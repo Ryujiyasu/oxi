@@ -16734,6 +16734,32 @@ impl<'a> WorkbookHost<'a> {
         value.as_ref().map(vba_of_calculation_value)
     }
 
+    fn range_count_dispatch_value(&self, receiver: &ObjectRef, name: &str) -> Option<Result<Value, i64>> {
+        if !name.eq_ignore_ascii_case("count") && !name.eq_ignore_ascii_case("countlarge") {
+            return None;
+        }
+        let axis_count = |range: CellRange, axis: RangeAxis| u64::from(match axis {
+            RangeAxis::Rows => range.end_row - range.start_row,
+            RangeAxis::Columns => range.end_column - range.start_column,
+        }) + 1;
+        let count = match self.objects.get(host_object_index(receiver.handle)) {
+            Some(HostObject::Range(range)) => Self::range_cell_count_large(*range).map_err(|_| 6),
+            Some(HostObject::RangeCollection(range, axis)) => Ok(axis_count(*range, *axis)),
+            Some(HostObject::Blocks(handle)) => self.blocks[*handle].iter().try_fold(0u64, |total, range| {
+                total.checked_add(Self::range_cell_count_large(*range).map_err(|_| 6)?).ok_or(6)
+            }),
+            Some(HostObject::BlocksAxis(handle, axis)) => Ok(axis_count(self.blocks[*handle][0], *axis)),
+            _ => return None,
+        };
+        Some(count.and_then(|count| {
+            if name.eq_ignore_ascii_case("countlarge") {
+                i64::try_from(count).map(Value::LongLong).map_err(|_| 6)
+            } else {
+                i32::try_from(count).map(|value| Value::Integer(i64::from(value))).map_err(|_| 6)
+            }
+        }))
+    }
+
     fn range_cell_count(range: CellRange) -> Result<usize, String> {
         let count = Self::range_cell_count_large(range)?;
         if count > 1_000_000 {
@@ -28777,6 +28803,13 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn automation_invocation_error(&self, receiver: &ObjectRef, name: &str, kind: u8) -> Option<i64> {
+        if matches!(kind, 4 | 8) {
+            if let Some(value) = self.range_count_dispatch_value(receiver, name) {
+                // A read-only Count assignment still reads its getter first.
+                // Keep overflow ahead of error450 and never coerce the RHS.
+                return Some(value.err().unwrap_or(450));
+            }
+        }
         if self.is_application(receiver) && name.eq_ignore_ascii_case("build") {
             return match kind {
                 1 | 4 => Some(1004),
@@ -29288,6 +29321,17 @@ impl Host for WorkbookHost<'_> {
             });
         }
         if let Some(receiver) = receiver {
+            if !args.is_empty()
+                && (name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge"))
+                && matches!(self.objects.get(host_object_index(receiver.handle)),
+                    Some(HostObject::Range(_) | HostObject::RangeCollection(..)
+                        | HostObject::Blocks(_) | HostObject::BlocksAxis(..)))
+                && self.get(receiver, name)?.is_some()
+            {
+                // Native reads the scalar getter before attempting its indices:
+                // Count overflow wins; a successful scalar result answers451.
+                return Err(host_error(451, "the count getter did not return an object"));
+            }
             if self.is_workbook(receiver) && name.eq_ignore_ascii_case("colors") {
                 return match args {
                     [] => Ok(Some(self.workbook_colors_value())),
@@ -54036,6 +54080,571 @@ End Function
                 format!("6|{large}|LongLong|20"), "{query}");
             assert!(!outcome.workbook_changed, "{query}");
         }
+    }
+
+
+    #[test]
+    fn count_getter_indices_match_native_invocation_errors_and_order() {
+        let source = r####"
+Attribute VB_Name = "CountInvocationContract"
+Option Explicit
+Private Trace As String
+Private Function Target(ByVal shape As Long) As Object
+ Trace = Trace & "R"
+ Select Case shape
+  Case 0: Set Target = ThisWorkbook.Worksheets(1).Range("A1:C3")
+  Case 1: Set Target = ThisWorkbook.Worksheets(1).Cells
+  Case 2: Set Target = ThisWorkbook.Worksheets(1).Rows
+  Case 3: Set Target = ThisWorkbook.Worksheets(1).Columns
+  Case 4: Set Target = Nothing
+ End Select
+End Function
+Private Function Payload(ByVal kind As Long) As Variant
+ Trace = Trace & "V"
+ Select Case kind
+  Case 0: Payload = 17
+  Case 1: Payload = Null
+  Case 2: Payload = Empty
+  Case 3: Payload = "x"
+  Case 4: Payload = CVErr(2042)
+  Case 5: Set Payload = Nothing
+  Case 6: Set Payload = New Collection
+ End Select
+End Function
+Public Function Probe(ByVal memberIndex As Long, ByVal form As Long, ByVal arity As Long, ByVal valueKind As Long, ByVal shape As Long) As String
+ Dim query As Object
+ Dim value As Variant
+ Dim name As String
+ Trace = ""
+ On Error GoTo Failed
+ Set query = Target(shape)
+ If memberIndex = 0 Then
+  name = "Count"
+ Else
+  name = "CountLarge"
+ End If
+ If form = 0 Then
+  Select Case arity
+   Case 0: value = CallByName(query, name, VbGet)
+   Case 1: value = CallByName(query, name, VbGet, Payload(valueKind))
+   Case 2: value = CallByName(query, name, VbGet, Payload(valueKind), Payload(valueKind))
+  End Select
+ ElseIf memberIndex = 0 Then
+  Select Case arity
+   Case 0: value = query.Count
+   Case 1: value = query.Count(Payload(valueKind))
+   Case 2: value = query.Count(Payload(valueKind), Payload(valueKind))
+  End Select
+ Else
+  Select Case arity
+   Case 0: value = query.CountLarge
+   Case 1: value = query.CountLarge(Payload(valueKind))
+   Case 2: value = query.CountLarge(Payload(valueKind), Payload(valueKind))
+  End Select
+ End If
+ Probe = "OK|" & CStr(value) & "|" & TypeName(value) & "|" & CStr(VarType(value)) & "|" & Trace
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext) & "|" & Trace
+End Function
+"####;
+        let cases: &[(i64, i64, i64, i64, i64, &str)] = &[
+            (0, 0, 0, 0, 0, "OK|9|Long|3|R"),
+            (0, 0, 1, 0, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 1, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 2, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 3, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 4, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 5, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 6, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 2, 0, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 0, 2, 1, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 1, 0, 0, 0, "OK|9|Long|3|R"),
+            (0, 1, 1, 0, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 1, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 2, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 3, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 4, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 5, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 6, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 2, 0, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 1, 2, 1, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 0, 0, 0, 0, "OK|9|LongLong|20|R"),
+            (1, 0, 1, 0, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 1, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 2, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 3, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 4, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 5, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 6, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 2, 0, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 0, 2, 1, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 1, 0, 0, 0, "OK|9|LongLong|20|R"),
+            (1, 1, 1, 0, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 1, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 2, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 3, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 4, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 5, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 6, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 2, 0, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 1, 2, 1, 0, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 0, 0, 0, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|R"),
+            (0, 0, 1, 0, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 0, 1, 1, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 0, 1, 2, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 0, 1, 3, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 0, 1, 4, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 0, 1, 5, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 0, 1, 6, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 0, 2, 0, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RVV"),
+            (0, 0, 2, 1, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RVV"),
+            (0, 1, 0, 0, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|R"),
+            (0, 1, 1, 0, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 1, 1, 1, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 1, 1, 2, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 1, 1, 3, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 1, 1, 4, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 1, 1, 5, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 1, 1, 6, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RV"),
+            (0, 1, 2, 0, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RVV"),
+            (0, 1, 2, 1, 1, "ERR|6|OxiNamedProject|オーバーフローしました。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000006|RVV"),
+            (1, 0, 0, 0, 1, "OK|17179869184|LongLong|20|R"),
+            (1, 0, 1, 0, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 1, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 2, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 3, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 4, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 5, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 6, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 2, 0, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 0, 2, 1, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 1, 0, 0, 1, "OK|17179869184|LongLong|20|R"),
+            (1, 1, 1, 0, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 1, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 2, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 3, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 4, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 5, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 6, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 2, 0, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 1, 2, 1, 1, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 0, 0, 0, 2, "OK|1048576|Long|3|R"),
+            (0, 0, 1, 0, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 1, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 2, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 3, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 4, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 5, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 6, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 2, 0, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 0, 2, 1, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 1, 0, 0, 2, "OK|1048576|Long|3|R"),
+            (0, 1, 1, 0, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 1, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 2, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 3, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 4, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 5, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 6, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 2, 0, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 1, 2, 1, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 0, 0, 0, 2, "OK|1048576|LongLong|20|R"),
+            (1, 0, 1, 0, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 1, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 2, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 3, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 4, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 5, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 6, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 2, 0, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 0, 2, 1, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 1, 0, 0, 2, "OK|1048576|LongLong|20|R"),
+            (1, 1, 1, 0, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 1, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 2, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 3, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 4, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 5, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 6, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 2, 0, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 1, 2, 1, 2, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 0, 0, 0, 3, "OK|16384|Long|3|R"),
+            (0, 0, 1, 0, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 1, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 2, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 3, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 4, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 5, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 1, 6, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 0, 2, 0, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 0, 2, 1, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 1, 0, 0, 3, "OK|16384|Long|3|R"),
+            (0, 1, 1, 0, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 1, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 2, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 3, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 4, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 5, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 1, 6, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (0, 1, 2, 0, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 1, 2, 1, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 0, 0, 0, 3, "OK|16384|LongLong|20|R"),
+            (1, 0, 1, 0, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 1, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 2, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 3, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 4, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 5, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 1, 6, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 0, 2, 0, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 0, 2, 1, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 1, 0, 0, 3, "OK|16384|LongLong|20|R"),
+            (1, 1, 1, 0, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 1, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 2, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 3, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 4, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 5, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 1, 6, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RV"),
+            (1, 1, 2, 0, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (1, 1, 2, 1, 3, "ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000451|RVV"),
+            (0, 0, 0, 0, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|R"),
+            (0, 0, 1, 0, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (0, 0, 1, 1, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (0, 0, 1, 2, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (0, 0, 1, 3, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (0, 0, 1, 4, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (0, 0, 1, 5, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (0, 0, 1, 6, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (0, 0, 2, 0, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RVV"),
+            (0, 0, 2, 1, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RVV"),
+            (0, 1, 0, 0, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|R"),
+            (0, 1, 1, 0, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (0, 1, 1, 1, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (0, 1, 1, 2, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (0, 1, 1, 3, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (0, 1, 1, 4, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (0, 1, 1, 5, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (0, 1, 1, 6, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (0, 1, 2, 0, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RVV"),
+            (0, 1, 2, 1, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RVV"),
+            (1, 0, 0, 0, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|R"),
+            (1, 0, 1, 0, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (1, 0, 1, 1, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (1, 0, 1, 2, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (1, 0, 1, 3, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (1, 0, 1, 4, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (1, 0, 1, 5, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (1, 0, 1, 6, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RV"),
+            (1, 0, 2, 0, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RVV"),
+            (1, 0, 2, 1, 4, "ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000005|RVV"),
+            (1, 1, 0, 0, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|R"),
+            (1, 1, 1, 0, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (1, 1, 1, 1, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (1, 1, 1, 2, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (1, 1, 1, 3, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (1, 1, 1, 4, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (1, 1, 1, 5, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (1, 1, 1, 6, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RV"),
+            (1, 1, 2, 0, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RVV"),
+            (1, 1, 2, 1, 4, "ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm|1000091|RVV"),
+        ];
+        let mut differences = Vec::new();
+        for &(member, form, arity, value_kind, shape, expected) in cases {
+            let mut session = None;
+            let mut book = workbook();
+            for phase in ["cold", "warm"] {
+                let mut context = failure_context();
+                context.project_name = "OxiNamedProject".into();
+                context.environment.help_file = "C:\\Program Files\\Common Files\\Microsoft Shared\\VBA\\VBA7.1\\1041\\VbLR6.chm".into();
+                let outcome = execute_workbook_action_in_session(book, source,
+                    Some("CountInvocationContract.Probe"),
+                    vec![Value::Integer(member), Value::Integer(form), Value::Integer(arity),
+                        Value::Integer(value_kind), Value::Integer(shape)],
+                    0, context, &mut session).unwrap();
+                let actual = serde_json::to_value(&outcome.result).unwrap();
+                if outcome.error.is_some() || actual["value"] != expected {
+                    differences.push(format!("member={member} form={form} arity={arity} value={value_kind} shape={shape} phase={phase}: {actual} expected {expected}"));
+                }
+                book = outcome.workbook;
+            }
+        }
+        assert_eq!(cases.len(), 200);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
+    fn count_dispatch_kinds_match_native_errors_and_precedence() {
+        let source = r####"
+Attribute VB_Name = "CountDispatchContract"
+Option Explicit
+Private Trace As String
+Private Function Target(ByVal shape As Long) As Object
+ Trace = Trace & "R"
+ Select Case shape
+  Case 0: Set Target = ThisWorkbook.Worksheets(1).Range("A1:C3")
+  Case 1: Set Target = ThisWorkbook.Worksheets(1).Cells
+  Case 2: Set Target = ThisWorkbook.Worksheets(1).Rows
+  Case 3: Set Target = ThisWorkbook.Worksheets(1).Columns
+  Case 4: Set Target = Nothing
+ End Select
+End Function
+Private Function Payload(ByVal kind As Long) As Variant
+ Trace = Trace & "V"
+ Select Case kind
+  Case 0: Payload = 17
+  Case 1: Payload = Null
+  Case 2: Payload = Empty
+  Case 3: Payload = "x"
+  Case 4: Payload = CVErr(2042)
+  Case 5: Set Payload = Nothing
+  Case 6: Set Payload = New Collection
+ End Select
+End Function
+Public Function Probe(ByVal memberIndex As Long, ByVal form As Long, ByVal arity As Long, ByVal valueKind As Long, ByVal shape As Long) As String
+ Dim query As Object
+ Dim value As Variant
+ Dim name As String
+ Trace = ""
+ On Error GoTo Failed
+ Set query = Target(shape)
+ If memberIndex = 0 Then
+  name = "Count"
+ Else
+  name = "CountLarge"
+ End If
+ If True Then
+  Select Case arity
+   Case 0: value = CallByName(query, name, form)
+   Case 1: value = CallByName(query, name, form, Payload(valueKind))
+   Case 2: value = CallByName(query, name, form, Payload(valueKind), Payload(valueKind))
+  End Select
+ ElseIf memberIndex = 0 Then
+  Select Case arity
+   Case 0: value = query.Count
+   Case 1: value = query.Count(Payload(valueKind))
+   Case 2: value = query.Count(Payload(valueKind), Payload(valueKind))
+  End Select
+ Else
+  Select Case arity
+   Case 0: value = query.CountLarge
+   Case 1: value = query.CountLarge(Payload(valueKind))
+   Case 2: value = query.CountLarge(Payload(valueKind), Payload(valueKind))
+  End Select
+ End If
+ Probe = "OK|" & CStr(value) & "|" & TypeName(value) & "|" & CStr(VarType(value)) & "|" & Trace
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext) & "|" & Trace
+End Function
+"####;
+        let expected = [
+            r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|R"####,
+            r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|RV"####,
+            r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|RVV"####,
+            r####"OK|9|Long|3|R"####,
+            r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|RV"####,
+            r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|RVV"####,
+            r####"ERR|446|OxiNamedProject|オブジェクトは名前付き引数をサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000446|R"####,
+            r####"ERR|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000450|RV"####,
+            r####"ERR|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000450|RVV"####,
+            r####"OK|9|LongLong|20|R"####,
+            r####"ERR|6|OxiNamedProject|オーバーフローしました。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000006|R"####,
+            r####"ERR|6|OxiNamedProject|オーバーフローしました。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000006|RV"####,
+            r####"ERR|6|OxiNamedProject|オーバーフローしました。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000006|RVV"####,
+            r####"OK|17179869184|LongLong|20|R"####,
+            r####"OK|1048576|Long|3|R"####,
+            r####"OK|1048576|LongLong|20|R"####,
+            r####"OK|16384|Long|3|R"####,
+            r####"OK|16384|LongLong|20|R"####,
+            r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|R"####,
+            r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|RV"####,
+            r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|RVV"####,
+        ];
+        let cases: &[([i64; 5], usize)] = &[
+            ([0, 1, 0, 0, 0], 0),
+            ([0, 1, 1, 0, 0], 1),
+            ([0, 1, 1, 1, 0], 1),
+            ([0, 1, 2, 0, 0], 2),
+            ([0, 2, 0, 0, 0], 3),
+            ([0, 2, 1, 0, 0], 4),
+            ([0, 2, 1, 1, 0], 4),
+            ([0, 2, 2, 0, 0], 5),
+            ([0, 4, 0, 0, 0], 6),
+            ([0, 4, 1, 0, 0], 7),
+            ([0, 4, 1, 1, 0], 7),
+            ([0, 4, 2, 0, 0], 8),
+            ([0, 8, 0, 0, 0], 6),
+            ([0, 8, 1, 0, 0], 7),
+            ([0, 8, 1, 1, 0], 7),
+            ([0, 8, 2, 0, 0], 8),
+            ([1, 1, 0, 0, 0], 0),
+            ([1, 1, 1, 0, 0], 1),
+            ([1, 1, 1, 1, 0], 1),
+            ([1, 1, 2, 0, 0], 2),
+            ([1, 2, 0, 0, 0], 9),
+            ([1, 2, 1, 0, 0], 4),
+            ([1, 2, 1, 1, 0], 4),
+            ([1, 2, 2, 0, 0], 5),
+            ([1, 4, 0, 0, 0], 6),
+            ([1, 4, 1, 0, 0], 7),
+            ([1, 4, 1, 1, 0], 7),
+            ([1, 4, 2, 0, 0], 8),
+            ([1, 8, 0, 0, 0], 6),
+            ([1, 8, 1, 0, 0], 7),
+            ([1, 8, 1, 1, 0], 7),
+            ([1, 8, 2, 0, 0], 8),
+            ([0, 1, 0, 0, 1], 0),
+            ([0, 1, 1, 0, 1], 1),
+            ([0, 1, 1, 1, 1], 1),
+            ([0, 1, 2, 0, 1], 2),
+            ([0, 2, 0, 0, 1], 10),
+            ([0, 2, 1, 0, 1], 11),
+            ([0, 2, 1, 1, 1], 11),
+            ([0, 2, 2, 0, 1], 12),
+            ([0, 4, 0, 0, 1], 6),
+            ([0, 4, 1, 0, 1], 11),
+            ([0, 4, 1, 1, 1], 11),
+            ([0, 4, 2, 0, 1], 12),
+            ([0, 8, 0, 0, 1], 6),
+            ([0, 8, 1, 0, 1], 11),
+            ([0, 8, 1, 1, 1], 11),
+            ([0, 8, 2, 0, 1], 12),
+            ([1, 1, 0, 0, 1], 0),
+            ([1, 1, 1, 0, 1], 1),
+            ([1, 1, 1, 1, 1], 1),
+            ([1, 1, 2, 0, 1], 2),
+            ([1, 2, 0, 0, 1], 13),
+            ([1, 2, 1, 0, 1], 4),
+            ([1, 2, 1, 1, 1], 4),
+            ([1, 2, 2, 0, 1], 5),
+            ([1, 4, 0, 0, 1], 6),
+            ([1, 4, 1, 0, 1], 7),
+            ([1, 4, 1, 1, 1], 7),
+            ([1, 4, 2, 0, 1], 8),
+            ([1, 8, 0, 0, 1], 6),
+            ([1, 8, 1, 0, 1], 7),
+            ([1, 8, 1, 1, 1], 7),
+            ([1, 8, 2, 0, 1], 8),
+            ([0, 1, 0, 0, 2], 0),
+            ([0, 1, 1, 0, 2], 1),
+            ([0, 1, 1, 1, 2], 1),
+            ([0, 1, 2, 0, 2], 2),
+            ([0, 2, 0, 0, 2], 14),
+            ([0, 2, 1, 0, 2], 4),
+            ([0, 2, 1, 1, 2], 4),
+            ([0, 2, 2, 0, 2], 5),
+            ([0, 4, 0, 0, 2], 6),
+            ([0, 4, 1, 0, 2], 7),
+            ([0, 4, 1, 1, 2], 7),
+            ([0, 4, 2, 0, 2], 8),
+            ([0, 8, 0, 0, 2], 6),
+            ([0, 8, 1, 0, 2], 7),
+            ([0, 8, 1, 1, 2], 7),
+            ([0, 8, 2, 0, 2], 8),
+            ([1, 1, 0, 0, 2], 0),
+            ([1, 1, 1, 0, 2], 1),
+            ([1, 1, 1, 1, 2], 1),
+            ([1, 1, 2, 0, 2], 2),
+            ([1, 2, 0, 0, 2], 15),
+            ([1, 2, 1, 0, 2], 4),
+            ([1, 2, 1, 1, 2], 4),
+            ([1, 2, 2, 0, 2], 5),
+            ([1, 4, 0, 0, 2], 6),
+            ([1, 4, 1, 0, 2], 7),
+            ([1, 4, 1, 1, 2], 7),
+            ([1, 4, 2, 0, 2], 8),
+            ([1, 8, 0, 0, 2], 6),
+            ([1, 8, 1, 0, 2], 7),
+            ([1, 8, 1, 1, 2], 7),
+            ([1, 8, 2, 0, 2], 8),
+            ([0, 1, 0, 0, 3], 0),
+            ([0, 1, 1, 0, 3], 1),
+            ([0, 1, 1, 1, 3], 1),
+            ([0, 1, 2, 0, 3], 2),
+            ([0, 2, 0, 0, 3], 16),
+            ([0, 2, 1, 0, 3], 4),
+            ([0, 2, 1, 1, 3], 4),
+            ([0, 2, 2, 0, 3], 5),
+            ([0, 4, 0, 0, 3], 6),
+            ([0, 4, 1, 0, 3], 7),
+            ([0, 4, 1, 1, 3], 7),
+            ([0, 4, 2, 0, 3], 8),
+            ([0, 8, 0, 0, 3], 6),
+            ([0, 8, 1, 0, 3], 7),
+            ([0, 8, 1, 1, 3], 7),
+            ([0, 8, 2, 0, 3], 8),
+            ([1, 1, 0, 0, 3], 0),
+            ([1, 1, 1, 0, 3], 1),
+            ([1, 1, 1, 1, 3], 1),
+            ([1, 1, 2, 0, 3], 2),
+            ([1, 2, 0, 0, 3], 17),
+            ([1, 2, 1, 0, 3], 4),
+            ([1, 2, 1, 1, 3], 4),
+            ([1, 2, 2, 0, 3], 5),
+            ([1, 4, 0, 0, 3], 6),
+            ([1, 4, 1, 0, 3], 7),
+            ([1, 4, 1, 1, 3], 7),
+            ([1, 4, 2, 0, 3], 8),
+            ([1, 8, 0, 0, 3], 6),
+            ([1, 8, 1, 0, 3], 7),
+            ([1, 8, 1, 1, 3], 7),
+            ([1, 8, 2, 0, 3], 8),
+            ([0, 1, 0, 0, 4], 18),
+            ([0, 1, 1, 0, 4], 19),
+            ([0, 1, 1, 1, 4], 19),
+            ([0, 1, 2, 0, 4], 20),
+            ([0, 2, 0, 0, 4], 18),
+            ([0, 2, 1, 0, 4], 19),
+            ([0, 2, 1, 1, 4], 19),
+            ([0, 2, 2, 0, 4], 20),
+            ([0, 4, 0, 0, 4], 18),
+            ([0, 4, 1, 0, 4], 19),
+            ([0, 4, 1, 1, 4], 19),
+            ([0, 4, 2, 0, 4], 20),
+            ([0, 8, 0, 0, 4], 18),
+            ([0, 8, 1, 0, 4], 19),
+            ([0, 8, 1, 1, 4], 19),
+            ([0, 8, 2, 0, 4], 20),
+            ([1, 1, 0, 0, 4], 18),
+            ([1, 1, 1, 0, 4], 19),
+            ([1, 1, 1, 1, 4], 19),
+            ([1, 1, 2, 0, 4], 20),
+            ([1, 2, 0, 0, 4], 18),
+            ([1, 2, 1, 0, 4], 19),
+            ([1, 2, 1, 1, 4], 19),
+            ([1, 2, 2, 0, 4], 20),
+            ([1, 4, 0, 0, 4], 18),
+            ([1, 4, 1, 0, 4], 19),
+            ([1, 4, 1, 1, 4], 19),
+            ([1, 4, 2, 0, 4], 20),
+            ([1, 8, 0, 0, 4], 18),
+            ([1, 8, 1, 0, 4], 19),
+            ([1, 8, 1, 1, 4], 19),
+            ([1, 8, 2, 0, 4], 20),
+        ];
+        let mut differences = Vec::new();
+        for &(args, expected_index) in cases {
+            let mut session = None;
+            let mut book = workbook();
+            for phase in ["cold", "warm"] {
+                let mut context = failure_context();
+                context.project_name = "OxiNamedProject".into();
+                context.environment.help_file = r"C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm".into();
+                let outcome = execute_workbook_action_in_session(book, source,
+                    Some("CountDispatchContract.Probe"),
+                    args.into_iter().map(Value::Integer).collect(),
+                    0, context, &mut session).unwrap();
+                let actual = serde_json::to_value(&outcome.result).unwrap();
+                if outcome.error.is_some() || actual["value"] != expected[expected_index] {
+                    differences.push(format!("args={args:?} phase={phase}: {actual} expected {}", expected[expected_index]));
+                }
+                book = outcome.workbook;
+            }
+        }
+        assert_eq!(cases.len(), 160);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
     }
 
     #[test]
