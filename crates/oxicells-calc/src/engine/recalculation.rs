@@ -144,6 +144,16 @@ impl Workbook {
         }).collect()
     }
 
+    /// Written references after resolving names and tables at the formula cell.
+    /// Does not evaluate formulas, invoke UDFs, or discover dynamic INDIRECT
+    /// references. Coordinates are zero-based (column, row).
+    pub fn written_formula_references(
+        &self, sheet: &str, formula: &str, at: (u32, u32),
+    ) -> Result<Vec<Reference>, CalcError> {
+        let expr = parse(formula)?;
+        Ok(self.written_dependency_expression(&expr, sheet, Some(at)).references())
+    }
+
     pub(super) fn dependency_expression(&self, expr: &Expr, sheet: &str, at: At) -> Expr {
         self.resolve_dependencies(expr, sheet, at, &BTreeSet::new(), &mut BTreeSet::new(), 0, false, true)
     }
@@ -233,4 +243,27 @@ impl Workbook {
 fn same_sheet(a: &str, b: &str) -> bool { crate::case_fold::name_key(a) == crate::case_fold::name_key(b) }
 fn overlaps(a: &RangeRef, b: &RangeRef) -> bool {
     a.start.col <= b.end.col && a.end.col >= b.start.col && a.start.row <= b.end.row && a.end.row >= b.start.row
+}
+
+#[cfg(test)]
+mod written_reference_tests {
+    use super::*;
+
+    #[test]
+    fn written_formula_references_resolve_names_without_dynamic_evaluation() {
+        let mut book = Workbook::new();
+        book.add_sheet("Sheet1");
+        book.define_name("ProbeInput", "=Sheet1!$A$1").unwrap();
+        book.define_name("AliasInput", "=ProbeInput").unwrap();
+        let refs = book.written_formula_references("Sheet1", "=AliasInput+B2", (2, 2)).unwrap();
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].sheet.as_deref(), Some("Sheet1"));
+        assert_eq!(refs[0].range.start.coord(), (0, 0));
+        assert_eq!(refs[1].range.start.coord(), (1, 1));
+        assert!(book.written_formula_references("Sheet1", "=INDIRECT(\"A1\")", (2, 2)).unwrap().is_empty());
+        assert!(book.written_formula_references("Sheet1", "=LET(ProbeInput,7,ProbeInput)", (2, 2)).unwrap().is_empty());
+        assert!(book.written_formula_references("Sheet1", "=LAMBDA(ProbeInput,ProbeInput)(7)", (2, 2)).unwrap().is_empty());
+        book.define_name("LoopInput", "=LoopInput").unwrap();
+        assert!(book.written_formula_references("Sheet1", "=LoopInput", (2, 2)).unwrap().is_empty());
+    }
 }

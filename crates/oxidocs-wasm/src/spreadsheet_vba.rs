@@ -4682,7 +4682,7 @@ impl<'a> WorkbookHost<'a> {
     fn borders_object(&mut self, range: CellRange, args: &[Value]) -> Result<Value, String> {
         let selection = match args {
             [] => BorderSelection::All,
-            [value] => border_selection(value)?,
+            [value] => self.border_selection(value)?,
             _ => return Err("Range.Borders expects zero or one border index".to_string()),
         };
         Ok(self.object(HostObject::RangeBorders(range, selection)))
@@ -4926,19 +4926,18 @@ impl<'a> WorkbookHost<'a> {
     }
 
     /// The references a cell's formula makes on its own sheet.
-    fn formula_refs(&self, sheet: usize, row: u32, column: u32) -> Vec<CellRange> {
+    fn formula_refs(&self, engine: &oxicells_calc::Workbook, sheet: usize, row: u32, column: u32) -> Vec<CellRange> {
         let Some(cell) = self.cell_here(sheet, row, column) else {
             return Vec::new();
         };
         let Some(formula) = cell.formula.as_deref() else {
             return Vec::new();
         };
-        let Ok(expr) = oxicells_calc::parse(&format!("={}", formula.trim_start_matches('='))) else {
-            return Vec::new();
-        };
         let own = &self.workbook.sheets[sheet].name;
-        expr.references()
-            .into_iter()
+        let Ok(references) = engine.written_formula_references(
+            own, &format!("={}", formula.trim_start_matches('=')), (column, row - 1),
+        ) else { return Vec::new(); };
+        references.into_iter()
             .filter(|reference| {
                 reference.book.is_none()
                     && reference.sheet.as_deref().is_none_or(|named| named.eq_ignore_ascii_case(own))
@@ -4956,8 +4955,11 @@ impl<'a> WorkbookHost<'a> {
     /// The cells linked to `range` by formulas: what its formulas read
     /// (precedents) or which formulas read it (dependents), one step or all
     /// the way.
-    fn formula_links(&self, range: CellRange, precedents: bool, direct: bool) -> Vec<CellRange> {
-        let sheet = range.sheet;
+    fn formula_links(&self, ranges: &[CellRange], precedents: bool, direct: bool) -> Vec<CellRange> {
+        let sheet = ranges[0].sheet;
+        let engine = oxicells_core::formula::assemble_for_evaluation(
+            &self.workbook.sheets, &self.workbook.defined_names, &self.workbook.external_books,
+        );
         let formulas: Vec<(u32, u32)> = self.workbook.sheets[sheet]
             .rows
             .iter()
@@ -4967,7 +4969,7 @@ impl<'a> WorkbookHost<'a> {
         // them to the answer that way, joining as it goes -- measured,
         // D1 = C1+Z9, C1 = B1+A2, B1 = A1*2 gives $Z$9,$B$1:$C$1,$A$1:$A$2.
         let mut found: Vec<CellRange> = Vec::new();
-        let mut frontier: std::collections::VecDeque<CellRange> = std::collections::VecDeque::from([range]);
+        let mut frontier: std::collections::VecDeque<CellRange> = std::collections::VecDeque::from(ranges.to_vec());
         let mut seen_cells: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
         while let Some(current) = frontier.pop_front() {
             let mut next: Vec<CellRange> = Vec::new();
@@ -4976,14 +4978,14 @@ impl<'a> WorkbookHost<'a> {
                     if !seen_cells.insert((row, column)) {
                         continue;
                     }
-                    next.extend(self.formula_refs(sheet, row, column));
+                    next.extend(self.formula_refs(&engine, sheet, row, column));
                 }
             } else {
                 for (row, column) in &formulas {
                     if seen_cells.contains(&(*row, *column)) {
                         continue;
                     }
-                    if self.formula_refs(sheet, *row, *column).iter().any(|r| ranges_overlap(*r, current)) {
+                    if self.formula_refs(&engine, sheet, *row, *column).iter().any(|r| ranges_overlap(*r, current)) {
                         seen_cells.insert((*row, *column));
                         next.push(CellRange::single(CellAddress { sheet, row: *row, column: *column }));
                     }
@@ -4999,6 +5001,20 @@ impl<'a> WorkbookHost<'a> {
             }
         }
         found
+    }
+
+    fn dependency_ranges(&mut self, ranges: &[CellRange], name: &str) -> Result<Value, String> {
+        for range in ranges { self.settle(*range); }
+        let lower = name.to_ascii_lowercase();
+        let found = self.formula_links(ranges, lower.contains("precedents"), lower.starts_with("direct"));
+        if found.is_empty() {
+            let description = match self.error_language {
+                ErrorLanguage::Japanese => "\u{8a72}\u{5f53}\u{3059}\u{308b}\u{30bb}\u{30eb}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}",
+                ErrorLanguage::English => "No cells were found.",
+            };
+            return Err(oxivba_core::host_error_from(1004, "Microsoft Excel", description));
+        }
+        self.blocks_object(found)
     }
 
     fn blocks_object(&mut self, given: Vec<CellRange>) -> Result<Value, String> {
@@ -5114,6 +5130,56 @@ impl<'a> WorkbookHost<'a> {
         } else {
             Ok(format!("{front}!{written}"))
         }
+    }
+
+    fn coerce_index_long(&self, value: &Value, automation: bool) -> Result<Value, String> {
+        let scalar;
+        let value = if let Value::Object(object) = value {
+            let range = self.range(object).or_else(|| match self.objects.get(host_object_index(object.handle)) {
+                Some(HostObject::Blocks(handle) | HostObject::BlocksAxis(handle, _)) =>
+                    self.blocks[*handle].first().copied(),
+                _ => None,
+            });
+            if let Some(range) = range {
+                scalar = self.range_value(range)?;
+                &scalar
+            } else {
+                if automation {
+                    return Err(host_error(13, "dispatch index has no scalar default value"));
+                }
+                if let Some(number) = self.default_member_error(object) {
+                    return Err(host_error(number, "index has no scalar default value"));
+                }
+                value
+            }
+        } else {
+            value
+        };
+        // Late-bound Automation rejects these conversions as type mismatches;
+        // an ordinary VBA argument conversion retains its specific error.
+        if automation && matches!(value, Value::Null | Value::Nothing) {
+            return Err(host_error(13, "dispatch index must be numeric"));
+        }
+        oxivba_core::runtime::coerce_automation_scalar(value, oxivba_core::runtime::AutomationScalarType::Long)
+    }
+
+    fn areas_item_index(&self, value: &Value, count: usize, automation: bool) -> Result<usize, String> {
+        areas_item_index(&self.coerce_index_long(value, automation)?, count)
+    }
+
+    fn border_selection(&self, value: &Value) -> Result<BorderSelection, String> {
+        border_selection(&self.coerce_index_long(value, false)?)
+    }
+
+    fn border_index_member(&self, receiver: &ObjectRef, name: &str) -> bool {
+        if name.eq_ignore_ascii_case("item") {
+            return matches!(self.objects.get(host_object_index(receiver.handle)),
+                Some(HostObject::RangeBorders(_, BorderSelection::All)
+                    | HostObject::BlocksStyle(_, StyleFace::Borders(BorderSelection::All))));
+        }
+        name.eq_ignore_ascii_case("borders") && (self.range(receiver).is_some()
+            || matches!(self.objects.get(host_object_index(receiver.handle)),
+                Some(HostObject::Blocks(_) | HostObject::BlocksAxis(..))))
     }
 
     /// The `Areas` of a range that is one block: a collection of one, which
@@ -5682,6 +5748,11 @@ impl<'a> WorkbookHost<'a> {
         args: &[Value],
     ) -> Result<Option<Value>, String> {
         let areas = self.blocks[handle].clone();
+        if ["precedents", "directprecedents", "dependents", "directdependents"]
+            .iter().any(|member| name.eq_ignore_ascii_case(member))
+        {
+            return self.dependency_ranges(&areas, name).map(Some);
+        }
         if name.eq_ignore_ascii_case("validation") && args.is_empty() {
             return Ok(Some(self.object(HostObject::ValidationBlocks(handle))));
         }
@@ -5689,10 +5760,8 @@ impl<'a> WorkbookHost<'a> {
             return match args {
                 [] | [Value::Missing] => Ok(Some(self.object(HostObject::Areas(handle)))),
                 [wanted] => {
-                    let at = positive_index(wanted, "index")? as usize;
-                    let block = areas
-                        .get(at - 1)
-                        .ok_or_else(|| format!("this range has no area number {at}"))?;
+                    let at = self.areas_item_index(wanted, areas.len(), false)?;
+                    let block = &areas[at];
                     Ok(Some(self.object(HostObject::Range(*block))))
                 }
                 _ => Err("Areas takes one number".to_string()),
@@ -5714,12 +5783,17 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("copy") {
             return self.copy_blocks(&areas, args).map(Some);
         }
-        if name.eq_ignore_ascii_case("count") {
+        if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge") {
             let mut total = 0u64;
             for block in &areas {
                 total += Self::range_cell_count_large(*block)?;
             }
-            return Ok(Some(Value::Integer(total as i64)));
+            return Ok(Some(if name.eq_ignore_ascii_case("countlarge") {
+                Value::LongLong(total as i64)
+            } else {
+                Value::Integer(i64::from(i32::try_from(total)
+                    .map_err(|_| host_error(6, "Range.Count overflows Long"))?))
+            }));
         }
         // Excel answers for the FIRST block where a many-block range has to
         // give one answer: `Union(A1:A2, C1:C2).Rows.Count` is 2, and `.Row`
@@ -5959,7 +6033,7 @@ impl<'a> WorkbookHost<'a> {
         if name.eq_ignore_ascii_case("borders") {
             let selection = match args {
                 [] | [Value::Missing] => BorderSelection::All,
-                [wanted] => border_selection(wanted)?,
+                [wanted] => self.border_selection(wanted)?,
                 _ => return Err("Range.Borders takes one index".to_string()),
             };
             return Ok(Some(
@@ -28287,6 +28361,20 @@ impl Host for ApplicationHost<'_> {
             host.default_member_error(receiver.expect("native receiver"))
         })
     }
+    fn scalar_argument_type(&self, receiver: &ObjectRef, name: &str,
+        args: &[Value], argument_names: &[Option<String>], index: usize)
+        -> Option<oxivba_core::runtime::AutomationScalarType> {
+        self.read(Some(receiver), name, false, |host, receiver| {
+            host.scalar_argument_type(receiver.expect("native receiver"), name, args, argument_names, index)
+        })
+    }
+    fn prepare_late_bound_call(&self, receiver: &ObjectRef, name: &str,
+        args: &[Value], argument_names: &[Option<String>])
+        -> Result<Option<(String, Vec<Value>)>, String> {
+        self.read(Some(receiver), name, false, |host, receiver| {
+            host.prepare_late_bound_call(receiver.expect("native receiver"), name, args, argument_names)
+        })
+    }
     fn prepare_automation_get(
         &self,
         _receiver: &ObjectRef,
@@ -28594,7 +28682,68 @@ impl Host for WorkbookHost<'_> {
         normalize_named_arguments(args, names, &parameters, name).map(Some)
     }
 
+    fn scalar_argument_type(&self, receiver: &ObjectRef, name: &str,
+        args: &[Value], argument_names: &[Option<String>], index: usize)
+        -> Option<oxivba_core::runtime::AutomationScalarType> {
+        if index != 0 || args.len() != 1 { return None; }
+        let borders = self.border_index_member(receiver, name);
+        let item = name.eq_ignore_ascii_case("item")
+            && (borders || matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::Areas(_))));
+        let areas = name.eq_ignore_ascii_case("areas") && (self.range(receiver).is_some()
+            || matches!(self.objects.get(host_object_index(receiver.handle)),
+                Some(HostObject::Blocks(_) | HostObject::BlocksAxis(..))));
+        if (!item && !areas && !borders) || argument_names.iter().any(|name| name.as_deref()
+            .is_some_and(|name| !item || !name.eq_ignore_ascii_case("index"))) {
+            return None;
+        }
+        Some(oxivba_core::runtime::AutomationScalarType::Long)
+    }
+
+    fn prepare_late_bound_call(&self, receiver: &ObjectRef, name: &str,
+        args: &[Value], argument_names: &[Option<String>])
+        -> Result<Option<(String, Vec<Value>)>, String> {
+        let borders = self.border_index_member(receiver, name);
+        let item = name.eq_ignore_ascii_case("item")
+            && (borders || matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::Areas(_))));
+        let areas = name.eq_ignore_ascii_case("areas") && (self.range(receiver).is_some()
+            || matches!(self.objects.get(host_object_index(receiver.handle)),
+                Some(HostObject::Blocks(_) | HostObject::BlocksAxis(..))));
+        if !item && !areas && !borders { return Ok(None); }
+        // Bind unknown names through the ordinary host path before conversion.
+        if argument_names.iter().any(|name| name.as_deref()
+            .is_some_and(|name| !item || !name.eq_ignore_ascii_case("index"))) {
+            return Ok(None);
+        }
+        self.prepare_automation_get(receiver, name, args)
+    }
+
     fn prepare_automation_get(&self, receiver: &ObjectRef, name: &str, args: &[Value]) -> Result<Option<(String, Vec<Value>)>, String> {
+        if self.border_index_member(receiver, name) {
+            if let [index] = args {
+                if !matches!(index, Value::Missing) {
+                    return Ok(Some((name.into(), vec![self.coerce_index_long(index, true)?])));
+                }
+            }
+        }
+        let area_count = match self.objects.get(host_object_index(receiver.handle)) {
+            Some(HostObject::Areas(handle)) if name.eq_ignore_ascii_case("item") =>
+                Some(self.blocks[*handle].len()),
+            Some(HostObject::Blocks(handle) | HostObject::BlocksAxis(handle, _))
+                if name.eq_ignore_ascii_case("areas") => Some(self.blocks[*handle].len()),
+            Some(HostObject::Range(_) | HostObject::RangeCollection(..))
+                if name.eq_ignore_ascii_case("areas") => Some(1),
+            _ => None,
+        };
+        if let (Some(count), [index]) = (area_count, args) {
+            if !matches!(index, Value::Missing) {
+                let at = self.areas_item_index(index, count, true)?;
+                // Pass the resolved Long onward, so a default value is read once.
+                return Ok(Some((name.into(), vec![Value::Integer((at + 1) as i64)])));
+            }
+        }
+        if self.is_application(receiver) && name.eq_ignore_ascii_case("build") && !args.is_empty() {
+            return Err(host_error(450, "Application.Build takes no arguments"));
+        }
         if self.is_workbook(receiver) && name.eq_ignore_ascii_case("colors") {
             if args.len() > 1 {
                 return Err(host_error(450, "Workbook.Colors takes at most one index"));
@@ -28623,6 +28772,13 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn automation_invocation_error(&self, receiver: &ObjectRef, name: &str, kind: u8) -> Option<i64> {
+        if self.is_application(receiver) && name.eq_ignore_ascii_case("build") {
+            return match kind {
+                1 | 4 => Some(1004),
+                8 => Some(13),
+                _ => None,
+            };
+        }
         (self.is_application(receiver) && name.eq_ignore_ascii_case("calculationstate") && kind == 4).then_some(450)
     }
 
@@ -29143,7 +29299,7 @@ impl Host for WorkbookHost<'_> {
                     return match args {
                         [] => Ok(Some(self.object(HostObject::FormatBorders(replace)))),
                         [index] => {
-                            let selection = border_selection(index)?;
+                            let selection = self.border_selection(index)?;
                             Ok(Some(self.object(HostObject::FormatBorder(replace, selection))))
                         }
                         _ => Err(host_error(450, "CellFormat.Borders takes zero or one border index")),
@@ -29247,13 +29403,26 @@ impl Host for WorkbookHost<'_> {
                     };
                 }
             }
+            if let Some(HostObject::BlocksStyle(handle, StyleFace::Borders(BorderSelection::All))) =
+                self.objects.get(host_object_index(receiver.handle)).copied()
+            {
+                if name.is_empty() || ["item", "_default"].iter().any(|member| name.eq_ignore_ascii_case(member)) {
+                    return match args {
+                        [index] => {
+                            let selection = self.border_selection(index)?;
+                            Ok(Some(self.object(HostObject::BlocksStyle(handle, StyleFace::Borders(selection)))))
+                        }
+                        _ => Err(host_error(450, "Borders.Item takes one index")),
+                    };
+                }
+            }
             if let Some(HostObject::FormatBorders(replace)) =
                 self.objects.get(host_object_index(receiver.handle)).copied()
             {
                 if name.is_empty() || ["item", "_default"].iter().any(|member| name.eq_ignore_ascii_case(member)) {
                     return match args {
                         [index] => {
-                            let selection = border_selection(index)?;
+                            let selection = self.border_selection(index)?;
                             Ok(Some(self.object(HostObject::FormatBorder(replace, selection))))
                         }
                         _ => Err(host_error(450, "CellFormat.Borders.Item takes one index")),
@@ -29356,8 +29525,12 @@ impl Host for WorkbookHost<'_> {
                 return Ok(Some(Value::String(format!("{book} - Excel"))));
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("build") {
-                // A Double, as Excel hands it: measured, TypeName(Build).
-                return Ok(Some(Value::Double(20326.0)));
+                if !args.is_empty() {
+                    return Err(host_error(450, "Application.Build takes no arguments"));
+                }
+                // The reference Excel build. Automation returns Double;
+                // statically bound reads use the typelib's declared Long.
+                return Ok(Some(Value::Double(20527.0)));
             }
             // The two rulers page setup is measured with: measured,
             // `InchesToPoints(1)` is 72 and `CentimetersToPoints(2)` is
@@ -29792,12 +29965,17 @@ impl Host for WorkbookHost<'_> {
             }
             if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(host_object_index(receiver.handle)).copied() {
                 let first = self.blocks[handle][0];
-                if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("item") {
-                    if name.eq_ignore_ascii_case("count") && args.is_empty() {
-                        return Ok(Some(Value::Integer(i64::from(match axis {
+                if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge") || name.eq_ignore_ascii_case("item") {
+                    if (name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge")) && args.is_empty() {
+                        let count = i64::from(match axis {
                             RangeAxis::Rows => first.end_row - first.start_row + 1,
                             RangeAxis::Columns => first.end_column - first.start_column + 1,
-                        }))));
+                        });
+                        return Ok(Some(if name.eq_ignore_ascii_case("countlarge") {
+                            Value::LongLong(count)
+                        } else {
+                            Value::Integer(count)
+                        }));
                     }
                     return self.range_collection_object_or_item(first, axis, args).map(Some);
                 }
@@ -29813,10 +29991,8 @@ impl Host for WorkbookHost<'_> {
                     let [wanted] = args else {
                         return Err("Areas.Item takes one number".to_string());
                     };
-                    let at = positive_index(wanted, "index")? as usize;
-                    let block = areas
-                        .get(at - 1)
-                        .ok_or_else(|| format!("this range has no area number {at}"))?;
+                    let at = self.areas_item_index(wanted, areas.len(), false)?;
+                    let block = &areas[at];
                     return Ok(Some(self.object(HostObject::Range(*block))));
                 }
                 return Ok(None);
@@ -30458,10 +30634,7 @@ impl Host for WorkbookHost<'_> {
                     return match args {
                         [] | [Value::Missing] => Ok(Some(self.areas_of(range))),
                         [wanted] => {
-                            let at = positive_index(wanted, "index")? as usize;
-                            if at != 1 {
-                                return Err(format!("this range has no area number {at}"));
-                            }
+                            self.areas_item_index(wanted, 1, false)?;
                             Ok(Some(self.object(HostObject::Range(range))))
                         }
                         _ => Err("Areas takes one number".to_string()),
@@ -30783,6 +30956,17 @@ impl Host for WorkbookHost<'_> {
         args: &[Value],
         argument_names: &[Option<String>],
     ) -> Result<Option<Value>, String> {
+        if argument_names.iter().any(Option::is_some)
+            && (name.eq_ignore_ascii_case("item") || name.eq_ignore_ascii_case("_default"))
+        {
+            if let Some(parameters) = receiver.and_then(|receiver|
+                builtin_compilation_references().library.member_parameter_names(&receiver.kind, name, 3))
+            {
+                let parameters: Vec<_> = parameters.iter().map(String::as_str).collect();
+                let args = normalize_named_arguments(args, argument_names, &parameters, name)?;
+                return self.call(receiver, name, &args);
+            }
+        }
         let parameters = if name.eq_ignore_ascii_case("find") {
             Some(
                 &[
@@ -31271,12 +31455,17 @@ impl Host for WorkbookHost<'_> {
             return self.blocks_member(*handle, name, &[]);
         }
         if let Some(HostObject::BlocksAxis(handle, axis)) = self.objects.get(host_object_index(receiver.handle)).copied() {
-            if name.eq_ignore_ascii_case("count") {
+            if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge") {
                 let first = self.blocks[handle][0];
-                return Ok(Some(Value::Integer(i64::from(match axis {
+                let count = i64::from(match axis {
                     RangeAxis::Rows => first.end_row - first.start_row + 1,
                     RangeAxis::Columns => first.end_column - first.start_column + 1,
-                }))));
+                });
+                return Ok(Some(if name.eq_ignore_ascii_case("countlarge") {
+                    Value::LongLong(count)
+                } else {
+                    Value::Integer(count)
+                }));
             }
             return self.blocks_member(handle, name, &[]);
         }
@@ -32539,12 +32728,16 @@ impl Host for WorkbookHost<'_> {
             return Ok(None);
         }
         if let Some((range, axis)) = self.range_collection(receiver) {
-            if name.eq_ignore_ascii_case("count") {
-                let count = match axis {
+            if name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge") {
+                let count = i64::from(match axis {
                     RangeAxis::Rows => range.end_row - range.start_row + 1,
                     RangeAxis::Columns => range.end_column - range.start_column + 1,
-                };
-                return Ok(Some(Value::Integer(i64::from(count))));
+                });
+                return Ok(Some(if name.eq_ignore_ascii_case("countlarge") {
+                    Value::LongLong(count)
+                } else {
+                    Value::Integer(count)
+                }));
             }
             // Everything else a range answers, a row or a column answers the
             // same way, so this falls through to the ordinary range arms
@@ -33074,13 +33267,7 @@ impl Host for WorkbookHost<'_> {
             .iter()
             .any(|wanted| name.eq_ignore_ascii_case(wanted))
         {
-            self.settle(range);
-            let lower = name.to_ascii_lowercase();
-            let found = self.formula_links(range, lower.contains("precedents"), lower.starts_with("direct"));
-            if found.is_empty() {
-                return Err(oxivba_core::host_error_explained(1004, "No cells were found.", "nothing on this sheet is linked"));
-            }
-            return self.blocks_object(found).map(Some);
+            return self.dependency_ranges(&[range], name).map(Some);
         }
         // `ID`: a label the macro may give a cell, empty until it does.
         if name.eq_ignore_ascii_case("id") {
@@ -39823,6 +40010,23 @@ fn column_index(value: &Value) -> Result<u32, String> {
         return Err(host_error(1004, format!("{letters:?} is not a column")));
     }
     positive_index(value, "column")
+}
+
+fn areas_item_index(value: &Value, count: usize) -> Result<usize, String> {
+    use oxivba_core::runtime::{coerce_automation_scalar, AutomationScalarType};
+
+    // Areas.Item takes an Automation Long, including ties-to-even rounding.
+    let Value::Double(number) = coerce_automation_scalar(value, AutomationScalarType::Double)? else {
+        unreachable!("Double coercion returns a Double");
+    };
+    let number = number.round_ties_even();
+    if !number.is_finite() || number < f64::from(i32::MIN) || number > f64::from(i32::MAX) {
+        return Err(host_error(6, "Areas.Item index overflows Long"));
+    }
+    if number < 1.0 || number > count as f64 {
+        return Err(host_error(1004, "Areas.Item index is outside the collection"));
+    }
+    Ok(number as usize - 1)
 }
 
 fn positive_index(value: &Value, label: &str) -> Result<u32, String> {
@@ -51307,6 +51511,1119 @@ End Function
             }
         }
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+
+    #[test]
+    fn named_index_default_calls_keep_native_type_specific_compile_errors() {
+        let cases = [
+            ("typed", "Areas", "collection(Index:=2)", None),
+            ("object", "Object", "collection(Index:=2)", Some("\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}")),
+            ("variant", "Variant", "collection(Index:=2)", Some("\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{306f}\u{4f7f}\u{3048}\u{307e}\u{305b}\u{3093}\u{3002}")),
+            ("variant_positional", "Variant", "collection(2)", None),
+            ("variant_item_named", "Variant", "collection.Item(Index:=2)", None),
+        ];
+        for (name, declaration, call, message) in cases {
+            let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function Probe() As String
+ Dim collection As {declaration}
+ Dim selected As Range
+ On Error GoTo Failed
+ Set collection = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7").Areas
+ Set selected = {call}
+ Probe = "OK|" & selected.Address
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number)
+End Function
+"#);
+            let control = execute_workbook_vba(workbook(), &source,
+                "NamedDefaultProbe.Control", vec![], 0, failure_context()).unwrap();
+            assert!(control.error.is_none(), "{name}: uncalled invalid procedure must stay uncompiled");
+            assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready", "{name}");
+            let outcome = execute_workbook_vba(workbook(), &source,
+                "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+            if let Some(message) = message {
+                let error = outcome.error.as_ref().expect(name);
+                assert_eq!(error.kind, "compile", "{name}: {}", error.message);
+                assert!(error.message.ends_with(message), "{name}: {}", error.message);
+            } else {
+                assert!(outcome.error.is_none(), "{name}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], "OK|$F$6:$G$7", "{name}");
+            }
+            assert!(!outcome.workbook_changed, "{name}");
+            assert!(outcome.debug_output.is_empty() && outcome.messages.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn named_index_qualified_variables_and_factory_results_keep_native_compile_phase() {
+        for (kind, factory) in [
+            ("Object", false), ("Object", true),
+            ("Variant", false), ("Variant", true),
+            ("Areas", false), ("Areas", true),
+        ] {
+            for named in [true, false] {
+                let argument = if named { "Index:=2" } else { "2" };
+                let factory_source = format!(r#"Public Function MakeCollection() As {kind}
+ Set MakeCollection = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7").Areas
+End Function
+"#);
+                let variable_declaration = format!("Public collection As {kind}");
+                let (declaration, setup, target, extra) = if factory {
+                    ("", "", "MakeCollection", factory_source.as_str())
+                } else {
+                    (variable_declaration.as_str(),
+                        r#"Set collection = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7").Areas"#,
+                        "NamedDefaultProbe.collection", "")
+                };
+                let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+{declaration}
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function Probe() As String
+ Dim selected As Range
+ On Error GoTo Failed
+ {setup}
+ Set selected = {target}({argument})
+ Probe = "OK|" & selected.Address
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number)
+End Function
+{extra}"#);
+                let control = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Control", vec![], 0, failure_context()).unwrap();
+                assert!(control.error.is_none(), "uncalled invalid procedure must stay uncompiled");
+                assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+                let outcome = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+                if named && kind != "Areas" {
+                    let error = outcome.error.as_ref().expect("named index must fail before execution");
+                    assert_eq!(error.kind, "compile", "factory={factory}: {}", error.message);
+                    let message = if kind == "Variant" {
+                        "\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{306f}\u{4f7f}\u{3048}\u{307e}\u{305b}\u{3093}\u{3002}"
+                    } else {
+                        "\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}"
+                    };
+                    assert!(error.message.ends_with(message), "{kind} factory={factory}: {}", error.message);
+                } else {
+                    assert!(outcome.error.is_none(), "factory={factory}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+                    assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], "OK|$F$6:$G$7");
+                }
+                assert!(!outcome.workbook_changed);
+                assert!(outcome.debug_output.is_empty() && outcome.messages.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn named_index_reference_results_validate_names_and_bind_operand_positions() {
+        for (kind, factory, argument, rejected) in [
+            ("Areas", true, "Missing:=2", true),
+            ("Areas", false, "Missing:=2", true),
+            ("Range", true, "ColumnIndex:=2, RowIndex:=1", false),
+            ("Range", false, "ColumnIndex:=2, RowIndex:=1", false),
+            ("Range", true, "Missing:=2", true),
+        ] {
+            let value = if kind == "Areas" {
+                r#"ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7").Areas"#
+            } else {
+                r#"ThisWorkbook.Worksheets(1).Range("B2:D4")"#
+            };
+            let declaration = if factory { String::new() } else { format!("Public collection As {kind}") };
+            let setup = if factory { String::new() } else { format!("Set collection = {value}") };
+            let target = if factory { "MakeCollection" } else { "NamedDefaultProbe.collection" };
+            let extra = if factory {
+                format!("Public Function MakeCollection() As {kind}\n Set MakeCollection = {value}\nEnd Function\n")
+            } else { String::new() };
+            let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+{declaration}
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function Probe() As String
+ Dim selected As Range
+ On Error GoTo Failed
+ {setup}
+ Set selected = {target}({argument})
+ Probe = "OK|" & selected.Address
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number)
+End Function
+{extra}"#);
+            let control = execute_workbook_vba(workbook(), &source,
+                "NamedDefaultProbe.Control", vec![], 0, failure_context()).unwrap();
+            assert!(control.error.is_none(), "uncalled invalid procedure must stay uncompiled");
+            assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+            let outcome = execute_workbook_vba(workbook(), &source,
+                "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+            if rejected {
+                let error = outcome.error.as_ref().expect("unknown named index must not execute");
+                assert_eq!(error.kind, "compile", "{kind} factory={factory}: {}", error.message);
+                assert!(error.message.ends_with("\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}"),
+                    "{kind} factory={factory}: {}", error.message);
+            } else {
+                assert!(outcome.error.is_none(), "{kind} factory={factory}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], "OK|$C$2");
+            }
+            assert!(!outcome.workbook_changed);
+            assert!(outcome.debug_output.is_empty() && outcome.messages.is_empty());
+        }
+    }
+
+    #[test]
+    fn named_source_default_indices_validate_names_and_preserve_byref() {
+        for factory in [false, true] {
+            for (argument, byref, has_default, rejected, expected) in [
+                ("2", false, true, false, "OK|$F$6:$G$7"),
+                ("Index:=2", false, true, false, "OK|$F$6:$G$7"),
+                ("Missing:=2", false, true, true, ""),
+                ("Index:=slot", true, true, false, "OK|$F$6:$G$7|12"),
+                ("Index:=2", false, false, true, ""),
+                ("2", false, false, false, "ERR|438"),
+            ] {
+                let declaration = if factory { "" } else { "Public collection As IndexBox" };
+                let setup = if factory { "" } else { "Set collection = New IndexBox" };
+                let target = if factory { "MakeCollection" } else { "NamedDefaultProbe.collection" };
+                let extra = if factory {
+                    "Public Function MakeCollection() As IndexBox\n Set MakeCollection = New IndexBox\nEnd Function\n"
+                } else { "" };
+                let mode = if byref { "ByRef" } else { "ByVal" };
+                let mutate = if byref { " Index = Index + 10\n" } else { "" };
+                let class_body = if has_default {
+                    format!(r#"Public Property Get ValueAt({mode} Index As Long) As Range
+Attribute ValueAt.VB_UserMemId = 0
+ Set ValueAt = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7").Areas.Item(Index)
+{mutate}End Property
+"#)
+                } else { "Public marker As Long\n".to_string() };
+                let suffix = if byref { r#" & "|" & CStr(slot)"# } else { "" };
+                let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+{declaration}
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function Probe() As String
+ Dim selected As Range
+ Dim slot As Long
+ On Error GoTo Failed
+ slot = 2
+ {setup}
+ Set selected = {target}({argument})
+ Probe = "OK|" & selected.Address{suffix}
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number)
+End Function
+{extra}VERSION 1.0 CLASS
+Attribute VB_Name = "IndexBox"
+{class_body}"#);
+                let control = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Control", vec![], 0, failure_context()).unwrap();
+                assert!(control.error.is_none(), "uncalled invalid procedure must stay uncompiled");
+                assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+                let outcome = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+                if rejected {
+                    let error = outcome.error.as_ref().expect("invalid named index must not execute");
+                    assert_eq!(error.kind, "compile", "factory={factory} {argument}: {}", error.message);
+                    assert!(error.message.ends_with("\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}"),
+                        "factory={factory} {argument}: {}", error.message);
+                } else {
+                    assert!(outcome.error.is_none(), "factory={factory} {argument}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+                    assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected,
+                        "factory={factory} {argument}");
+                }
+                assert!(!outcome.workbook_changed);
+                assert!(outcome.debug_output.is_empty() && outcome.messages.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn named_index_arrays_fail_at_compile_time_and_keep_positional_indices() {
+        for (name, declaration, seed, index) in [
+            ("typed", "Dim collection(1 To 2) As Long", "collection(1) = 5\n collection(2) = 7", 2),
+            ("variant", "Dim collection As Variant", "collection = Array(5,7)", 1),
+            ("qualified", "Public collection(1 To 2) As Long", "collection(1) = 5\n collection(2) = 7", 2),
+        ] {
+            for named in [true, false] {
+                let argument = if named { format!("Index:={index}") } else { index.to_string() };
+                let target = if name == "qualified" { "NamedDefaultProbe.collection" } else { "collection" };
+                let (module_declaration, local_declaration) = if name == "qualified" {
+                    (declaration, "")
+                } else {
+                    ("", declaration)
+                };
+                let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+{module_declaration}
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function Probe() As String
+ {local_declaration}
+ {seed}
+ Probe = CStr({target}({argument}))
+End Function
+"#);
+                let control = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Control", vec![], 0, failure_context()).unwrap();
+                assert!(control.error.is_none(), "{name}: uncalled invalid procedure must stay uncompiled");
+                assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready", "{name}");
+                let outcome = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+                if named {
+                    let error = outcome.error.as_ref().expect(name);
+                    assert_eq!(error.kind, "compile", "{name}: {}", error.message);
+                    assert!(error.message.ends_with("\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{306f}\u{4f7f}\u{3048}\u{307e}\u{305b}\u{3093}\u{3002}"), "{name}: {}", error.message);
+                } else {
+                    assert!(outcome.error.is_none(), "{name}: {:?}", outcome.error.as_ref().map(|e| &e.message));
+                    assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], "7", "{name}");
+                }
+                assert!(!outcome.workbook_changed, "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn on_demand_declared_types_fail_before_side_effects() {
+        for name in ["MissingType", "A"] {
+            let source = format!("Attribute VB_Name = \"TypeProbe\"\nPublic Function Probe() As Long\n On Error Resume Next\n Range(\"A1\").Value = 99\n Debug.Print \"ran\"\n MsgBox \"ran\"\n Dim obj As {name}\n Probe = 1\nEnd Function\nVERSION 1.0 CLASS\nAttribute VB_Name = \"\u{ff21}\"\nPublic marker As Long\n");
+            let outcome = execute_workbook_vba(failure_workbook(), &source,
+                "TypeProbe.Probe", vec![], 0, failure_context()).unwrap();
+            let error = outcome.error.as_ref().expect("unknown declared type must not run");
+            assert_eq!(error.kind, "compile", "{name}: {}", error.message);
+            assert_eq!(error.line, Some(7), "{name}: {}", error.message);
+            assert!(!outcome.workbook_changed, "{name}");
+            assert!(outcome.debug_output.is_empty(), "{name}");
+            assert!(outcome.messages.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn on_demand_type_validation_leaves_uncalled_procedures_uncompiled() {
+        let source = "Attribute VB_Name = \"TypeProbe\"\nPublic Function Good() As Long\n Good = 7\nEnd Function\nPublic Function Bad() As Long\n Dim value As MissingType\n Bad = 9\nEnd Function\n";
+        let outcome = execute_workbook_vba(failure_workbook(), source,
+            "TypeProbe.Good", vec![], 0, failure_context()).unwrap();
+        assert!(outcome.error.is_none(), "{}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+        assert!(!outcome.workbook_changed);
+        assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], 7);
+    }
+
+    #[test]
+    fn on_demand_module_and_new_types_fail_before_side_effects() {
+        let header = "Attribute VB_Name = \"TypeProbe\"\n";
+        let body = |declarations: &str, statements: &str| format!(
+            "{header}{declarations}Public Function Probe() As Long\n On Error Resume Next\n Range(\"A1\").Value = 99\n Debug.Print \"ran\"\n MsgBox \"ran\"\n{statements} Probe = 1\nEnd Function\n"
+        );
+        let cases = [
+            ("module", body("Private bad As MissingType\n", "")),
+            ("record", body("Private Type UnusedRecord\n bad As MissingType\nEnd Type\n", "")),
+            ("new", body("", " Dim obj As Object\n Set obj = New MissingType\n")),
+            ("class", format!("{}VERSION 1.0 CLASS\nAttribute VB_Name = \"InvalidFieldClass\"\nPublic bad As MissingType\n",
+                body("", " Dim obj As InvalidFieldClass\n Set obj = New InvalidFieldClass\n"))),
+        ];
+        for (name, source) in cases {
+            let outcome = execute_workbook_vba(failure_workbook(), &source,
+                "TypeProbe.Probe", vec![], 0, failure_context()).unwrap();
+            let error = outcome.error.as_ref().expect(name);
+            assert_eq!(error.kind, "compile", "{name}: {}", error.message);
+            assert!(!outcome.workbook_changed, "{name}");
+            assert!(outcome.debug_output.is_empty(), "{name}");
+            assert!(outcome.messages.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn on_demand_types_leave_unreferenced_declaration_scopes_uncompiled() {
+        let entry = "Attribute VB_Name = \"TypeProbe\"\nPublic Function Probe() As Long\n Probe = 7\nEnd Function\n";
+        for unused in [
+            "Attribute VB_Name = \"OtherUnusedModule\"\nPrivate bad As MissingType\n",
+            "VERSION 1.0 CLASS\nAttribute VB_Name = \"UnusedClass\"\nPublic bad As MissingType\n",
+        ] {
+            let source = format!("{entry}{unused}");
+            let outcome = execute_workbook_vba(failure_workbook(), &source,
+                "TypeProbe.Probe", vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+            assert!(!outcome.workbook_changed);
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], 7);
+        }
+    }
+
+    #[test]
+    fn areas_item_calls_source_default_once_and_respects_dispatch_depth() {
+        // Outcomes and getter counts measured with Excel 64-bit, Office 16.
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "AreaIndexProvider"
+Option Explicit
+Public Kind As Long
+Public Calls As Long
+Public Property Get Value() As Variant
+Attribute Value.VB_UserMemId = 0
+ Calls = Calls + 1
+ Select Case Kind
+ Case 1: Value = 2
+ Case 2: Value = 1.5
+ Case 3: Value = "2"
+ Case 4: Value = Null
+ Case 5: Value = CVErr(2042)
+ Case 6: Set Value = ThisWorkbook.Worksheets(1).Range("Z1")
+ Case 7: Set Value = Nothing
+ Case 8: Value = Array(1)
+ Case 9: Err.Raise 513, "ProviderCustom", "default raised"
+ End Select
+End Property
+Attribute VB_Name = "AreasProbe"
+Option Explicit
+Public Function Probe(ByVal mode As Long, ByVal kind As Long) As String
+ Dim provider As AreaIndexProvider
+ Dim index As Variant
+ Dim query As Range
+ Dim collection As Areas
+ Dim lateCollection As Object
+ Dim lateRange As Object
+ Dim selected As Range
+ Dim failureNumber As Long
+ Range("Z1").Value2 = 2
+ On Error GoTo Failed
+ Set provider = New AreaIndexProvider
+ provider.Kind = kind
+ Set index = provider
+ Set query = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7,J10:L10")
+ Set collection = query.Areas
+ Set lateCollection = collection
+ Set lateRange = query
+ Select Case mode
+ Case 0: Set selected = query.Areas(index)
+ Case 1: Set selected = collection.Item(index)
+ Case 2: Set selected = lateCollection.Item(index)
+ Case 3: Set selected = lateRange.Areas(index)
+ Case 4: Set selected = collection(index)
+ Case 5: Set selected = lateCollection(index)
+ Case 6: Set selected = CallByName(collection, "Item", VbGet, index)
+ Case 7: With collection
+ Set selected = .Item(index)
+ End With
+ Case 8: With lateCollection
+ Set selected = .Item(index)
+ End With
+ Case 9: With query
+ Set selected = .Areas(index)
+ End With
+ Case 10: With lateRange
+ Set selected = .Areas(index)
+ End With
+ Case 11: Set selected = collection.Item(Index:=index)
+ Case 12: Set selected = lateCollection.Item(Index:=index)
+ Case 15: With collection
+ Set selected = .Item(Index:=index)
+ End With
+ Case 16: With lateCollection
+ Set selected = .Item(Index:=index)
+ End With
+ End Select
+ Probe = "OK|" & selected.Address & "|calls=" & CStr(provider.Calls)
+ Exit Function
+Failed:
+ failureNumber = Err.Number
+ Probe = CStr(failureNumber) & "|calls=" & CStr(provider.Calls)
+End Function
+"#;
+        for named in [false, true] {
+            let source = if named {
+                source.replace("Get Value()", "Get IndexValue()")
+                    .replace("Attribute Value.VB_UserMemId", "Attribute IndexValue.VB_UserMemId")
+                    .replace(" Value =", " IndexValue =")
+                    .replace("End Property", "End Property\nPublic Property Get Value() As Variant\n Calls = Calls + 1000\n Value = 3\nEnd Property")
+            } else { source.to_string() };
+            let (modes, kinds) = if named { (17, 9) } else { (7, 8) };
+            for mode in 0..modes {
+                if matches!(mode, 13 | 14) { continue; }
+                for kind in 1..=kinds {
+                    let early = matches!(mode, 0 | 1 | 4 | 7 | 9);
+                    let expected = match kind {
+                        1..=3 => "OK|$F$6:$G$7|calls=1",
+                        6 if early => "OK|$F$6:$G$7|calls=1",
+                        4 if early => "94|calls=1",
+                        9 if early => "513|calls=1",
+                        _ => "13|calls=1",
+                    };
+                    let outcome = execute_workbook_vba(workbook(), &source, "AreasProbe.Probe",
+                        vec![Value::Integer(mode), Value::Integer(kind)], 0, failure_context()).unwrap();
+                    assert!(outcome.error.is_none(), "mode {mode}, kind {kind}: {}",
+                        outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+                    assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected,
+                        "mode {mode}, kind {kind}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn areas_item_nested_defaults_follow_one_scalar_conversion_layer() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "AreaIndexLeaf"
+Public Kind As Long
+Public Calls As Long
+Public Property Get LeafIndex() As Variant
+Attribute LeafIndex.VB_UserMemId = 0
+ Calls = Calls + 1
+ Select Case Kind
+ Case 13: Set LeafIndex = Nothing
+ Case 14: Err.Raise 513, "LeafCustom", "leaf raised"
+ Case 15: LeafIndex = Null
+ Case 16: Set LeafIndex = ThisWorkbook.Worksheets(1).Range("Z1")
+ Case 17: Set LeafIndex = ThisWorkbook.Worksheets(1)
+ Case 18: LeafIndex = Array(1)
+ Case 19: LeafIndex = "bad"
+ Case 20: LeafIndex = 2147483648#
+ Case 21: LeafIndex = 0
+ Case 22: LeafIndex = CVErr(2042)
+ Case Else: LeafIndex = 2
+ End Select
+End Property
+VERSION 1.0 CLASS
+Attribute VB_Name = "AreaIndexProvider"
+Public Kind As Long
+Public Calls As Long
+Public Leaf As AreaIndexLeaf
+Public Property Get IndexValue() As Variant
+Attribute IndexValue.VB_UserMemId = 0
+ Calls = Calls + 1
+ Select Case Kind
+ Case 11: Set IndexValue = ThisWorkbook.Worksheets(1)
+ Case 12: Set IndexValue = ThisWorkbook.Worksheets(1).Range("Z1:Z2")
+ Case Else: Set IndexValue = Leaf
+ End Select
+End Property
+Attribute VB_Name = "AreasProbe"
+Public Function Probe(ByVal mode As Long, ByVal kind As Long) As String
+ Dim provider As AreaIndexProvider
+ Dim index As Variant
+ Dim query As Range
+ Dim collection As Areas
+ Dim lateCollection As Object
+ Dim lateRange As Object
+ Dim selected As Range
+ Dim status As String
+ Range("Z1").Value2 = 2
+ On Error GoTo Failed
+ Set provider = New AreaIndexProvider
+ provider.Kind = kind
+ Set provider.Leaf = New AreaIndexLeaf
+ provider.Leaf.Kind = kind
+ Set index = provider
+ Set query = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7,J10:L10")
+ Set collection = query.Areas
+ Set lateCollection = collection
+ Set lateRange = query
+ Select Case mode
+ Case 0: Set selected = query.Areas(index)
+ Case 1: Set selected = collection.Item(index)
+ Case 2: Set selected = lateCollection.Item(index)
+ Case 3: Set selected = lateRange.Areas(index)
+ Case 4: Set selected = collection(index)
+ Case 5: Set selected = lateCollection(index)
+ Case 6: Set selected = CallByName(collection, "Item", VbGet, index)
+ Case 7: With collection
+ Set selected = .Item(index)
+ End With
+ Case 8: With lateCollection
+ Set selected = .Item(index)
+ End With
+ Case 9: With query
+ Set selected = .Areas(index)
+ End With
+ Case 10: With lateRange
+ Set selected = .Areas(index)
+ End With
+ End Select
+ status = "OK|" & selected.Address
+ GoTo Finished
+Failed:
+ status = CStr(Err.Number)
+Finished:
+ Probe = status & "|calls=" & CStr(provider.Calls) & "|leafCalls=" & CStr(provider.Leaf.Calls)
+End Function
+"#;
+        // Both default getter counts and error outcomes measured in native Excel.
+        for mode in 0..11 {
+            for kind in 10..=22 {
+                let early = matches!(mode, 0 | 1 | 4 | 7 | 9);
+                let status = match (early, kind) {
+                    (true, 10) => "OK|$F$6:$G$7",
+                    (true, 20) => "6",
+                    (true, 21) => "1004",
+                    _ => "13",
+                };
+                let leaf_calls = i32::from(early && !matches!(kind, 11 | 12));
+                let outcome = execute_workbook_vba(workbook(), source, "AreasProbe.Probe",
+                    vec![Value::Integer(mode), Value::Integer(kind)], 0, failure_context()).unwrap();
+                assert!(outcome.error.is_none(), "mode {mode}, kind {kind}: {}",
+                    outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                    format!("{status}|calls=1|leafCalls={leaf_calls}"), "mode {mode}, kind {kind}");
+            }
+        }
+    }
+
+    #[test]
+    fn borders_item_coercion_matches_native_colored_indices() {
+        // Two native Excel range shapes, fourteen call paths, 32 input kinds.
+        let source = r#"Attribute VB_Name = "BordersCoercionProbe"
+Option Explicit
+Private Function Query(ByVal shape As Long) As Range
+ If shape = 0 Then
+ Set Query = ThisWorkbook.Worksheets(1).Range("B2:C3")
+ Else
+ Set Query = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7,J10:L11")
+ End If
+End Function
+Public Sub Seed()
+ Dim shape As Long
+ Dim i As Long
+ Dim r As Range
+ For shape = 0 To 1
+ Set r = Query(shape)
+ For i = 5 To 12
+ r.Borders(i).LineStyle = 1
+ r.Borders(i).Color = i * 1000
+ Next i
+ Next shape
+ ThisWorkbook.Worksheets(1).Range("Z1").Value2 = 7
+ ThisWorkbook.Worksheets(1).Range("Z2").Value2 = 8
+End Sub
+Public Function Probe(ByVal mode As Long, ByVal kind As Long, ByVal shape As Long) As String
+ Dim queryRange As Range
+ Dim collection As Borders
+ Dim lateCollection As Object
+ Dim lateRange As Object
+ Dim selected As Border
+ Dim index As Variant
+ Dim value As Variant
+ Dim written As String
+ On Error GoTo Failed
+ Set queryRange = Query(shape)
+ Set collection = queryRange.Borders
+ Set lateCollection = collection
+ Set lateRange = queryRange
+ Select Case kind
+ Case 1: index = 7
+ Case 2: index = 8
+ Case 3: index = 12
+ Case 4: index = 0
+ Case 5: index = -1
+ Case 6: index = 13
+ Case 7: index = 7.4
+ Case 8: index = 7.5
+ Case 9: index = 8.5
+ Case 10: index = 12.5
+ Case 11: index = "7"
+ Case 12: index = "7.5"
+ Case 13: index = "bad"
+ Case 14: index = Empty
+ Case 15: index = Null
+ Case 16: index = True
+ Case 17: index = False
+ Case 18: index = CCur(7.5)
+ Case 19: index = CLngLng(7)
+ Case 20: index = CVErr(2042)
+ Case 21: index = Array(1)
+ Case 22: index = 2147483648#
+ Case 23: index = ""
+ Case 24: index = CDate(7)
+ Case 25: index = 2147483647.5
+ Case 26: index = -2147483648.5
+ Case 27: index = " 7 "
+ Case 28: index = CDec(7.5)
+ Case 29: Set index = ThisWorkbook.Worksheets(1).Range("Z1")
+ Case 30: Set index = ThisWorkbook.Worksheets(1).Range("Z1:Z2")
+ Case 31: Set index = Nothing
+ Case 32: Set index = ThisWorkbook.Worksheets(1)
+ End Select
+ Select Case mode
+ Case 0: Set selected = queryRange.Borders(index)
+ Case 1: Set selected = collection.Item(index)
+ Case 2: Set selected = lateCollection.Item(index)
+ Case 3: Set selected = lateRange.Borders(index)
+ Case 4: Set selected = collection(index)
+ Case 5: Set selected = lateCollection(index)
+ Case 6: Set selected = CallByName(collection, "Item", VbGet, index)
+ Case 7: With collection
+ Set selected = .Item(index)
+ End With
+ Case 8: With lateCollection
+ Set selected = .Item(index)
+ End With
+ Case 9: With queryRange
+ Set selected = .Borders(index)
+ End With
+ Case 10: With lateRange
+ Set selected = .Borders(index)
+ End With
+ Case 11: Set selected = CallByName(queryRange, "Borders", VbGet, index)
+ Case 12: Set selected = collection.Item(index:=index)
+ Case 13: Set selected = lateCollection.Item(index:=index)
+ End Select
+ value = selected.Color
+ If IsNull(value) Then
+ written = "NULL"
+ Else
+ written = CStr(value)
+ End If
+ Probe = "OK|" & written & "|" & TypeName(value) & "|" & CStr(VarType(value)) & "|" & TypeName(selected)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+
+"#;
+        let expected_early = [
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|12000|Double|5|Border",
+            "ERR|1004",
+            "ERR|1004",
+            "ERR|1004",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|12000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "ERR|13",
+            "ERR|1004",
+            "ERR|94",
+            "ERR|1004",
+            "ERR|1004",
+            "OK|8000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "ERR|13",
+            "ERR|13",
+            "ERR|6",
+            "ERR|13",
+            "OK|7000|Double|5|Border",
+            "ERR|6",
+            "ERR|1004",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "ERR|13",
+            "ERR|91",
+            "ERR|438",
+        ];
+        let expected_dispatch = [
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|12000|Double|5|Border",
+            "ERR|1004",
+            "ERR|1004",
+            "ERR|1004",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|12000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "ERR|13",
+            "ERR|1004",
+            "ERR|13",
+            "ERR|1004",
+            "ERR|1004",
+            "OK|8000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "ERR|13",
+            "ERR|13",
+            "ERR|6",
+            "ERR|13",
+            "OK|7000|Double|5|Border",
+            "ERR|6",
+            "ERR|1004",
+            "OK|7000|Double|5|Border",
+            "OK|8000|Double|5|Border",
+            "OK|7000|Double|5|Border",
+            "ERR|13",
+            "ERR|13",
+            "ERR|13",
+        ];
+        let seeded = execute_workbook_vba(workbook(), source, "BordersCoercionProbe.Seed",
+            vec![], 0, failure_context()).unwrap();
+        assert!(seeded.error.is_none(), "{}", seeded.error.as_ref().map_or("", |e| e.message.as_str()));
+        for shape in 0..2 {
+            for mode in 0..14 {
+                for kind in 1..=32 {
+                    let outcome = execute_workbook_vba(seeded.workbook.clone(), source,
+                        "BordersCoercionProbe.Probe", vec![Value::Integer(mode),
+                        Value::Integer(kind), Value::Integer(shape)], 0, failure_context()).unwrap();
+                    assert!(outcome.error.is_none(), "shape {shape}, mode {mode}, kind {kind}: {}",
+                        outcome.error.as_ref().map_or("", |e| e.message.as_str()));
+                    let result = serde_json::to_value(&outcome.result).unwrap();
+                    let actual = result["value"].as_str().expect("probe result");
+                    let projected = if actual.starts_with("ERR|") {
+                        actual.split('|').take(2).collect::<Vec<_>>().join("|")
+                    } else { actual.to_string() };
+                    let expected = if matches!(mode, 0 | 1 | 4 | 7 | 9) {
+                        &expected_early
+                    } else { &expected_dispatch };
+                    assert_eq!(projected, expected[kind as usize - 1],
+                        "shape {shape}, mode {mode}, kind {kind}");
+                    assert!(!outcome.workbook_changed, "probe must only read borders");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn borders_item_source_defaults_match_native_getter_counts() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "BorderIndexProvider"
+Attribute VB_Base = "0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}"
+Attribute VB_TemplateDerived = False
+Attribute VB_Customizable = False
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Option Explicit
+Public Kind As Long
+Public Calls As Long
+Public Property Get Value() As Variant
+Attribute Value.VB_UserMemId = 0
+ Calls = Calls + 1
+ Select Case Kind
+ Case 1: Value = 7
+ Case 2: Value = 7.5
+ Case 3: Value = "7"
+ Case 4: Value = Null
+ Case 5: Value = CVErr(2042)
+ Case 6: Set Value = ThisWorkbook.Worksheets(1).Range("Z1")
+ Case 7: Set Value = Nothing
+ Case 8: Value = Array(1)
+ End Select
+End Property
+
+Attribute VB_Name = "BorderSourceDefaultProbe"
+Option Explicit
+Public Sub Seed()
+ Range("Z1").Value2 = 7
+End Sub
+Public Function Probe(ByVal mode As Long, ByVal kind As Long) As String
+ Dim provider As BorderIndexProvider
+ Dim index As Variant
+ Dim query As Range
+ Dim collection As Borders
+ Dim lateCollection As Object
+ Dim lateRange As Object
+ Dim selected As Border
+ Dim failureText As String
+ On Error GoTo Failed
+ Set provider = New BorderIndexProvider
+ provider.Kind = kind
+ Set index = provider
+ Set query = ThisWorkbook.Worksheets(1).Range("B2:C3,F6:G7,J10:L10")
+ Set collection = query.Borders
+ Set lateCollection = collection
+ Set lateRange = query
+ Select Case mode
+ Case 0: Set selected = query.Borders(index)
+ Case 1: Set selected = collection.Item(index)
+ Case 2: Set selected = lateCollection.Item(index)
+ Case 3: Set selected = lateRange.Borders(index)
+ Case 4: Set selected = collection(index)
+ Case 5: Set selected = lateCollection(index)
+ Case 6: Set selected = CallByName(collection,"Item",VbGet,index)
+ End Select
+ Probe = "OK|" & selected.LineStyle & "|" & TypeName(selected) & "|calls=" & CStr(provider.Calls)
+ Exit Function
+Failed:
+ failureText = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = failureText & "|calls=" & CStr(provider.Calls)
+End Function
+
+"#;
+        let expected_early = [
+            "OK|-4142|Border|calls=1",
+            "OK|-4142|Border|calls=1",
+            "OK|-4142|Border|calls=1",
+            "ERR|94|calls=1",
+            "ERR|13|calls=1",
+            "OK|-4142|Border|calls=1",
+            "ERR|13|calls=1",
+            "ERR|13|calls=1",
+        ];
+        let expected_dispatch = [
+            "OK|-4142|Border|calls=1",
+            "OK|-4142|Border|calls=1",
+            "OK|-4142|Border|calls=1",
+            "ERR|13|calls=1",
+            "ERR|13|calls=1",
+            "ERR|13|calls=1",
+            "ERR|13|calls=1",
+            "ERR|13|calls=1",
+        ];
+        let seeded = execute_workbook_vba(workbook(), source, "BorderSourceDefaultProbe.Seed",
+            vec![], 0, failure_context()).unwrap();
+        assert!(seeded.error.is_none());
+        for mode in 0..7 {
+            for kind in 1..=8 {
+                let outcome = execute_workbook_vba(seeded.workbook.clone(), source,
+                    "BorderSourceDefaultProbe.Probe", vec![Value::Integer(mode), Value::Integer(kind)],
+                    0, failure_context()).unwrap();
+                assert!(outcome.error.is_none(), "mode {mode}, kind {kind}: {}",
+                    outcome.error.as_ref().map_or("", |e| e.message.as_str()));
+                let result = serde_json::to_value(&outcome.result).unwrap();
+                let actual = result["value"].as_str().expect("probe result");
+                let projected = if actual.starts_with("ERR|") {
+                    format!("ERR|{}|{}", actual.split('|').nth(1).unwrap(), actual.split('|').next_back().unwrap())
+                } else { actual.to_string() };
+                let expected = if matches!(mode, 0 | 1 | 4) { &expected_early } else { &expected_dispatch };
+                assert_eq!(projected, expected[kind as usize - 1], "mode {mode}, kind {kind}");
+                assert!(!outcome.workbook_changed);
+            }
+        }
+    }
+
+    #[test]
+    fn areas_item_resolves_range_default_values_and_object_errors() {
+        for access in ["query.Areas(index)", "collection.Item(index)",
+            "lateCollection.Item(index)", "lateRange.Areas(index)",
+            "collection(index)", "lateCollection(index)",
+            "CallByName(collection, \"Item\", VbGet, index)",
+            "CallByName(query, \"Areas\", VbGet, index)"] {
+            for (index, expected) in [
+                ("Range(\"Z1\")", 1004), ("Range(\"Z1:Z2\")", 13),
+                ("Nothing", 91), ("Worksheets(1)", 438),
+            ] {
+                let source = format!("Attribute VB_Name = \"AreasProbe\"\nPublic Function Probe() As String\n Dim query As Range\n Dim collection As Areas\n Dim lateCollection As Object\n Dim lateRange As Object\n Dim selected As Range\n Dim index As Variant\n On Error GoTo Failed\n Set query = Range(\"B2:C3,F6:G7,J10:L10\")\n Set collection = query.Areas\n Set lateCollection = collection\n Set lateRange = query\n Set index = {index}\n Set selected = {access}\n Probe = \"unexpected success\"\n Exit Function\nFailed:\n Probe = CStr(Err.Number)\nEnd Function\n");
+                let expected = if (access.starts_with("late") || access.starts_with("CallByName")) && matches!(expected, 91 | 94 | 438) { 13 } else { expected };
+                let outcome = execute_workbook_vba(workbook(), &source, "AreasProbe.Probe",
+                    vec![], 0, failure_context()).unwrap();
+                assert!(outcome.error.is_none(), "{access} ({index}): {}",
+                    outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                    expected.to_string(), "{access} ({index})");
+                assert!(!outcome.workbook_changed, "{access} ({index})");
+            }
+        }
+    }
+
+    #[test]
+    fn areas_item_with_blocks_preserve_static_and_dispatch_conversion() {
+        for (block, late) in [
+            ("With collection\n Set selected = .Item(index)\nEnd With", false),
+            ("With lateCollection\n Set selected = .Item(index)\nEnd With", true),
+            ("With query\n Set selected = .Areas(index)\nEnd With", false),
+            ("With lateRange\n Set selected = .Areas(index)\nEnd With", true),
+        ] {
+            for (assignment, expected) in [
+                ("index = Null", 94), ("Set index = Nothing", 91),
+                ("Set index = Worksheets(1)", 438),
+            ] {
+                let source = format!("Attribute VB_Name = \"AreasProbe\"\nPublic Function Probe() As String\n Dim query As Range\n Dim collection As Areas\n Dim lateCollection As Object\n Dim lateRange As Object\n Dim selected As Range\n Dim index As Variant\n On Error GoTo Failed\n Set query = Range(\"B2:C3,F6:G7,J10:L10\")\n Set collection = query.Areas\n Set lateCollection = collection\n Set lateRange = query\n {assignment}\n {block}\n Probe = \"unexpected success\"\n Exit Function\nFailed:\n Probe = CStr(Err.Number)\nEnd Function\n");
+                let outcome = execute_workbook_vba(workbook(), &source, "AreasProbe.Probe",
+                    vec![], 0, failure_context()).unwrap();
+                assert!(outcome.error.is_none(), "{block} ({assignment}): {}",
+                    outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                    if late { 13 } else { expected }.to_string(), "{block} ({assignment})");
+                assert!(!outcome.workbook_changed, "{block} ({assignment})");
+            }
+        }
+    }
+
+    #[test]
+    fn areas_item_coerces_numeric_indices_like_excel() {
+        for access in ["query.Areas(index)", "collection.Item(index)",
+            "lateCollection.Item(index)", "lateRange.Areas(index)",
+            "collection(index)", "lateCollection(index)",
+            "CallByName(collection, \"Item\", VbGet, index)",
+            "CallByName(query, \"Areas\", VbGet, index)"] {
+            for (index, expected) in [
+                ("1.4", "$B$2:$C$3"), ("1.5", "$F$6:$G$7"),
+                ("2.5", "$F$6:$G$7"), ("\"2\"", "$F$6:$G$7"),
+                ("\"1.5\"", "$F$6:$G$7"), ("CCur(1.5)", "$F$6:$G$7"),
+            ] {
+                let source = format!("Attribute VB_Name = \"AreasProbe\"\nPublic Function Probe() As String\n Dim query As Range\n Dim collection As Areas\n Dim lateCollection As Object\n Dim lateRange As Object\n Dim selected As Range\n Dim index As Variant\n Set query = Range(\"B2:C3,F6:G7,J10:L10\")\n Set collection = query.Areas\n Set lateCollection = collection\n Set lateRange = query\n index = {index}\n Set selected = {access}\n Probe = selected.Address\nEnd Function\n");
+                let outcome = execute_workbook_vba(workbook(), &source, "AreasProbe.Probe",
+                    vec![], 0, failure_context()).unwrap();
+                assert!(outcome.error.is_none(), "{access} ({index}): {}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected,
+                    "{access} ({index})");
+                assert!(!outcome.workbook_changed, "{access} ({index})");
+            }
+        }
+    }
+
+    #[test]
+    fn areas_item_preserves_typed_argument_errors() {
+        for access in ["query.Areas(index)", "collection.Item(index)",
+            "lateCollection.Item(index)", "lateRange.Areas(index)",
+            "collection(index)", "lateCollection(index)",
+            "CallByName(collection, \"Item\", VbGet, index)",
+            "CallByName(query, \"Areas\", VbGet, index)"] {
+            for (index, expected) in [
+                ("\"bad\"", 13), ("Null", 94), ("CVErr(2042)", 13),
+                ("Array(1)", 13), ("2147483648#", 6), ("\"\"", 13),
+                ("Empty", 1004), ("-1", 1004),
+            ] {
+                let source = format!("Attribute VB_Name = \"AreasProbe\"\nPublic Function Probe() As String\n Dim query As Range\n Dim collection As Areas\n Dim lateCollection As Object\n Dim lateRange As Object\n Dim selected As Range\n Dim index As Variant\n On Error GoTo Failed\n Set query = Range(\"B2:C3,F6:G7,J10:L10\")\n Set collection = query.Areas\n Set lateCollection = collection\n Set lateRange = query\n index = {index}\n Set selected = {access}\n Probe = \"unexpected success\"\n Exit Function\nFailed:\n Probe = CStr(Err.Number)\nEnd Function\n");
+                let expected = if (access.starts_with("late") || access.starts_with("CallByName")) && matches!(expected, 91 | 94 | 438) { 13 } else { expected };
+                let outcome = execute_workbook_vba(workbook(), &source, "AreasProbe.Probe",
+                    vec![], 0, failure_context()).unwrap();
+                assert!(outcome.error.is_none(), "{access} ({index}): {}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                    expected.to_string(), "{access} ({index})");
+                assert!(!outcome.workbook_changed, "{access} ({index})");
+            }
+        }
+    }
+
+    #[test]
+    fn multi_area_count_checks_long_overflow_for_object_receivers() {
+        for (query, large) in [
+            ("A1:XFD131072,A1", "2147483649"),
+            ("A:XFD,A:XFD", "34359738368"),
+        ] {
+            let source = format!("Attribute VB_Name = \"CountBoundary\"\nPublic Function Probe() As String\n Dim query As Object\n Dim large As Variant\n Dim small As Variant\n On Error GoTo Failed\n Set query = Range(\"{query}\")\n large = query.CountLarge\n small = query.Count\n Probe = \"unexpected success\"\n Exit Function\nFailed:\n Probe = CStr(Err.Number) & \"|\" & CStr(large) & \"|\" & TypeName(large) & \"|\" & CStr(VarType(large))\nEnd Function\n");
+            let outcome = execute_workbook_vba(workbook(), &source, "CountBoundary.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{query}: {}",
+                outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                format!("6|{large}|LongLong|20"), "{query}");
+            assert!(!outcome.workbook_changed, "{query}");
+        }
+    }
+
+    #[test]
+    fn countlarge_preserves_all_range_areas_and_longlong_type() {
+        for (query, expected) in [
+            ("Range(\"A1,A3\")", "2"),
+            ("Range(\"A1,A1\")", "2"),
+            ("Range(\"A:A,C:C\")", "2097152"),
+            ("Range(\"A1:B2,D4:E5\")", "8"),
+            ("Range(\"A1:XFD131072,A1\")", "2147483649"),
+            ("Range(\"A:XFD,A:XFD\")", "34359738368"),
+        ] {
+            let source = format!("Attribute VB_Name = \"CountProbe\"\nPublic Function Probe() As String\n Dim held As Variant\n held = {query}.CountLarge\n Probe = CStr(held) & \"|\" & TypeName(held) & \"|\" & CStr(VarType(held))\nEnd Function\n");
+            let outcome = execute_workbook_vba(workbook(), &source, "CountProbe.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{query}: {}", outcome.error.as_ref().map_or("", |e| e.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                format!("{expected}|LongLong|20"), "{query}");
+            assert!(!outcome.workbook_changed, "{query}");
+        }
+    }
+
+    #[test]
+    fn countlarge_preserves_row_and_column_collection_extent() {
+        for (query, expected) in [
+            ("Worksheets(1).Rows(1)", "1"),
+            ("Worksheets(1).Columns(1)", "1"),
+            ("Worksheets(1).Rows", "1048576"),
+            ("Worksheets(1).Columns", "16384"),
+            ("Range(\"A1:C3\").Rows", "3"),
+            ("Range(\"A1:C3\").Columns", "3"),
+            ("Range(\"A1:C3,D4:F5\").Rows", "3"),
+            ("Range(\"A1:C3,D4:F5\").Columns", "3"),
+            ("Range(\"A1:C3,D4:F5\").Cells", "15"),
+            ("Range(\"A1\").EntireRow", "1"),
+        ] {
+            let source = format!("Attribute VB_Name = \"CountProbe\"\nPublic Function Probe() As String\n Dim held As Variant\n held = {query}.CountLarge\n Probe = CStr(held) & \"|\" & TypeName(held) & \"|\" & CStr(VarType(held))\nEnd Function\n");
+            let outcome = execute_workbook_vba(workbook(), &source, "CountProbe.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{query}: {}", outcome.error.as_ref().map_or("", |e| e.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                format!("{expected}|LongLong|20"), "{query}");
+            assert!(!outcome.workbook_changed, "{query}");
+        }
+    }
+
+    #[test]
+    fn dependency_getters_include_all_areas() {
+        for member in ["Precedents", "DirectPrecedents", "Dependents", "DirectDependents"] {
+            let precedents = member.ends_with("Precedents");
+            let query = if precedents { "B1,C1" } else { "A1,A3" };
+            let expected = if precedents { "$A$1,$A$3|2|2" } else { "$B$1:$C$1|1|2" };
+            let source = format!("Attribute VB_Name = \"GraphProbe\"\nPublic Function Probe() As String\n Dim found As Range\n Range(\"A1\").Value = 2\n Range(\"A3\").Value = 4\n Range(\"B1\").Formula = \"=A1+1\"\n Range(\"C1\").Formula = \"=A3+1\"\n Set found = Range(\"{query}\").{member}\n Probe = found.Address & \"|\" & found.Areas.Count & \"|\" & found.Count\nEnd Function\n");
+            let mut book = workbook();
+            for sheet in &mut book.sheets { sheet.rows.clear(); }
+            let outcome = execute_workbook_vba(book, &source, "GraphProbe.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{member}: {}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected, "{member}");
+        }
+    }
+
+    #[test]
+    fn dependency_getters_resolve_defined_names() {
+        for member in ["Precedents", "DirectPrecedents", "Dependents", "DirectDependents"] {
+            let precedents = member.ends_with("Precedents");
+            let query = if precedents { "B1" } else { "A1" };
+            let expected = if precedents { "$A$1" } else { "$B$1" };
+            let source = format!("Attribute VB_Name = \"GraphProbe\"\nPublic Function Probe() As String\n Dim found As Range\n ActiveSheet.Name = \"GraphSheet\"\n Range(\"A1\").Value = 2\n ThisWorkbook.Names.Add Name:=\"ProbeGraphInput\", RefersTo:=\"=GraphSheet!$A$1\"\n Range(\"B1\").Formula = \"=ProbeGraphInput+1\"\n Set found = Range(\"{query}\").{member}\n Probe = found.Address\nEnd Function\n");
+            let mut book = workbook();
+            for sheet in &mut book.sheets { sheet.rows.clear(); }
+            let outcome = execute_workbook_vba(book, &source, "GraphProbe.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{member}: {}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected, "{member}");
+        }
+    }
+
+    #[test]
+    fn dependency_getter_errors_retain_excel_metadata() {
+        for member in ["Precedents", "DirectPrecedents", "Dependents", "DirectDependents"] {
+            for (language, description) in [
+                (ErrorLanguage::Japanese, "\u{8a72}\u{5f53}\u{3059}\u{308b}\u{30bb}\u{30eb}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}\u{3002}"),
+                (ErrorLanguage::English, "No cells were found."),
+            ] {
+                let source = format!("Attribute VB_Name = \"DependencyProbe\"\nPublic Function Probe() As String\n Dim linked As Range\n On Error GoTo Failed\n Set linked = Range(\"A1\").{member}\n Probe = \"unexpected\"\n Exit Function\nFailed:\n Probe = CStr(Err.Number) & \"|\" & Err.Source & \"|\" & Err.Description & \"|\" & Err.HelpFile & \"|\" & CStr(Err.HelpContext)\nEnd Function\n");
+                let mut book = workbook();
+                for sheet in &mut book.sheets { sheet.rows.clear(); }
+                let mut context = failure_context();
+                context.environment.language = language;
+                let outcome = execute_workbook_vba(book, &source, "DependencyProbe.Probe",
+                    vec![], 0, context).unwrap();
+                assert!(outcome.error.is_none(), "{member}: {}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+                let expected = format!("1004|Microsoft Excel|{description}|xlmain11.chm|1001004");
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected, "{member}");
+                assert!(!outcome.workbook_changed, "{member}");
+            }
+        }
+    }
+
+    #[test]
+    fn dependency_getters_preserve_inactive_sheet_access() {
+        for member in ["Precedents", "DirectPrecedents", "Dependents", "DirectDependents"] {
+            let precedents = member.ends_with("Precedents");
+            let query = if precedents { "C1" } else { "A1" };
+            let address = if precedents { "$A$1" } else { "$C$1" };
+            let source = format!("Attribute VB_Name = \"DependencyProbe\"\nPublic Function Probe() As String\n Dim linked As Range\n Worksheets(1).Name = \"ProbeFirst\"\n Worksheets(2).Name = \"ProbeSecond\"\n Worksheets(2).Range(\"A1\").Value = 3\n Worksheets(2).Range(\"C1\").Formula = \"=A1+2\"\n Worksheets(1).Activate\n Set linked = Worksheets(2).Range(\"{query}\").{member}\n Probe = linked.Parent.Name & \"|\" & linked.Address & \"|\" & ActiveSheet.Name\nEnd Function\n");
+            let mut book = workbook();
+            let mut second = book.sheets[0].clone();
+            second.name = "Sheet2".to_string();
+            second.rows.clear();
+            book.sheets.push(second);
+            for sheet in &mut book.sheets { sheet.rows.clear(); }
+            let outcome = execute_workbook_vba(book, &source, "DependencyProbe.Probe",
+                vec![], 0, failure_context()).unwrap();
+            assert!(outcome.error.is_none(), "{member}: {}", outcome.error.as_ref().map_or("", |error| error.message.as_str()));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                format!("ProbeSecond|{address}|ProbeFirst"), "{member}");
+            assert_eq!(outcome.active_sheet, 0, "{member}");
+        }
     }
 
     #[test]
@@ -63817,10 +65134,11 @@ End Function
             debug_output,
             vec![
                 "True\tFalse\tNull".to_string(),
+                // EntireColumn retains the column collection: CountLarge is 1.
                 // Excel abbreviates a whole row and a whole column rather than
                 // spelling out its far corner — measured, where this
                 // expectation had been written the long way without asking.
-                "$3:$3	$C:$C	1048576".to_string(),
+                "$3:$3	$C:$C	1".to_string(),
                 "Sheet1\t1".to_string(),
             ]
         );
@@ -83117,6 +84435,189 @@ End Function
         let outcome = execute_workbook_action_in_session(book, source, Some(procedure), arguments, 0, failure_context(), &mut session).unwrap();
         assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
         assert_eq!(serde_json::to_value(&outcome.result).unwrap(), serde_json::json!({"type":"string", "value":expected}));
+    }
+
+
+    #[test]
+    fn application_build_binding_and_automation_match_excel() {
+        let source = r#"Attribute VB_Name = "ApplicationBuildProbe"
+Option Explicit
+Private Function Typed(ByVal value As Variant) As String
+ Typed = CStr(VarType(value)) & ":" & TypeName(value) & ":" & CStr(value)
+End Function
+Public Function Probe(ByVal route As Long) As String
+ Dim early As Application, late As Object, held As Variant
+ Set early = Application
+ Set late = Application
+ Set held = Application
+ On Error GoTo Failed
+ Select Case route
+ Case 0
+  Probe = Typed(Application.Build)
+ Case 1
+  Probe = Typed(CallByName(Application, "Build", VbGet))
+ Case 2
+  CallByName Application, "Build", VbLet, 123
+  Probe = "write-returned|" & Typed(Application.Build)
+ Case 3
+  Probe = Typed(CallByName(Application, "Build", VbGet, 1))
+ Case 4
+  Probe = Typed(CallByName(Application, "Build", VbMethod))
+ Case 5
+  Probe = Typed(Application.Build + 0.5)
+ Case 6
+  Probe = Typed(early.Build)
+ Case 7
+  Probe = Typed(late.Build)
+ Case 8
+  Probe = Typed(held.Build)
+ Case 9
+  With Application
+   Probe = Typed(.Build)
+  End With
+ Case 10
+  With late
+   Probe = Typed(.Build)
+  End With
+ Case 11
+  Probe = Typed(Application.Application.Build)
+ Case 12
+  Probe = Typed(ActiveWorkbook.Application.Build)
+ Case 13
+  With late.Application
+   Probe = Typed(.Build)
+  End With
+ Case 14
+  Probe = Typed(CallByName(early, "Build", VbGet))
+ Case 15
+  Probe = Typed(CallByName(Application, "Build", VbGet, Empty))
+ Case 16
+  Probe = Typed(CallByName(Application, "Build", 3))
+ Case 17
+  CallByName Application, "Build", VbSet, Nothing
+  Probe = "write-returned"
+ Case 18
+  CallByName Application, "Build", VbLet
+  Probe = "write-returned"
+ Case 19
+  Probe = Typed(CallByName(Application, "Build", VbMethod, 1))
+ Case 20
+  CallByName Application, "Build", VbSet, Application
+  Probe = "write-returned"
+ Case 21
+  CallByName Application, "Build", VbSet, Range("A1")
+  Probe = "write-returned"
+ Case 22
+  CallByName Application, "Build", VbSet, 123
+  Probe = "write-returned"
+ Case 23
+  CallByName Application, "Build", VbSet, Null
+  Probe = "write-returned"
+ Case 24
+  CallByName Application, "Build", VbLet, Nothing
+  Probe = "write-returned"
+ Case 25
+  CallByName Application, "Build", VbLet, Range("A1")
+  Probe = "write-returned"
+ Case 26
+  CallByName Application, "Build", VbLet, Null
+  Probe = "write-returned"
+ Case 27
+  Probe = Typed(CallByName(Application, "Build", VbGet, Null))
+ Case 28
+  CallByName Application, "Build", VbLet, 0, 123
+  Probe = "write-returned"
+ End Select
+ Exit Function
+Failed:
+ Probe = "error|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description
+End Function
+"#;
+        let expected = [
+            "3:Long:20527",
+            "5:Double:20527",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "error|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "5:Double:20527.5",
+            "3:Long:20527",
+            "5:Double:20527",
+            "5:Double:20527",
+            "3:Long:20527",
+            "5:Double:20527",
+            "3:Long:20527",
+            "3:Long:20527",
+            "5:Double:20527",
+            "5:Double:20527",
+            "error|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。",
+            "5:Double:20527",
+            "error|13|OxiNamedProject|型が一致しません。",
+            "error|446|OxiNamedProject|オブジェクトは名前付き引数をサポートしていません。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "error|13|OxiNamedProject|型が一致しません。",
+            "error|13|OxiNamedProject|型が一致しません。",
+            "error|13|OxiNamedProject|型が一致しません。",
+            "error|13|OxiNamedProject|型が一致しません。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+            "error|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。",
+            "error|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。",
+        ];
+        for (route, expected) in expected.iter().enumerate() {
+            let mut context = failure_context();
+            context.project_name = "OxiNamedProject".to_string();
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(
+                workbook(), source, Some("ApplicationBuildProbe.Probe"),
+                vec![Value::Integer(route as i64)], 0, context, &mut session,
+            ).unwrap();
+            assert!(outcome.error.is_none(), "route {route}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap(),
+                serde_json::json!({"type":"string", "value":expected}), "route {route}");
+        }
+    }
+
+    #[test]
+    fn host_typelib_result_types_do_not_override_source_classes() {
+        let source = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "Range"
+Attribute VB_Base = "0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Public Property Get Row() As String
+ Row = "source-row"
+End Property
+
+VERSION 1.0 CLASS
+Attribute VB_Name = "Application"
+Attribute VB_Base = "0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Public Property Get Build() As String
+ Build = "source-build"
+End Property
+
+Attribute VB_Name = "SourceShadowProbe"
+Option Explicit
+Public Function Probe(ByVal route As Long) As String
+ Dim ownRange As Range, ownApplication As Application
+ If route = 0 Then
+  Set ownRange = New Range
+  Probe = TypeName(ownRange.Row) & "|" & ownRange.Row
+ Else
+  Set ownApplication = New Application
+  Probe = TypeName(ownApplication.Build) & "|" & ownApplication.Build
+ End If
+End Function
+"#;
+        for (route, expected) in ["String|source-row", "String|source-build"].iter().enumerate() {
+            check_imported_reference_result(source, "SourceShadowProbe.Probe", vec![Value::Integer(route as i64)], expected);
+        }
     }
 
     #[test]

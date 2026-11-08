@@ -306,6 +306,25 @@ pub trait Host {
         Ok(None)
     }
 
+    /// Typed scalar arguments whose object defaults must be evaluated by the
+    /// runtime before host dispatch. None preserves the host's existing binding.
+    /// The host checks arity and names without executing the member.
+    fn scalar_argument_type(&self, _receiver: &ObjectRef, _name: &str,
+        _args: &[Value], _argument_names: &[Option<String>], _index: usize)
+        -> Option<AutomationScalarType> {
+        None
+    }
+
+    /// Prepare arguments for a dispatch host call after its receiver and
+    /// argument expressions have been evaluated. Named host arguments also use
+    /// this path with a statically typed receiver. Source classes retain their
+    /// runtime-owned dispatch.
+    fn prepare_late_bound_call(&self, _receiver: &ObjectRef, _name: &str,
+        _args: &[Value], _argument_names: &[Option<String>])
+        -> Result<Option<(String, Vec<Value>)>, String> {
+        Ok(None)
+    }
+
     /// Bind a host property's named indices without invoking its getter.
     /// None leaves resolution to a getter returning the assignment object.
     fn bind_indexed_assignment(&self, _receiver: &ObjectRef, _name: &str, args: &[Value], names: &[Option<String>]) -> Result<Option<Vec<Value>>, String> {
@@ -8120,6 +8139,48 @@ impl<'a> Runtime<'a> {
     }
 
     fn eval_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        let value = self.eval_uncoerced_expr(expr, frame)?;
+        if self.host.is_none() { return Ok(value); }
+        let target = match expr {
+            Expr::Index { target, .. } => target.as_ref(),
+            other => other,
+        };
+        let (owner, member) = match target {
+            Expr::Member { object, name, .. } => {
+                if let Some(owner) = expr_name(object) {
+                    if self.lookup_slot(frame, owner).is_none() && self.enum_member(owner, name).is_some() {
+                        return Ok(value);
+                    }
+                }
+                (self.assignment_receiver_type(object, frame), name.as_str())
+            }
+            Expr::WithMember(name, _) => {
+                let owner = match frame.with_objects.last() {
+                    Some(WithSubject::Object { assignment_type, .. }) => assignment_type.clone(),
+                    _ => None,
+                };
+                (owner, name.as_str())
+            }
+            _ => return Ok(value),
+        };
+        let declared = owner.as_deref().filter(|owner| {
+            self.source_class_key(owner).is_none() && self.find_type(owner).is_none()
+        }).and_then(|owner| {
+            self.host.as_deref()?.assignment_call_result(Some(owner), member)
+        });
+        let Some(declared) = declared else { return Ok(value); };
+        let scalar = self.reference_scalar_type(&declared).unwrap_or(declared);
+        // A vtable result has its declared primitive type. Object/Variant
+        // receivers and CallByName retain the host's raw Automation variant.
+        if matches!(key(&scalar).as_str(), "byte" | "integer" | "long" | "longlong" | "longptr"
+            | "single" | "double" | "currency" | "decimal" | "date" | "boolean" | "string") {
+            self.coerce_runtime(value, &scalar, expr.span().line, self.this_year())
+        } else {
+            Ok(value)
+        }
+    }
+
+    fn eval_uncoerced_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
         self.ensure_expression_module(expr, frame)?;
         if let Expr::Member { object, name, .. } = expr {
             if let Some(enumeration) = expr_name(object) {
@@ -8406,7 +8467,18 @@ impl<'a> Runtime<'a> {
                     }
                     // Variable subscripts are evaluated in the caller. The
                     // selected array/object itself belongs to the module.
-                    let evaluated = args.iter().map(|arg| match &arg.value { Some(expr) => self.eval_expr(expr, frame), None => Ok(Value::Missing) }).collect::<Result<Vec<_>, _>>()?;
+                    let class = self.source_class_name(target, frame);
+                    let instance = class.is_some() || self.expression_slot(target, frame).is_some_and(|slot|
+                        matches!(&*slot.borrow(), Value::Object(object) if
+                            matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_)))));
+                    let parameters = class.as_deref().and_then(|class| self.source_class_parameters(class, "_default"));
+                    let arguments = if instance {
+                        Some(self.evaluate_source_arguments(args, *force_by_value, parameters.as_deref(), frame)?)
+                    } else { None };
+                    let evaluated = args.iter().enumerate().map(|(index, arg)| {
+                        if let Some(arguments) = &arguments { return Ok(arguments[index].value()); }
+                        match &arg.value { Some(expr) => self.eval_expr(expr, frame), None => Ok(Value::Missing) }
+                    }).collect::<Result<Vec<_>, _>>()?;
                     let name = name.to_string();
                     return self.in_standard(module, |this| {
                         let scope = empty_frame(this.error_environment.clone(), this.project_name.clone());
@@ -8416,7 +8488,23 @@ impl<'a> Runtime<'a> {
                                 let indices = evaluated.iter().map(|v| index_from(v, span.line)).collect::<Result<Vec<_>, _>>()?;
                                 Ok(array.values[array_offset(&array, &indices, span.line)?].clone())
                             }
-                            Some(Value::Object(receiver)) => this.host_call(Some(&receiver), "Item", &evaluated, span.line)?.ok_or_else(|| no_such_member(format!("default member is not available: {}.Item", receiver.kind), Some(span.line))),
+                            Some(Value::Object(receiver)) => {
+                                if let Some(answer) = this.call_instance_source(&receiver, "_default", args,
+                                    *force_by_value, arguments.as_deref(), class.as_deref(), frame, span.line)?
+                                {
+                                    return Ok(answer);
+                                }
+                                if instance {
+                                    return Err(no_such_member("the class has no default member".into(), Some(span.line)));
+                                }
+                                let answer = if args.iter().any(|argument| argument.name.is_some()) {
+                                    let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                                    this.host_call_named(Some(&receiver), "Item", &evaluated, &names, span.line)?
+                                } else {
+                                    this.host_call(Some(&receiver), "Item", &evaluated, span.line)?
+                                };
+                                answer.ok_or_else(|| no_such_member(format!("default member is not available: {}.Item", receiver.kind), Some(span.line)))
+                            }
                             _ => Err(error(RuntimeErrorKind::TypeMismatch, "subscripts on a value that is not an array", Some(span.line))),
                         }
                     });
@@ -8441,6 +8529,21 @@ impl<'a> Runtime<'a> {
                                         Some(value) => self.eval_expr(value, frame)?,
                                         None => Value::Missing,
                                     }});
+                                }
+                                let late = self.assignment_receiver_type(target, frame).is_none();
+                                let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                                self.resolve_host_source_arguments(&receiver, "Item", &mut values, &names,
+                                    late, frame, span.line)?;
+                                if late {
+                                    let prepared = self.host.as_deref()
+                                        .map(|host| host.prepare_late_bound_call(&receiver, "Item", &values, &names))
+                                        .transpose().map_err(|message| host_failure(message, span.line))?.flatten();
+                                    if let Some((member, arguments)) = prepared {
+                                        return self.with_callback_error_context(frame, |runtime, _| {
+                                            runtime.host_call_named(Some(&receiver), &member, &arguments, &names, span.line)
+                                        })?.ok_or_else(|| no_such_member(
+                                            format!("default member is not available: {}.{member}", receiver.kind), Some(span.line)));
+                                    }
                                 }
                                 return self
                                     .host_call(Some(&receiver), "Item", &values, span.line)?
@@ -8570,6 +8673,37 @@ impl<'a> Runtime<'a> {
                         Some(value) => self.eval_expr(value, frame)?,
                         None => Value::Missing,
                     }});
+                }
+                let late_host_call = argument_names.iter().any(Option::is_some) || match target.as_ref() {
+                    Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
+                    Expr::WithMember(..) | Expr::WithBangMember(..) => matches!(
+                        frame.with_objects.last(), Some(WithSubject::Object { assignment_type: None, .. })),
+                    _ => false,
+                };
+                if let Some(receiver) = receiver.as_ref() {
+                    let name = match target.as_ref() {
+                        Expr::Member { name, .. } | Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => name,
+                        _ => unreachable!("host member"),
+                    };
+                    self.resolve_host_source_arguments(receiver, name, &mut values, &argument_names,
+                        late_host_call, frame, span.line)?;
+                }
+                if late_host_call {
+                    if let Some(receiver) = receiver.as_ref() {
+                        let name = match target.as_ref() {
+                            Expr::Member { name, .. } | Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => name,
+                            _ => unreachable!("late host member"),
+                        };
+                        let prepared = self.host.as_deref()
+                            .map(|host| host.prepare_late_bound_call(receiver, name, &values, &argument_names))
+                            .transpose().map_err(|message| host_failure(message, span.line))?.flatten();
+                        if let Some((member, arguments)) = prepared {
+                            return self.with_callback_error_context(frame, |runtime, _| {
+                                runtime.host_call_named(Some(receiver), &member, &arguments, &argument_names, span.line)
+                            })?.ok_or_else(|| no_such_member(
+                                format!("host method is not available: {}.{member}", receiver.kind), Some(span.line)));
+                        }
+                    }
                 }
                 match target.as_ref() {
                     Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
@@ -8759,7 +8893,10 @@ impl<'a> Runtime<'a> {
 
     fn indexes_procedure_result(&self, procedure: &Procedure, args: &[Argument]) -> bool {
         procedure.params.is_empty() && !args.is_empty()
-            && args.iter().all(|arg| arg.name.is_none())
+            && (args.iter().all(|arg| arg.name.is_none())
+                || procedure.return_type.as_ref().is_some_and(|kind| {
+                    !kind.is_array && self.is_specific_object_type(&kind.name)
+                }))
             && matches!(procedure.kind, ProcKind::Function | ProcKind::PropertyGet)
             && procedure.return_type.as_ref().is_none_or(|kind| {
                 kind.is_array || matches!(key(&kind.name).as_str(), "variant" | "object")
@@ -8789,9 +8926,8 @@ impl<'a> Runtime<'a> {
         if self.indexes_procedure_result(procedure, args) {
             // Index operands are evaluated in the caller before invoking the
             // parameterless factory, and retain their places for its default.
-            let class = procedure.return_type.as_ref().map(|kind| kind.name.as_str())
-                .filter(|name| self.classes.contains_key(&key(name)));
-            let parameters = class.and_then(|name| self.source_class_parameters(name, "_default"));
+            let class = procedure.return_type.as_ref().and_then(|kind| self.source_class_key(&kind.name));
+            let parameters = class.as_deref().and_then(|name| self.source_class_parameters(name, "_default"));
             let arguments = match evaluated {
                 Some(values) => values.to_vec(),
                 None => self.evaluate_source_arguments(args, force_by_value, parameters.as_deref(), frame)?,
@@ -8799,15 +8935,20 @@ impl<'a> Runtime<'a> {
             let value = self.call_resolved_source_body(module, procedure, receiver, &[], false, None, frame, line)?;
             return match value {
                 Value::Object(object) => {
-                    if let Some(value) = self.call_instance_source(&object, "_default", args, force_by_value, Some(&arguments), class, frame, line.unwrap_or(0))? {
+                    if let Some(value) = self.call_instance_source(&object, "_default", args, force_by_value, Some(&arguments), class.as_deref(), frame, line.unwrap_or(0))? {
                         return Ok(value);
                     }
                     if matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_))) {
                         return Err(no_such_member("the returned class has no default member".into(), line));
                     }
                     let values: Vec<_> = arguments.iter().map(EvaluatedArgument::value).collect();
-                    self.host_call(Some(&object), "Item", &values, line.unwrap_or(0))?
-                        .ok_or_else(|| no_such_member("the returned object has no default member".into(), line))
+                    let answer = if args.iter().any(|argument| argument.name.is_some()) {
+                        let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                        self.host_call_named(Some(&object), "Item", &values, &names, line.unwrap_or(0))?
+                    } else {
+                        self.host_call(Some(&object), "Item", &values, line.unwrap_or(0))?
+                    };
+                    answer.ok_or_else(|| no_such_member("the returned object has no default member".into(), line))
                 }
                 Value::Array(array) => {
                     let indices = arguments.iter().map(|arg| index_from(&arg.value(), line.unwrap_or(0))).collect::<Result<Vec<_>, _>>()?;
@@ -9601,6 +9742,10 @@ impl<'a> Runtime<'a> {
                 }
             }
             1 | 2 | 3 => {
+                let mut values = rest.to_vec();
+                self.resolve_host_source_arguments(receiver, &member, &mut values, &[],
+                    true, frame, at)?;
+                let rest = values.as_slice();
                 let prepared = if matches!(kind, 2 | 3) {
                     self.host.as_deref().map(|host| host.prepare_automation_get(receiver, &member, rest))
                         .transpose().map_err(|message| host_failure(message, at))?.flatten()
@@ -9975,6 +10120,55 @@ impl<'a> Runtime<'a> {
         Ok(self
             .host_get(object, "Value", line)?
             .unwrap_or_else(|| value.clone()))
+    }
+
+    fn resolve_host_source_arguments(&mut self, receiver: &ObjectRef, name: &str,
+        args: &mut [Value], names: &[Option<String>], late: bool, frame: &mut Frame, line: u32)
+        -> Result<(), RuntimeError>
+    {
+        for index in 0..args.len() {
+            let Some(target) = self.host.as_deref().and_then(|host|
+                host.scalar_argument_type(receiver, name, args, names, index)) else { continue; };
+            if !matches!(&args[index], Value::Object(object) if
+                matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_)))) {
+                continue;
+            }
+            let mut value = args[index].clone();
+            // Early VBA dereferences the argument, then performs one scalar
+            // Automation conversion if that getter returned another object.
+            // Late dispatch performs only the scalar Automation conversion.
+            for level in 0..if late { 1 } else { 2 } {
+                let Value::Object(object) = &value else { break; };
+                let automation = late || level > 0;
+                self.tick(Some(line))?;
+                let answer = if let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&object.handle) {
+                    let getter = self.source_class_procedure_view(&instance.class, "_default",
+                        &[ProcKind::PropertyGet, ProcKind::Function], object.dispatch_view.as_deref())
+                        .map(|(_, getter)| getter.name.clone());
+                    match getter {
+                        Some(getter) => self.with_callback_error_context(frame, |runtime, _|
+                            runtime.instance_member(object, &getter, &[], line)),
+                        None => Err(language_error(438, "the argument has no scalar default member", line)),
+                    }
+                } else {
+                    self.let_value(value.clone(), frame, line)
+                };
+                value = answer.map_err(|failure| {
+                    if automation && !matches!(failure.kind, RuntimeErrorKind::StepLimit |
+                        RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated |
+                        RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile) {
+                        language_error(13, "the default member could not supply a scalar argument", line)
+                    } else { failure }
+                })?;
+                if matches!(value, Value::Nothing) ||
+                    automation && matches!(value, Value::Object(_) | Value::Null) {
+                    return Err(language_error(13, "the default member did not return a scalar argument", line));
+                }
+            }
+            args[index] = coerce_automation_scalar(&value, target)
+                .map_err(|message| host_failure(message, line))?;
+        }
+        Ok(())
     }
 
     fn let_value(&mut self, value: Value, frame: &Frame, line: u32) -> Result<Value, RuntimeError> {
@@ -17824,6 +18018,7 @@ fn element_type_name(default: &Value) -> Option<&'static str> {
 pub enum AutomationScalarType {
     Bstr,
     Double,
+    Long,
 }
 
 /// Convert a resolved scalar at a typed Automation boundary. The host must
@@ -17843,6 +18038,13 @@ pub fn coerce_automation_scalar(value: &Value, target: AutomationScalarType) -> 
         AutomationScalarType::Bstr if value.is_string() => Ok(value.clone()),
         AutomationScalarType::Bstr => text(value).map(Value::String),
         AutomationScalarType::Double => number(value).map(Value::Double),
+        AutomationScalarType::Long => {
+            let numeric = number(value).map_err(|_| host_error(13, "Type mismatch"))?.round_ties_even();
+            if !numeric.is_finite() || numeric < f64::from(i32::MIN) || numeric > f64::from(i32::MAX) {
+                return Err(host_error(6, "Overflow"));
+            }
+            Ok(Value::Integer(numeric as i64))
+        }
     }.map_err(|_| host_error(13, "Type mismatch"))
 }
 

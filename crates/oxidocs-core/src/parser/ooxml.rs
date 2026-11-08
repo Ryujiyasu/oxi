@@ -7388,7 +7388,7 @@ fn parse_run(
                         depth += 1;
                     }
                     "ruby" if depth == 0 => {
-                        ruby = Some(parse_ruby(reader)?);
+                        ruby = Some(parse_ruby_with(reader, Some((ctx, styles)))?);
                     }
                     _ => {
                         depth += 1;
@@ -8328,6 +8328,8 @@ fn parse_drawing(
     let mut stroke_width: Option<f32> = None;
     let mut stroke_cmpd: Option<String> = None;
     let mut stroke_dash: Option<String> = None;
+    // OXI_LINE_CAP_ROUND: a:ln cap="rnd" (last a:ln wins, as stroke_dash).
+    let mut stroke_cap_rnd = false;
     let mut outer_shadow: Option<(f32, f32, String, f32)> = None;
     let mut shape_text_blocks: Vec<Block> = Vec::new();
     let mut rotation: Option<f32> = None;
@@ -8384,6 +8386,8 @@ fn parse_drawing(
         ln_w: Option<f32>,
         /// OXI_WPG_DASH: a:ln dash pattern in multiples of the line width.
         dash: Vec<f32>,
+        /// OXI_LINE_CAP_ROUND: a:ln cap="rnd".
+        cap_rnd: bool,
         ln_color: Option<String>,
         ln_nofill: bool,
         fill: Option<String>,
@@ -8522,6 +8526,7 @@ fn parse_drawing(
                             has_curve: false,
                             ln_w: None,
                             dash: Vec::new(),
+                            cap_rnd: false,
                             ln_color: None,
                             ln_nofill: false,
                             fill: None,
@@ -8702,6 +8707,12 @@ fn parse_drawing(
                             if key == "cmpd" {
                                 let v = String::from_utf8_lossy(&attr.value).to_string();
                                 stroke_cmpd = (v != "sng").then_some(v);
+                            }
+                            if key == "cap" {
+                                stroke_cap_rnd = attr.value.as_ref() == b"rnd";
+                                if let Some(wsp) = s839_wsp.as_mut() {
+                                    wsp.cap_rnd = stroke_cap_rnd;
+                                }
                             }
                             if key == "w" {
                                 let val = String::from_utf8_lossy(&attr.value);
@@ -10048,6 +10059,12 @@ fn parse_drawing(
                                 let v = String::from_utf8_lossy(&attr.value).to_string();
                                 stroke_cmpd = (v != "sng").then_some(v);
                             }
+                            if key == "cap" {
+                                stroke_cap_rnd = attr.value.as_ref() == b"rnd";
+                                if let Some(wsp) = s839_wsp.as_mut() {
+                                    wsp.cap_rnd = stroke_cap_rnd;
+                                }
+                            }
                             if key == "w" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 stroke_width = val.parse::<f32>().ok().map(|v| v / 12700.0);
@@ -10228,9 +10245,16 @@ fn parse_drawing(
                             // snip2DiagRect (adj1 10823, noFill, lnRef 2 dk1) plus a quarter-
                             // turned roundRect (adj 50000, bg1 fill) behind a vertical label;
                             // Oxi drew neither. A quarter turn swaps the box about its centre.
+                            // OXI_WPG_ELLIPSE_CALLOUT (2026-11-07, default ON, opt-out _DISABLE):
+                            // a wedgeEllipseCallout member is the ECMA outline -- the ellipse
+                            // from 11 degrees past the tail direction round to 11 before it,
+                            // then the tip at the centre + (adj1 w, adj2 h). blind-J ja/
+                            // creative__99e3d9f9's «初心者向け» bubble (00B0F0) was not drawn.
+                            let ellipse_callout = w.prst.as_deref() == Some("wedgeEllipseCallout")
+                                && std::env::var_os("OXI_WPG_ELLIPSE_CALLOUT_DISABLE").is_none();
                             let s1120_path = if s1120_path.is_empty() && !is_line && !is_rect
                                 && std::env::var_os("OXI_WPG_PRESET_PATHS_DISABLE").is_none()
-                                && matches!(w.prst.as_deref(), Some("snip2DiagRect") | Some("roundRect"))
+                                && (matches!(w.prst.as_deref(), Some("snip2DiagRect") | Some("roundRect")) || ellipse_callout)
                             {
                                 use crate::ir::PathSeg::{C, L, M, Z};
                                 let quarter = ((w.rot / 90.0).round() as i32).rem_euclid(2) == 1;
@@ -10238,7 +10262,29 @@ fn parse_drawing(
                                 let (bw, bh) = (bw.max(1.0), bh.max(1.0));
                                 let ss = bw.min(bh);
                                 let g = |n: &str, d: f32| w.adj.iter().find(|(k, _)| k == n).map_or(d, |(_, v)| *v);
-                                if w.prst.as_deref() == Some("snip2DiagRect") {
+                                if ellipse_callout {
+                                    let (cw, chh) = (w.ext.0.max(1.0), w.ext.1.max(1.0));
+                                    let (dx, dy) = (cw * g("adj1", -20833.0) / 100000.0, chh * g("adj2", 62500.0) / 100000.0);
+                                    let pang = (dy * cw).atan2(dx * chh);
+                                    let (st, en) = (pang + 11f32.to_radians(), pang - 11f32.to_radians() + std::f32::consts::TAU);
+                                    let mut v = Vec::new();
+                                    // the member's own turn (xfrm rot, clockwise) about its centre
+                                    let th = w.rot.to_radians();
+                                    let turn = |px: f32, py: f32| {
+                                        let (ax, ay) = ((px - 0.5) * cw, (py - 0.5) * chh);
+                                        (0.5 + (ax * th.cos() - ay * th.sin()) / cw,
+                                         0.5 + (ax * th.sin() + ay * th.cos()) / chh)
+                                    };
+                                    for i in 0..=48 {
+                                        let t = st + (en - st) * i as f32 / 48.0;
+                                        let (px, py) = turn(0.5 + 0.5 * t.cos(), 0.5 + 0.5 * t.sin());
+                                        v.push(if i == 0 { M(px, py) } else { L(px, py) });
+                                    }
+                                    let (tx, ty) = turn(0.5 + dx / cw, 0.5 + dy / chh);
+                                    v.push(L(tx, ty));
+                                    v.push(Z);
+                                    v
+                                } else if w.prst.as_deref() == Some("snip2DiagRect") {
                                     let a1 = (g("adj1", 0.0).clamp(0.0, 50000.0) / 100000.0) * ss;
                                     let a2 = (g("adj2", 16667.0).clamp(0.0, 50000.0) / 100000.0) * ss;
                                     let (x1, y1, x2, y2) = (a1 / bw, a1 / bh, a2 / bw, a2 / bh);
@@ -10365,6 +10411,33 @@ fn parse_drawing(
                                     (vx + (vw - vh) / 2.0, vy + (vh - vw) / 2.0, vh, vw)
                                 } else { (vx, vy, vw, vh) };
                                 let (dash_has_fill, dash_has_stroke) = (fill.is_some(), stroke.is_some());
+                                // OXI_LINE_CAP_ROUND: a dashed, round-capped member line is
+                                // its round dots, filled in the line colour. blind-J ja/
+                                // creative__99e3d9f9 p1's footer rule (sysDot, cap rnd, 1.5pt):
+                                // Word's PDF strokes [0 3] with round caps (dots every 2w);
+                                // Oxi drew the line solid.
+                                if is_line && w.cap_rnd && !w.dash.is_empty() && dash_has_stroke
+                                    && !crate::env_flag!("OXI_LINE_CAP_ROUND_DISABLE")
+                                {
+                                    let lw = w.ln_w.unwrap_or(0.75).max(0.25);
+                                    let pattern: Vec<f32> = w.dash.iter().enumerate()
+                                        .map(|(i, u)| if i % 2 == 0 { (u * lw - lw).max(0.0) } else { u * lw + lw })
+                                        .collect();
+                                    let bx = (vx - lw, vy - lw, vw + 2.0 * lw, vh + 2.0 * lw);
+                                    let dots = round_dash_dots((vx, vy, vx + vw, vy + vh), bx, &pattern, lw);
+                                    s839_vector_shapes.push(crate::ir::VectorShape {
+                                        x: bx.0,
+                                        y: bx.1,
+                                        w: bx.2,
+                                        h: bx.3,
+                                        fill: stroke.clone(),
+                                        stroke: None,
+                                        stroke_width: 0.0,
+                                        is_line: false,
+                                        path: dots,
+                                        image: None,
+                                    });
+                                } else {
                                 s839_vector_shapes.push(crate::ir::VectorShape {
                                     x: vx,
                                     y: vy,
@@ -10392,6 +10465,7 @@ fn parse_drawing(
                                     },
                                     image: None,
                                 });
+                                }
                             }
                         }
                     }
@@ -10660,7 +10734,7 @@ fn parse_drawing(
             anchor_wrap: wrap_type,
             is_vml: false, // DrawingML
             escapes_cell: false,
-            stroke_dash: if has_no_stroke { None } else { stroke_dash.clone() },
+            stroke_dash: if has_no_stroke { None } else { round_cap_dash(stroke_dash.clone(), stroke_cap_rnd) },
         })
     } else {
         None
@@ -10913,7 +10987,7 @@ fn parse_drawing(
                 && std::env::var_os("OXI_TXBX_ELLIPSE_DISABLE").is_none(),
             outline_cmpd: stroke_cmpd.clone(),
             outer_shadow: outer_shadow.clone(),
-            outline_dash: stroke_dash.clone(),
+            outline_dash: round_cap_dash(stroke_dash.clone(), stroke_cap_rnd),
             // OXI_TXBX_CALLOUT (2026-11-03, default ON, opt-out _DISABLE)
             callout: match shape_type.as_deref() {
                 Some(p @ ("wedgeRoundRectCallout" | "wedgeRectCallout"))
@@ -11345,6 +11419,8 @@ fn parse_vml_pict(
     let mut is_hr = false;
     // OXI_VML_ABS_TXBX: <v:textbox inset="l,t,r,b"> (VML default 7.2,3.6,7.2,3.6).
     let mut vml_tb_inset: Option<[f32; 4]> = None;
+    // OXI_VML_CONNECTOR_LINE: style flip:x / flip:y.
+    let (mut vml_flip_h, mut vml_flip_v) = (false, false);
 
     loop {
         match reader.read_event()? {
@@ -11358,8 +11434,19 @@ fn parse_vml_pict(
                     {
                         let d = [7.2f32, 3.6, 7.2, 3.6];
                         let mut out = d;
+                        // OXI_VML_INSET_ZERO (2026-11-08, default ON, opt-out _DISABLE): an
+                        // explicit 0 is a zero inset; only an empty slot keeps the default.
+                        // blind-J ja/educational__2a8abbb2's callouts (v:roundrect h 24.1,
+                        // inset="0,0,0,0", two 8pt lines): Word shows both lines, Oxi kept
+                        // 7.2/3.6 and clipped the second away.
+                        let zero_ok = !crate::env_flag!("OXI_VML_INSET_ZERO_DISABLE");
                         for (k, t) in v.split(',').take(4).enumerate() {
-                            if let Some(x) = parse_css_length_opt(t.trim()) { out[k] = x; }
+                            let t = t.trim();
+                            if let Some(x) = parse_css_length_opt(t) {
+                                out[k] = x;
+                            } else if zero_ok && !t.is_empty() {
+                                out[k] = parse_css_length(t).max(0.0);
+                            }
                         }
                         vml_tb_inset = Some(out);
                     }
@@ -11538,6 +11625,12 @@ fn parse_vml_pict(
                                     // Map VML shapetype IDs to OOXML preset names
                                     match vml_type_attr.as_deref() {
                                         Some(t) if t.contains("t185") => "bracketPair", // double bracket 〔〕
+                                        // OXI_VML_CONNECTOR_LINE (2026-11-08, default ON, opt-out
+                                        // _DISABLE): shapetype 32 is the straight connector -- a
+                                        // line corner to corner (flip picks the diagonal). blind-J
+                                        // ja/educational__2a8abbb2's callout leaders drew as boxes.
+                                        Some(t) if t.ends_with("_x0000_t32")
+                                            && !crate::env_flag!("OXI_VML_CONNECTOR_LINE_DISABLE") => "line",
                                         _ => "rect",
                                     }
                                 }
@@ -11562,6 +11655,10 @@ fn parse_vml_pict(
                                             if let Some(v) = part.strip_prefix("mso-wrap-distance-right:") {
                                                 vml_dist_r = Some(parse_css_length(v.trim()));
                                             }
+                                        }
+                                        if let Some(f) = part.strip_prefix("flip:") {
+                                            vml_flip_h |= f.contains('x');
+                                            vml_flip_v |= f.contains('y');
                                         }
                                         if let Some(w) = part.strip_prefix("width:") {
                                             if !in_grp {
@@ -12500,8 +12597,8 @@ fn parse_vml_pict(
         gradient_angle: None,
         anchor_block_index: 0,
         v_text_anchor,
-        flip_h: false,
-        flip_v: false,
+        flip_h: vml_flip_h && !crate::env_flag!("OXI_VML_CONNECTOR_LINE_DISABLE"),
+        flip_v: vml_flip_v && !crate::env_flag!("OXI_VML_CONNECTOR_LINE_DISABLE"),
         arrow_head: false,
         arrow_tail: false,
         wrap_polygon: shape_wrap_points.into_iter().map(|(x, y)| (x / shape_coord_size.0, y / shape_coord_size.1)).collect(),
@@ -16971,8 +17068,17 @@ fn parse_tracked_change_runs(
 /// Parse w:ruby element (furigana). Populates all rubyPr children:
 /// rubyAlign, hps, hpsRaise, hpsBaseText, lid (per ECMA-376 §17.3.3.25).
 /// Geometry rules in spec/word_layout_spec_ra.md §18.
+#[cfg(test)]
 fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
+    parse_ruby_with(reader, None)
+}
+
+fn parse_ruby_with(
+    reader: &mut Reader<&[u8]>,
+    rpr_ctx: Option<(&ParseContext, &StyleSheet)>,
+) -> Result<Ruby, ParseError> {
     let mut annotation_fonts = Vec::new();
+    let mut annotation_style: Option<Box<RunStyle>> = None;
     let mut base_text = String::new();
     let mut ruby_text = String::new();
     let mut ruby_font_size: Option<f32> = None;
@@ -17014,6 +17120,25 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
                     }
                     if let Some(family) = east_asia.or(latin) {
                         if !annotation_fonts.contains(&family) { annotation_fonts.push(family); }
+                    }
+                }
+                // OXI_RUBY_RUN_STYLE (2026-11-07, default ON, opt-out _DISABLE): the rt
+                // run's rPr is read in full -- colour, w14 textFill / textOutline,
+                // shadow -- and the annotation is painted with it. blind-J
+                // ja/creative__9aa11078's title ruby «ししょ» / «こうざ» (w:color 4472C4,
+                // w14:textFill FFFFFF, w14:textOutline accent5): Word draws white glyphs
+                // with a blue outline, Oxi painted them flat 4472C4 with no effects.
+                if in_rt && local == "rPr" && annotation_style.is_none()
+                    && !crate::env_flag!("OXI_RUBY_RUN_STYLE_DISABLE")
+                {
+                    if let Some((ctx, styles)) = rpr_ctx {
+                        let (st, _) = parse_run_properties(reader, ctx, styles, true)?;
+                        for family in [st.font_family_east_asia.clone(), st.font_family.clone()].into_iter().flatten() {
+                            if !annotation_fonts.contains(&family) { annotation_fonts.push(family); break; }
+                        }
+                        if st.text_scale.is_some() { rt_scale = st.text_scale; }
+                        annotation_style = Some(Box::new(st));
+                        continue;
                     }
                 }
                 match local.as_str() {
@@ -17159,6 +17284,7 @@ fn parse_ruby(reader: &mut Reader<&[u8]>) -> Result<Ruby, ParseError> {
         hps_base_text_halfpt,
         lang,
         text_scale: rt_scale,
+        annotation_style,
     })
 }
 
@@ -19045,6 +19171,73 @@ fn math_operator_control_color_uses_package_context_without_coloring_leaves() {
 
 /// A path normalised over a w x h box, cut into the dashes of `pattern`
 /// (on / off lengths in points, starting at the path start).
+/// OXI_LINE_CAP_ROUND (2026-11-08, default ON, opt-out _DISABLE): a round-capped
+/// dash pattern is carried as "<prstDash>+rnd" (see layout::dash_style).
+fn round_cap_dash(dash: Option<String>, cap_rnd: bool) -> Option<String> {
+    match dash {
+        Some(d) if cap_rnd && !crate::env_flag!("OXI_LINE_CAP_ROUND_DISABLE") => Some(format!("{d}+rnd")),
+        d => d,
+    }
+}
+
+/// OXI_LINE_CAP_ROUND: a round-capped dash pattern along the straight line
+/// (x0,y0)-(x1,y1) as filled dots / capsules, in 0..1 space over the box
+/// (bx, by, bw, bh). `pattern` is in points, on-lengths already shortened by the
+/// width (the caps carry it). Each dash is a capsule of diameter `lw`.
+fn round_dash_dots(
+    (x0, y0, x1, y1): (f32, f32, f32, f32),
+    (bx, by, bw, bh): (f32, f32, f32, f32),
+    pattern: &[f32],
+    lw: f32,
+) -> Vec<crate::ir::PathSeg> {
+    use crate::ir::PathSeg;
+    let mut out = Vec::new();
+    let len = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+    let period: f32 = pattern.iter().sum();
+    if len <= 0.0 || period <= 0.01 || bw <= 0.0 || bh <= 0.0 {
+        return out;
+    }
+    let (ux, uy) = ((x1 - x0) / len, (y1 - y0) / len);
+    let (nx, ny) = (-uy, ux);
+    let r = lw / 2.0;
+    let k = 0.5523 * r;
+    let p = |x: f32, y: f32| ((x - bx) / bw, (y - by) / bh);
+    let mut t = 0.0f32;
+    let mut i = 0usize;
+    while t <= len + 1e-3 {
+        let on = pattern[i % pattern.len()];
+        if i % 2 == 0 {
+            let e = (t + on).min(len);
+            let (ax, ay) = (x0 + ux * t, y0 + uy * t);
+            let (cx, cy) = (x0 + ux * e, y0 + uy * e);
+            // capsule: side a->c at +n, half circle round c, side c->a at -n, half circle round a
+            let m = p(ax + nx * r, ay + ny * r);
+            out.push(PathSeg::M(m.0, m.1));
+            let q = p(cx + nx * r, cy + ny * r);
+            out.push(PathSeg::L(q.0, q.1));
+            for (sx, sy, dx, dy) in [(nx, ny, ux, uy), (ux, uy, -nx, -ny)] {
+                // quarter arc from (c + s r) to (c + d r)
+                let a = p(cx + sx * r + dx * k, cy + sy * r + dy * k);
+                let b = p(cx + dx * r + sx * k, cy + dy * r + sy * k);
+                let z = p(cx + dx * r, cy + dy * r);
+                out.push(PathSeg::C(a.0, a.1, b.0, b.1, z.0, z.1));
+            }
+            let q = p(ax - nx * r, ay - ny * r);
+            out.push(PathSeg::L(q.0, q.1));
+            for (sx, sy, dx, dy) in [(-nx, -ny, -ux, -uy), (-ux, -uy, nx, ny)] {
+                let a = p(ax + sx * r + dx * k, ay + sy * r + dy * k);
+                let b = p(ax + dx * r + sx * k, ay + dy * r + sy * k);
+                let z = p(ax + dx * r, ay + dy * r);
+                out.push(PathSeg::C(a.0, a.1, b.0, b.1, z.0, z.1));
+            }
+            out.push(PathSeg::Z);
+        }
+        t += on;
+        i += 1;
+    }
+    out
+}
+
 fn dash_path(segs: &[crate::ir::PathSeg], w: f32, h: f32, pattern: &[f32]) -> Vec<crate::ir::PathSeg> {
     use crate::ir::PathSeg;
     if segs.is_empty() || w <= 0.0 || h <= 0.0 || pattern.len() < 2 || pattern.iter().sum::<f32>() <= 0.01 {

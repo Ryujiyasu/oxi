@@ -816,8 +816,29 @@ fn shape_line_dash(shape: &Shape) -> Option<String> {
     {
         return None;
     }
-    let units = prst_dash_units(shape.stroke_dash.as_deref()?)?;
-    Some(format!("prst:{}:0", units.iter().map(|u| format!("{u}")).collect::<Vec<_>>().join(",")))
+    let (units, round) = dash_style(shape.stroke_dash.as_deref()?)?;
+    Some(format!("{}:{}:0", if round { "prstr" } else { "prst" },
+        units.iter().map(|u| format!("{u}")).collect::<Vec<_>>().join(",")))
+}
+
+/// OXI_LINE_CAP_ROUND (2026-11-08, default ON, opt-out _DISABLE): a dash named
+/// "<prstDash>+rnd" (a:ln cap="rnd") is drawn with round caps, each dash's
+/// on-length shortened by one width and each gap lengthened by one -- the caps
+/// carry the difference. blind-J ja/legal__10f9c779 p1's 収入印紙 box (sysDot,
+/// cap rnd, 0.75pt): Word's PDF strokes [0 1.5] with round caps (round dots
+/// every 2w); Oxi drew 1w square dashes every 2w. Returns (units, round).
+pub(crate) fn dash_style(name: &str) -> Option<(Vec<f32>, bool)> {
+    match name.strip_suffix("+rnd") {
+        Some(base) => Some((
+            prst_dash_units(base)?
+                .iter()
+                .enumerate()
+                .map(|(i, u)| if i % 2 == 0 { (u - 1.0).max(0.0) } else { u + 1.0 })
+                .collect(),
+            true,
+        )),
+        None => Some((prst_dash_units(name)?.to_vec(), false)),
+    }
 }
 
 fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
@@ -2868,6 +2889,22 @@ pub struct TextEffects {
     pub glow: Option<(f32, u32, f32)>,
     /// OXI_TEXT_GLOW: a solid w14:textOutline (width pt, 0xRRGGBB).
     pub line: Option<(f32, u32)>,
+}
+
+impl TextEffects {
+    /// A run's Word character effects (S702 / S1327 / OXI_TEXT_GLOW), as the body
+    /// text builds them.
+    pub(crate) fn of_run(st: &crate::ir::RunStyle) -> Self {
+        TextEffects {
+            shadow: st.shadow,
+            emboss: st.emboss,
+            imprint: st.imprint,
+            outline: st.outline,
+            no_fill: st.no_fill,
+            glow: st.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
+            line: st.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -9119,7 +9156,14 @@ cells={} pitch={:.2} text={:?}",
                 let glyph_chars: Vec<_> = text.chars().collect();
                 let advances: Vec<_> = glyph_chars.iter().copied().map(|ch| {
                     let metrics = self.metrics_for_char_in(ch, true, &run.style, &para.style);
-                    let advance = self.registry.vertical_advance_pt(&metrics.family, ch, fs);
+                    // OXI_VERT_HALFWIDTH_SIDEWAYS: a half-width form runs sideways.
+                    let advance = if ('\u{FF61}'..='\u{FF9F}').contains(&ch)
+                        && !crate::env_flag!("OXI_VERT_HALFWIDTH_SIDEWAYS_DISABLE")
+                    {
+                        Some(metrics.char_width_em(ch) * fs)
+                    } else {
+                        self.registry.vertical_advance_pt(&metrics.family, ch, fs)
+                    };
                     (metrics, advance)
                 }).collect();
                 if advances.iter().any(|(_, advance)| advance.is_some()) || char_grid_active {
@@ -9913,12 +9957,19 @@ cells={} pitch={:.2} text={:?}",
             // the three photo frames (2.25pt FF66FF sysDot): Word's PDF strokes one
             // 8-segment path with [2.25 2.25] = [1 1] x w; Oxi drew them solid.
             let round_dash = cr > 0.0 && !crate::env_flag!("OXI_TXBX_ROUND_DASH_DISABLE");
-            let dash_units: Option<&[f32]> = match text_box.outline_dash.as_deref() {
+            let dash_units: Option<(Vec<f32>, bool)> = match text_box.outline_dash.as_deref() {
                 _ if !has_border || (cr > 0.0 && !round_dash) || !bands.is_empty()
                     || crate::env_flag!("OXI_TXBX_DASH_DISABLE") => None,
-                Some(d) => prst_dash_units(d),
+                Some(d) => dash_style(d),
                 None => None,
             };
+            // OXI_LINE_CAP_ROUND: round-capped dashes keep each dash centred where
+            // the flat pattern put it (the on-length lost half a width each side).
+            let (dash_kind, dash_shift) = match &dash_units {
+                Some((_, true)) => ("prstr", -0.5f32),
+                _ => ("prst", 0.0f32),
+            };
+            let dash_units: Option<&[f32]> = dash_units.as_ref().map(|(u, _)| u.as_slice());
             if let (Some(units), true) = (dash_units, cr > 0.0) {
                 elements.push(LayoutElement::new(
                     abs_x,
@@ -9957,7 +10008,7 @@ cells={} pitch={:.2} text={:?}",
                             x1: ax, y1: ay, x2: bx, y2: by,
                             color: stroke_hex.clone(),
                             width: sw,
-                            style: Some(format!("prst:{pat}:{:.4}", run.rem_euclid(period))),
+                            style: Some(format!("{dash_kind}:{pat}:{:.4}", (run + dash_shift).rem_euclid(period))),
                         },
                     ));
                     run += len / sw.max(0.01);
@@ -9990,7 +10041,7 @@ cells={} pitch={:.2} text={:?}",
                             x1: ax, y1: ay, x2: bx, y2: by,
                             color: stroke_hex.clone(),
                             width: sw,
-                            style: Some(format!("prst:{pat}:{:.4}", run.rem_euclid(units.iter().sum::<f32>()))),
+                            style: Some(format!("{dash_kind}:{pat}:{:.4}", (run + dash_shift).rem_euclid(units.iter().sum::<f32>()))),
                         },
                     ));
                     let _ = k;
@@ -10065,10 +10116,29 @@ cells={} pitch={:.2} text={:?}",
         let s1644_overflow = !crate::env_flag!("OXI_S1644_DISABLE")
             && text_box.vert_overflow.as_deref() != Some("clip");
         let s1644_extra = if s1644_overflow { 2000.0 } else { 0.0 };
+        // OXI_WRAPNONE_OVERFLOW (2026-11-08, default ON, opt-out _DISABLE): a
+        // wrap="none" line longer than the box is drawn whole from the left inset,
+        // past the right edge -- never wrapped, never cut. Word PDFs: docx-corpus
+        // ja/administrative__d33417cd «提出日　2020年10月29日» (jc right, 12pt, 144pt
+        // box, spAutoFit) starts at the inner left 345.2 and runs to 496; ja/forms__
+        // f62f5a80 (185pt box, no autofit) draws both 第12条 / 第30条 lines whole on
+        // one line each. Oxi cut the first at the box edge and wrapped the second.
+        let wrapnone_text_w = if text_box.body_wrap_none
+            && !crate::env_flag!("OXI_WRAPNONE_OVERFLOW_DISABLE")
+        {
+            self.textbox_unwrapped_text_width(text_box)
+        } else {
+            0.0
+        };
+        // The estimate can run short of the drawn line (grid pitch, kerning), so a
+        // box whose text overflows gets an open measure and an open clip instead.
+        let wrapnone_overflows = wrapnone_text_w
+            > text_box.width - text_box.inset_left.unwrap_or(7.2) - text_box.inset_right.unwrap_or(7.2) - 0.5;
+        let wrapnone_clip_w = if wrapnone_overflows { text_box.width + 2000.0 } else { text_box.width };
         elements.push(LayoutElement::new(
             abs_x,
             abs_y,
-            text_box.width,
+            wrapnone_clip_w,
             text_box.height + s1644_extra,
             LayoutContent::ClipStart,
         ));
@@ -10127,6 +10197,8 @@ cells={} pitch={:.2} text={:?}",
         };
         let inner_x = abs_x + inset_l + corner_inset;
         let inner_width = (text_box.width - inset_l - inset_r - 2.0 * corner_inset).max(0.0);
+        // OXI_WRAPNONE_OVERFLOW: the unwrapped line sets the measure.
+        let inner_width = if wrapnone_overflows { inner_width + 2000.0 } else { inner_width };
         let inner_height = (text_box.height - inset_t - inset_b - 2.0 * v_corner_inset).max(0.0);
         // S481 (REVERTED, finding only): rendering vertOverflow="overflow" lines
         // (e.g. 2ea81a "＜＜記載例＞＞", dropped via avail=0) REGRESSED p2 −0.0009 —
@@ -10751,7 +10823,7 @@ cells={} pitch={:.2} text={:?}",
                 match &el.content {
                     LayoutContent::BoxRect { .. } | LayoutContent::ClipStart => {}
                     // OXI_TXBX_DASH: the dashed outline's sides are the box, not content
-                    LayoutContent::TableBorder { style: Some(st), .. } if st.starts_with("prst:") => {}
+                    LayoutContent::TableBorder { style: Some(st), .. } if st.starts_with("prst:") || st.starts_with("prstr:") => {}
                     LayoutContent::VectorPath { .. }
                         if (el.x - abs_x).abs() < 0.01 && (el.y - abs_y).abs() < 0.01
                             && (el.width - text_box.width).abs() < 0.01
@@ -18936,8 +19008,17 @@ cells={} pitch={:.2} text={:?}",
             para_style.line_spacing_rule.as_deref(),
             para_style.line_spacing,
         ) {
+            // OXI_ATLEAST_UNDER_FONT_AUTO (2026-11-07, default ON, opt-out _DISABLE): an
+            // atLeast value that does not set the line's height is an auto line and is
+            // placed like one. `_pb_atleast_under_font_slice.py` (blind-J ja/creative__
+            // 99e3d9f9's text box «伊豆の国市商工会 TEL…», Meiryo 14pt, lines-360 grid,
+            // two cells = 36pt): Word's baseline is 623.35 for atLeast 10 / 13 / 14 / 16
+            // / 20pt and for no rule at all; the shape-context bottom-align put the
+            // line at 36 - 14 = 22 + ascent, 13.5 low.
             (Some(rule @ ("exact" | "atLeast")), Some(v))
-                if rule == "exact" || v > 0.01 || !natbox_atleast_on =>
+                if (rule == "exact" || v > 0.01 || !natbox_atleast_on)
+                    && !(rule == "atLeast" && v + 0.5 < line_height
+                        && !crate::env_flag!("OXI_ATLEAST_UNDER_FONT_AUTO_DISABLE")) =>
             {
                 // S1261 (2026-08-30, OPT-IN `OXI_S1261=1` pending gates): under
                 // `lineRule="exact"` Word puts the BASELINE at 0.8 x the line
