@@ -266,7 +266,12 @@ fn xfrm(n: &Node) -> Option<(f32, f32, f32, f32)> {
 
 /// The text of one shape as paragraphs, and its body's insets and anchor.
 fn text_blocks(sp: &Node, xml: &str, theme: &ThemeColors) -> Vec<Block> {
-    let Some(body) = sp.child("txBody") else { return Vec::new() };
+    text_blocks_in(sp.child("txBody"), sp, xml, theme)
+}
+
+/// The paragraphs of the text body `body` of shape `sp`.
+fn text_blocks_in(body: Option<&Node>, sp: &Node, xml: &str, theme: &ThemeColors) -> Vec<Block> {
+    let Some(body) = body else { return Vec::new() };
     let default_color = sp.path(&["style", "fontRef"]).and_then(|f| color_of(f, xml, theme));
     let mut blocks = Vec::new();
     for p in body.children.iter().filter(|c| c.name == "p") {
@@ -410,6 +415,194 @@ pub(super) fn from_drawing(xml: &str, theme: &ThemeColors) -> Option<Group> {
     (!art.shapes.is_empty() || !art.texts.is_empty()).then_some(art)
 }
 
+/// One group's child-to-parent transform, in points: its children's
+/// `chOff`/`chExt` box is drawn over the group's `off`/`ext` box.
+#[derive(Clone, Copy, Debug)]
+struct GroupXf {
+    off: (f32, f32),
+    ext: (f32, f32),
+    ch_off: (f32, f32),
+    ch_ext: (f32, f32),
+}
+
+impl GroupXf {
+    fn of(grp_sp_pr: &Node) -> Option<Self> {
+        let x = grp_sp_pr.child("xfrm")?;
+        let pair = |name: &str, a: &str, b: &str| -> Option<(f32, f32)> {
+            let n = x.child(name)?;
+            Some((n.num(a)? / EMU_PER_PT, n.num(b)? / EMU_PER_PT))
+        };
+        let ext = pair("ext", "cx", "cy")?;
+        Some(Self {
+            off: pair("off", "x", "y").unwrap_or((0.0, 0.0)),
+            ext,
+            ch_off: pair("chOff", "x", "y").unwrap_or((0.0, 0.0)),
+            ch_ext: pair("chExt", "cx", "cy").unwrap_or(ext),
+        })
+    }
+    fn scale(&self) -> (f32, f32) {
+        (self.ext.0 / self.ch_ext.0.max(f32::EPSILON), self.ext.1 / self.ch_ext.1.max(f32::EPSILON))
+    }
+    fn apply(&self, (x, y, w, h): (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+        let (sx, sy) = self.scale();
+        (self.off.0 + (x - self.ch_off.0) * sx, self.off.1 + (y - self.ch_off.1) * sy, w * sx, h * sy)
+    }
+}
+
+/// A member's spPr xfrm and its box in its group's space.
+fn member_xfrm(n: &Node) -> Option<(&Node, (f32, f32, f32, f32))> {
+    let x = n.path(&["spPr", "xfrm"])?;
+    Some((x, xfrm(x)?))
+}
+
+/// `rect` in a member's own group space, carried out to the frame through
+/// `chain` (outermost first).
+fn to_frame(chain: &[GroupXf], rect: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+    chain.iter().rev().fold(rect, |r, xf| xf.apply(r))
+}
+
+/// The open outline of a connector preset over (x, y, w, h); `None` for a
+/// straight one, which is drawn as a line.
+fn connector_outline(sp: &Node, prst: &str, x: f32, y: f32, w: f32, h: f32) -> Option<Vec<PathSeg>> {
+    let pts: Vec<(f32, f32)> = match prst {
+        "bentConnector2" => vec![(0.0, 0.0), (w, 0.0), (w, h)],
+        "bentConnector3" | "curvedConnector3" => {
+            let m = adj(sp, "adj1", 0.5) * w;
+            vec![(0.0, 0.0), (m, 0.0), (m, h), (w, h)]
+        }
+        "bentConnector4" | "curvedConnector4" => {
+            let (m1, m2) = (adj(sp, "adj1", 0.5) * w, adj(sp, "adj2", 0.5) * h);
+            vec![(0.0, 0.0), (m1, 0.0), (m1, m2), (w, m2), (w, h)]
+        }
+        _ => return None,
+    };
+    Some(pts.iter().enumerate()
+        .map(|(i, &(px, py))| if i == 0 { PathSeg::M(x + px, y + py) } else { PathSeg::L(x + px, y + py) })
+        .collect())
+}
+
+/// A locked canvas (`lc:lockedCanvas`, a group of DrawingML shapes pasted
+/// from PowerPoint) drawn into a frame of `frame_w` x `frame_h` points: its
+/// shapes, connectors and pictures as group members, its shape text as
+/// member text boxes. The canvas is scaled to the frame as a whole, like a
+/// picture: member boxes through each group's chOff/chExt -> off/ext, and
+/// the text by the smaller of the two scales (UNMEASURED against Word).
+/// `media` maps the document's relationship ids to image bytes.
+pub(super) fn from_locked_canvas(
+    xml: &str,
+    theme: &ThemeColors,
+    media: &std::collections::HashMap<String, Vec<u8>>,
+    frame_w: f32,
+    frame_h: f32,
+) -> Option<Group> {
+    let root = parse_tree(xml)?;
+    let canvas = GroupXf::of(root.child("grpSpPr")?)?;
+    if frame_w <= 0.0 || frame_h <= 0.0 {
+        return None;
+    }
+    let frame = GroupXf { off: (0.0, 0.0), ext: (frame_w, frame_h), ch_off: canvas.off, ch_ext: canvas.ext };
+    let mut art = Group { shapes: Vec::new(), texts: Vec::new() };
+    // (member, the group transforms above it, outermost first)
+    let mut stack: Vec<(&Node, Vec<GroupXf>)> = root.children.iter().rev().map(|n| (n, vec![frame, canvas])).collect();
+    while let Some((n, chain)) = stack.pop() {
+        match n.name.as_str() {
+            "grpSp" => {
+                let mut inner = chain.clone();
+                if let Some(xf) = n.child("grpSpPr").and_then(GroupXf::of) {
+                    inner.push(xf);
+                }
+                stack.extend(n.children.iter().rev().map(|c| (c, inner.clone())));
+            }
+            "pic" => {
+                let Some((_, local)) = member_xfrm(n) else { continue };
+                let (x, y, w, h) = to_frame(&chain, local);
+                let rid = n.path(&["blipFill", "blip"]).and_then(|b| b.attr("embed"));
+                if let Some(data) = rid.and_then(|id| media.get(id)).filter(|_| w > 0.0 && h > 0.0) {
+                    art.shapes.push(VectorShape {
+                        x, y, w, h, fill: None, stroke: None, stroke_width: 0.0, is_line: false,
+                        path: Vec::new(), image: Some(std::sync::Arc::new(data.clone())),
+                    });
+                }
+            }
+            "cxnSp" => {
+                let Some((x_node, local)) = member_xfrm(n) else { continue };
+                let rect = to_frame(&chain, local);
+                let (stroke, stroke_width) = line_of(n, xml, theme);
+                if stroke.is_none() {
+                    continue;
+                }
+                let rot = x_node.num("rot").unwrap_or(0.0) / 60_000.0;
+                let (flip_h, flip_v) = (x_node.attr("flipH") == Some("1"), x_node.attr("flipV") == Some("1"));
+                let (bx, by, bw, bh) = rect;
+                let prst = n.path(&["spPr", "prstGeom"]).and_then(|g| g.attr("prst")).unwrap_or("line");
+                match connector_outline(n, prst, bx, by, bw, bh) {
+                    Some(open) if bw > 0.0 && bh > 0.0 => art.shapes.push(VectorShape {
+                        x: bx, y: by, w: bw, h: bh, fill: None, stroke, stroke_width, is_line: false,
+                        path: place(open, rect, rot, flip_h, flip_v), image: None,
+                    }),
+                    _ => {
+                        // A straight connector runs corner to corner; a flip
+                        // swaps the corners it joins.
+                        let (x0, x1) = if flip_h { (bx + bw, bx) } else { (bx, bx + bw) };
+                        let (y0, y1) = if flip_v { (by + bh, by) } else { (by, by + bh) };
+                        art.shapes.push(VectorShape {
+                            x: x0, y: y0, w: x1 - x0, h: y1 - y0, fill: None, stroke, stroke_width,
+                            is_line: true, path: Vec::new(), image: None,
+                        });
+                    }
+                }
+            }
+            "sp" => {
+                let Some((x_node, local)) = member_xfrm(n) else { continue };
+                let rect = to_frame(&chain, local);
+                let rot = x_node.num("rot").unwrap_or(0.0) / 60_000.0;
+                let (flip_h, flip_v) = (x_node.attr("flipH") == Some("1"), x_node.attr("flipV") == Some("1"));
+                let fill = fill_of(n, xml, theme);
+                let (stroke, stroke_width) = line_of(n, xml, theme);
+                let (bx, by, bw, bh) = rect;
+                if (fill.is_some() || stroke.is_some()) && bw > 0.0 && bh > 0.0 {
+                    let outline = if let Some(g) = n.path(&["spPr", "custGeom"]) {
+                        custom_outline(g, bx, by, bw, bh)
+                    } else {
+                        let prst = n.path(&["spPr", "prstGeom"]).and_then(|g| g.attr("prst")).unwrap_or("rect");
+                        preset_outline(n, prst, bx, by, bw, bh)
+                    };
+                    if !outline.is_empty() {
+                        art.shapes.push(VectorShape {
+                            x: bx, y: by, w: bw, h: bh, fill, stroke, stroke_width, is_line: false,
+                            path: place(outline, rect, rot, flip_h, flip_v), image: None,
+                        });
+                    }
+                }
+                // Shape text sits in a:txSp/a:txBody here (dsp:txBody in SmartArt).
+                let body = n.path(&["txSp", "txBody"]).or_else(|| n.child("txBody"));
+                let mut blocks = text_blocks_in(body, n, xml, theme);
+                let has_text = blocks.iter().any(|b| matches!(b, Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.trim().is_empty())));
+                if has_text {
+                    let (sx, sy) = chain.iter().fold((1.0f32, 1.0f32), |(a, b), xf| { let (u, v) = xf.scale(); (a * u, b * v) });
+                    let k = sx.min(sy);
+                    for b in &mut blocks {
+                        if let Block::Paragraph(p) = b {
+                            for r in &mut p.runs {
+                                r.style.font_size = r.style.font_size.map(|s| s * k);
+                            }
+                            p.style.space_before = p.style.space_before.map(|s| s * k);
+                            p.style.space_after = p.style.space_after.map(|s| s * k);
+                        }
+                    }
+                    let mut tb = body_text_box(blocks, body.and_then(|b| b.child("bodyPr")), rect);
+                    for inset in [&mut tb.inset_left, &mut tb.inset_top, &mut tb.inset_right, &mut tb.inset_bottom] {
+                        *inset = inset.map(|v| v * k);
+                    }
+                    art.texts.push(tb);
+                }
+            }
+            _ => {}
+        }
+    }
+    (!art.shapes.is_empty() || !art.texts.is_empty()).then_some(art)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +622,43 @@ mod tests {
         t.minor_font = Some("Calibri".into());
         t.minor_font_ea = Some("游明朝".into());
         t
+    }
+
+    // A canvas of 200 x 100pt whose children start at (100, 50)pt, drawn into
+    // a 100 x 50pt frame: everything halves, and the text with it.
+    const CANVAS: &str = r#"<lockedCanvas><a:nvGrpSpPr/><a:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2540000" cy="1270000"/><a:chOff x="1270000" y="635000"/><a:chExt cx="2540000" cy="1270000"/></a:xfrm></a:grpSpPr>
+<a:sp><a:spPr><a:xfrm><a:off x="1270000" y="635000"/><a:ext cx="1270000" cy="635000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:spPr>
+<a:txSp><a:txBody><a:bodyPr lIns="91440" anchor="ctr"/><a:p><a:r><a:rPr sz="2000"/><a:t>Team</a:t></a:r></a:p></a:txBody></a:txSp></a:sp>
+<a:cxnSp><a:spPr><a:xfrm flipH="1"><a:off x="2540000" y="1270000"/><a:ext cx="1270000" cy="0"/></a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></a:spPr></a:cxnSp>
+<a:grpSp><a:grpSpPr><a:xfrm><a:off x="2540000" y="635000"/><a:ext cx="1270000" cy="635000"/><a:chOff x="0" y="0"/><a:chExt cx="2540000" cy="1270000"/></a:xfrm></a:grpSpPr>
+<a:pic><a:blipFill><a:blip r:embed="rId9"/></a:blipFill><a:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2540000" cy="1270000"/></a:xfrm></a:spPr></a:pic></a:grpSp>
+</lockedCanvas>"#;
+
+    #[test]
+    fn locked_canvas_members_are_scaled_into_the_frame() {
+        let media = std::collections::HashMap::from([("rId9".to_string(), vec![1u8, 2, 3])]);
+        let art = from_locked_canvas(CANVAS, &theme(), &media, 100.0, 50.0).expect("canvas");
+        assert_eq!(art.shapes.len(), 3);
+        let rect = &art.shapes[0];
+        assert_eq!((rect.x, rect.y, rect.w, rect.h), (0.0, 0.0, 50.0, 25.0));
+        assert_eq!(rect.fill.as_deref(), Some("FF0000"));
+        // a flipped straight connector runs from its right end to its left
+        let line = &art.shapes[1];
+        assert!(line.is_line);
+        assert_eq!((line.x, line.y, line.w, line.h), (100.0, 25.0, -50.0, 0.0));
+        assert_eq!(line.stroke_width, 2.0);
+        // the nested group maps its 200 x 100 children onto 100 x 50, then the frame halves it
+        let pic = &art.shapes[2];
+        assert_eq!((pic.x, pic.y, pic.w, pic.h), (50.0, 0.0, 50.0, 25.0));
+        assert_eq!(pic.image.as_deref().map(Vec::as_slice), Some(&[1u8, 2, 3][..]));
+
+        assert_eq!(art.texts.len(), 1);
+        let t = &art.texts[0];
+        assert_eq!((t.width, t.height), (50.0, 25.0));
+        assert_eq!(t.inset_left, Some(3.6));
+        let Block::Paragraph(p) = &t.blocks[0] else { panic!() };
+        assert_eq!(p.runs[0].text, "Team");
+        assert_eq!(p.runs[0].style.font_size, Some(10.0));
     }
 
     #[test]

@@ -68,6 +68,12 @@ fn graphic_kind(uri: &str) -> Option<String> {
     if DRAWN_GRAPHICS.contains(&uri) {
         return None;
     }
+    // OXI_LOCKED_CANVAS: drawn as a group of its shapes.
+    if uri == "http://schemas.openxmlformats.org/drawingml/2006/lockedCanvas"
+        && std::env::var_os("OXI_LOCKED_CANVAS_DISABLE").is_none()
+    {
+        return None;
+    }
     Some(match uri {
         "http://schemas.openxmlformats.org/drawingml/2006/chart"
         | "http://schemas.microsoft.com/office/drawing/2014/chartex" => "chart".to_string(),

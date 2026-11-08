@@ -8366,6 +8366,8 @@ fn parse_drawing(
     // chart relationship of a chart (`c:chart r:id`).
     let mut smartart_dm: Option<String> = None;
     let mut chart_rel: Option<String> = None;
+    // The XML of an lc:lockedCanvas graphic, read whole (see below).
+    let mut locked_canvas: Option<String> = None;
     // S839 (2026-07-14): wpg vector-group per-shape extraction. The main
     // loop keeps ALL its existing (last-win, global) prop semantics; the
     // S839 state only PIGGYBACKS per-shape records so a visual-only group
@@ -8439,6 +8441,18 @@ fn parse_drawing(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 depth += 1;
+                // OXI_LOCKED_CANVAS (2026-11-08, default ON, opt-out _DISABLE): a
+                // locked canvas is read whole and drawn as a group (see
+                // smartart::from_locked_canvas); its members' xfrm / fills must
+                // not reach the frame's own shape properties below.
+                if local == "lockedCanvas" && std::env::var_os("OXI_LOCKED_CANVAS_DISABLE").is_none() {
+                    let name = e.name().as_ref().to_vec();
+                    if let Ok(inner) = reader.read_text(quick_xml::name::QName(&name)) {
+                        locked_canvas = Some(format!("<lockedCanvas>{inner}</lockedCanvas>"));
+                        depth -= 1;
+                    }
+                    continue;
+                }
                 match local.as_str() {
                     "wrapPolygon" => { in_wrapping_polygon = true; }
                     "start" | "lineTo" if in_wrapping_polygon => {
@@ -10915,7 +10929,10 @@ fn parse_drawing(
         .filter(|_| std::env::var_os("OXI_CHART_DISABLE").is_none())
         .and_then(|id| ctx.graphic_parts.get(id))
         .and_then(|xml| super::chart::from_chart(xml, &ctx.theme, width, height));
-    let group = smartart.or(chart);
+    let canvas = locked_canvas
+        .as_deref()
+        .and_then(|xml| super::smartart::from_locked_canvas(xml, &ctx.theme, &ctx.media, width, height));
+    let group = smartart.or(chart).or(canvas);
     let group_drawn = group.is_some();
     if let Some(art) = group {
         s839_vector_shapes = art.shapes;
