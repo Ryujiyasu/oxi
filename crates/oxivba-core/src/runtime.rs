@@ -2450,7 +2450,9 @@ impl<'a> Runtime<'a> {
         } else {
             match target {
                 Expr::Member { object, name, .. } => {
-                    (self.source_class_name(object, frame)?, name.as_str())
+                    let class = self.source_class_name(object, frame)
+                        .or_else(|| self.source_default_value_class(object, frame))?;
+                    (class, name.as_str())
                 }
                 Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
                     let Some(WithSubject::Object {
@@ -4722,6 +4724,37 @@ impl<'a> Runtime<'a> {
             } => {
                 let evaluated=self.prepare_named_setter(target,frame,false)?;
                 let value = self.eval_expr(value, frame)?;
+                let source_value_parameter = match target {
+                    Expr::Member { .. } | Expr::WithMember(..)
+                        if self.source_module_setter(target, frame, false).is_none() =>
+                        self.source_setter_signature(target, frame, false)
+                            .and_then(|parameters| parameters.last().cloned()),
+                    _ => None,
+                };
+                if let Some(parameter) = source_value_parameter {
+                    // Bind the value before resolving a parameterless receiver.
+                    let value = self.prepare_byval_argument(value, &parameter, frame, span.line)?;
+                    let view = match target {
+                        Expr::Member { object, .. } => self.source_class_name(object, frame)
+                            .or_else(|| self.source_default_value_class(object, frame)),
+                        _ => self.source_member_view(target, frame),
+                    };
+                    let (receiver, name) = match target {
+                        Expr::Member { object, name, .. } =>
+                            (self.eval_object(object, frame, span.line)?, name.as_str()),
+                        Expr::WithMember(name, _) => match frame.with_objects.last() {
+                            Some(WithSubject::Object { receiver, .. }) =>
+                                (receiver.clone(), name.as_str()),
+                            _ => return Err(language_error(91, "With block variable not set", span.line)),
+                        },
+                        _ => unreachable!("source member assignment target"),
+                    };
+                    if !self.call_instance_set_source(&receiver, name, &[], &[], value.clone(),
+                        view.as_deref(), frame, span.line, Some(ProcKind::PropertyLet))? {
+                        self.assign_member_value(receiver, name, value, frame, span.line, view.as_deref())?;
+                    }
+                    return Ok(Flow::Continue);
+                }
                 let variant_member = match target {
                     Expr::Member { object, name, span: at, .. }
                         if self.source_class_name(object, frame).is_none()
