@@ -317,6 +317,7 @@ Beyond .docx rendering (the core mission), Oxi also ships:
 - **Hanko / Inkan** — Japanese digital stamp generation + PAdES PDF signatures
 - **Local document processing** — the browser engine handles documents on the device without a document-processing backend
 - **VS Code extension** — open .docx / .xlsx / .pptx inside the editor, rendered by the same WebAssembly build ([editors/vscode](editors/vscode))
+- **Gotenberg module** — converts .docx on Gotenberg's LibreOffice route with Oxi and hands anything it cannot fully serve back to LibreOffice; on 4,988 docx-corpus documents it converted 99.8% itself, at a median 0.08 s against LibreOffice's 0.89 s ([integrations/gotenberg](integrations/gotenberg))
 
 These reuse common OOXML utilities, font metrics and language bindings. The rendering benchmarks above provide the visual compatibility measurements.
 
@@ -518,7 +519,7 @@ Oxi is licensed in three layers, chosen to maximize both adoption and the flow o
 | Layer | License | Why |
 |-------|---------|-----|
 | **Core engine** (`oxidocs`, `oxidocs-common`, `oxidocs-core`, `oxicells-core`, `oxislides-core`, `oxipdf-core`, `oxihanko`, `oxidocs-cli`, `oxi-desktop`) | [MPL-2.0](LICENSE) | File-level copyleft: modifications to engine files must be published, so layout-fidelity improvements converge into one tree. Embedding Oxi in proprietary or commercial products is fully permitted — only changes to Oxi's own files must be shared. Same license as LibreOffice and Firefox |
-| **Bindings** (`oxidocs-wasm`, `oxidocs-python`) | MIT OR Apache-2.0 | Standard Rust dual license — zero friction for embedding in any stack |
+| **Bindings and integrations** (`oxidocs-wasm`, `oxidocs-python`, `integrations/gotenberg`) | MIT OR Apache-2.0 | Standard Rust dual license — zero friction for embedding in any stack |
 | **Conformance corpus** (self-authored repro documents under `tools/golden-test/repros/`) | CC BY-SA 4.0 | The Word-compatibility test suite is a shared public asset; improvements to it must stay shared |
 
 Contributions are accepted under the [Developer Certificate of Origin](https://developercertificate.org/) (`git commit -s`). There is no CLA — contributors keep their copyright, and the project cannot relicense your work out from under you.
