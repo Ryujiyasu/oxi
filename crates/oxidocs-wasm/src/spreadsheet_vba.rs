@@ -52238,6 +52238,243 @@ End Function
     }
 
 
+
+    #[test]
+    fn source_scalar_dispatch_edges_keep_native_null_and_overflow_errors() {
+        for (receiver, formal, storage_kind, expected) in [
+            ("variable_field","String","Object", ["ERR|13|R|", "OK|R|Long:0", "ERR|13|R|", "ERR|13|R|", "ERR|6|R|"]),
+            ("factory_field","String","Object", ["ERR|13|RF|", "OK|RF|Long:0", "ERR|13|RF|", "ERR|13|RF|", "ERR|6|RF|"]),
+            ("factory_sheet","String","Object", ["ERR|13|RF|", "ERR|1004|RF|", "ERR|13|RF|", "ERR|13|RF|", "OK|RF|String:2147483648"]),
+            ("string_explicit_late","String","Object", ["ERR|13|R|", "OK|RL|String:8:False", "ERR|13|R|", "ERR|13|R|", "OK|RL|String:8:False"]),
+            ("string_explicit_typed","String","IndexBox", ["ERR|94|R|", "OK|RL|String:8:False", "ERR|13|R|", "ERR|13|R|", "OK|RL|String:8:False"]),
+            ("long_explicit_late","Long","Object", ["ERR|13|R|", "OK|RL|Long:3:False", "ERR|13|R|", "ERR|13|R|", "ERR|6|R|"]),
+            ("long_explicit_typed","Long","IndexBox", ["ERR|94|R|", "OK|RL|Long:3:False", "ERR|13|R|", "ERR|13|R|", "ERR|6|R|"]),
+        ] {
+            let mut probe = source_default_storage_probe().replace(
+                " Case 4\n  Set rhs = Nothing\n End Select",
+                " Case 4\n  Set rhs = Nothing\n Case 5\n  rhs = Null\n Case 6\n  rhs = Empty\n Case 7\n  rhs = CVErr(2007)\n Case 8\n  rhs = Array(1, 2)\n Case 9\n  rhs = 2147483648#\n End Select",
+            );
+            let field_or_host = matches!(receiver, "variable_field" | "factory_field" | "factory_sheet");
+            if field_or_host {
+                probe.push_str(&format!("\nPublic Function FactoryBox() As Object\n Trace = Trace & \"F\"\n Set FactoryBox = {}\nEnd Function\n",
+                    if receiver == "factory_sheet" { "Worksheets(1)" } else { "HeldBox" }));
+            }
+            let assignment = match receiver {
+                "variable_field" => "box.Tag = ReadRhs(rhs)\n Report = TypeName(HeldBox.Tag) & \":\" & CStr(HeldBox.Tag)",
+                "factory_field" => "NamedDefaultProbe.FactoryBox.Tag = ReadRhs(rhs)\n Report = TypeName(HeldBox.Tag) & \":\" & CStr(HeldBox.Tag)",
+                "factory_sheet" => "NamedDefaultProbe.FactoryBox.Name = ReadRhs(rhs)\n Report = TypeName(Worksheets(1).Name) & \":\" & Worksheets(1).Name",
+                _ => "box.ValueAt = ReadRhs(rhs)",
+            };
+            let mut source = source_default_storage_fixture(&probe, formal, Some(storage_kind))
+                .replace("box = ReadRhs(rhs)", assignment);
+            if field_or_host {
+                source = source.replace("Public Property Get ValueAt() As String",
+                    "Public Tag As Long\nPublic Property Get ValueAt() As String");
+            }
+            let mut session = None;
+            let control = execute_workbook_action_in_session(workbook(), &source,
+                Some("NamedDefaultProbe.Control"), vec![], 0, failure_context(), &mut session).unwrap();
+            assert!(control.error.is_none());
+            assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+            let mut book = control.workbook;
+            for (index, expected) in expected.into_iter().enumerate() {
+                let kind = index as i64 + 5;
+                let outcome = execute_workbook_action_in_session(book, &source,
+                    Some("NamedDefaultProbe.Probe"), vec![Value::Integer(0), Value::Integer(kind)],
+                    0, failure_context(), &mut session).unwrap();
+                assert!(outcome.error.is_none());
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected,
+                    "receiver={receiver} value={kind}");
+                book = outcome.workbook;
+            }
+        }
+        let mut probe = source_default_storage_probe().to_string();
+        probe.push_str(r#"
+Public Function ErrFactory() As Object
+ Set ErrFactory = Err
+End Function
+Public Function ErrAlias(ByVal factory As Boolean) As String
+ On Error Resume Next
+ Dim e As Object
+ If factory Then
+  Set e = ErrFactory
+ Else
+  Set e = Err
+ End If
+ e.Number = 13
+ e.Source = "src"
+ e.Description = "desc"
+ e.HelpFile = "guide"
+ e.HelpContext = 42
+ ErrAlias = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"#);
+        let source = source_default_storage_fixture(&probe, "String", Some("Object"));
+        let mut session = None;
+        let control = execute_workbook_action_in_session(workbook(), &source,
+            Some("NamedDefaultProbe.Control"), vec![], 0, failure_context(), &mut session).unwrap();
+        assert!(control.error.is_none());
+        assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+        let mut book = control.workbook;
+        for factory in [false, true] {
+            let outcome = execute_workbook_action_in_session(book, &source,
+                Some("NamedDefaultProbe.ErrAlias"), vec![Value::Boolean(factory)],
+                0, failure_context(), &mut session).unwrap();
+            assert!(outcome.error.is_none());
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], "13|src|desc|guide|42");
+            book = outcome.workbook;
+        }
+    }
+
+    #[test]
+    fn source_factory_fields_and_host_names_keep_native_value_conversion() {
+        for receiver in ["variable_field", "factory_field", "factory_sheet"] {
+            let mut probe = source_default_storage_probe().to_string();
+            probe.push_str(&format!("\nPublic Function FactoryBox() As Object\n Trace = Trace & \"F\"\n Set FactoryBox = {}\nEnd Function\n",
+                if receiver == "factory_sheet" { "Worksheets(1)" } else { "HeldBox" }));
+            let assignment = match receiver {
+                "variable_field" => "box.Tag = ReadRhs(rhs)\n Report = TypeName(HeldBox.Tag) & \":\" & CStr(HeldBox.Tag)",
+                "factory_field" => "NamedDefaultProbe.FactoryBox.Tag = ReadRhs(rhs)\n Report = TypeName(HeldBox.Tag) & \":\" & CStr(HeldBox.Tag)",
+                _ => "NamedDefaultProbe.FactoryBox.Name = ReadRhs(rhs)\n Report = TypeName(Worksheets(1).Name) & \":\" & Worksheets(1).Name",
+            };
+            let source = source_default_storage_fixture(&probe, "String", Some("Object"))
+                .replace("box = ReadRhs(rhs)", assignment)
+                .replace("Public Property Get ValueAt() As String", "Public Tag As Long\nPublic Property Get ValueAt() As String");
+            let expected = match receiver {
+                "variable_field" => ["OK|R|Long:17", "ERR|13|R|", "ERR|13|RP|", "ERR|13|R|", "ERR|13|R|"],
+                "factory_field" => ["OK|RF|Long:17", "ERR|13|RF|", "ERR|13|RFP|", "ERR|13|RF|", "ERR|13|RF|"],
+                _ => ["OK|RF|String:17", "OK|RF|String:abc", "OK|RFP|String:payload", "ERR|13|RF|", "ERR|13|RF|"],
+            };
+            let mut session = None;
+            let control = execute_workbook_action_in_session(workbook(), &source,
+                Some("NamedDefaultProbe.Control"), vec![], 0, failure_context(), &mut session).unwrap();
+            assert!(control.error.is_none());
+            assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+            let mut book = control.workbook;
+            for (kind, expected) in expected.into_iter().enumerate() {
+                let outcome = execute_workbook_action_in_session(book, &source,
+                    Some("NamedDefaultProbe.Probe"), vec![Value::Integer(0), Value::Integer(kind as i64)],
+                    0, failure_context(), &mut session).unwrap();
+                assert!(outcome.error.is_none());
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected,
+                    "receiver={receiver} value={kind}");
+                book = outcome.workbook;
+            }
+        }
+    }
+
+    #[test]
+    fn source_factory_and_with_getter_errors_keep_native_dispatch_order() {
+        for factory in [false, true] {
+            for indexed in [false, true] {
+                for typed in [false, true] {
+                    let mut probe = source_default_storage_probe().replace(
+                        "Public Report As String", "Public Report As String\nPublic ThrowCode As Long",
+                    );
+                    probe.push_str("\nPublic Function SetThrowCode(ByVal code As Long) As String\n ThrowCode = code\n SetThrowCode = \"set\"\nEnd Function\n");
+                    probe.push_str(&format!("\nPublic Function FactoryBox() As {}\n Trace = Trace & \"F\"\n Set FactoryBox = HeldBox\nEnd Function\n", if typed { "IndexBox" } else { "Object" }));
+                    let target = if factory {
+                        if indexed { "NamedDefaultProbe.FactoryBox(0)" } else { "NamedDefaultProbe.FactoryBox.ValueAt" }
+                    } else if indexed { ".ValueAt(0)" } else { ".ValueAt" };
+                    let assignment = if factory { format!("{target} = ReadRhs(rhs)") }
+                        else { format!("With box\n {target} = ReadRhs(rhs)\n End With") };
+                    let mut source = source_default_storage_fixture(&probe, "String", Some("Object"))
+                        .replace("box = ReadRhs(rhs)", &assignment)
+                        .replace(" Value = \"payload\"", " Err.Raise NamedDefaultProbe.ThrowCode\n Value = \"payload\"");
+                    if typed { source = source.replace("Dim box As Object", "Dim box As IndexBox"); }
+                    if indexed {
+                        source = source
+                            .replace("Property Get ValueAt() As String", "Property Get ValueAt(ByVal index As Long) As String")
+                            .replace("Property Let ValueAt(ByVal Value As String)", "Property Let ValueAt(ByVal index As Long, ByVal Value As String)")
+                            .replace("Property Set ValueAt(ByVal Value As Variant)", "Property Set ValueAt(ByVal index As Long, ByVal Value As Variant)");
+                    }
+                    let mut session = None;
+                    let control = execute_workbook_action_in_session(workbook(), &source,
+                        Some("NamedDefaultProbe.Control"), vec![], 0, failure_context(), &mut session).unwrap();
+                    assert!(control.error.is_none());
+                    assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+                    let mut book = control.workbook;
+                    for code in [91, 424, 438, 193] {
+                        let setting = execute_workbook_action_in_session(book, &source,
+                            Some("NamedDefaultProbe.SetThrowCode"), vec![Value::Integer(code)],
+                            0, failure_context(), &mut session).unwrap();
+                        assert!(setting.error.is_none());
+                        assert_eq!(serde_json::to_value(&setting.result).unwrap()["value"], "set");
+                        let outcome = execute_workbook_action_in_session(setting.workbook, &source,
+                            Some("NamedDefaultProbe.Probe"), vec![Value::Integer(0), Value::Integer(2)],
+                            0, failure_context(), &mut session).unwrap();
+                        assert!(outcome.error.is_none());
+                        assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                            format!("ERR|{}|{}|", if typed { code } else { 13 },
+                                if factory && !typed { "RFP" } else { "RP" }),
+                            "factory={factory} indexed={indexed} typed={typed} code={code}");
+                        book = outcome.workbook;
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_factory_index_arguments_run_once_in_native_order() {
+        for getter_errors in [false, true] {
+            for qualified in [false, true] {
+                for typed in [false, true] {
+                    let mut probe = source_default_storage_probe().to_string();
+                    if getter_errors {
+                        probe = probe.replace("Public Report As String", "Public Report As String\nPublic ThrowCode As Long");
+                        probe.push_str("\nPublic Function SetThrowCode(ByVal code As Long) As String\n ThrowCode = code\n SetThrowCode = \"set\"\nEnd Function\n");
+                    }
+                    probe.push_str(&format!("\nPublic Function FactoryBox() As {}\n Trace = Trace & \"F\"\n Set FactoryBox = HeldBox\nEnd Function\n", if typed { "IndexBox" } else { "Object" }));
+                    probe.push_str("\nPublic Function ReadIndex() As Long\n Trace = Trace & \"I\"\n ReadIndex = 0\nEnd Function\n");
+                    let mut source = source_default_storage_fixture(&probe, "String", Some("Object"))
+                        .replace("box = ReadRhs(rhs)", if qualified {
+                            "NamedDefaultProbe.FactoryBox(ReadIndex()) = ReadRhs(rhs)"
+                        } else { "FactoryBox(ReadIndex()) = ReadRhs(rhs)" })
+                        .replace("Property Get ValueAt() As String", "Property Get ValueAt(ByVal index As Long) As String")
+                        .replace("Property Let ValueAt(ByVal Value As String)", "Property Let ValueAt(ByVal index As Long, ByVal Value As String)")
+                        .replace("Property Set ValueAt(ByVal Value As Variant)", "Property Set ValueAt(ByVal index As Long, ByVal Value As Variant)");
+                    if typed { source = source.replace("Dim box As Object", "Dim box As IndexBox"); }
+                    if getter_errors { source = source.replace(" Value = \"payload\"", " Err.Raise NamedDefaultProbe.ThrowCode\n Value = \"payload\""); }
+                    let mut session = None;
+                    let control = execute_workbook_action_in_session(workbook(), &source,
+                        Some("NamedDefaultProbe.Control"), vec![], 0, failure_context(), &mut session).unwrap();
+                    assert!(control.error.is_none());
+                    assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+                    let mut book = control.workbook;
+                    let conditions: Vec<_> = if getter_errors {
+                        [91, 424, 438, 193].into_iter().map(|code|
+                            (2, Some(code), format!("ERR|{}|{}|", if typed { code } else { 13 },
+                                if typed { "RP" } else { "IRFP" }))).collect()
+                    } else {
+                        (if typed {
+                            ["OK|RIFL|String:8:False", "OK|RIFL|String:8:False", "OK|RPIFL|String:8:False", "ERR|438|R|", "ERR|91|R|"]
+                        } else {
+                            ["OK|IRFL|String:8:False", "OK|IRFL|String:8:False", "OK|IRFPL|String:8:False", "ERR|13|IRF|", "ERR|13|IRF|"]
+                        }).into_iter().enumerate().map(|(kind, value)| (kind as i64, None, value.to_string())).collect()
+                    };
+                    for (kind, code, expected) in conditions {
+                        if let Some(code) = code {
+                            let setting = execute_workbook_action_in_session(book, &source,
+                                Some("NamedDefaultProbe.SetThrowCode"), vec![Value::Integer(code)],
+                                0, failure_context(), &mut session).unwrap();
+                            assert!(setting.error.is_none());
+                            assert_eq!(serde_json::to_value(&setting.result).unwrap()["value"], "set");
+                            book = setting.workbook;
+                        }
+                        let outcome = execute_workbook_action_in_session(book, &source,
+                            Some("NamedDefaultProbe.Probe"), vec![Value::Integer(0), Value::Integer(kind)],
+                            0, failure_context(), &mut session).unwrap();
+                        assert!(outcome.error.is_none());
+                        assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected,
+                            "getter_errors={getter_errors} qualified={qualified} typed={typed} kind={kind} code={code:?}");
+                        book = outcome.workbook;
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn source_named_and_indexed_property_values_keep_dispatch_types() {
         let variant = [
