@@ -1889,10 +1889,17 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         .and_then(parse_hex_color)
                         .unwrap_or(Color::Gray(0.0));
                     let bw = *width as f64;
+                    // OXI_PDF_HRULE_BELOW (2026-11-09, default ON, opt-out _DISABLE): a
+                    // horizontal rule hangs below its coordinate -- Word's PDF fills
+                    // [y, y + w] (blind-J page 1, ~25 docs EN+JA: table rules' centres
+                    // sit +0.5w below the layout's y; policies__28f59048 28.44 / 67.32 /
+                    // 417.19 for y 28.40 / 67.35 / 417.15). Vertical rules stay centred.
+                    let dy = if (*y1 - *y2).abs() < 0.01
+                        && std::env::var_os("OXI_PDF_HRULE_BELOW_DISABLE").is_none() { bw * 0.5 } else { 0.0 };
                     contents.push(ContentElement::Path(PathData {
                         operations: vec![
-                            PathOp::MoveTo(*x1 as f64, *y1 as f64),
-                            PathOp::LineTo(*x2 as f64, *y2 as f64),
+                            PathOp::MoveTo(*x1 as f64, *y1 as f64 + dy),
+                            PathOp::LineTo(*x2 as f64, *y2 as f64 + dy),
                         ],
                         stroke: Some(StrokeStyle {
                             color: bc, width: bw,
