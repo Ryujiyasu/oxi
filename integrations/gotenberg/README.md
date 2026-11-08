@@ -10,14 +10,15 @@ A [Gotenberg](https://gotenberg.dev) 9 module that converts `.docx` to PDF with 
 ## Quick start
 
 ```sh
-docker build -t gotenberg-oxi .
-docker run --rm -p 3000:3000 gotenberg-oxi
+docker run --rm -p 3000:3000 ghcr.io/ryujiyasu/gotenberg-oxi:9.1.0-oxi-de905fba
 
 curl -s -D - -o out.pdf \
   -F files=@report.docx \
   http://localhost:3000/forms/libreoffice/convert | grep -i '^gotenberg-engine'
 # Gotenberg-Engine: oxi
 ```
+
+To build it yourself instead (about 15 minutes, most of it the Rust build): `docker build -t gotenberg-oxi .` in this directory. `--build-arg OXI_COMMIT=<commit>` picks the Oxi version.
 
 The image is the official `gotenberg/gotenberg:9.1.0` with two changes: its `gotenberg` binary is rebuilt with this module, and `oxidocs` is installed beside it. The image sets `OXI_ENABLE=true`. Chromium, LibreOffice, the PDF engines and every other route behave as in the official image.
 
@@ -57,6 +58,20 @@ Oxi runs as one `oxidocs serve` process (JSON lines over stdin/stdout). It start
 
 ## Measured
 
+### Fidelity against Word
+
+On 2026-11-08 we froze a new set of 50 English and 50 Japanese documents, then measured it. The set is called blind-K. Documents were drawn from [docx-corpus](https://docxcorp.us) by the rule the main README's blind sets use, and the list was frozen before any engine rendered them. Each document went through this image (Oxi `de905fba`) once as deployed and once with `Gotenberg-Oxi: off`. The PDFs were scored against Microsoft 365 Word's own PDF of the same file. The score is SSIM at 150 DPI on common pages; the penalized score also counts pages missing or extra.
+
+| | English SSIM | penalized | page count matches Word | Japanese SSIM | penalized | page count matches Word |
+|---|---|---|---|---|---|---|
+| **Oxi, this image (as deployed)** | **0.884** | **0.870** | **47 / 50** | **0.797** | **0.775** | **45 / 50** |
+| LibreOffice 26.8.2.2, same container | 0.841 | 0.803 | 39 / 50 | 0.769 | 0.614 | 26 / 50 |
+| Oxi at the same commit, Windows native render (reference) | 0.918 | 0.908 | 48 / 50 | 0.889 | 0.872 | 46 / 50 |
+
+Inside the same container, Oxi is ahead of LibreOffice on every measure in both languages. The container has no Microsoft fonts: Oxi lays text out with Word's own metrics and draws it with metric-compatible open faces, and its PDF is drawn by a different path than the native render. Fixes to that PDF path made after `de905fba` are not in these numbers.
+
+### Robustness and speed
+
 On 2026-11-08 we ran 4,988 `.docx` files through this image, at Oxi `7774ac9c`. The files come from [docx-corpus](https://docxcorp.us): 4,000 English and 988 Japanese, taken from the end of each type's manifest. Each file was sent twice, once as deployed and once with `Gotenberg-Oxi: off` (LibreOffice). Four requests ran at a time, with `API_TIMEOUT=170s`.
 
 | | Oxi (as deployed) | LibreOffice only |
@@ -70,7 +85,7 @@ On 2026-11-08 we ran 4,988 `.docx` files through this image, at Oxi `7774ac9c`. 
 
 The six documents LibreOffice could not convert were all converted on the deployed path.
 
-This run measures robustness and speed, not fidelity. Fidelity against Microsoft Word, compared with LibreOffice and other engines on documents no engine was tuned on, is in the main [README](../../README.md#layout-accuracy-vs-microsoft-word).
+This run measures robustness and speed. For fidelity, see the section above, and the main [README](../../README.md#layout-accuracy-vs-microsoft-word), which compares Oxi with ten engines on Windows.
 
 ## Testing
 
