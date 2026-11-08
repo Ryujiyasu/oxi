@@ -16734,6 +16734,34 @@ impl<'a> WorkbookHost<'a> {
         value.as_ref().map(vba_of_calculation_value)
     }
 
+
+    fn scalar_property_dispatch_errors(&self, receiver: &ObjectRef, name: &str) -> Option<(i64, i64)> {
+        if self.gone(receiver) { return None; }
+        let named = |names: &[&str]| names.iter().any(|candidate| name.eq_ignore_ascii_case(candidate));
+        // Native Automation has two scalar-property dispatch profiles, even
+        // within one class. METHOD and extra PROPERTYGET indices are distinct.
+        let legacy = if self.is_workbook(receiver) {
+            named(&["saved", "readonly", "date1904", "precisionasdisplayed", "fileformat"])
+        } else if self.worksheet(receiver).is_some() {
+            named(&["visible", "protectcontents", "standardwidth", "standardheight"])
+        } else if self.range(receiver).is_some()
+            || matches!(self.objects.get(host_object_index(receiver.handle)),
+                Some(HostObject::Blocks(_) | HostObject::BlocksAxis(..))) {
+            named(&["hasformula", "locked"])
+        } else {
+            self.is_application(receiver) && name.eq_ignore_ascii_case("build")
+        };
+        if legacy { return Some((1004, 450)); }
+        let scalar = (self.is_workbook(receiver) && name.eq_ignore_ascii_case("readonlyrecommended"))
+            || (self.worksheet(receiver).is_some() && named(&["index", "enablecalculation"]))
+            || ((self.range(receiver).is_some()
+                || matches!(self.objects.get(host_object_index(receiver.handle)),
+                    Some(HostObject::Blocks(_) | HostObject::BlocksAxis(..))))
+                && named(&["row", "column"]))
+            || (self.is_application(receiver) && name.eq_ignore_ascii_case("calculationstate"));
+        scalar.then_some((438, 451))
+    }
+
     fn range_count_dispatch_value(&self, receiver: &ObjectRef, name: &str) -> Option<Result<Value, i64>> {
         if !name.eq_ignore_ascii_case("count") && !name.eq_ignore_ascii_case("countlarge") {
             return None;
@@ -28803,6 +28831,11 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn automation_invocation_error(&self, receiver: &ObjectRef, name: &str, kind: u8) -> Option<i64> {
+        if kind == 1 {
+            if let Some((number, _)) = self.scalar_property_dispatch_errors(receiver, name) {
+                return Some(number);
+            }
+        }
         if matches!(kind, 4 | 8) {
             if let Some(value) = self.range_count_dispatch_value(receiver, name) {
                 // A read-only Count assignment still reads its getter first.
@@ -29321,6 +29354,16 @@ impl Host for WorkbookHost<'_> {
             });
         }
         if let Some(receiver) = receiver {
+            if !args.is_empty() {
+                if let Some((_, number)) = self.scalar_property_dispatch_errors(receiver, name) {
+                    if number == 451 {
+                        // Ordinary scalar getters run before their result is
+                        // indexed; retain any error from the getter itself.
+                        self.get(receiver, name)?;
+                    }
+                    return Err(host_error(number, "the scalar property takes no indices"));
+                }
+            }
             if !args.is_empty()
                 && (name.eq_ignore_ascii_case("count") || name.eq_ignore_ascii_case("countlarge"))
                 && matches!(self.objects.get(host_object_index(receiver.handle)),
@@ -30366,6 +30409,14 @@ impl Host for WorkbookHost<'_> {
             // VBA has of its own, `Len` and `Abs` among them — are left off
             // here too, so they fall through to "no such member".
             if self.is_application(receiver) && !vba_has_its_own(name) {
+                if args.is_empty()
+                    && builtin_compilation_references().library.member_invocation_flags("Excel._Application", name).is_none()
+                    && builtin_compilation_references().library.member_invocation_flags("Excel.WorksheetFunction", name).is_none()
+                {
+                    // An unknown name is not a worksheet function missing its
+                    // first argument. Preserve the missing-member fallback.
+                    return Ok(None);
+                }
                 let answered = self.worksheet_function_value(name, args);
                 if !matches!(&answered, Err(why) if why.ends_with("is not supported in the browser"))
                 {
@@ -54685,6 +54736,638 @@ End Function
         }
         assert_eq!(cases.len(), 160);
         assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+
+    fn check_scalar_getter_native_matrix(source: &str, procedure: &str,
+        expected: &[&str], cases: &[([i64; 4], usize)]) {
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let seed_source = crate::vba_project::read_project_source_with_code_page(seed, None).unwrap().unwrap();
+        let bytes = crate::vba_project::write_project_source(seed, &(seed_source + "\n" + source), None).unwrap();
+        let source = crate::vba_project::read_project_source_with_code_page(&bytes, None).unwrap().unwrap();
+        let mut book = oxicells_core::parse_xlsx(&bytes).unwrap();
+        book.calculation.dbcs_language = Some(true);
+        let mut differences = Vec::new();
+        for &(args, expected_index) in cases {
+            let mut session = None;
+            let mut current = book.clone();
+            for phase in ["cold", "warm"] {
+                let mut context = failure_context();
+                context.project_name = "OxiNamedProject".into();
+                context.file_name = Some("ScalarGetter.xlsm".into());
+                context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+                context.environment.help_file = r"C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm".into();
+                context.application_state = Some(serde_json::from_value(serde_json::json!({
+                    "enableEvents":false, "displayAlerts":false, "calculation":-4105
+                })).unwrap());
+                context.file_context = Some(serde_json::from_value(serde_json::json!({
+                    "packageBytes":bytes, "readOnly":true, "editRevision":0
+                })).unwrap());
+                let outcome = execute_workbook_action_in_session(current, &source, Some(procedure),
+                    args.into_iter().map(Value::Integer).collect(), 0, context, &mut session).unwrap();
+                let actual = serde_json::to_value(&outcome.result).unwrap();
+                if outcome.error.is_some() || actual["value"] != expected[expected_index]
+                    || outcome.workbook_changed {
+                    differences.push(format!("args={args:?} phase={phase}: {actual} expected {}", expected[expected_index]));
+                }
+                current = outcome.workbook;
+            }
+        }
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
+    fn scalar_getter_expanded_matches_native_dispatch_and_arity() {
+        let source = r####"
+Attribute VB_Name = "ScalarGetterExpanded"
+Option Explicit
+Private Trace As String
+Private Function Target(ByVal memberIndex As Long) As Object
+ Trace = Trace & "R"
+ Select Case memberIndex
+  Case 0 To 5: Set Target = ThisWorkbook
+  Case 6 To 11: Set Target = ThisWorkbook.Worksheets(1)
+  Case 12 To 17: Set Target = ThisWorkbook.Worksheets(1).Range("A1:C3")
+  Case Else: Set Target = Application
+ End Select
+End Function
+Private Function Payload(ByVal valueKind As Long) As Variant
+ Trace = Trace & "V"
+ If valueKind = 1 Then
+  Payload = Null
+ Else
+  Payload = 17
+ End If
+End Function
+Public Function Probe(ByVal memberIndex As Long, ByVal callKind As Long, ByVal arity As Long, ByVal valueKind As Long) As String
+ Dim query As Object, value As Variant, name As String
+ Trace = ""
+ On Error GoTo Failed
+ Set query = Target(memberIndex)
+ Select Case memberIndex
+  Case 0: name = "Saved"
+  Case 1: name = "ReadOnly"
+  Case 2: name = "Date1904"
+  Case 3: name = "PrecisionAsDisplayed"
+  Case 4: name = "FileFormat"
+  Case 5: name = "ReadOnlyRecommended"
+  Case 6: name = "Index"
+  Case 7: name = "Visible"
+  Case 8: name = "ProtectContents"
+  Case 9: name = "StandardWidth"
+  Case 10: name = "StandardHeight"
+  Case 11: name = "EnableCalculation"
+  Case 12: name = "Row"
+  Case 13: name = "Column"
+  Case 14: name = "HasFormula"
+  Case 15: name = "Locked"
+  Case 16: name = "Count"
+  Case 17: name = "CountLarge"
+  Case 18: name = "Build"
+  Case 19: name = "CalculationState"
+ End Select
+ Select Case arity
+  Case 0: value = CallByName(query, name, callKind)
+  Case 1: value = CallByName(query, name, callKind, Payload(valueKind))
+  Case 2: value = CallByName(query, name, callKind, Payload(valueKind), Payload(valueKind))
+ End Select
+ Probe = "OK|" & CStr(value) & "|" & TypeName(value) & "|" & CStr(VarType(value)) & "|" & Trace
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext) & "|" & Trace
+End Function
+"####;
+        let expected = &[
+            r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|R"####,
+            r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|RV"####,
+            r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|RVV"####,
+            r####"OK|True|Boolean|11|R"####,
+            r####"ERR|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000450|RV"####,
+            r####"ERR|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000450|RVV"####,
+            r####"OK|False|Boolean|11|R"####,
+            r####"OK|52|Double|5|R"####,
+            r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|R"####,
+            r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|RV"####,
+            r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|RVV"####,
+            r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|RV"####,
+            r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|RVV"####,
+            r####"OK|1|Long|3|R"####,
+            r####"OK|-1|Long|3|R"####,
+            r####"OK|8.43|Double|5|R"####,
+            r####"OK|15|Double|5|R"####,
+            r####"OK|9|Long|3|R"####,
+            r####"OK|9|LongLong|20|R"####,
+            r####"OK|20527|Double|5|R"####,
+            r####"OK|0|Long|3|R"####,
+        ];
+        let cases = &[
+            ([0, 1, 0, 0], 0),
+            ([0, 1, 1, 0], 1),
+            ([0, 1, 1, 1], 1),
+            ([0, 1, 2, 0], 2),
+            ([0, 2, 0, 0], 3),
+            ([0, 2, 1, 0], 4),
+            ([0, 2, 1, 1], 4),
+            ([0, 2, 2, 0], 5),
+            ([0, 3, 0, 0], 3),
+            ([0, 3, 1, 0], 4),
+            ([0, 3, 1, 1], 4),
+            ([0, 3, 2, 0], 5),
+            ([1, 1, 0, 0], 0),
+            ([1, 1, 1, 0], 1),
+            ([1, 1, 1, 1], 1),
+            ([1, 1, 2, 0], 2),
+            ([1, 2, 0, 0], 3),
+            ([1, 2, 1, 0], 4),
+            ([1, 2, 1, 1], 4),
+            ([1, 2, 2, 0], 5),
+            ([1, 3, 0, 0], 3),
+            ([1, 3, 1, 0], 4),
+            ([1, 3, 1, 1], 4),
+            ([1, 3, 2, 0], 5),
+            ([2, 1, 0, 0], 0),
+            ([2, 1, 1, 0], 1),
+            ([2, 1, 1, 1], 1),
+            ([2, 1, 2, 0], 2),
+            ([2, 2, 0, 0], 6),
+            ([2, 2, 1, 0], 4),
+            ([2, 2, 1, 1], 4),
+            ([2, 2, 2, 0], 5),
+            ([2, 3, 0, 0], 6),
+            ([2, 3, 1, 0], 4),
+            ([2, 3, 1, 1], 4),
+            ([2, 3, 2, 0], 5),
+            ([3, 1, 0, 0], 0),
+            ([3, 1, 1, 0], 1),
+            ([3, 1, 1, 1], 1),
+            ([3, 1, 2, 0], 2),
+            ([3, 2, 0, 0], 6),
+            ([3, 2, 1, 0], 4),
+            ([3, 2, 1, 1], 4),
+            ([3, 2, 2, 0], 5),
+            ([3, 3, 0, 0], 6),
+            ([3, 3, 1, 0], 4),
+            ([3, 3, 1, 1], 4),
+            ([3, 3, 2, 0], 5),
+            ([4, 1, 0, 0], 0),
+            ([4, 1, 1, 0], 1),
+            ([4, 1, 1, 1], 1),
+            ([4, 1, 2, 0], 2),
+            ([4, 2, 0, 0], 7),
+            ([4, 2, 1, 0], 4),
+            ([4, 2, 1, 1], 4),
+            ([4, 2, 2, 0], 5),
+            ([4, 3, 0, 0], 7),
+            ([4, 3, 1, 0], 4),
+            ([4, 3, 1, 1], 4),
+            ([4, 3, 2, 0], 5),
+            ([5, 1, 0, 0], 8),
+            ([5, 1, 1, 0], 9),
+            ([5, 1, 1, 1], 9),
+            ([5, 1, 2, 0], 10),
+            ([5, 2, 0, 0], 6),
+            ([5, 2, 1, 0], 11),
+            ([5, 2, 1, 1], 11),
+            ([5, 2, 2, 0], 12),
+            ([5, 3, 0, 0], 6),
+            ([5, 3, 1, 0], 11),
+            ([5, 3, 1, 1], 11),
+            ([5, 3, 2, 0], 12),
+            ([6, 1, 0, 0], 8),
+            ([6, 1, 1, 0], 9),
+            ([6, 1, 1, 1], 9),
+            ([6, 1, 2, 0], 10),
+            ([6, 2, 0, 0], 13),
+            ([6, 2, 1, 0], 11),
+            ([6, 2, 1, 1], 11),
+            ([6, 2, 2, 0], 12),
+            ([6, 3, 0, 0], 13),
+            ([6, 3, 1, 0], 11),
+            ([6, 3, 1, 1], 11),
+            ([6, 3, 2, 0], 12),
+            ([7, 1, 0, 0], 0),
+            ([7, 1, 1, 0], 1),
+            ([7, 1, 1, 1], 1),
+            ([7, 1, 2, 0], 2),
+            ([7, 2, 0, 0], 14),
+            ([7, 2, 1, 0], 4),
+            ([7, 2, 1, 1], 4),
+            ([7, 2, 2, 0], 5),
+            ([7, 3, 0, 0], 14),
+            ([7, 3, 1, 0], 4),
+            ([7, 3, 1, 1], 4),
+            ([7, 3, 2, 0], 5),
+            ([8, 1, 0, 0], 0),
+            ([8, 1, 1, 0], 1),
+            ([8, 1, 1, 1], 1),
+            ([8, 1, 2, 0], 2),
+            ([8, 2, 0, 0], 6),
+            ([8, 2, 1, 0], 4),
+            ([8, 2, 1, 1], 4),
+            ([8, 2, 2, 0], 5),
+            ([8, 3, 0, 0], 6),
+            ([8, 3, 1, 0], 4),
+            ([8, 3, 1, 1], 4),
+            ([8, 3, 2, 0], 5),
+            ([9, 1, 0, 0], 0),
+            ([9, 1, 1, 0], 1),
+            ([9, 1, 1, 1], 1),
+            ([9, 1, 2, 0], 2),
+            ([9, 2, 0, 0], 15),
+            ([9, 2, 1, 0], 4),
+            ([9, 2, 1, 1], 4),
+            ([9, 2, 2, 0], 5),
+            ([9, 3, 0, 0], 15),
+            ([9, 3, 1, 0], 4),
+            ([9, 3, 1, 1], 4),
+            ([9, 3, 2, 0], 5),
+            ([10, 1, 0, 0], 0),
+            ([10, 1, 1, 0], 1),
+            ([10, 1, 1, 1], 1),
+            ([10, 1, 2, 0], 2),
+            ([10, 2, 0, 0], 16),
+            ([10, 2, 1, 0], 4),
+            ([10, 2, 1, 1], 4),
+            ([10, 2, 2, 0], 5),
+            ([10, 3, 0, 0], 16),
+            ([10, 3, 1, 0], 4),
+            ([10, 3, 1, 1], 4),
+            ([10, 3, 2, 0], 5),
+            ([11, 1, 0, 0], 8),
+            ([11, 1, 1, 0], 9),
+            ([11, 1, 1, 1], 9),
+            ([11, 1, 2, 0], 10),
+            ([11, 2, 0, 0], 3),
+            ([11, 2, 1, 0], 11),
+            ([11, 2, 1, 1], 11),
+            ([11, 2, 2, 0], 12),
+            ([11, 3, 0, 0], 3),
+            ([11, 3, 1, 0], 11),
+            ([11, 3, 1, 1], 11),
+            ([11, 3, 2, 0], 12),
+            ([12, 1, 0, 0], 8),
+            ([12, 1, 1, 0], 9),
+            ([12, 1, 1, 1], 9),
+            ([12, 1, 2, 0], 10),
+            ([12, 2, 0, 0], 13),
+            ([12, 2, 1, 0], 11),
+            ([12, 2, 1, 1], 11),
+            ([12, 2, 2, 0], 12),
+            ([12, 3, 0, 0], 13),
+            ([12, 3, 1, 0], 11),
+            ([12, 3, 1, 1], 11),
+            ([12, 3, 2, 0], 12),
+            ([13, 1, 0, 0], 8),
+            ([13, 1, 1, 0], 9),
+            ([13, 1, 1, 1], 9),
+            ([13, 1, 2, 0], 10),
+            ([13, 2, 0, 0], 13),
+            ([13, 2, 1, 0], 11),
+            ([13, 2, 1, 1], 11),
+            ([13, 2, 2, 0], 12),
+            ([13, 3, 0, 0], 13),
+            ([13, 3, 1, 0], 11),
+            ([13, 3, 1, 1], 11),
+            ([13, 3, 2, 0], 12),
+            ([14, 1, 0, 0], 0),
+            ([14, 1, 1, 0], 1),
+            ([14, 1, 1, 1], 1),
+            ([14, 1, 2, 0], 2),
+            ([14, 2, 0, 0], 6),
+            ([14, 2, 1, 0], 4),
+            ([14, 2, 1, 1], 4),
+            ([14, 2, 2, 0], 5),
+            ([14, 3, 0, 0], 6),
+            ([14, 3, 1, 0], 4),
+            ([14, 3, 1, 1], 4),
+            ([14, 3, 2, 0], 5),
+            ([15, 1, 0, 0], 0),
+            ([15, 1, 1, 0], 1),
+            ([15, 1, 1, 1], 1),
+            ([15, 1, 2, 0], 2),
+            ([15, 2, 0, 0], 3),
+            ([15, 2, 1, 0], 4),
+            ([15, 2, 1, 1], 4),
+            ([15, 2, 2, 0], 5),
+            ([15, 3, 0, 0], 3),
+            ([15, 3, 1, 0], 4),
+            ([15, 3, 1, 1], 4),
+            ([15, 3, 2, 0], 5),
+            ([16, 1, 0, 0], 8),
+            ([16, 1, 1, 0], 9),
+            ([16, 1, 1, 1], 9),
+            ([16, 1, 2, 0], 10),
+            ([16, 2, 0, 0], 17),
+            ([16, 2, 1, 0], 11),
+            ([16, 2, 1, 1], 11),
+            ([16, 2, 2, 0], 12),
+            ([16, 3, 0, 0], 17),
+            ([16, 3, 1, 0], 11),
+            ([16, 3, 1, 1], 11),
+            ([16, 3, 2, 0], 12),
+            ([17, 1, 0, 0], 8),
+            ([17, 1, 1, 0], 9),
+            ([17, 1, 1, 1], 9),
+            ([17, 1, 2, 0], 10),
+            ([17, 2, 0, 0], 18),
+            ([17, 2, 1, 0], 11),
+            ([17, 2, 1, 1], 11),
+            ([17, 2, 2, 0], 12),
+            ([17, 3, 0, 0], 18),
+            ([17, 3, 1, 0], 11),
+            ([17, 3, 1, 1], 11),
+            ([17, 3, 2, 0], 12),
+            ([18, 1, 0, 0], 0),
+            ([18, 1, 1, 0], 1),
+            ([18, 1, 1, 1], 1),
+            ([18, 1, 2, 0], 2),
+            ([18, 2, 0, 0], 19),
+            ([18, 2, 1, 0], 4),
+            ([18, 2, 1, 1], 4),
+            ([18, 2, 2, 0], 5),
+            ([18, 3, 0, 0], 19),
+            ([18, 3, 1, 0], 4),
+            ([18, 3, 1, 1], 4),
+            ([18, 3, 2, 0], 5),
+            ([19, 1, 0, 0], 8),
+            ([19, 1, 1, 0], 9),
+            ([19, 1, 1, 1], 9),
+            ([19, 1, 2, 0], 10),
+            ([19, 2, 0, 0], 20),
+            ([19, 2, 1, 0], 11),
+            ([19, 2, 1, 1], 11),
+            ([19, 2, 2, 0], 12),
+            ([19, 3, 0, 0], 20),
+            ([19, 3, 1, 0], 11),
+            ([19, 3, 1, 1], 11),
+            ([19, 3, 2, 0], 12),
+        ];
+        assert_eq!(cases.len(), 240);
+        check_scalar_getter_native_matrix(source, "ScalarGetterExpanded.Probe", expected, cases);
+    }
+
+    #[test]
+    fn scalar_getter_direct_matches_native_dispatch_and_arity() {
+        let source = r####"
+Attribute VB_Name = "ScalarGetterDirect"
+Option Explicit
+Private Trace As String
+Private Function Target(ByVal memberIndex As Long) As Object
+ Trace = Trace & "R"
+ Select Case memberIndex
+  Case 0 To 5: Set Target = ThisWorkbook
+  Case 6 To 11: Set Target = ThisWorkbook.Worksheets(1)
+  Case 12 To 17: Set Target = ThisWorkbook.Worksheets(1).Range("A1:C3")
+  Case 20: Set Target = ThisWorkbook
+  Case 21: Set Target = ThisWorkbook.Worksheets(1)
+  Case 22: Set Target = ThisWorkbook.Worksheets(1).Range("A1:C3")
+  Case Else: Set Target = Application
+ End Select
+End Function
+Private Function Payload(ByVal valueKind As Long) As Variant
+ Trace = Trace & "V"
+ If valueKind = 1 Then
+  Payload = Null
+ Else
+  Payload = 17
+ End If
+End Function
+Public Function Probe(ByVal memberIndex As Long, ByVal callKind As Long, ByVal arity As Long, ByVal valueKind As Long) As String
+ Dim query As Object, value As Variant, name As String
+ Trace = ""
+ On Error GoTo Failed
+ Set query = Target(memberIndex)
+ Select Case memberIndex
+  Case 0: name = "Saved"
+  Case 1: name = "ReadOnly"
+  Case 2: name = "Date1904"
+  Case 3: name = "PrecisionAsDisplayed"
+  Case 4: name = "FileFormat"
+  Case 5: name = "ReadOnlyRecommended"
+  Case 6: name = "Index"
+  Case 7: name = "Visible"
+  Case 8: name = "ProtectContents"
+  Case 9: name = "StandardWidth"
+  Case 10: name = "StandardHeight"
+  Case 11: name = "EnableCalculation"
+  Case 12: name = "Row"
+  Case 13: name = "Column"
+  Case 14: name = "HasFormula"
+  Case 15: name = "Locked"
+  Case 16: name = "Count"
+  Case 17: name = "CountLarge"
+  Case 18: name = "Build"
+  Case 19: name = "CalculationState"
+ End Select
+ Select Case arity
+ Case 0
+  Select Case memberIndex
+   Case 0: value = query.Saved
+   Case 1: value = query.ReadOnly
+   Case 2: value = query.Date1904
+   Case 3: value = query.PrecisionAsDisplayed
+   Case 4: value = query.FileFormat
+   Case 5: value = query.ReadOnlyRecommended
+   Case 6: value = query.Index
+   Case 7: value = query.Visible
+   Case 8: value = query.ProtectContents
+   Case 9: value = query.StandardWidth
+   Case 10: value = query.StandardHeight
+   Case 11: value = query.EnableCalculation
+   Case 12: value = query.Row
+   Case 13: value = query.Column
+   Case 14: value = query.HasFormula
+   Case 15: value = query.Locked
+   Case 16: value = query.Count
+   Case 17: value = query.CountLarge
+   Case 18: value = query.Build
+   Case 19: value = query.CalculationState
+   Case 20: value = query.NoSuchScalar
+   Case 21: value = query.NoSuchScalar
+   Case 22: value = query.NoSuchScalar
+   Case 23: value = query.NoSuchScalar
+  End Select
+ Case 1
+  Select Case memberIndex
+   Case 0: value = query.Saved(Payload(valueKind))
+   Case 1: value = query.ReadOnly(Payload(valueKind))
+   Case 2: value = query.Date1904(Payload(valueKind))
+   Case 3: value = query.PrecisionAsDisplayed(Payload(valueKind))
+   Case 4: value = query.FileFormat(Payload(valueKind))
+   Case 5: value = query.ReadOnlyRecommended(Payload(valueKind))
+   Case 6: value = query.Index(Payload(valueKind))
+   Case 7: value = query.Visible(Payload(valueKind))
+   Case 8: value = query.ProtectContents(Payload(valueKind))
+   Case 9: value = query.StandardWidth(Payload(valueKind))
+   Case 10: value = query.StandardHeight(Payload(valueKind))
+   Case 11: value = query.EnableCalculation(Payload(valueKind))
+   Case 12: value = query.Row(Payload(valueKind))
+   Case 13: value = query.Column(Payload(valueKind))
+   Case 14: value = query.HasFormula(Payload(valueKind))
+   Case 15: value = query.Locked(Payload(valueKind))
+   Case 16: value = query.Count(Payload(valueKind))
+   Case 17: value = query.CountLarge(Payload(valueKind))
+   Case 18: value = query.Build(Payload(valueKind))
+   Case 19: value = query.CalculationState(Payload(valueKind))
+   Case 20: value = query.NoSuchScalar(Payload(valueKind))
+   Case 21: value = query.NoSuchScalar(Payload(valueKind))
+   Case 22: value = query.NoSuchScalar(Payload(valueKind))
+   Case 23: value = query.NoSuchScalar(Payload(valueKind))
+  End Select
+ Case 2
+  Select Case memberIndex
+   Case 0: value = query.Saved(Payload(valueKind), Payload(valueKind))
+   Case 1: value = query.ReadOnly(Payload(valueKind), Payload(valueKind))
+   Case 2: value = query.Date1904(Payload(valueKind), Payload(valueKind))
+   Case 3: value = query.PrecisionAsDisplayed(Payload(valueKind), Payload(valueKind))
+   Case 4: value = query.FileFormat(Payload(valueKind), Payload(valueKind))
+   Case 5: value = query.ReadOnlyRecommended(Payload(valueKind), Payload(valueKind))
+   Case 6: value = query.Index(Payload(valueKind), Payload(valueKind))
+   Case 7: value = query.Visible(Payload(valueKind), Payload(valueKind))
+   Case 8: value = query.ProtectContents(Payload(valueKind), Payload(valueKind))
+   Case 9: value = query.StandardWidth(Payload(valueKind), Payload(valueKind))
+   Case 10: value = query.StandardHeight(Payload(valueKind), Payload(valueKind))
+   Case 11: value = query.EnableCalculation(Payload(valueKind), Payload(valueKind))
+   Case 12: value = query.Row(Payload(valueKind), Payload(valueKind))
+   Case 13: value = query.Column(Payload(valueKind), Payload(valueKind))
+   Case 14: value = query.HasFormula(Payload(valueKind), Payload(valueKind))
+   Case 15: value = query.Locked(Payload(valueKind), Payload(valueKind))
+   Case 16: value = query.Count(Payload(valueKind), Payload(valueKind))
+   Case 17: value = query.CountLarge(Payload(valueKind), Payload(valueKind))
+   Case 18: value = query.Build(Payload(valueKind), Payload(valueKind))
+   Case 19: value = query.CalculationState(Payload(valueKind), Payload(valueKind))
+   Case 20: value = query.NoSuchScalar(Payload(valueKind), Payload(valueKind))
+   Case 21: value = query.NoSuchScalar(Payload(valueKind), Payload(valueKind))
+   Case 22: value = query.NoSuchScalar(Payload(valueKind), Payload(valueKind))
+   Case 23: value = query.NoSuchScalar(Payload(valueKind), Payload(valueKind))
+  End Select
+ End Select
+ Probe = "OK|" & CStr(value) & "|" & TypeName(value) & "|" & CStr(VarType(value)) & "|" & Trace
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext) & "|" & Trace
+End Function
+"####;
+        let expected = &[
+            r####"OK|True|Boolean|11|R"####,
+            r####"ERR|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000450|RV"####,
+            r####"ERR|450|OxiNamedProject|引数の数が一致していません。または不正なプロパティを指定しています。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000450|RVV"####,
+            r####"OK|False|Boolean|11|R"####,
+            r####"OK|52|Double|5|R"####,
+            r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|RV"####,
+            r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|RVV"####,
+            r####"OK|1|Long|3|R"####,
+            r####"OK|-1|Long|3|R"####,
+            r####"OK|8.43|Double|5|R"####,
+            r####"OK|15|Double|5|R"####,
+            r####"OK|9|Long|3|R"####,
+            r####"OK|9|LongLong|20|R"####,
+            r####"OK|20527|Double|5|R"####,
+            r####"OK|0|Long|3|R"####,
+            r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|R"####,
+            r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|RV"####,
+            r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|RVV"####,
+        ];
+        let cases = &[
+            ([0, 4, 0, 0], 0),
+            ([0, 4, 1, 0], 1),
+            ([0, 4, 1, 1], 1),
+            ([0, 4, 2, 0], 2),
+            ([1, 4, 0, 0], 0),
+            ([1, 4, 1, 0], 1),
+            ([1, 4, 1, 1], 1),
+            ([1, 4, 2, 0], 2),
+            ([2, 4, 0, 0], 3),
+            ([2, 4, 1, 0], 1),
+            ([2, 4, 1, 1], 1),
+            ([2, 4, 2, 0], 2),
+            ([3, 4, 0, 0], 3),
+            ([3, 4, 1, 0], 1),
+            ([3, 4, 1, 1], 1),
+            ([3, 4, 2, 0], 2),
+            ([4, 4, 0, 0], 4),
+            ([4, 4, 1, 0], 1),
+            ([4, 4, 1, 1], 1),
+            ([4, 4, 2, 0], 2),
+            ([5, 4, 0, 0], 3),
+            ([5, 4, 1, 0], 5),
+            ([5, 4, 1, 1], 5),
+            ([5, 4, 2, 0], 6),
+            ([6, 4, 0, 0], 7),
+            ([6, 4, 1, 0], 5),
+            ([6, 4, 1, 1], 5),
+            ([6, 4, 2, 0], 6),
+            ([7, 4, 0, 0], 8),
+            ([7, 4, 1, 0], 1),
+            ([7, 4, 1, 1], 1),
+            ([7, 4, 2, 0], 2),
+            ([8, 4, 0, 0], 3),
+            ([8, 4, 1, 0], 1),
+            ([8, 4, 1, 1], 1),
+            ([8, 4, 2, 0], 2),
+            ([9, 4, 0, 0], 9),
+            ([9, 4, 1, 0], 1),
+            ([9, 4, 1, 1], 1),
+            ([9, 4, 2, 0], 2),
+            ([10, 4, 0, 0], 10),
+            ([10, 4, 1, 0], 1),
+            ([10, 4, 1, 1], 1),
+            ([10, 4, 2, 0], 2),
+            ([11, 4, 0, 0], 0),
+            ([11, 4, 1, 0], 5),
+            ([11, 4, 1, 1], 5),
+            ([11, 4, 2, 0], 6),
+            ([12, 4, 0, 0], 7),
+            ([12, 4, 1, 0], 5),
+            ([12, 4, 1, 1], 5),
+            ([12, 4, 2, 0], 6),
+            ([13, 4, 0, 0], 7),
+            ([13, 4, 1, 0], 5),
+            ([13, 4, 1, 1], 5),
+            ([13, 4, 2, 0], 6),
+            ([14, 4, 0, 0], 3),
+            ([14, 4, 1, 0], 1),
+            ([14, 4, 1, 1], 1),
+            ([14, 4, 2, 0], 2),
+            ([15, 4, 0, 0], 0),
+            ([15, 4, 1, 0], 1),
+            ([15, 4, 1, 1], 1),
+            ([15, 4, 2, 0], 2),
+            ([16, 4, 0, 0], 11),
+            ([16, 4, 1, 0], 5),
+            ([16, 4, 1, 1], 5),
+            ([16, 4, 2, 0], 6),
+            ([17, 4, 0, 0], 12),
+            ([17, 4, 1, 0], 5),
+            ([17, 4, 1, 1], 5),
+            ([17, 4, 2, 0], 6),
+            ([18, 4, 0, 0], 13),
+            ([18, 4, 1, 0], 1),
+            ([18, 4, 1, 1], 1),
+            ([18, 4, 2, 0], 2),
+            ([19, 4, 0, 0], 14),
+            ([19, 4, 1, 0], 5),
+            ([19, 4, 1, 1], 5),
+            ([19, 4, 2, 0], 6),
+            ([20, 4, 0, 0], 15),
+            ([20, 4, 1, 0], 16),
+            ([20, 4, 1, 1], 16),
+            ([20, 4, 2, 0], 17),
+            ([21, 4, 0, 0], 15),
+            ([21, 4, 1, 0], 16),
+            ([21, 4, 1, 1], 16),
+            ([21, 4, 2, 0], 17),
+            ([22, 4, 0, 0], 15),
+            ([22, 4, 1, 0], 16),
+            ([22, 4, 1, 1], 16),
+            ([22, 4, 2, 0], 17),
+            ([23, 4, 0, 0], 15),
+            ([23, 4, 1, 0], 16),
+            ([23, 4, 1, 1], 16),
+            ([23, 4, 2, 0], 17),
+        ];
+        assert_eq!(cases.len(), 96);
+        check_scalar_getter_native_matrix(source, "ScalarGetterDirect.Probe", expected, cases);
     }
 
     #[test]
