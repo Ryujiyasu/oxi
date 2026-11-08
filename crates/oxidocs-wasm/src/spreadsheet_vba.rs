@@ -52239,6 +52239,140 @@ End Function
 
 
     #[test]
+    fn source_named_and_indexed_property_values_keep_dispatch_types() {
+        let variant = [
+            "OK|RL|Integer:2:False", "OK|RL|String:8:False",
+            "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True",
+            "OK|RL|Nothing:9:True",
+        ];
+        let scalar = [
+            "OK|RL|String:8:False", "OK|RL|String:8:False",
+            "OK|RPL|String:8:False", "ERR|438|R|", "ERR|91|R|",
+        ];
+        let scalar_late = [
+            "OK|RL|String:8:False", "OK|RL|String:8:False",
+            "OK|RPL|String:8:False", "ERR|13|R|", "ERR|13|R|",
+        ];
+        let object = [
+            "ERR|424|R|", "ERR|424|R|", "OK|RLP|ScalarPayload:8:True",
+            "OK|RL|PlainPayload:9:True", "OK|RL|Nothing:9:True",
+        ];
+        let object_late = [
+            "ERR|13|R|", "ERR|13|R|", "OK|RLP|ScalarPayload:8:True",
+            "OK|RL|PlainPayload:9:True", "OK|RL|Nothing:9:True",
+        ];
+        let class = [
+            "ERR|424|R|", "ERR|424|R|", "OK|RLP|ScalarPayload:8:True",
+            "ERR|13|R|", "OK|RL|Nothing:9:True",
+        ];
+        let class_late = [
+            "ERR|13|R|", "ERR|13|R|", "OK|RLP|ScalarPayload:8:True",
+            "ERR|13|R|", "OK|RL|Nothing:9:True",
+        ];
+        for (formal, typed_expected, late_expected) in [
+            ("Variant", &variant, &variant), ("String", &scalar, &scalar_late),
+            ("Object", &object, &object_late), ("ScalarPayload", &class, &class_late),
+        ] {
+            for indexed in [false, true] {
+                for typed in [false, true] {
+                    let mut source = source_default_storage_fixture(
+                        source_default_storage_probe(), formal, Some("Object"),
+                    ).replace("box = ReadRhs(rhs)", if indexed {
+                        "box(0) = ReadRhs(rhs)"
+                    } else {
+                        "box.ValueAt = ReadRhs(rhs)"
+                    });
+                    if typed {
+                        source = source.replace("Dim box As Object", "Dim box As IndexBox");
+                    }
+                    if indexed {
+                        source = source
+                            .replace(&format!("Property Get ValueAt() As {formal}"),
+                                &format!("Property Get ValueAt(ByVal index As Long) As {formal}"))
+                            .replace(&format!("Property Let ValueAt(ByVal Value As {formal})"),
+                                &format!("Property Let ValueAt(ByVal index As Long, ByVal Value As {formal})"))
+                            .replace("Property Set ValueAt(ByVal Value As Variant)",
+                                "Property Set ValueAt(ByVal index As Long, ByVal Value As Variant)");
+                    }
+                    let mut session = None;
+                    let control = execute_workbook_action_in_session(workbook(), &source,
+                        Some("NamedDefaultProbe.Control"), vec![], 0, failure_context(),
+                        &mut session).unwrap();
+                    assert!(control.error.is_none());
+                    assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+                    let mut book = control.workbook;
+                    for (kind, expected) in (if typed { typed_expected } else { late_expected })
+                        .iter().enumerate()
+                    {
+                        let outcome = execute_workbook_action_in_session(book, &source,
+                            Some("NamedDefaultProbe.Probe"),
+                            vec![Value::Integer(0), Value::Integer(kind as i64)],
+                            0, failure_context(), &mut session).unwrap();
+                        assert!(outcome.error.is_none());
+                        assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], *expected,
+                            "{formal} indexed={indexed} typed={typed} value={kind}");
+                        book = outcome.workbook;
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_named_and_indexed_getter_errors_keep_dispatch_boundary() {
+        let probe = source_default_storage_probe().replace(
+            "Public Report As String", "Public Report As String\nPublic ThrowCode As Long",
+        ) + "\nPublic Function SetThrowCode(ByVal code As Long) As String\n ThrowCode = code\n SetThrowCode = \"set\"\nEnd Function\n";
+        for indexed in [false, true] {
+            for typed in [false, true] {
+                let mut source = source_default_storage_fixture(&probe, "String", Some("Object"))
+                    .replace("box = ReadRhs(rhs)", if indexed {
+                        "box(0) = ReadRhs(rhs)"
+                    } else {
+                        "box.ValueAt = ReadRhs(rhs)"
+                    })
+                    .replace(" Value = \"payload\"",
+                        " Err.Raise NamedDefaultProbe.ThrowCode\n Value = \"payload\"");
+                if typed {
+                    source = source.replace("Dim box As Object", "Dim box As IndexBox");
+                }
+                if indexed {
+                    source = source
+                        .replace("Property Get ValueAt() As String",
+                            "Property Get ValueAt(ByVal index As Long) As String")
+                        .replace("Property Let ValueAt(ByVal Value As String)",
+                            "Property Let ValueAt(ByVal index As Long, ByVal Value As String)")
+                        .replace("Property Set ValueAt(ByVal Value As Variant)",
+                            "Property Set ValueAt(ByVal index As Long, ByVal Value As Variant)");
+                }
+                let mut session = None;
+                let control = execute_workbook_action_in_session(workbook(), &source,
+                    Some("NamedDefaultProbe.Control"), vec![], 0, failure_context(),
+                    &mut session).unwrap();
+                assert!(control.error.is_none());
+                assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+                let mut book = control.workbook;
+                for code in [91, 424, 438, 193] {
+                    let setting = execute_workbook_action_in_session(book, &source,
+                        Some("NamedDefaultProbe.SetThrowCode"), vec![Value::Integer(code)],
+                        0, failure_context(), &mut session).unwrap();
+                    assert!(setting.error.is_none());
+                    assert_eq!(serde_json::to_value(&setting.result).unwrap()["value"], "set");
+                    let outcome = execute_workbook_action_in_session(setting.workbook, &source,
+                        Some("NamedDefaultProbe.Probe"),
+                        vec![Value::Integer(0), Value::Integer(2)],
+                        0, failure_context(), &mut session).unwrap();
+                    assert!(outcome.error.is_none());
+                    assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                        format!("ERR|{}|RP|", if typed { code } else { 13 }),
+                        "indexed={indexed} typed={typed} code={code}");
+                    book = outcome.workbook;
+                }
+            }
+        }
+    }
+
+    #[test]
     fn source_default_dispatch_preserves_scalar_overflow_after_getter() {
         let probe = source_default_storage_probe().replace(
             "Public Report As String", "Public Report As String\nPublic PayloadText As String",
