@@ -44355,6 +44355,9 @@ fn saved_package_matches_input(package: &[u8], source: &str, workbook: &mut Work
     }
     let mut persisted = oxicells_core::parse_xlsx_preserving_values(package)
         .map_err(|error| error.to_string())?;
+    // Calculation language is host context, not an OOXML document edit.
+    // Compare the loaded document under the same runtime language override.
+    persisted.calculation.dbcs_language = workbook.calculation.dbcs_language;
     Ok(observable_workbook_bytes(&mut persisted)? == observable_workbook_bytes(workbook)?)
 }
 
@@ -44926,6 +44929,43 @@ mod tests {
         let edited = source + "\n' unsaved source comment\n";
         let changed = saved_state_run(fresh, &edited, "SavedStateProbe.Probe", &package, None, &mut None);
         saved_state_expect(&changed, "False|1");
+    }
+
+    #[test]
+    fn saved_state_host_language_preserves_saved_and_real_edits_remain_dirty() {
+        for language in [false, true] {
+            let (package, source, mut book) = saved_state_package();
+            book.calculation.dbcs_language = Some(language);
+            let mut session = None;
+            let first = saved_state_run(book, &source, "SavedStateProbe.Probe",
+                &package, Some(0), &mut session);
+            saved_state_expect(&first, "True|1");
+            assert!(!first.workbook_changed);
+
+            let changed = saved_state_run(first.workbook, &source, "SavedStateProbe.SameValue",
+                &package, Some(0), &mut session);
+            let second = saved_state_run(changed.workbook, &source, "SavedStateProbe.Probe",
+                &package, Some(0), &mut session);
+            saved_state_expect(&second, "False|2");
+
+            let (_, _, mut edited) = saved_state_package();
+            edited.calculation.dbcs_language = Some(language);
+            let mut host = WorkbookHost::new(&mut edited, 0).unwrap();
+            host.set_cell_value(CellAddress { sheet:0, row:1, column:0 }, CellValue::Number(8.0)).unwrap();
+            drop(host);
+            let cell_edit = saved_state_run(edited, &source, "SavedStateProbe.Probe",
+                &package, Some(0), &mut None);
+            saved_state_expect(&cell_edit, "False|1");
+
+            let (_, _, mut fresh) = saved_state_package();
+            fresh.calculation.dbcs_language = Some(language);
+            let source_edit = saved_state_run(fresh.clone(), &(source.clone() + "\n' source edit\n"),
+                "SavedStateProbe.Probe", &package, Some(0), &mut None);
+            saved_state_expect(&source_edit, "False|1");
+            let prior_edit = saved_state_run(fresh, &source, "SavedStateProbe.Probe",
+                &package, Some(1), &mut None);
+            saved_state_expect(&prior_edit, "False|1");
+        }
     }
 
     #[test]
