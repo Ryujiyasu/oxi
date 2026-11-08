@@ -1237,8 +1237,10 @@ unsafe fn render_line(
     // art borders (S480) use the built-in cadence.
     // OXI_TXBX_DASH (layout): "prst:<units,...>:<offset>" -- a DrawingML preset
     // dash in multiples of the line width, continuing at <offset> widths.
+    // OXI_LINE_CAP_ROUND: "prstr:" = the same, drawn with round caps.
+    let prst_round = style.map_or(false, |st| st.starts_with("prstr:"));
     let prst_dash: Option<(Vec<f32>, f32)> = style
-        .and_then(|st| st.strip_prefix("prst:"))
+        .and_then(|st| st.strip_prefix("prst:").or_else(|| st.strip_prefix("prstr:")))
         .and_then(|rest| {
             let (pat, off) = rest.rsplit_once(':')?;
             let units: Vec<f32> = pat.split(',').filter_map(|u| u.parse().ok()).collect();
@@ -1247,10 +1249,11 @@ unsafe fn render_line(
     let stroke_style: Option<ID2D1StrokeStyle> =
         if let Some((units, offset)) = prst_dash {
             let factory: ID2D1Factory = rt.GetFactory()?;
+            let cap = if prst_round { D2D1_CAP_STYLE_ROUND } else { D2D1_CAP_STYLE_FLAT };
             let props = D2D1_STROKE_STYLE_PROPERTIES {
-                startCap: D2D1_CAP_STYLE_FLAT,
-                endCap: D2D1_CAP_STYLE_FLAT,
-                dashCap: D2D1_CAP_STYLE_FLAT,
+                startCap: cap,
+                endCap: cap,
+                dashCap: cap,
                 lineJoin: D2D1_LINE_JOIN_MITER,
                 miterLimit: 10.0,
                 dashStyle: D2D1_DASH_STYLE_CUSTOM,

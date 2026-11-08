@@ -816,8 +816,29 @@ fn shape_line_dash(shape: &Shape) -> Option<String> {
     {
         return None;
     }
-    let units = prst_dash_units(shape.stroke_dash.as_deref()?)?;
-    Some(format!("prst:{}:0", units.iter().map(|u| format!("{u}")).collect::<Vec<_>>().join(",")))
+    let (units, round) = dash_style(shape.stroke_dash.as_deref()?)?;
+    Some(format!("{}:{}:0", if round { "prstr" } else { "prst" },
+        units.iter().map(|u| format!("{u}")).collect::<Vec<_>>().join(",")))
+}
+
+/// OXI_LINE_CAP_ROUND (2026-11-08, default ON, opt-out _DISABLE): a dash named
+/// "<prstDash>+rnd" (a:ln cap="rnd") is drawn with round caps, each dash's
+/// on-length shortened by one width and each gap lengthened by one -- the caps
+/// carry the difference. blind-J ja/legal__10f9c779 p1's 収入印紙 box (sysDot,
+/// cap rnd, 0.75pt): Word's PDF strokes [0 1.5] with round caps (round dots
+/// every 2w); Oxi drew 1w square dashes every 2w. Returns (units, round).
+pub(crate) fn dash_style(name: &str) -> Option<(Vec<f32>, bool)> {
+    match name.strip_suffix("+rnd") {
+        Some(base) => Some((
+            prst_dash_units(base)?
+                .iter()
+                .enumerate()
+                .map(|(i, u)| if i % 2 == 0 { (u - 1.0).max(0.0) } else { u + 1.0 })
+                .collect(),
+            true,
+        )),
+        None => Some((prst_dash_units(name)?.to_vec(), false)),
+    }
 }
 
 fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
@@ -9929,12 +9950,19 @@ cells={} pitch={:.2} text={:?}",
             // the three photo frames (2.25pt FF66FF sysDot): Word's PDF strokes one
             // 8-segment path with [2.25 2.25] = [1 1] x w; Oxi drew them solid.
             let round_dash = cr > 0.0 && !crate::env_flag!("OXI_TXBX_ROUND_DASH_DISABLE");
-            let dash_units: Option<&[f32]> = match text_box.outline_dash.as_deref() {
+            let dash_units: Option<(Vec<f32>, bool)> = match text_box.outline_dash.as_deref() {
                 _ if !has_border || (cr > 0.0 && !round_dash) || !bands.is_empty()
                     || crate::env_flag!("OXI_TXBX_DASH_DISABLE") => None,
-                Some(d) => prst_dash_units(d),
+                Some(d) => dash_style(d),
                 None => None,
             };
+            // OXI_LINE_CAP_ROUND: round-capped dashes keep each dash centred where
+            // the flat pattern put it (the on-length lost half a width each side).
+            let (dash_kind, dash_shift) = match &dash_units {
+                Some((_, true)) => ("prstr", -0.5f32),
+                _ => ("prst", 0.0f32),
+            };
+            let dash_units: Option<&[f32]> = dash_units.as_ref().map(|(u, _)| u.as_slice());
             if let (Some(units), true) = (dash_units, cr > 0.0) {
                 elements.push(LayoutElement::new(
                     abs_x,
@@ -9973,7 +10001,7 @@ cells={} pitch={:.2} text={:?}",
                             x1: ax, y1: ay, x2: bx, y2: by,
                             color: stroke_hex.clone(),
                             width: sw,
-                            style: Some(format!("prst:{pat}:{:.4}", run.rem_euclid(period))),
+                            style: Some(format!("{dash_kind}:{pat}:{:.4}", (run + dash_shift).rem_euclid(period))),
                         },
                     ));
                     run += len / sw.max(0.01);
@@ -10006,7 +10034,7 @@ cells={} pitch={:.2} text={:?}",
                             x1: ax, y1: ay, x2: bx, y2: by,
                             color: stroke_hex.clone(),
                             width: sw,
-                            style: Some(format!("prst:{pat}:{:.4}", run.rem_euclid(units.iter().sum::<f32>()))),
+                            style: Some(format!("{dash_kind}:{pat}:{:.4}", (run + dash_shift).rem_euclid(units.iter().sum::<f32>()))),
                         },
                     ));
                     let _ = k;
@@ -10767,7 +10795,7 @@ cells={} pitch={:.2} text={:?}",
                 match &el.content {
                     LayoutContent::BoxRect { .. } | LayoutContent::ClipStart => {}
                     // OXI_TXBX_DASH: the dashed outline's sides are the box, not content
-                    LayoutContent::TableBorder { style: Some(st), .. } if st.starts_with("prst:") => {}
+                    LayoutContent::TableBorder { style: Some(st), .. } if st.starts_with("prst:") || st.starts_with("prstr:") => {}
                     LayoutContent::VectorPath { .. }
                         if (el.x - abs_x).abs() < 0.01 && (el.y - abs_y).abs() < 0.01
                             && (el.width - text_box.width).abs() < 0.01
