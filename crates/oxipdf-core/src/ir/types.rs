@@ -169,6 +169,16 @@ pub struct TextSpan {
     /// plain fill.
     #[serde(default)]
     pub stroke_width: f64,
+    /// Horizontal glyph scale in percent (PDF Tz); 100.0 = unscaled.
+    #[serde(default = "default_horizontal_scale")]
+    pub horizontal_scale: f64,
+    /// Colour of the stroke when stroke_width > 0; None = the fill colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_color: Option<Color>,
+}
+
+fn default_horizontal_scale() -> f64 {
+    100.0
 }
 
 /// Vector path data.

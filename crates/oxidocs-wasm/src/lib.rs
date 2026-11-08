@@ -2009,7 +2009,7 @@ fn layout_to_pdf(
                         font_name,
                         font_size: *font_size as f64,
                         fill_color,
-                        character_spacing: *character_spacing as f64, stroke_width: 0.0,
+                        character_spacing: *character_spacing as f64, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
                     };
                     contents.push(if let Some(glyph) = &elem.font_glyph {
                         ContentElement::GlyphRun(GlyphRun { span, glyph_indices: vec![glyph.index] })
@@ -2277,7 +2277,7 @@ pub fn create_pdf(title: &str, text: &str) -> Vec<u8> {
                 text: text.to_string(),
                 font_name: "Helvetica".to_string(),
                 font_size: 12.0,
-                fill_color: Color::Gray(0.0), character_spacing: 0.0, stroke_width: 0.0,
+                fill_color: Color::Gray(0.0), character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
             })],
             rotation: 0,
         }],

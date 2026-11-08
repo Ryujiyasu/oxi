@@ -184,7 +184,7 @@ fn interpret_content_stream_impl(
                 font_name,
                 font_size,
                 fill_color: state.fill_color,
-                character_spacing: 0.0, stroke_width: 0.0,
+                character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
             }));
         }
     };

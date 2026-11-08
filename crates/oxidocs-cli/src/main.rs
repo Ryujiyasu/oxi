@@ -688,7 +688,7 @@ impl PdfBuilder {
     /// Add text at (x, y) where y is in top-down coordinates.
     fn add_text(&mut self, x: f64, y: f64, text: String, font_name: String, font_size: f64, color: Color) {
         self.current_contents.push(ContentElement::Text(TextSpan {
-            x, y, text, font_name, font_size, fill_color: color, character_spacing: 0.0, stroke_width: 0.0,
+            x, y, text, font_name, font_size, fill_color: color, character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
         }));
     }
 
@@ -1636,9 +1636,25 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                 oxidocs_core::layout::LayoutContent::Text {
                     text, font_size, font_family, bold, italic,
                     underline, underline_style, strikethrough, color, highlight,
-                    character_spacing, ..
+                    character_spacing, text_scale, effects, ..
                 } => {
+                    // OXI_PDF_TEXT_EFFECTS (2026-11-08, default ON, opt-out _DISABLE): Word's
+                    // character effects as the DirectWrite renderer draws them -- no fill
+                    // paints nothing; outline = a white fill ringed in the text colour;
+                    // shadow = a gray copy 1pt down-right underneath; a w14:textOutline is
+                    // the ring in its own colour. The CLI drew the plain colour (blind-J
+                    // ja/creative__9aa11078: the white outlined title came out blue on blue).
+                    let fx_on = std::env::var_os("OXI_PDF_TEXT_EFFECTS_DISABLE").is_none();
+                    if fx_on && effects.no_fill {
+                        continue;
+                    }
                     let fs = *font_size as f64;
+                    // OXI_PDF_TEXT_SCALE (2026-11-08, default ON, opt-out _DISABLE): w:w is
+                    // drawn as a horizontal glyph scale (Word's PDF: a compressed text
+                    // matrix); without it the glyphs kept full width at the layout's narrower
+                    // positions and overlapped (blind-J ja/creative__9aa11078, w:w=66).
+                    let hscale = if std::env::var_os("OXI_PDF_TEXT_SCALE_DISABLE").is_none()
+                        && *text_scale > 0.0 { *text_scale as f64 } else { 100.0 };
                     let fill_color = color.as_deref()
                         .and_then(parse_hex_color)
                         .unwrap_or(Color::Gray(0.0));
@@ -1732,12 +1748,31 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         }
                     };
 
+                    let hex = |c: u32| Color::Rgb(((c >> 16) & 255) as f64 / 255.0, ((c >> 8) & 255) as f64 / 255.0, (c & 255) as f64 / 255.0);
+                    // (fill, stroke width, stroke colour) of the main pass
+                    let (main_fill, main_w, main_stroke) = if fx_on && effects.outline {
+                        (Color::Gray(1.0), 1.6, Some(fill_color))
+                    } else if let (true, Some((lw, lc))) = (fx_on, effects.line) {
+                        (fill_color, (lw as f64).max(0.5), Some(hex(lc)))
+                    } else if fake_bold {
+                        (fill_color, fs / 35.0, None)
+                    } else {
+                        (fill_color, 0.0, None)
+                    };
                     for (seg_text, seg_font, sx, _sw) in segments {
+                        if fx_on && effects.shadow {
+                            contents.push(ContentElement::Text(TextSpan {
+                                x: sx + 1.0, y: text_y + 1.0,
+                                text: seg_text.clone(), font_name: seg_font.clone(),
+                                font_size: fs, fill_color: Color::Gray(0.5),
+                                character_spacing: *character_spacing as f64, stroke_width: 0.0, horizontal_scale: hscale, stroke_color: None,
+                            }));
+                        }
                         contents.push(ContentElement::Text(TextSpan {
                             x: sx, y: text_y,
                             text: seg_text, font_name: seg_font,
-                            font_size: fs, fill_color,
-                            character_spacing: *character_spacing as f64, stroke_width: if fake_bold { fs / 35.0 } else { 0.0 },
+                            font_size: fs, fill_color: main_fill,
+                            character_spacing: *character_spacing as f64, stroke_width: main_w, horizontal_scale: hscale, stroke_color: main_stroke,
                         }));
                     }
 

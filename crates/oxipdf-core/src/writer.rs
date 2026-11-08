@@ -552,15 +552,21 @@ fn build_content_stream_with_images(
                 let font_key = escape_name(&span.font_name);
                 write_color_op(&mut buf, &span.fill_color, false);
                 if span.stroke_width > 0.0 {
-                    write_color_op(&mut buf, &span.fill_color, true);
+                    write_color_op(&mut buf, span.stroke_color.as_ref().unwrap_or(&span.fill_color), true);
                 }
                 write!(buf, "BT\n").unwrap();
                 write!(buf, "/{} {} Tf\n", font_key, span.font_size).unwrap();
                 if span.stroke_width > 0.0 {
                     write!(buf, "2 Tr {:.4} w\n", span.stroke_width).unwrap();
                 }
+                let scaled = (span.horizontal_scale - 100.0).abs() > 0.01 && span.horizontal_scale > 0.0;
+                if scaled {
+                    write!(buf, "{:.2} Tz\n", span.horizontal_scale).unwrap();
+                }
                 if span.character_spacing.abs() > 0.001 {
-                    write!(buf, "{:.3} Tc\n", span.character_spacing).unwrap();
+                    // PDF scales Tc by Tz; the layout's spacing is added unscaled
+                    let tc = if scaled { span.character_spacing * 100.0 / span.horizontal_scale } else { span.character_spacing };
+                    write!(buf, "{:.3} Tc\n", tc).unwrap();
                 }
                 let pdf_y = page.height - span.y;
                 write!(buf, "{} {} Td\n", span.x, pdf_y).unwrap();
@@ -584,6 +590,9 @@ fn build_content_stream_with_images(
                 }
                 if span.stroke_width > 0.0 {
                     write!(buf, "0 Tr\n").unwrap();
+                }
+                if scaled {
+                    write!(buf, "100 Tz\n").unwrap();
                 }
             }
             ContentElement::Path(path) => {
@@ -862,7 +871,7 @@ mod tests {
                     font_name: "F1".into(),
                     font_size: 12.0,
                     fill_color: Color::Gray(0.0),
-                    character_spacing: 0.0, stroke_width: 0.0,
+                    character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
                 })],
                 rotation: 0,
             }],
@@ -1069,7 +1078,7 @@ mod tests {
                     font_name: "MSGothic".into(),
                     font_size: 12.0,
                     fill_color: Color::Gray(0.0),
-                    character_spacing: 0.0, stroke_width: 0.0,
+                    character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
                 })],
                 rotation: 0,
             }],
@@ -1145,7 +1154,7 @@ mod tests {
                         font_name: "Helvetica".into(),
                         font_size: 12.0,
                         fill_color: Color::Gray(0.0),
-                        character_spacing: 0.0, stroke_width: 0.0,
+                        character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
                     }),
                     ContentElement::Text(TextSpan {
                         x: 72.0,
@@ -1154,7 +1163,7 @@ mod tests {
                         font_name: "MSGothic".into(),
                         font_size: 12.0,
                         fill_color: Color::Gray(0.0),
-                        character_spacing: 0.0, stroke_width: 0.0,
+                        character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
                     }),
                 ],
                 rotation: 0,
@@ -1213,7 +1222,7 @@ mod tests {
                 font_name: font.into(),
                 font_size: 12.0,
                 fill_color: Color::Gray(0.0),
-                character_spacing: 0.0, stroke_width: 0.0,
+                character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
             })
         };
         let doc = PdfDocument {
@@ -1302,7 +1311,7 @@ mod tests {
                     font_name: "FArial".into(),
                     font_size: 12.0,
                     fill_color: Color::Gray(0.0),
-                    character_spacing: 0.0, stroke_width: 0.0,
+                    character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
                 })],
                 rotation: 0,
             }],
