@@ -51750,6 +51750,269 @@ Attribute VB_Name = "IndexBox"
         }
     }
 
+
+    #[test]
+    fn indexed_source_default_setters_keep_native_dispatch_and_byref() {
+        for object_value in [false, true] {
+            for (target, temporary) in [("collection", false), ("NamedDefaultProbe.collection", false),
+                ("MakeCollection", false), ("NamedDefaultProbe.MakeCollection", false),
+                ("MakeCollection", true), ("NamedDefaultProbe.MakeCollection", true)] {
+                for named in [false, true] {
+                    let argument = if named { "Index:=slot" } else { "slot" };
+                    let (kind, result_type, assign, read, value, expected, stored) = if object_value {
+                        ("Set", "Range", "Set ", r#"ThisWorkbook.Worksheets(1).Range("H1")"#,
+                            r#"ThisWorkbook.Worksheets(1).Range("B2")"#,
+                            "OK|$B$2:2|12", "$B$2:2")
+                    } else {
+                        ("Let", "Variant", "", r#"ThisWorkbook.Worksheets(1).Range("H1").Value2"#,
+                            r#""value""#, "OK|value:2|12", "value:2")
+                    };
+                    let written = if object_value { "Value.Address" } else { "CStr(Value)" };
+                    let factory = if temporary {
+                        "Public Function MakeCollection() As IndexBox\n Set MakeCollection = New IndexBox\nEnd Function\n"
+                    } else if target.contains("MakeCollection") {
+                        "Public Function MakeCollection() As IndexBox\n Set MakeCollection = collection\nEnd Function\n"
+                    } else { "" };
+                    let expected = if temporary { format!("{expected}|T") } else { expected.to_string() };
+                    let stored = if temporary { format!("{stored}|T") } else { stored.to_string() };
+                    let declaration = if temporary { "" } else { "Public collection As IndexBox" };
+                    let setup = if temporary {
+                        r#"ThisWorkbook.Worksheets(1).Range("H1:H2").ClearContents"#
+                    } else { "Set collection = New IndexBox" };
+                    let snapshot_suffix = if temporary {
+                        r#" & "|" & CStr(ThisWorkbook.Worksheets(1).Range("H2").Value2)"#
+                    } else { "" };
+                    let terminate = if temporary { r#"Private Sub Class_Terminate()
+ ThisWorkbook.Worksheets(1).Range("H2").Value2 = CStr(ThisWorkbook.Worksheets(1).Range("H2").Value2) & "T"
+End Sub
+"# } else { "" };
+                    let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+{declaration}
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function Probe() As String
+ Dim slot As Long
+ slot = 2
+ {setup}
+ On Error GoTo Failed
+ {assign}{target}({argument}) = {value}
+ Probe = "OK|" & CStr(ThisWorkbook.Worksheets(1).Range("H1").Value2) & "|" & CStr(slot){snapshot_suffix}
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & CStr(slot)
+End Function
+Public Function Snapshot() As String
+ Snapshot = CStr(ThisWorkbook.Worksheets(1).Range("H1").Value2){snapshot_suffix}
+End Function
+{factory}VERSION 1.0 CLASS
+Attribute VB_Name = "IndexBox"
+Public Property Get ValueAt(ByRef Index As Long) As {result_type}
+Attribute ValueAt.VB_UserMemId = 0
+ {assign}ValueAt = {read}
+End Property
+Public Property {kind} ValueAt(ByRef Index As Long, ByVal Value As {result_type})
+Attribute ValueAt.VB_UserMemId = 0
+ ThisWorkbook.Worksheets(1).Range("H1").Value2 = {written} & ":" & CStr(Index)
+ Index = Index + 10
+End Property
+{terminate}"#);
+                    let control = execute_workbook_vba(workbook(), &source,
+                        "NamedDefaultProbe.Control", vec![], 0, failure_context()).unwrap();
+                    assert!(control.error.is_none());
+                    assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+                    let outcome = execute_workbook_vba(workbook(), &source,
+                        "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+                    assert!(outcome.error.is_none(), "{kind} {target} {argument}: {:?}",
+                        outcome.error.as_ref().map(|e| &e.message));
+                    assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected,
+                        "{kind} {target} {argument}");
+                    assert!(outcome.workbook_changed);
+                    let snapshot = execute_workbook_vba(outcome.workbook, &source,
+                        "NamedDefaultProbe.Snapshot", vec![], 0, failure_context()).unwrap();
+                    assert!(snapshot.error.is_none() && !snapshot.workbook_changed);
+                    assert_eq!(serde_json::to_value(&snapshot.result).unwrap()["value"], stored);
+                }
+            }
+        }
+    }
+
+
+    #[test]
+    fn source_default_setter_evaluation_order_matches_native() {
+        for object_value in [false, true] {
+            for count in 1..=4 {
+                if object_value && count != 1 { continue; }
+                let targets: &[&str] = if object_value {
+                    &["collection", "NamedDefaultProbe.collection", "MakeCollection",
+                        "NamedDefaultProbe.MakeCollection"]
+                } else if count <= 2 {
+                    &["collection", "NamedDefaultProbe.collection", "MakeCollection",
+                        "NamedDefaultProbe.MakeCollection", "collection.ValueAt",
+                        "RecordAt", "NamedDefaultProbe.RecordAt"]
+                } else {
+                    &["collection", "NamedDefaultProbe.collection", "MakeCollection",
+                        "collection.ValueAt"]
+                };
+                let letters = &["A", "B", "C", "D"][..count];
+                let parameters = letters.iter().map(|name| format!("ByRef {name} As Long"))
+                    .collect::<Vec<_>>().join(", ");
+                let mut index_functions = String::new();
+                for (index, name) in letters.iter().enumerate() {
+                    index_functions.push_str(&format!(
+                        "Public Function Index{name}() As Long\n trace = trace & \"{name}\"\n Index{name} = {}\nEnd Function\n",
+                        index + 2));
+                }
+                let values = letters.iter().map(|name| format!("CStr({name})"))
+                    .collect::<Vec<_>>().join(" & \":\" & ");
+                let (kind, returned, assign, value, written, initial) = if object_value {
+                    ("Set", "Range", "Set ", r#"ThisWorkbook.Worksheets(1).Range("B2")"#,
+                        "Value.Address", "$B$2")
+                } else {
+                    ("Let", "Variant", "", r#""value""#, "CStr(Value)", "value")
+                };
+                let record = if object_value { String::new() } else {
+                    format!(r#"Public Property Let RecordAt({parameters}, ByVal Value As Variant)
+ trace = trace & "S"
+ ThisWorkbook.Worksheets(1).Range("H1").Value2 = CStr(Value) & ":" & {values}
+End Property
+"#)
+                };
+                for target in targets {
+                    for named in [false, true] {
+                        let arguments = if named {
+                            letters.iter().rev().map(|name| format!("{name}:=Index{name}()"))
+                                .collect::<Vec<_>>().join(", ")
+                        } else {
+                            letters.iter().map(|name| format!("Index{name}()"))
+                                .collect::<Vec<_>>().join(", ")
+                        };
+                        let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+Public trace As String
+Public collection As IndexBox
+{index_functions}Public Function OperandValue() As {returned}
+ trace = trace & "V"
+ {assign}OperandValue = {value}
+End Function
+Public Function MakeCollection() As IndexBox
+ trace = trace & "F"
+ Set MakeCollection = collection
+End Function
+{record}Public Function Probe() As String
+ trace = ""
+ Set collection = New IndexBox
+ On Error GoTo Failed
+ {assign}{target}({arguments}) = OperandValue()
+ Probe = trace & "|" & CStr(ThisWorkbook.Worksheets(1).Range("H1").Value2)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & trace
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "IndexBox"
+Public Property Get ValueAt({parameters}) As {returned}
+Attribute ValueAt.VB_UserMemId = 0
+ NamedDefaultProbe.trace = NamedDefaultProbe.trace & "G"
+ {assign}ValueAt = ThisWorkbook.Worksheets(1).Range("H1"){scalar}
+End Property
+Public Property {kind} ValueAt({parameters}, ByVal Value As {returned})
+Attribute ValueAt.VB_UserMemId = 0
+ NamedDefaultProbe.trace = NamedDefaultProbe.trace & "S"
+ ThisWorkbook.Worksheets(1).Range("H1").Value2 = {written} & ":" & {values}
+End Property
+"#, scalar = if object_value { "" } else { ".Value2" });
+                        let index_order = letters.join("");
+                        let trace = if count == 1 { format!("V{index_order}") }
+                            else { format!("{index_order}V") };
+                        let factory = if target.contains("MakeCollection") { "F" } else { "" };
+                        let tail = (0..count).map(|index| (index + 2).to_string())
+                            .collect::<Vec<_>>().join(":");
+                        let expected = format!("{trace}{factory}S|{initial}:{tail}");
+                        let outcome = execute_workbook_vba(workbook(), &source,
+                            "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+                        assert!(outcome.error.is_none(), "{kind} {target} {arguments}: {:?}",
+                            outcome.error.as_ref().map(|error| &error.message));
+                        assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                            expected, "{kind} {target} {arguments}");
+                        assert!(outcome.workbook_changed);
+                    }
+                }
+            }
+        }
+    }
+
+
+    #[test]
+    fn source_default_setter_optional_indices_keep_native_evaluation_order() {
+        for target in ["collection", "NamedDefaultProbe.collection", "MakeCollection",
+            "NamedDefaultProbe.MakeCollection", "collection.ValueAt",
+            "RecordAt", "NamedDefaultProbe.RecordAt"] {
+            for (arguments, trace, second) in [
+                ("IndexA()", "VA", 9), ("A:=IndexA()", "VA", 9),
+                ("IndexA(), IndexB()", "ABV", 3),
+            ] {
+                let source = format!(r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+Public trace As String
+Public collection As IndexBox
+Public Function IndexA() As Long
+ trace = trace & "A"
+ IndexA = 2
+End Function
+Public Function IndexB() As Variant
+ trace = trace & "B"
+ IndexB = 3
+End Function
+Public Function OperandValue() As Variant
+ trace = trace & "V"
+ OperandValue = "value"
+End Function
+Public Function MakeCollection() As IndexBox
+ trace = trace & "F"
+ Set MakeCollection = collection
+End Function
+Public Property Let RecordAt(ByRef A As Long, Optional ByRef B As Variant = 9, ByVal Value As Variant)
+ trace = trace & "S"
+ ThisWorkbook.Worksheets(1).Range("H1").Value2 = CStr(Value) & ":" & CStr(A) & ":" & CStr(B)
+End Property
+Public Function Probe() As String
+ trace = ""
+ Set collection = New IndexBox
+ On Error GoTo Failed
+ {target}({arguments}) = OperandValue()
+ Probe = trace & "|" & CStr(ThisWorkbook.Worksheets(1).Range("H1").Value2)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & trace
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "IndexBox"
+Public Property Get ValueAt(ByRef A As Long, Optional ByRef B As Variant = 9) As Variant
+Attribute ValueAt.VB_UserMemId = 0
+ NamedDefaultProbe.trace = NamedDefaultProbe.trace & "G"
+ ValueAt = ThisWorkbook.Worksheets(1).Range("H1").Value2
+End Property
+Public Property Let ValueAt(ByRef A As Long, Optional ByRef B As Variant = 9, ByVal Value As Variant)
+Attribute ValueAt.VB_UserMemId = 0
+ NamedDefaultProbe.trace = NamedDefaultProbe.trace & "S"
+ ThisWorkbook.Worksheets(1).Range("H1").Value2 = CStr(Value) & ":" & CStr(A) & ":" & CStr(B)
+End Property
+"#);
+                let factory = if target.contains("MakeCollection") { "F" } else { "" };
+                let expected = format!("{trace}{factory}S|value:2:{second}");
+                let outcome = execute_workbook_vba(workbook(), &source,
+                    "NamedDefaultProbe.Probe", vec![], 0, failure_context()).unwrap();
+                assert!(outcome.error.is_none(), "{target} {arguments}: {:?}",
+                    outcome.error.as_ref().map(|error| &error.message));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"],
+                    expected, "{target} {arguments}");
+                assert!(outcome.workbook_changed);
+            }
+        }
+    }
+
     #[test]
     fn named_index_arrays_fail_at_compile_time_and_keep_positional_indices() {
         for (name, declaration, seed, index) in [

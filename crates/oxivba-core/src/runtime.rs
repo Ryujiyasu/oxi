@@ -2403,6 +2403,31 @@ impl<'a> Runtime<'a> {
         }
     }
 
+
+    fn source_default_value_class(&self, target: &Expr, frame: &Frame) -> Option<String> {
+        if self.expression_slot(target, frame).is_some() {
+            return self.source_class_name(target, frame);
+        }
+        let procedure = if let Some((module, name)) = self.qualified_standard_member(target, frame) {
+            module.items.iter().find_map(|item| match item {
+                ModuleItem::Procedure(procedure)
+                    if procedure.name.eq_ignore_ascii_case(name)
+                        && matches!(procedure.kind, ProcKind::Function | ProcKind::PropertyGet) =>
+                {
+                    Some(procedure.clone())
+                }
+                _ => None,
+            })
+        } else {
+            expr_name(target).and_then(|name| self.resolve_procedure(
+                name, Some(&[ProcKind::Function, ProcKind::PropertyGet])).ok().flatten()
+                .map(|(_, procedure)| procedure))
+        }?;
+        if !procedure.params.is_empty() { return None; }
+        procedure.return_type.filter(|kind| !kind.is_array)
+            .and_then(|kind| self.source_class_key(&kind.name))
+    }
+
     fn source_setter_parameters(
         &self,
         target: &Expr,
@@ -2413,20 +2438,24 @@ impl<'a> Runtime<'a> {
             procedure.params.pop();
             return Some(procedure.params);
         }
-        let (class, name) = match target {
-            Expr::Member { object, name, .. } => {
-                (self.source_class_name(object, frame)?, name.as_str())
+        let (class, name) = if let Some(class) = self.source_default_value_class(target, frame) {
+            (class, "_default")
+        } else {
+            match target {
+                Expr::Member { object, name, .. } => {
+                    (self.source_class_name(object, frame)?, name.as_str())
+                }
+                Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
+                    let Some(WithSubject::Object {
+                        class: Some(class), ..
+                    }) = frame.with_objects.last()
+                    else {
+                        return None;
+                    };
+                    (class.clone(), name.as_str())
+                }
+                _ => (self.source_class_name(target, frame)?, "_default"),
             }
-            Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
-                let Some(WithSubject::Object {
-                    class: Some(class), ..
-                }) = frame.with_objects.last()
-                else {
-                    return None;
-                };
-                (class.clone(), name.as_str())
-            }
-            _ => (self.source_class_name(target, frame)?, "_default"),
         };
         let (_, mut procedure) = if object_value {
             self.source_class_procedure(&class, name, &[ProcKind::PropertySet])
@@ -2460,7 +2489,7 @@ impl<'a> Runtime<'a> {
             && receiver_type.is_none();
         let setter = self.source_setter_parameters(target, frame, object_value);
         if let Some(parameters) = setter {
-            if !late_member && !args.iter().any(|argument| argument.name.is_some()) { return Ok(None); }
+            if args.len() < 2 { return Ok(None); }
             let values = self.evaluate_selected_arguments(args, *force_by_value, Some(&parameters), frame, None)?;
             return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters) }));
         }
@@ -7528,6 +7557,33 @@ impl<'a> Runtime<'a> {
                 return self.call_resolved_set_source(
                     module, &procedure, None, args, evaluated, value, frame, line,
                 );
+            }
+
+            if self.source_default_value_class(callee, frame).is_some() {
+                if let Some(parameters) = self.source_setter_parameters(
+                    callee, frame, matches!(value, Value::Object(_) | Value::Nothing),
+                ) {
+                    // Capture index places in the caller before entering a
+                    // module or invoking the parameterless object factory.
+                    let captured = if evaluated.is_none() {
+                        Some(self.evaluate_source_arguments(
+                            args, *force_by_value, Some(&parameters), frame,
+                        )?)
+                    } else { None };
+                    let arguments = evaluated.or(captured.as_deref())
+                        .expect("default setter arguments captured");
+                    let class = self.source_default_value_class(callee, frame);
+                    let receiver = self.eval_object(callee, frame, line)?;
+                    let answer = self.call_instance_set_source(&receiver, "_default", args, arguments,
+                        value, class.as_deref(), frame, line);
+                    drop(receiver);
+                    let collected = self.collect_instances(line);
+                    if answer.is_ok() { collected?; }
+                    if answer? { return Ok(()); }
+                    return Err(no_such_member(
+                        "the class has no writable default member".into(), Some(line),
+                    ));
+                }
             }
         }
         if let Expr::Index {
