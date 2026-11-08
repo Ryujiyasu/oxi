@@ -1420,11 +1420,23 @@ fn resolve_font(family: Option<&str>, bold: bool) -> String {
     resolve_font_styled(family, bold, false)
 }
 
+fn cjk_bold_face_enabled() -> bool {
+    std::env::var_os("OXI_PDF_CJK_BOLD_FACE_DISABLE").is_none()
+}
+
 fn resolve_font_styled(family: Option<&str>, bold: bool, italic: bool) -> String {
     let base = family.unwrap_or("Calibri");
     // CJK fonts: use bold variant when bold is requested
     if is_cjk_family(base) {
         if bold {
+            // OXI_PDF_CJK_BOLD_FACE (2026-11-09, default ON, opt-out _DISABLE): a family
+            // with its own bold face on this machine (メイリオ → meiryob.ttc, 游ゴシック
+            // Bold, BIZ UD…) is drawn with it, embedded as «<name>-Bold»; only a family
+            // without one goes to the shared stand-in. blind-J ja/creative__99e3d9f9: bold
+            // メイリオ «2024 年 10 月 24 日» came out in ＭＳ ゴシック (Word: Meiryo-Bold).
+            if cjk_bold_face_enabled() && oxidocs_core::font::runtime::face_file(base, true, false).is_some() {
+                return format!("{}-Bold", resolve_font_styled(Some(base), false, italic));
+            }
             return "OxiCJK-Bold".to_string();
         }
         return match base {
@@ -1711,6 +1723,13 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                             && oxidocs_core::font::runtime::face_file(f, true, false).is_none());
                     // Resolve font name for PDF (map to Type1 base fonts or CJK)
                     let font_name = resolve_font_styled(font_family.as_deref(), *bold && !fake_bold, *italic);
+                    let font_name = if *bold && !fake_bold && font_family.as_deref().is_some_and(is_cjk_family)
+                        && font_name != "OxiCJK-Bold" && !embedded_fonts.contains_key(&font_name)
+                    {
+                        "OxiCJK-Bold".to_string()
+                    } else {
+                        font_name
+                    };
                     let text = &symbol_text(font_family.as_deref(), &font_name, text, &embedded_fonts);
                     let chars: Vec<char> = text.chars().collect();
                     let mut seg_x = x;
@@ -3628,6 +3647,31 @@ fn build_embedded_fonts(
             if let oxidocs_core::layout::LayoutContent::Text { font_family: Some(family), .. } = &elem.content {
                 if is_cjk_family(family) && !font_names_used.contains(family) {
                     font_names_used.push(family.clone());
+                }
+            }
+        }
+    }
+
+    if cjk_bold_face_enabled() {
+        let mut bold_families: Vec<String> = Vec::new();
+        for page in &layout.pages {
+            for elem in &page.elements {
+                if let oxidocs_core::layout::LayoutContent::Text { font_family: Some(family), bold: true, .. } = &elem.content {
+                    if is_cjk_family(family) && !bold_families.contains(family) {
+                        bold_families.push(family.clone());
+                    }
+                }
+            }
+        }
+        for name in &bold_families {
+            let key = resolve_font_styled(Some(name), true, false);
+            if fonts.contains_key(&key) || !key.ends_with("-Bold") || key == "OxiCJK-Bold" {
+                continue;
+            }
+            if let Some((path, face)) = oxidocs_core::font::runtime::face_file(name, true, false) {
+                if let Ok(result) = subset_font_native_face(&path.to_string_lossy(), face, &used_chars) {
+                    eprintln!("Embedding CJK bold font '{}' ({}) from {} face {} ({} bytes)", key, name, path.display(), face, result.data.len());
+                    fonts.insert(key, result);
                 }
             }
         }
