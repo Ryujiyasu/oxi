@@ -105,6 +105,8 @@ enum RecordStep {
 
 /// Where a `With` block's subject lives while its body runs.
 enum WithSubject {
+    /// A dynamic subject can be Nothing or a scalar until a member is used.
+    Value(Value),
     /// A host object, which carries a reference of its own.
     Object { receiver: ObjectRef, class: Option<String>, early_application: bool, assignment_type: Option<String> },
     /// A record, which carries none. VBA's `With` takes a user-defined type as
@@ -4977,6 +4979,14 @@ impl<'a> Runtime<'a> {
             } => {
                 let evaluated=self.prepare_named_setter(target,frame,false)?;
                 let value = self.eval_expr(value, frame)?;
+                if stands_on_the_with_subject(target)
+                    && matches!(frame.with_objects.last(), Some(WithSubject::Value(_)))
+                {
+                    // Index expressions precede the RHS. Resolve the held
+                    // subject before asking an RHS object for its default.
+                    self.finish_assignment_arguments(target, evaluated, frame)?;
+                    return current_with_object(frame, span.line).map(|_| Flow::Continue);
+                }
                 let factory_target = match target {
                     Expr::Index { target: factory, args, .. }
                         if self.source_module_setter(factory, frame, false).is_none()
@@ -5466,8 +5476,15 @@ impl<'a> Runtime<'a> {
                 let held = match held {
                     Some(held) => held,
                     None => {
-                        let class=self.source_class_name(subject,frame);
-                        WithSubject::Object {early_application:self.early_application_expression(subject,frame),assignment_type:self.assignment_receiver_type(subject,frame),receiver:self.eval_object(subject, frame, line)?,class}
+                        let class = self.source_class_name(subject, frame);
+                        let early_application = self.early_application_expression(subject, frame);
+                        let assignment_type = self.assignment_receiver_type(subject, frame);
+                        match self.eval_with_value(subject, frame, line)? {
+                            Value::Object(receiver) => WithSubject::Object {
+                                receiver, class, early_application, assignment_type,
+                            },
+                            value => WithSubject::Value(value),
+                        }
                     },
                 };
                 frame.with_objects.push(held);
@@ -10667,16 +10684,16 @@ impl<'a> Runtime<'a> {
         })
     }
 
-    fn eval_object(
+    fn eval_with_value(
         &mut self,
         expr: &Expr,
         frame: &mut Frame,
         line: u32,
-    ) -> Result<ObjectRef, RuntimeError> {
+    ) -> Result<Value, RuntimeError> {
         if expr_name(expr).is_some_and(|name| {
             name.eq_ignore_ascii_case("err") && self.lookup_slot(frame, name).is_none()
         }) {
-            return Ok(ObjectRef::new(u64::MAX, "ErrObject"));
+            return Ok(Value::Object(ObjectRef::new(u64::MAX, "ErrObject")));
         }
         let value = match expr {
             Expr::EvaluateShortcut { text, .. } => self.evaluate_shortcut(text, line, true),
@@ -10693,6 +10710,16 @@ impl<'a> Runtime<'a> {
                 failure
             }
         })?;
+        Ok(value)
+    }
+
+    fn eval_object(
+        &mut self,
+        expr: &Expr,
+        frame: &mut Frame,
+        line: u32,
+    ) -> Result<ObjectRef, RuntimeError> {
+        let value = self.eval_with_value(expr, frame, line)?;
         match value {
             Value::Object(object) => Ok(object),
             Value::Nothing => Err(error(
@@ -12759,6 +12786,10 @@ fn expr_name(expr: &Expr) -> Option<&str> {
 fn current_with_object(frame: &Frame, line: u32) -> Result<ObjectRef, RuntimeError> {
     match frame.with_objects.last() {
         Some(WithSubject::Object {receiver,..}) => Ok(receiver.clone()),
+        Some(WithSubject::Value(Value::Nothing)) => Err(language_error(
+            91, "object variable or With block variable not set", line)),
+        Some(WithSubject::Value(_)) => Err(language_error(
+            424, "With member access requires an object", line)),
         // A record has fields, not members to call. Anything reaching here
         // asked one for something only an object can give.
         Some(WithSubject::Record { .. }) => Err(error(
