@@ -17367,37 +17367,48 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn worksheet_index(&mut self, args: &[Value]) -> Result<Value, String> {
-        let (array, row, column) = match args {
-            [array, row] => (array, row, None),
-            [array, row, column] => (array, row, Some(column)),
-            _ => return Err("WorksheetFunction.Index expects two or three arguments".to_string()),
+        let (array, row, column, area) = match args {
+            [array, row] => (array, row, None, None),
+            [array, row, column] => (array, row, Some(column), None),
+            [array, row, column, area] => (array, row, Some(column), Some(area)),
+            _ => return Err("WorksheetFunction.Index expects two to four arguments".to_string()),
         };
-        let default_row = Value::Integer(0);
-        let row = if matches!(row, Value::Null) && column.is_some_and(|value| !matches!(value, Value::Missing | Value::Null)) {
-            &default_row
+        let default_selector = Value::Integer(0);
+        let row = if matches!(row, Value::Missing | Value::Null) && column.is_some() {
+            &default_selector
         } else { row };
-        if matches!(row, Value::Null) || matches!(column, Some(Value::Null)) {
+        let column = column.map(|value| if matches!(value, Value::Missing | Value::Null) {
+            &default_selector
+        } else { value });
+        if matches!(row, Value::Missing | Value::Null) {
             let description = match self.error_language {
                 ErrorLanguage::English => "Wrong number of arguments.",
                 ErrorLanguage::Japanese => "引数の数の誤りがあります。",
             };
             return Err(oxivba_core::host_error_from(1004, "Microsoft Excel", description));
         }
-        if matches!(row, Value::Array(_)) || matches!(column, Some(Value::Array(_))) {
+        if matches!(row, Value::Array(_)) || matches!(column, Some(Value::Array(_)))
+            || matches!(area, Some(Value::Array(_))) {
             let shape = |value: &Value| -> Result<(usize, usize), String> {
                 match value {
-                    Value::Array(array) => match array.dimensions.as_slice() {
-                        [columns] if columns.length > 0 => Ok((1, columns.length)),
-                        [rows, columns] if rows.length > 0 && columns.length > 0 => Ok((rows.length, columns.length)),
-                        _ => Err(host_error(1004, "invalid INDEX selector dimensions")),
+                    Value::Array(array) => {
+                        if array.values.iter().any(|value| matches!(value, Value::Null | Value::Array(_))) {
+                            return Err(host_error(13, "Type mismatch"));
+                        }
+                        match array.dimensions.as_slice() {
+                            [columns] if columns.length > 0 => Ok((1, columns.length)),
+                            [rows, columns] if rows.length > 0 && columns.length > 0 => Ok((rows.length, columns.length)),
+                            _ => Err(host_error(1004, "invalid INDEX selector dimensions")),
+                        }
                     },
                     _ => Ok((1, 1)),
                 }
             };
             let row_shape = shape(row)?;
             let column_shape = column.map(shape).transpose()?.unwrap_or((1, 1));
-            let rows = row_shape.0.max(column_shape.0);
-            let columns = row_shape.1.max(column_shape.1);
+            let area_shape = area.map(shape).transpose()?.unwrap_or((1, 1));
+            let rows = row_shape.0.max(column_shape.0).max(area_shape.0);
+            let columns = row_shape.1.max(column_shape.1).max(area_shape.1);
             let count = rows.checked_mul(columns).filter(|count| *count <= 1_000_000)
                 .ok_or_else(|| host_error(6, "INDEX result exceeds the browser array execution limit"))?;
             let at = |value: &Value, shape: (usize, usize), row: usize, column: usize| -> Value {
@@ -17418,6 +17429,9 @@ impl<'a> WorkbookHost<'a> {
                     selected_args[1] = at(row, row_shape, selected_row, selected_column);
                     if let Some(column) = column {
                         selected_args[2] = at(column, column_shape, selected_row, selected_column);
+                    }
+                    if let Some(area) = area {
+                        selected_args[3] = at(area, area_shape, selected_row, selected_column);
                     }
                     let mut answer = self.worksheet_index(&selected_args)?;
                     if let Value::Object(object) = &answer {
@@ -17440,41 +17454,66 @@ impl<'a> WorkbookHost<'a> {
         }
         if let Value::Error(code) = row { return Ok(Value::Error(*code)); }
         if let Some(Value::Error(code)) = column { return Ok(Value::Error(*code)); }
-        let row = index_argument(row, "row")?;
+        if let Some(Value::Error(code)) = area { return Ok(Value::Error(*code)); }
+        let area = match area {
+            None | Some(Value::Missing | Value::Null) => 1,
+            Some(area) => match index_argument(area, "area") {
+                Ok(area) if area > 0 => area,
+                _ => return Ok(Value::Error(2015)),
+            },
+        };
+        let row = match index_argument(row, "row") {
+            Ok(row) => row,
+            Err(_) => return Ok(Value::Error(2015)),
+        };
         let column = match column {
-            None | Some(Value::Missing) => None,
-            Some(column) => Some(index_argument(column, "column")?),
+            None => None,
+            Some(column) => match index_argument(column, "column") {
+                Ok(column) => Some(column),
+                Err(_) => return Ok(Value::Error(2015)),
+            },
         };
 
-        if let Value::Object(object) = array {
-            if let Some(range) = self.range(object) {
-                let rows = (range.end_row - range.start_row + 1) as usize;
-                let columns = (range.end_column - range.start_column + 1) as usize;
-                // Past the end is #REF!, an answer rather than a failure:
-                // measured, `Application.Index(Range("A1:A4"), 9)` is Error
-                // 2023 (and `WorksheetFunction.Index` raises 1004 over it).
-                let Ok((row, column)) = index_selection(rows, columns, row, column, true) else {
-                    return Ok(Value::Error(2023));
-                };
-                let selected = CellRange {
-                    sheet: range.sheet,
-                    start_row: range.start_row + row.saturating_sub(1) as u32,
-                    end_row: if row == 0 {
-                        range.end_row
-                    } else {
-                        range.start_row + row as u32 - 1
-                    },
-                    start_column: range.start_column + column.saturating_sub(1) as u32,
-                    end_column: if column == 0 {
-                        range.end_column
-                    } else {
-                        range.start_column + column as u32 - 1
-                    },
-                };
-                return Ok(self.object(HostObject::Range(selected)));
-            }
+        let references = match array {
+            Value::Object(object) => self.range(object).map(|range| vec![range]).or_else(|| {
+                if matches!(self.objects.get(host_object_index(object.handle)),
+                    Some(HostObject::Blocks(_) | HostObject::BlocksAxis(..))) {
+                    self.blocks(object).map(<[CellRange]>::to_vec)
+                } else { None }
+            }),
+            _ => None,
+        };
+        if let Some(references) = references {
+            let Some(&range) = references.get(area - 1) else {
+                return Ok(Value::Error(2023));
+            };
+            let rows = (range.end_row - range.start_row + 1) as usize;
+            let columns = (range.end_column - range.start_column + 1) as usize;
+            // Past the end is #REF!, an answer rather than a failure:
+            // measured, `Application.Index(Range("A1:A4"), 9)` is Error
+            // 2023 (and `WorksheetFunction.Index` raises 1004 over it).
+            let Ok((row, column)) = index_selection(rows, columns, row, column, true) else {
+                return Ok(Value::Error(2023));
+            };
+            let selected = CellRange {
+                sheet: range.sheet,
+                start_row: range.start_row + row.saturating_sub(1) as u32,
+                end_row: if row == 0 {
+                    range.end_row
+                } else {
+                    range.start_row + row as u32 - 1
+                },
+                start_column: range.start_column + column.saturating_sub(1) as u32,
+                end_column: if column == 0 {
+                    range.end_column
+                } else {
+                    range.start_column + column as u32 - 1
+                },
+            };
+            return Ok(self.object(HostObject::Range(selected)));
         }
 
+        if area != 1 { return Ok(Value::Error(2023)); }
         if let Value::Int16(_) | Value::Byte(_) | Value::Integer(_) = array {
             if index_selection(1, 1, row, column, false).is_err() { return Ok(Value::Error(2023)); }
             return Ok(Value::Integer(any_number(array).unwrap_or_default() as i64));
@@ -28912,7 +28951,7 @@ impl Host for WorkbookHost<'_> {
 
     fn source_argument_uses_value(&self, receiver: &ObjectRef, name: &str,
         args: &[Value], argument_names: &[Option<String>], index: usize) -> bool {
-        name.eq_ignore_ascii_case("index") && (2..=3).contains(&args.len()) && index > 0
+        name.eq_ignore_ascii_case("index") && (2..=4).contains(&args.len()) && index > 0
             && (self.is_application(receiver) || self.is_worksheet_function(receiver))
             && argument_names.iter().all(Option::is_none)
     }
@@ -38363,11 +38402,13 @@ fn number_of(value: &Value) -> Option<f64> {
 
 fn index_argument(value: &Value, label: &str) -> Result<usize, String> {
     let number = match value {
-        value if any_number(value).is_some() => any_number(value).unwrap_or_default(),
-        _ => return Err(format!("WorksheetFunction.Index {label} must be numeric")),
+        Value::Empty => 0.0,
+        Value::Boolean(value) => f64::from(u8::from(*value)),
+        _ => numeric_text(value)
+            .ok_or_else(|| format!("WorksheetFunction.Index {label} must be numeric"))?,
     };
     let number = number.trunc();
-    if !(0.0..=u32::MAX as f64).contains(&number) {
+    if number < 0.0 {
         return Err(format!(
             "WorksheetFunction.Index {label} must be zero or greater"
         ));
@@ -55802,6 +55843,10 @@ End Property
     }
 
     fn check_scalar_setter_native_matrix(probe: &str, expected: &[&str], cases: &[([i64; 4], usize, &str)], locked: &[([i64; 4], [bool; 9])]) {
+        check_scalar_native_matrix(probe, "ScalarSetterContract.Probe", expected, cases, locked);
+    }
+
+    fn check_scalar_native_matrix<const N: usize>(probe: &str, procedure: &str, expected: &[&str], cases: &[([i64; N], usize, &str)], locked: &[([i64; N], [bool; 9])]) {
         let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
         let seed_source = crate::vba_project::read_project_source_with_code_page(seed, None).unwrap().unwrap();
         let bytes = crate::vba_project::write_project_source(seed, &(seed_source + "\n" + probe), None).unwrap();
@@ -55824,7 +55869,7 @@ End Property
                 context.file_context = Some(serde_json::from_value(serde_json::json!({
                     "packageBytes":bytes, "readOnly":true, "editRevision":0
                 })).unwrap());
-                let outcome = execute_workbook_action_in_session(current, &source, Some("ScalarSetterContract.Probe"),
+                let outcome = execute_workbook_action_in_session(current, &source, Some(procedure),
                     args.into_iter().map(Value::Integer).collect(), 0, context, &mut session).unwrap();
                 let actual = serde_json::to_value(&outcome.result).unwrap();
                 if outcome.error.is_some() || actual["value"] != expected[expected_index] {
@@ -55850,6 +55895,2031 @@ End Property
             }
         }
         assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
+    fn index_fourth_area_coercion_matches_native() {
+        let probe = r####"Attribute VB_Name = "IndexAreaContract"
+Option Explicit
+Private Function AreaSelector(ByVal kind As Long) As Variant
+ Select Case kind
+ Case 0: AreaSelector = 1
+ Case 1: AreaSelector = 2
+ Case 2: AreaSelector = 0
+ Case 3: AreaSelector = 3
+ Case 4: AreaSelector = -1
+ Case 5: AreaSelector = 1.5
+ Case 6: AreaSelector = Array(1, 2)
+ Case 7: AreaSelector = Null
+ Case 8: AreaSelector = Empty
+ Case 9: AreaSelector = CVErr(2042)
+ Case 10: AreaSelector = "1"
+ Case 11: AreaSelector = "2"
+ Case 12: AreaSelector = "bad"
+ Case 13: AreaSelector = True
+ Case 14: AreaSelector = False
+ Case 15: AreaSelector = 0.9
+ Case 16: AreaSelector = 2.9
+ Case 17: AreaSelector = -0.9
+ Case 18: AreaSelector = CCur(1.5)
+ Case 19: AreaSelector = CDate(1.5)
+ Case 20: AreaSelector = 2147483648#
+ Case 21: AreaSelector = 4294967296#
+ Case 22: AreaSelector = -2147483649#
+ Case 23: AreaSelector = " 2 "
+ Case 24: AreaSelector = CVErr(2015)
+ Case 25: AreaSelector = Array(1, Null, "2", "bad")
+ End Select
+End Function
+Private Function ArrayShape(ByRef value As Variant) As String
+ Dim dimension As Long, lo As Long, hi As Long, shape As String
+ On Error Resume Next
+ dimension = 1
+ Do
+  Err.Clear
+  lo = LBound(value, dimension)
+  If Err.Number <> 0 Then Exit Do
+  hi = UBound(value, dimension)
+  shape = shape & CStr(lo) & ":" & CStr(hi) & ","
+  dimension = dimension + 1
+ Loop
+ Err.Clear
+ On Error GoTo 0
+ ArrayShape = TypeName(value) & ":" & CStr(VarType(value)) & ":" & shape
+End Function
+Private Function Describe(ByVal value As Variant) As String
+ Dim item As Variant, report As String
+ If IsArray(value) Then
+  report = "array:" & ArrayShape(value)
+  For Each item In value
+   report = report & ";" & Describe(item)
+  Next
+  Describe = report
+ ElseIf IsNull(value) Then
+  Describe = "Null:1"
+ Else
+  Describe = CStr(value) & ":" & TypeName(value) & ":" & CStr(VarType(value))
+ End If
+End Function
+Public Function Probe(ByVal receiverKind As Long, ByVal callKind As Long, ByVal areaKind As Long, ByVal sourceKind As Long) As String
+ Dim query As Object, source As Variant, value As Variant, failure As String
+ On Error GoTo Failed
+ Range("A1").Value2 = 11: Range("B1").Value2 = 22
+ Range("A2").Value2 = 33: Range("B2").Value2 = 44
+ Range("D1").Value2 = 55: Range("E1").Value2 = 66
+ Range("D2").Value2 = 77: Range("E2").Value2 = 88
+ Select Case sourceKind
+ Case 0: Set source = Application.Union(Range("A1:B2"), Range("D1:E2"))
+ Case 1: Set source = Range("A1:B2")
+ Case 2: source = Range("A1:B2").Value2
+ Case 3: source = Array(11, 22, 33)
+ Case 4: source = 11
+ End Select
+ If receiverKind = 0 Then
+  Set query = Application
+ Else
+  Set query = Application.WorksheetFunction
+ End If
+ If callKind = 0 Then
+  value = query.Index(source, 1, 1, AreaSelector(areaKind))
+ Else
+  value = CallByName(query, "Index", callKind, source, 1, 1, AreaSelector(areaKind))
+ End If
+ Probe = "OK|" & Describe(value) & "|saved=" & CStr(ThisWorkbook.Saved)
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = "ERR|" & failure & "|saved=" & CStr(ThisWorkbook.Saved)
+End Function"####;
+        let expected: &[&str] = &[
+            r####"OK|11:Double:5|saved=False"####,
+            r####"OK|11:Long:3|saved=False"####,
+            r####"OK|55:Double:5|saved=False"####,
+            r####"OK|エラー 2023:Error:10|saved=False"####,
+            r####"OK|エラー 2015:Error:10|saved=False"####,
+            r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|saved=False"####,
+            r####"ERR|1004|Microsoft Excel|WorksheetFunction クラスの Index プロパティを取得できません。|xlmain11.chm|1001004|saved=False"####,
+            r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|saved=False"####,
+        ];
+        let cases: &[([i64; 4], usize, &str)] = &[
+            ([0, 0, 10, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 10, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 10, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 10, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 10, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 11, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 0, 11, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 11, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 11, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 11, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 12, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 12, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 12, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 12, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 12, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 13, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 13, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 13, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 13, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 13, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 14, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 14, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 14, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 14, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 14, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 15, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 15, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 15, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 15, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 15, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 16, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 0, 16, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 16, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 16, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 16, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 17, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 17, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 17, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 17, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 17, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 18, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 18, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 18, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 18, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 18, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 19, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 19, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 19, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 19, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 19, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 20, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 20, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 20, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 20, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 20, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 21, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 21, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 21, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 21, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 21, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 22, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 22, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 22, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 22, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 22, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 23, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 0, 23, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 23, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 23, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 23, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 24, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 24, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 24, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 24, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 24, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 25, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 0, 25, 1], 5, "ScalarSetterContract.xlsm"),
+            ([0, 0, 25, 2], 5, "ScalarSetterContract.xlsm"),
+            ([0, 0, 25, 3], 5, "ScalarSetterContract.xlsm"),
+            ([0, 0, 25, 4], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 10, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 10, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 10, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 10, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 10, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 1, 11, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 1, 11, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 11, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 11, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 11, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 12, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 12, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 12, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 12, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 12, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 13, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 13, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 13, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 13, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 13, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 1, 14, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 14, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 14, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 14, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 14, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 15, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 15, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 15, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 15, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 15, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 16, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 1, 16, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 16, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 16, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 16, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 17, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 17, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 17, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 17, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 17, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 18, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 18, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 18, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 18, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 18, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 1, 19, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 19, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 19, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 19, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 19, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 1, 20, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 20, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 20, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 20, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 20, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 21, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 21, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 21, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 21, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 21, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 22, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 22, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 22, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 22, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 22, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 23, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 1, 23, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 23, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 23, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 23, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 24, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 24, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 24, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 24, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 24, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 25, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 25, 1], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 25, 2], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 25, 3], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 25, 4], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 10, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 10, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 10, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 10, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 10, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 2, 11, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 2, 11, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 11, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 11, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 11, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 12, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 12, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 12, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 12, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 12, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 13, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 13, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 13, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 13, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 13, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 2, 14, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 14, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 14, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 14, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 14, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 15, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 15, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 15, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 15, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 15, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 16, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 2, 16, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 16, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 16, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 16, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 17, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 17, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 17, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 17, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 17, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 18, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 18, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 18, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 18, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 18, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 2, 19, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 19, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 19, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 19, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 19, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 2, 20, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 20, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 20, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 20, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 20, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 21, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 21, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 21, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 21, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 21, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 22, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 22, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 22, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 22, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 22, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 23, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 2, 23, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 23, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 23, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 23, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 24, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 24, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 24, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 24, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 24, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 25, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 25, 1], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 25, 2], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 25, 3], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 25, 4], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 10, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 10, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 10, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 10, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 10, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 11, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 0, 11, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 11, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 11, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 11, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 12, 0], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 12, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 12, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 12, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 12, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 13, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 13, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 13, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 13, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 13, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 14, 0], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 14, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 14, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 14, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 14, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 15, 0], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 15, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 15, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 15, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 15, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 16, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 0, 16, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 16, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 16, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 16, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 17, 0], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 17, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 17, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 17, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 17, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 18, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 18, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 18, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 18, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 18, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 19, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 19, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 19, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 19, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 19, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 20, 0], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 20, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 20, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 20, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 20, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 21, 0], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 21, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 21, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 21, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 21, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 22, 0], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 22, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 22, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 22, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 22, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 23, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 0, 23, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 23, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 23, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 23, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 24, 0], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 24, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 24, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 24, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 24, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 25, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 25, 1], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 25, 2], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 25, 3], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 25, 4], 5, "ScalarSetterContract.xlsm"),
+            ([1, 1, 10, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 10, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 10, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 10, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 10, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 1, 11, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 1, 11, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 11, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 11, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 11, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 12, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 12, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 12, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 12, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 12, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 13, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 13, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 13, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 13, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 13, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 1, 14, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 14, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 14, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 14, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 14, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 15, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 15, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 15, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 15, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 15, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 16, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 1, 16, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 16, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 16, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 16, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 17, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 17, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 17, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 17, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 17, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 18, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 18, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 18, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 18, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 18, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 1, 19, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 19, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 19, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 19, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 19, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 1, 20, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 20, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 20, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 20, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 20, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 21, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 21, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 21, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 21, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 21, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 22, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 22, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 22, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 22, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 22, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 23, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 1, 23, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 23, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 23, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 23, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 24, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 24, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 24, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 24, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 24, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 25, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 1, 25, 1], 5, "ScalarSetterContract.xlsm"),
+            ([1, 1, 25, 2], 5, "ScalarSetterContract.xlsm"),
+            ([1, 1, 25, 3], 5, "ScalarSetterContract.xlsm"),
+            ([1, 1, 25, 4], 5, "ScalarSetterContract.xlsm"),
+            ([1, 2, 10, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 10, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 10, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 10, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 10, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 2, 11, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 2, 11, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 11, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 11, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 11, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 12, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 12, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 12, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 12, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 12, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 13, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 13, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 13, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 13, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 13, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 2, 14, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 14, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 14, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 14, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 14, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 15, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 15, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 15, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 15, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 15, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 16, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 2, 16, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 16, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 16, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 16, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 17, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 17, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 17, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 17, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 17, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 18, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 18, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 18, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 18, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 18, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 2, 19, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 19, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 19, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 19, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 19, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 2, 20, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 20, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 20, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 20, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 20, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 21, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 21, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 21, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 21, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 21, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 22, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 22, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 22, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 22, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 22, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 23, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 2, 23, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 23, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 23, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 23, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 24, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 24, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 24, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 24, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 24, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 25, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 2, 25, 1], 5, "ScalarSetterContract.xlsm"),
+            ([1, 2, 25, 2], 5, "ScalarSetterContract.xlsm"),
+            ([1, 2, 25, 3], 5, "ScalarSetterContract.xlsm"),
+            ([1, 2, 25, 4], 5, "ScalarSetterContract.xlsm"),
+        ];
+        assert_eq!(cases.len(), 480);
+        check_scalar_native_matrix(probe, "IndexAreaContract.Probe", expected, cases, &[]);
+    }
+
+    #[test]
+    fn index_fourth_area_array_elements_match_native() {
+        let probe = r####"Attribute VB_Name = "IndexAreaContract"
+Option Explicit
+Private Function AreaSelector(ByVal kind As Long) As Variant
+ Select Case kind
+ Case 0: AreaSelector = 1
+ Case 1: AreaSelector = 2
+ Case 2: AreaSelector = 0
+ Case 3: AreaSelector = 3
+ Case 4: AreaSelector = -1
+ Case 5: AreaSelector = 1.5
+ Case 6: AreaSelector = Array(1, 2)
+ Case 7: AreaSelector = Null
+ Case 8: AreaSelector = Empty
+ Case 9: AreaSelector = CVErr(2042)
+ Case 10: AreaSelector = "1"
+ Case 11: AreaSelector = "2"
+ Case 12: AreaSelector = "bad"
+ Case 13: AreaSelector = True
+ Case 14: AreaSelector = False
+ Case 15: AreaSelector = 0.9
+ Case 16: AreaSelector = 2.9
+ Case 17: AreaSelector = -0.9
+ Case 18: AreaSelector = CCur(1.5)
+ Case 19: AreaSelector = CDate(1.5)
+ Case 20: AreaSelector = 2147483648#
+ Case 21: AreaSelector = 4294967296#
+ Case 22: AreaSelector = -2147483649#
+ Case 23: AreaSelector = " 2 "
+ Case 24: AreaSelector = CVErr(2015)
+ Case 25: AreaSelector = Array(1, Null, "2", "bad")
+ Case 26: AreaSelector = Array(1, Null)
+ Case 27: AreaSelector = Array(1, "2")
+ Case 28: AreaSelector = Array(1, "bad")
+ Case 29: AreaSelector = Array(1, CVErr(2042))
+ Case 30: AreaSelector = Array(True, False)
+ Case 31: AreaSelector = Array(Empty, 1)
+ Case 32: AreaSelector = Array(1, 1.5)
+ Case 33: AreaSelector = Array(1, CCur(1.5))
+ Case 34: AreaSelector = Array(1, CDate(1.5))
+ Case 35: AreaSelector = Array(0, 3)
+ Case 36: AreaSelector = Array(1, Array(1, 2))
+ End Select
+End Function
+Private Function ArrayShape(ByRef value As Variant) As String
+ Dim dimension As Long, lo As Long, hi As Long, shape As String
+ On Error Resume Next
+ dimension = 1
+ Do
+  Err.Clear
+  lo = LBound(value, dimension)
+  If Err.Number <> 0 Then Exit Do
+  hi = UBound(value, dimension)
+  shape = shape & CStr(lo) & ":" & CStr(hi) & ","
+  dimension = dimension + 1
+ Loop
+ Err.Clear
+ On Error GoTo 0
+ ArrayShape = TypeName(value) & ":" & CStr(VarType(value)) & ":" & shape
+End Function
+Private Function Describe(ByVal value As Variant) As String
+ Dim item As Variant, report As String
+ If IsArray(value) Then
+  report = "array:" & ArrayShape(value)
+  For Each item In value
+   report = report & ";" & Describe(item)
+  Next
+  Describe = report
+ ElseIf IsNull(value) Then
+  Describe = "Null:1"
+ Else
+  Describe = CStr(value) & ":" & TypeName(value) & ":" & CStr(VarType(value))
+ End If
+End Function
+Public Function Probe(ByVal receiverKind As Long, ByVal callKind As Long, ByVal areaKind As Long, ByVal sourceKind As Long) As String
+ Dim query As Object, source As Variant, value As Variant, failure As String
+ On Error GoTo Failed
+ Range("A1").Value2 = 11: Range("B1").Value2 = 22
+ Range("A2").Value2 = 33: Range("B2").Value2 = 44
+ Range("D1").Value2 = 55: Range("E1").Value2 = 66
+ Range("D2").Value2 = 77: Range("E2").Value2 = 88
+ Select Case sourceKind
+ Case 0: Set source = Application.Union(Range("A1:B2"), Range("D1:E2"))
+ Case 1: Set source = Range("A1:B2")
+ Case 2: source = Range("A1:B2").Value2
+ Case 3: source = Array(11, 22, 33)
+ Case 4: source = 11
+ End Select
+ If receiverKind = 0 Then
+  Set query = Application
+ Else
+  Set query = Application.WorksheetFunction
+ End If
+ If callKind = 0 Then
+  value = query.Index(source, 1, 1, AreaSelector(areaKind))
+ Else
+  value = CallByName(query, "Index", callKind, source, 1, 1, AreaSelector(areaKind))
+ End If
+ Probe = "OK|" & Describe(value) & "|saved=" & CStr(ThisWorkbook.Saved)
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = "ERR|" & failure & "|saved=" & CStr(ThisWorkbook.Saved)
+End Function"####;
+        let expected: &[&str] = &[
+            r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Double:5;55:Double:5|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Long:3;エラー 2023:Error:10|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Double:5;エラー 2015:Error:10|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Long:3;エラー 2015:Error:10|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Double:5;エラー 2042:Error:10|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Long:3;エラー 2042:Error:10|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;エラー 2015:Error:10;11:Double:5|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;エラー 2015:Error:10;11:Long:3|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Double:5;11:Double:5|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Long:3;11:Long:3|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;エラー 2015:Error:10;エラー 2023:Error:10|saved=False"####,
+        ];
+        let cases: &[([i64; 4], usize, &str)] = &[
+            ([0, 0, 26, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 26, 4], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 27, 0], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 27, 4], 2, "ScalarSetterContract.xlsm"),
+            ([0, 0, 28, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 28, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 29, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 0, 29, 4], 6, "ScalarSetterContract.xlsm"),
+            ([0, 0, 30, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 30, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 31, 0], 7, "ScalarSetterContract.xlsm"),
+            ([0, 0, 31, 4], 8, "ScalarSetterContract.xlsm"),
+            ([0, 0, 32, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 0, 32, 4], 10, "ScalarSetterContract.xlsm"),
+            ([0, 0, 33, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 0, 33, 4], 10, "ScalarSetterContract.xlsm"),
+            ([0, 0, 34, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 0, 34, 4], 10, "ScalarSetterContract.xlsm"),
+            ([0, 0, 35, 0], 11, "ScalarSetterContract.xlsm"),
+            ([0, 0, 35, 4], 11, "ScalarSetterContract.xlsm"),
+            ([0, 0, 36, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 36, 4], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 26, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 26, 4], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 27, 0], 1, "ScalarSetterContract.xlsm"),
+            ([0, 1, 27, 4], 2, "ScalarSetterContract.xlsm"),
+            ([0, 1, 28, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 28, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 29, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 29, 4], 6, "ScalarSetterContract.xlsm"),
+            ([0, 1, 30, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 30, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 31, 0], 7, "ScalarSetterContract.xlsm"),
+            ([0, 1, 31, 4], 8, "ScalarSetterContract.xlsm"),
+            ([0, 1, 32, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 1, 32, 4], 10, "ScalarSetterContract.xlsm"),
+            ([0, 1, 33, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 1, 33, 4], 10, "ScalarSetterContract.xlsm"),
+            ([0, 1, 34, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 1, 34, 4], 10, "ScalarSetterContract.xlsm"),
+            ([0, 1, 35, 0], 11, "ScalarSetterContract.xlsm"),
+            ([0, 1, 35, 4], 11, "ScalarSetterContract.xlsm"),
+            ([0, 1, 36, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 36, 4], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 26, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 26, 4], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 27, 0], 1, "ScalarSetterContract.xlsm"),
+            ([0, 2, 27, 4], 2, "ScalarSetterContract.xlsm"),
+            ([0, 2, 28, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 28, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 29, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 29, 4], 6, "ScalarSetterContract.xlsm"),
+            ([0, 2, 30, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 30, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 31, 0], 7, "ScalarSetterContract.xlsm"),
+            ([0, 2, 31, 4], 8, "ScalarSetterContract.xlsm"),
+            ([0, 2, 32, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 2, 32, 4], 10, "ScalarSetterContract.xlsm"),
+            ([0, 2, 33, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 2, 33, 4], 10, "ScalarSetterContract.xlsm"),
+            ([0, 2, 34, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 2, 34, 4], 10, "ScalarSetterContract.xlsm"),
+            ([0, 2, 35, 0], 11, "ScalarSetterContract.xlsm"),
+            ([0, 2, 35, 4], 11, "ScalarSetterContract.xlsm"),
+            ([0, 2, 36, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 36, 4], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 26, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 26, 4], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 27, 0], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 27, 4], 2, "ScalarSetterContract.xlsm"),
+            ([1, 0, 28, 0], 3, "ScalarSetterContract.xlsm"),
+            ([1, 0, 28, 4], 4, "ScalarSetterContract.xlsm"),
+            ([1, 0, 29, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 29, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 30, 0], 3, "ScalarSetterContract.xlsm"),
+            ([1, 0, 30, 4], 4, "ScalarSetterContract.xlsm"),
+            ([1, 0, 31, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 0, 31, 4], 8, "ScalarSetterContract.xlsm"),
+            ([1, 0, 32, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 32, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 0, 33, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 33, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 0, 34, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 34, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 0, 35, 0], 11, "ScalarSetterContract.xlsm"),
+            ([1, 0, 35, 4], 11, "ScalarSetterContract.xlsm"),
+            ([1, 0, 36, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 36, 4], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 26, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 26, 4], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 27, 0], 1, "ScalarSetterContract.xlsm"),
+            ([1, 1, 27, 4], 2, "ScalarSetterContract.xlsm"),
+            ([1, 1, 28, 0], 3, "ScalarSetterContract.xlsm"),
+            ([1, 1, 28, 4], 4, "ScalarSetterContract.xlsm"),
+            ([1, 1, 29, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 1, 29, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 1, 30, 0], 3, "ScalarSetterContract.xlsm"),
+            ([1, 1, 30, 4], 4, "ScalarSetterContract.xlsm"),
+            ([1, 1, 31, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 31, 4], 8, "ScalarSetterContract.xlsm"),
+            ([1, 1, 32, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 1, 32, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 33, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 1, 33, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 34, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 1, 34, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 35, 0], 11, "ScalarSetterContract.xlsm"),
+            ([1, 1, 35, 4], 11, "ScalarSetterContract.xlsm"),
+            ([1, 1, 36, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 36, 4], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 26, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 26, 4], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 27, 0], 1, "ScalarSetterContract.xlsm"),
+            ([1, 2, 27, 4], 2, "ScalarSetterContract.xlsm"),
+            ([1, 2, 28, 0], 3, "ScalarSetterContract.xlsm"),
+            ([1, 2, 28, 4], 4, "ScalarSetterContract.xlsm"),
+            ([1, 2, 29, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 2, 29, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 2, 30, 0], 3, "ScalarSetterContract.xlsm"),
+            ([1, 2, 30, 4], 4, "ScalarSetterContract.xlsm"),
+            ([1, 2, 31, 0], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 31, 4], 8, "ScalarSetterContract.xlsm"),
+            ([1, 2, 32, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 2, 32, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 33, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 2, 33, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 34, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 2, 34, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 35, 0], 11, "ScalarSetterContract.xlsm"),
+            ([1, 2, 35, 4], 11, "ScalarSetterContract.xlsm"),
+            ([1, 2, 36, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 36, 4], 0, "ScalarSetterContract.xlsm"),
+        ];
+        assert_eq!(cases.len(), 132);
+        check_scalar_native_matrix(probe, "IndexAreaContract.Probe", expected, cases, &[]);
+    }
+
+    #[test]
+    fn index_fourth_area_row_column_coercion_matches_native() {
+        let probe = r####"Attribute VB_Name = "IndexAreaContract"
+Option Explicit
+Private Function AreaSelector(ByVal kind As Long) As Variant
+ Select Case kind
+ Case 0: AreaSelector = 1
+ Case 1: AreaSelector = 2
+ Case 2: AreaSelector = 0
+ Case 3: AreaSelector = 3
+ Case 4: AreaSelector = -1
+ Case 5: AreaSelector = 1.5
+ Case 6: AreaSelector = Array(1, 2)
+ Case 7: AreaSelector = Null
+ Case 8: AreaSelector = Empty
+ Case 9: AreaSelector = CVErr(2042)
+ Case 10: AreaSelector = "1"
+ Case 11: AreaSelector = "2"
+ Case 12: AreaSelector = "bad"
+ Case 13: AreaSelector = True
+ Case 14: AreaSelector = False
+ Case 15: AreaSelector = 0.9
+ Case 16: AreaSelector = 2.9
+ Case 17: AreaSelector = -0.9
+ Case 18: AreaSelector = CCur(1.5)
+ Case 19: AreaSelector = CDate(1.5)
+ Case 20: AreaSelector = 2147483648#
+ Case 21: AreaSelector = 4294967296#
+ Case 22: AreaSelector = -2147483649#
+ Case 23: AreaSelector = " 2 "
+ Case 24: AreaSelector = CVErr(2015)
+ Case 25: AreaSelector = Array(1, Null, "2", "bad")
+ Case 26: AreaSelector = Array(1, Null)
+ Case 27: AreaSelector = Array(1, "2")
+ Case 28: AreaSelector = Array(1, "bad")
+ Case 29: AreaSelector = Array(1, CVErr(2042))
+ Case 30: AreaSelector = Array(True, False)
+ Case 31: AreaSelector = Array(Empty, 1)
+ Case 32: AreaSelector = Array(1, 1.5)
+ Case 33: AreaSelector = Array(1, CCur(1.5))
+ Case 34: AreaSelector = Array(1, CDate(1.5))
+ Case 35: AreaSelector = Array(0, 3)
+ Case 36: AreaSelector = Array(1, Array(1, 2))
+ End Select
+End Function
+Private Function ArrayShape(ByRef value As Variant) As String
+ Dim dimension As Long, lo As Long, hi As Long, shape As String
+ On Error Resume Next
+ dimension = 1
+ Do
+  Err.Clear
+  lo = LBound(value, dimension)
+  If Err.Number <> 0 Then Exit Do
+  hi = UBound(value, dimension)
+  shape = shape & CStr(lo) & ":" & CStr(hi) & ","
+  dimension = dimension + 1
+ Loop
+ Err.Clear
+ On Error GoTo 0
+ ArrayShape = TypeName(value) & ":" & CStr(VarType(value)) & ":" & shape
+End Function
+Private Function Describe(ByVal value As Variant) As String
+ Dim item As Variant, report As String
+ If IsArray(value) Then
+  report = "array:" & ArrayShape(value)
+  For Each item In value
+   report = report & ";" & Describe(item)
+  Next
+  Describe = report
+ ElseIf IsNull(value) Then
+  Describe = "Null:1"
+ Else
+  Describe = CStr(value) & ":" & TypeName(value) & ":" & CStr(VarType(value))
+ End If
+End Function
+Public Function Probe(ByVal receiverKind As Long, ByVal callKind As Long, ByVal areaKind As Long, ByVal sourceKind As Long, ByVal positionKind As Long) As String
+ Dim query As Object, source As Variant, value As Variant, failure As String
+ Dim rowSelector As Variant, columnSelector As Variant
+ On Error GoTo Failed
+ Range("A1").Value2 = 11: Range("B1").Value2 = 22
+ Range("A2").Value2 = 33: Range("B2").Value2 = 44
+ Range("D1").Value2 = 55: Range("E1").Value2 = 66
+ Range("D2").Value2 = 77: Range("E2").Value2 = 88
+ Select Case sourceKind
+ Case 0: Set source = Application.Union(Range("A1:B2"), Range("D1:E2"))
+ Case 1: Set source = Range("A1:B2")
+ Case 2: source = Range("A1:B2").Value2
+ Case 3: source = Array(11, 22, 33)
+ Case 4: source = 11
+ End Select
+ If receiverKind = 0 Then
+  Set query = Application
+ Else
+  Set query = Application.WorksheetFunction
+ End If
+ rowSelector = 1: columnSelector = 1
+ If positionKind = 0 Then
+  rowSelector = AreaSelector(areaKind)
+ Else
+  columnSelector = AreaSelector(areaKind)
+ End If
+ If callKind = 0 Then
+  value = query.Index(source, rowSelector, columnSelector, 1)
+ Else
+  value = CallByName(query, "Index", callKind, source, rowSelector, columnSelector, 1)
+ End If
+ Probe = "OK|" & Describe(value) & "|saved=" & CStr(ThisWorkbook.Saved)
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = "ERR|" & failure & "|saved=" & CStr(ThisWorkbook.Saved)
+End Function"####;
+        let expected: &[&str] = &[
+            r####"OK|11:Double:5|saved=False"####,
+            r####"OK|エラー 2015:Error:10|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,1:1,;11:Double:5;33:Double:5|saved=False"####,
+            r####"OK|array:Variant():8204:1:1,1:2,;11:Double:5;22:Double:5|saved=False"####,
+            r####"OK|エラー 2023:Error:10|saved=False"####,
+            r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Double:5;33:Double:5|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Double:5;22:Double:5|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Double:5;エラー 2015:Error:10|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Double:5;11:Double:5|saved=False"####,
+            r####"ERR|1004|Microsoft Excel|WorksheetFunction クラスの Index プロパティを取得できません。|xlmain11.chm|1001004|saved=False"####,
+            r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|saved=False"####,
+        ];
+        let cases: &[([i64; 5], usize, &str)] = &[
+            ([0, 0, 10, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 10, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 12, 0, 0], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 12, 0, 1], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 13, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 13, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 14, 0, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 0, 14, 0, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 18, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 18, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 19, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 19, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 21, 0, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 21, 0, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 26, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 0, 26, 0, 1], 5, "ScalarSetterContract.xlsm"),
+            ([0, 0, 27, 0, 0], 6, "ScalarSetterContract.xlsm"),
+            ([0, 0, 27, 0, 1], 7, "ScalarSetterContract.xlsm"),
+            ([0, 0, 28, 0, 0], 8, "ScalarSetterContract.xlsm"),
+            ([0, 0, 28, 0, 1], 8, "ScalarSetterContract.xlsm"),
+            ([0, 0, 30, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 0, 30, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([0, 0, 31, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 0, 31, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([0, 0, 36, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 0, 36, 0, 1], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 10, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 10, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 12, 0, 0], 1, "ScalarSetterContract.xlsm"),
+            ([0, 1, 12, 0, 1], 1, "ScalarSetterContract.xlsm"),
+            ([0, 1, 13, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 13, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 14, 0, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 1, 14, 0, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 18, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 18, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 19, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 19, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 21, 0, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 21, 0, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 26, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 26, 0, 1], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 27, 0, 0], 6, "ScalarSetterContract.xlsm"),
+            ([0, 1, 27, 0, 1], 7, "ScalarSetterContract.xlsm"),
+            ([0, 1, 28, 0, 0], 8, "ScalarSetterContract.xlsm"),
+            ([0, 1, 28, 0, 1], 8, "ScalarSetterContract.xlsm"),
+            ([0, 1, 30, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 1, 30, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([0, 1, 31, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 1, 31, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([0, 1, 36, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 36, 0, 1], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 10, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 10, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 12, 0, 0], 1, "ScalarSetterContract.xlsm"),
+            ([0, 2, 12, 0, 1], 1, "ScalarSetterContract.xlsm"),
+            ([0, 2, 13, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 13, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 14, 0, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 2, 14, 0, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 18, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 18, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 19, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 19, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 21, 0, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 21, 0, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 26, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 26, 0, 1], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 27, 0, 0], 6, "ScalarSetterContract.xlsm"),
+            ([0, 2, 27, 0, 1], 7, "ScalarSetterContract.xlsm"),
+            ([0, 2, 28, 0, 0], 8, "ScalarSetterContract.xlsm"),
+            ([0, 2, 28, 0, 1], 8, "ScalarSetterContract.xlsm"),
+            ([0, 2, 30, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 2, 30, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([0, 2, 31, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([0, 2, 31, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([0, 2, 36, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 36, 0, 1], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 10, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 10, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 12, 0, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 0, 12, 0, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 0, 13, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 13, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 14, 0, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 0, 14, 0, 1], 3, "ScalarSetterContract.xlsm"),
+            ([1, 0, 18, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 18, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 19, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 19, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 21, 0, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 0, 21, 0, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 0, 26, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 26, 0, 1], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 27, 0, 0], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 27, 0, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 0, 28, 0, 0], 8, "ScalarSetterContract.xlsm"),
+            ([1, 0, 28, 0, 1], 8, "ScalarSetterContract.xlsm"),
+            ([1, 0, 30, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 30, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 31, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 31, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 36, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 36, 0, 1], 5, "ScalarSetterContract.xlsm"),
+            ([1, 1, 10, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 10, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 12, 0, 0], 11, "ScalarSetterContract.xlsm"),
+            ([1, 1, 12, 0, 1], 11, "ScalarSetterContract.xlsm"),
+            ([1, 1, 13, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 13, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 14, 0, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 1, 14, 0, 1], 3, "ScalarSetterContract.xlsm"),
+            ([1, 1, 18, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 18, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 19, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 19, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 21, 0, 0], 11, "ScalarSetterContract.xlsm"),
+            ([1, 1, 21, 0, 1], 11, "ScalarSetterContract.xlsm"),
+            ([1, 1, 26, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 1, 26, 0, 1], 5, "ScalarSetterContract.xlsm"),
+            ([1, 1, 27, 0, 0], 6, "ScalarSetterContract.xlsm"),
+            ([1, 1, 27, 0, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 28, 0, 0], 8, "ScalarSetterContract.xlsm"),
+            ([1, 1, 28, 0, 1], 8, "ScalarSetterContract.xlsm"),
+            ([1, 1, 30, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 1, 30, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 1, 31, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 1, 31, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 1, 36, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 1, 36, 0, 1], 5, "ScalarSetterContract.xlsm"),
+            ([1, 2, 10, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 10, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 12, 0, 0], 11, "ScalarSetterContract.xlsm"),
+            ([1, 2, 12, 0, 1], 11, "ScalarSetterContract.xlsm"),
+            ([1, 2, 13, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 13, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 14, 0, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 2, 14, 0, 1], 3, "ScalarSetterContract.xlsm"),
+            ([1, 2, 18, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 18, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 19, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 19, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 21, 0, 0], 11, "ScalarSetterContract.xlsm"),
+            ([1, 2, 21, 0, 1], 11, "ScalarSetterContract.xlsm"),
+            ([1, 2, 26, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 2, 26, 0, 1], 5, "ScalarSetterContract.xlsm"),
+            ([1, 2, 27, 0, 0], 6, "ScalarSetterContract.xlsm"),
+            ([1, 2, 27, 0, 1], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 28, 0, 0], 8, "ScalarSetterContract.xlsm"),
+            ([1, 2, 28, 0, 1], 8, "ScalarSetterContract.xlsm"),
+            ([1, 2, 30, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 2, 30, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 2, 31, 0, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 2, 31, 0, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 2, 36, 0, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 2, 36, 0, 1], 5, "ScalarSetterContract.xlsm"),
+        ];
+        assert_eq!(cases.len(), 156);
+        check_scalar_native_matrix(probe, "IndexAreaContract.Probe", expected, cases, &[]);
+    }
+
+    #[test]
+    fn index_fourth_area_interior_missing_selectors_match_native() {
+        let probe = r####"Attribute VB_Name = "IndexAreaContract"
+Option Explicit
+Private Function AreaSelector(ByVal kind As Long) As Variant
+ Select Case kind
+ Case 0: AreaSelector = 1
+ Case 1: AreaSelector = 2
+ Case 2: AreaSelector = 0
+ Case 3: AreaSelector = 3
+ Case 4: AreaSelector = -1
+ Case 5: AreaSelector = 1.5
+ Case 6: AreaSelector = Array(1, 2)
+ Case 7: AreaSelector = Null
+ Case 8: AreaSelector = Empty
+ Case 9: AreaSelector = CVErr(2042)
+ Case 10: AreaSelector = "1"
+ Case 11: AreaSelector = "2"
+ Case 12: AreaSelector = "bad"
+ Case 13: AreaSelector = True
+ Case 14: AreaSelector = False
+ Case 15: AreaSelector = 0.9
+ Case 16: AreaSelector = 2.9
+ Case 17: AreaSelector = -0.9
+ Case 18: AreaSelector = CCur(1.5)
+ Case 19: AreaSelector = CDate(1.5)
+ Case 20: AreaSelector = 2147483648#
+ Case 21: AreaSelector = 4294967296#
+ Case 22: AreaSelector = -2147483649#
+ Case 23: AreaSelector = " 2 "
+ Case 24: AreaSelector = CVErr(2015)
+ Case 25: AreaSelector = Array(1, Null, "2", "bad")
+ Case 26: AreaSelector = Array(1, Null)
+ Case 27: AreaSelector = Array(1, "2")
+ Case 28: AreaSelector = Array(1, "bad")
+ Case 29: AreaSelector = Array(1, CVErr(2042))
+ Case 30: AreaSelector = Array(True, False)
+ Case 31: AreaSelector = Array(Empty, 1)
+ Case 32: AreaSelector = Array(1, 1.5)
+ Case 33: AreaSelector = Array(1, CCur(1.5))
+ Case 34: AreaSelector = Array(1, CDate(1.5))
+ Case 35: AreaSelector = Array(0, 3)
+ Case 36: AreaSelector = Array(1, Array(1, 2))
+ End Select
+End Function
+Private Function ArrayShape(ByRef value As Variant) As String
+ Dim dimension As Long, lo As Long, hi As Long, shape As String
+ On Error Resume Next
+ dimension = 1
+ Do
+  Err.Clear
+  lo = LBound(value, dimension)
+  If Err.Number <> 0 Then Exit Do
+  hi = UBound(value, dimension)
+  shape = shape & CStr(lo) & ":" & CStr(hi) & ","
+  dimension = dimension + 1
+ Loop
+ Err.Clear
+ On Error GoTo 0
+ ArrayShape = TypeName(value) & ":" & CStr(VarType(value)) & ":" & shape
+End Function
+Private Function Describe(ByVal value As Variant) As String
+ Dim item As Variant, report As String
+ If IsArray(value) Then
+  report = "array:" & ArrayShape(value)
+  For Each item In value
+   report = report & ";" & Describe(item)
+  Next
+  Describe = report
+ ElseIf IsNull(value) Then
+  Describe = "Null:1"
+ Else
+  Describe = CStr(value) & ":" & TypeName(value) & ":" & CStr(VarType(value))
+ End If
+End Function
+Public Function Probe(ByVal receiverKind As Long, ByVal callKind As Long, ByVal areaKind As Long, ByVal sourceKind As Long, ByVal positionKind As Long) As String
+ Dim query As Object, source As Variant, value As Variant, failure As String
+ Dim rowSelector As Variant, columnSelector As Variant
+ On Error GoTo Failed
+ Range("A1").Value2 = 11: Range("B1").Value2 = 22
+ Range("A2").Value2 = 33: Range("B2").Value2 = 44
+ Range("D1").Value2 = 55: Range("E1").Value2 = 66
+ Range("D2").Value2 = 77: Range("E2").Value2 = 88
+ Select Case sourceKind
+ Case 0: Set source = Application.Union(Range("A1:B2"), Range("D1:E2"))
+ Case 1: Set source = Range("A1:B2")
+ Case 2: source = Range("A1:B2").Value2
+ Case 3: source = Array(11, 22, 33)
+ Case 4: source = 11
+ End Select
+ If receiverKind = 0 Then
+  Set query = Application
+ Else
+  Set query = Application.WorksheetFunction
+ End If
+ rowSelector = 1: columnSelector = 1
+ If positionKind = 0 Then
+  rowSelector = AreaSelector(areaKind)
+ Else
+  columnSelector = AreaSelector(areaKind)
+ End If
+ If callKind = 0 Then
+  Select Case positionKind
+  Case 0: value = query.Index(source, , 1, 1)
+  Case 1: value = query.Index(source, 1, , 1)
+  End Select
+ Else
+  value = CallByName(query, "Index", callKind, source, rowSelector, columnSelector, 1)
+ End If
+ Probe = "OK|" & Describe(value) & "|saved=" & CStr(ThisWorkbook.Saved)
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = "ERR|" & failure & "|saved=" & CStr(ThisWorkbook.Saved)
+End Function"####;
+        let expected: &[&str] = &[
+            r####"OK|array:Variant():8204:1:2,1:1,;11:Double:5;33:Double:5|saved=False"####,
+            r####"OK|array:Variant():8204:1:1,1:2,;11:Double:5;22:Double:5|saved=False"####,
+        ];
+        let cases: &[([i64; 5], usize, &str)] = &[
+            ([0, 0, 0, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 0, 0, 1], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 0, 1], 1, "ScalarSetterContract.xlsm"),
+        ];
+        assert_eq!(cases.len(), 4);
+        check_scalar_native_matrix(probe, "IndexAreaContract.Probe", expected, cases, &[]);
+    }
+
+    #[test]
+    fn index_fourth_area_missing_null_combinations_match_native() {
+        let probe = r####"Attribute VB_Name = "IndexAreaContract"
+Option Explicit
+Private Function AreaSelector(ByVal kind As Long) As Variant
+ Select Case kind
+ Case 0: AreaSelector = 1
+ Case 1: AreaSelector = 2
+ Case 2: AreaSelector = 0
+ Case 3: AreaSelector = 3
+ Case 4: AreaSelector = -1
+ Case 5: AreaSelector = 1.5
+ Case 6: AreaSelector = Array(1, 2)
+ Case 7: AreaSelector = Null
+ Case 8: AreaSelector = Empty
+ Case 9: AreaSelector = CVErr(2042)
+ Case 10: AreaSelector = "1"
+ Case 11: AreaSelector = "2"
+ Case 12: AreaSelector = "bad"
+ Case 13: AreaSelector = True
+ Case 14: AreaSelector = False
+ Case 15: AreaSelector = 0.9
+ Case 16: AreaSelector = 2.9
+ Case 17: AreaSelector = -0.9
+ Case 18: AreaSelector = CCur(1.5)
+ Case 19: AreaSelector = CDate(1.5)
+ Case 20: AreaSelector = 2147483648#
+ Case 21: AreaSelector = 4294967296#
+ Case 22: AreaSelector = -2147483649#
+ Case 23: AreaSelector = " 2 "
+ Case 24: AreaSelector = CVErr(2015)
+ Case 25: AreaSelector = Array(1, Null, "2", "bad")
+ Case 26: AreaSelector = Array(1, Null)
+ Case 27: AreaSelector = Array(1, "2")
+ Case 28: AreaSelector = Array(1, "bad")
+ Case 29: AreaSelector = Array(1, CVErr(2042))
+ Case 30: AreaSelector = Array(True, False)
+ Case 31: AreaSelector = Array(Empty, 1)
+ Case 32: AreaSelector = Array(1, 1.5)
+ Case 33: AreaSelector = Array(1, CCur(1.5))
+ Case 34: AreaSelector = Array(1, CDate(1.5))
+ Case 35: AreaSelector = Array(0, 3)
+ Case 36: AreaSelector = Array(1, Array(1, 2))
+ End Select
+End Function
+Private Function ArrayShape(ByRef value As Variant) As String
+ Dim dimension As Long, lo As Long, hi As Long, shape As String
+ On Error Resume Next
+ dimension = 1
+ Do
+  Err.Clear
+  lo = LBound(value, dimension)
+  If Err.Number <> 0 Then Exit Do
+  hi = UBound(value, dimension)
+  shape = shape & CStr(lo) & ":" & CStr(hi) & ","
+  dimension = dimension + 1
+ Loop
+ Err.Clear
+ On Error GoTo 0
+ ArrayShape = TypeName(value) & ":" & CStr(VarType(value)) & ":" & shape
+End Function
+Private Function Describe(ByVal value As Variant) As String
+ Dim item As Variant, report As String
+ If IsArray(value) Then
+  report = "array:" & ArrayShape(value)
+  For Each item In value
+   report = report & ";" & Describe(item)
+  Next
+  Describe = report
+ ElseIf IsNull(value) Then
+  Describe = "Null:1"
+ Else
+  Describe = CStr(value) & ":" & TypeName(value) & ":" & CStr(VarType(value))
+ End If
+End Function
+Public Function Probe(ByVal receiverKind As Long, ByVal callKind As Long, ByVal areaKind As Long, ByVal sourceKind As Long, ByVal positionKind As Long) As String
+ Dim query As Object, source As Variant, value As Variant, failure As String
+ Dim rowSelector As Variant, columnSelector As Variant
+ On Error GoTo Failed
+ Range("A1").Value2 = 11: Range("B1").Value2 = 22
+ Range("A2").Value2 = 33: Range("B2").Value2 = 44
+ Range("D1").Value2 = 55: Range("E1").Value2 = 66
+ Range("D2").Value2 = 77: Range("E2").Value2 = 88
+ Select Case sourceKind
+ Case 0: Set source = Application.Union(Range("A1:B2"), Range("D1:E2"))
+ Case 1: Set source = Range("A1:B2")
+ Case 2: source = Range("A1:B2").Value2
+ Case 3: source = Array(11, 22, 33)
+ Case 4: source = 11
+ End Select
+ If receiverKind = 0 Then
+  Set query = Application
+ Else
+  Set query = Application.WorksheetFunction
+ End If
+ rowSelector = 1: columnSelector = 1
+ If positionKind = 0 Then
+  rowSelector = AreaSelector(areaKind)
+ Else
+  columnSelector = AreaSelector(areaKind)
+ End If
+ If callKind = 0 Then
+  Select Case positionKind
+  Case 0: value = query.Index(source, , , 1)
+  Case 1: value = query.Index(source, Null, , 1)
+  Case 2: value = query.Index(source, , Null, 1)
+  Case 3: value = query.Index(source, Null, Null, 1)
+  Case 4: value = query.Index(source, 1, Null, 1)
+  Case 5: value = query.Index(source, Null, 1, 1)
+  Case 6: value = query.Index(source, 1, , 1)
+  End Select
+ Else
+  value = CallByName(query, "Index", callKind, source, rowSelector, columnSelector, 1)
+ End If
+ Probe = "OK|" & Describe(value) & "|saved=" & CStr(ThisWorkbook.Saved)
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = "ERR|" & failure & "|saved=" & CStr(ThisWorkbook.Saved)
+End Function"####;
+        let expected: &[&str] = &[
+            r####"OK|array:Variant():8204:1:2,1:2,;11:Double:5;33:Double:5;22:Double:5;44:Double:5|saved=False"####,
+            r####"OK|array:Variant():8204:1:1,1:2,;11:Double:5;22:Double:5|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,1:1,;11:Double:5;33:Double:5|saved=False"####,
+        ];
+        let cases: &[([i64; 5], usize, &str)] = &[
+            ([0, 0, 0, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 0, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 0, 0, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 0, 0, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 0, 0, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 0, 0, 5], 2, "ScalarSetterContract.xlsm"),
+            ([0, 0, 0, 0, 6], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 0, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 0, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 0, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 0, 5], 2, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 0, 6], 1, "ScalarSetterContract.xlsm"),
+        ];
+        assert_eq!(cases.len(), 14);
+        check_scalar_native_matrix(probe, "IndexAreaContract.Probe", expected, cases, &[]);
+    }
+
+    #[test]
+    fn index_fourth_area_matches_native_results_and_errors() {
+        let probe = r####"Attribute VB_Name = "IndexAreaContract"
+Option Explicit
+Private Function AreaSelector(ByVal kind As Long) As Variant
+ Select Case kind
+ Case 0: AreaSelector = 1
+ Case 1: AreaSelector = 2
+ Case 2: AreaSelector = 0
+ Case 3: AreaSelector = 3
+ Case 4: AreaSelector = -1
+ Case 5: AreaSelector = 1.5
+ Case 6: AreaSelector = Array(1, 2)
+ Case 7: AreaSelector = Null
+ Case 8: AreaSelector = Empty
+ Case 9: AreaSelector = CVErr(2042)
+ End Select
+End Function
+Private Function Describe(ByVal value As Variant) As String
+ Dim item As Variant, report As String
+ If IsArray(value) Then
+  report = "array:" & TypeName(value) & ":" & CStr(VarType(value)) & ":" & CStr(LBound(value, 1)) & ":" & CStr(UBound(value, 1))
+  For Each item In value
+   report = report & ";" & Describe(item)
+  Next
+  Describe = report
+ ElseIf IsNull(value) Then
+  Describe = "Null:1"
+ Else
+  Describe = CStr(value) & ":" & TypeName(value) & ":" & CStr(VarType(value))
+ End If
+End Function
+Public Function Probe(ByVal receiverKind As Long, ByVal callKind As Long, ByVal areaKind As Long) As String
+ Dim query As Object, source As Range, value As Variant, failure As String
+ On Error GoTo Failed
+ Range("A1").Value2 = 11: Range("B1").Value2 = 22
+ Range("A2").Value2 = 33: Range("B2").Value2 = 44
+ Range("D1").Value2 = 55: Range("E1").Value2 = 66
+ Range("D2").Value2 = 77: Range("E2").Value2 = 88
+ Set source = Application.Union(Range("A1:B2"), Range("D1:E2"))
+ If receiverKind = 0 Then
+  Set query = Application
+ Else
+  Set query = Application.WorksheetFunction
+ End If
+ If callKind = 0 Then
+  value = query.Index(source, 1, 1, AreaSelector(areaKind))
+ Else
+  value = CallByName(query, "Index", callKind, source, 1, 1, AreaSelector(areaKind))
+ End If
+ Probe = "OK|" & Describe(value) & "|saved=" & CStr(ThisWorkbook.Saved)
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = "ERR|" & failure & "|saved=" & CStr(ThisWorkbook.Saved)
+End Function"####;
+        let expected: &[&str] = &[
+            r####"OK|11:Double:5|saved=False"####,
+            r####"OK|55:Double:5|saved=False"####,
+            r####"OK|エラー 2015:Error:10|saved=False"####,
+            r####"OK|エラー 2023:Error:10|saved=False"####,
+            r####"OK|array:Variant():8204:1:2;11:Double:5;55:Double:5|saved=False"####,
+            r####"OK|エラー 2042:Error:10|saved=False"####,
+            r####"ERR|1004|Microsoft Excel|WorksheetFunction クラスの Index プロパティを取得できません。|xlmain11.chm|1001004|saved=False"####,
+            r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|saved=False"####,
+        ];
+        let cases: &[([i64; 3], usize, &str)] = &[
+            ([0, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 1], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 2], 2, "ScalarSetterContract.xlsm"),
+            ([0, 0, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 4], 2, "ScalarSetterContract.xlsm"),
+            ([0, 0, 5], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 6], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 7], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 8], 2, "ScalarSetterContract.xlsm"),
+            ([0, 0, 9], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 1], 1, "ScalarSetterContract.xlsm"),
+            ([0, 1, 2], 2, "ScalarSetterContract.xlsm"),
+            ([0, 1, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 4], 2, "ScalarSetterContract.xlsm"),
+            ([0, 1, 5], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 6], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 7], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 8], 2, "ScalarSetterContract.xlsm"),
+            ([0, 1, 9], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 1], 1, "ScalarSetterContract.xlsm"),
+            ([0, 2, 2], 2, "ScalarSetterContract.xlsm"),
+            ([0, 2, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 4], 2, "ScalarSetterContract.xlsm"),
+            ([0, 2, 5], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 6], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 7], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 8], 2, "ScalarSetterContract.xlsm"),
+            ([0, 2, 9], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 1], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 4], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 5], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 6], 4, "ScalarSetterContract.xlsm"),
+            ([1, 0, 7], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 8], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 9], 6, "ScalarSetterContract.xlsm"),
+            ([1, 1, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 1], 1, "ScalarSetterContract.xlsm"),
+            ([1, 1, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 5], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 6], 4, "ScalarSetterContract.xlsm"),
+            ([1, 1, 7], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 8], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 9], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 1], 1, "ScalarSetterContract.xlsm"),
+            ([1, 2, 2], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 3], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 5], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 6], 4, "ScalarSetterContract.xlsm"),
+            ([1, 2, 7], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 8], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 9], 7, "ScalarSetterContract.xlsm"),
+        ];
+        assert_eq!(cases.len(), 60);
+        check_scalar_native_matrix(probe, "IndexAreaContract.Probe", expected, cases, &[]);
+    }
+
+    #[test]
+    fn index_fourth_area_preserves_native_array_bounds() {
+        let probe = r####"Attribute VB_Name = "IndexAreaContract"
+Option Explicit
+Private Function AreaSelector(ByVal kind As Long) As Variant
+ Select Case kind
+ Case 0: AreaSelector = 1
+ Case 1: AreaSelector = 2
+ Case 2: AreaSelector = 0
+ Case 3: AreaSelector = 3
+ Case 4: AreaSelector = -1
+ Case 5: AreaSelector = 1.5
+ Case 6: AreaSelector = Array(1, 2)
+ Case 7: AreaSelector = Null
+ Case 8: AreaSelector = Empty
+ Case 9: AreaSelector = CVErr(2042)
+ End Select
+End Function
+Private Function ArrayShape(ByRef value As Variant) As String
+ Dim dimension As Long, lo As Long, hi As Long, shape As String
+ On Error Resume Next
+ dimension = 1
+ Do
+  Err.Clear
+  lo = LBound(value, dimension)
+  If Err.Number <> 0 Then Exit Do
+  hi = UBound(value, dimension)
+  shape = shape & CStr(lo) & ":" & CStr(hi) & ","
+  dimension = dimension + 1
+ Loop
+ Err.Clear
+ On Error GoTo 0
+ ArrayShape = TypeName(value) & ":" & CStr(VarType(value)) & ":" & shape
+End Function
+Private Function Describe(ByVal value As Variant) As String
+ Dim item As Variant, report As String
+ If IsArray(value) Then
+  report = "array:" & ArrayShape(value)
+  For Each item In value
+   report = report & ";" & Describe(item)
+  Next
+  Describe = report
+ ElseIf IsNull(value) Then
+  Describe = "Null:1"
+ Else
+  Describe = CStr(value) & ":" & TypeName(value) & ":" & CStr(VarType(value))
+ End If
+End Function
+Public Function Probe(ByVal receiverKind As Long, ByVal callKind As Long, ByVal areaKind As Long) As String
+ Dim query As Object, source As Range, value As Variant, failure As String
+ On Error GoTo Failed
+ Range("A1").Value2 = 11: Range("B1").Value2 = 22
+ Range("A2").Value2 = 33: Range("B2").Value2 = 44
+ Range("D1").Value2 = 55: Range("E1").Value2 = 66
+ Range("D2").Value2 = 77: Range("E2").Value2 = 88
+ Set source = Application.Union(Range("A1:B2"), Range("D1:E2"))
+ If receiverKind = 0 Then
+  Set query = Application
+ Else
+  Set query = Application.WorksheetFunction
+ End If
+ If callKind = 0 Then
+  value = query.Index(source, 1, 1, AreaSelector(areaKind))
+ Else
+  value = CallByName(query, "Index", callKind, source, 1, 1, AreaSelector(areaKind))
+ End If
+ Probe = "OK|" & Describe(value) & "|saved=" & CStr(ThisWorkbook.Saved)
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = "ERR|" & failure & "|saved=" & CStr(ThisWorkbook.Saved)
+End Function"####;
+        let expected: &[&str] = &[
+            r####"OK|array:Variant():8204:1:2,;11:Double:5;55:Double:5|saved=False"####,
+        ];
+        let cases: &[([i64; 3], usize, &str)] = &[
+            ([0, 0, 6], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 6], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 6], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 6], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 6], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 6], 0, "ScalarSetterContract.xlsm"),
+        ];
+        assert_eq!(cases.len(), 6);
+        check_scalar_native_matrix(probe, "IndexAreaContract.Probe", expected, cases, &[]);
+    }
+
+    #[test]
+    fn index_fourth_area_source_forms_match_native() {
+        let probe = r####"Attribute VB_Name = "IndexAreaContract"
+Option Explicit
+Private Function AreaSelector(ByVal kind As Long) As Variant
+ Select Case kind
+ Case 0: AreaSelector = 1
+ Case 1: AreaSelector = 2
+ Case 2: AreaSelector = 0
+ Case 3: AreaSelector = 3
+ Case 4: AreaSelector = -1
+ Case 5: AreaSelector = 1.5
+ Case 6: AreaSelector = Array(1, 2)
+ Case 7: AreaSelector = Null
+ Case 8: AreaSelector = Empty
+ Case 9: AreaSelector = CVErr(2042)
+ End Select
+End Function
+Private Function ArrayShape(ByRef value As Variant) As String
+ Dim dimension As Long, lo As Long, hi As Long, shape As String
+ On Error Resume Next
+ dimension = 1
+ Do
+  Err.Clear
+  lo = LBound(value, dimension)
+  If Err.Number <> 0 Then Exit Do
+  hi = UBound(value, dimension)
+  shape = shape & CStr(lo) & ":" & CStr(hi) & ","
+  dimension = dimension + 1
+ Loop
+ Err.Clear
+ On Error GoTo 0
+ ArrayShape = TypeName(value) & ":" & CStr(VarType(value)) & ":" & shape
+End Function
+Private Function Describe(ByVal value As Variant) As String
+ Dim item As Variant, report As String
+ If IsArray(value) Then
+  report = "array:" & ArrayShape(value)
+  For Each item In value
+   report = report & ";" & Describe(item)
+  Next
+  Describe = report
+ ElseIf IsNull(value) Then
+  Describe = "Null:1"
+ Else
+  Describe = CStr(value) & ":" & TypeName(value) & ":" & CStr(VarType(value))
+ End If
+End Function
+Public Function Probe(ByVal receiverKind As Long, ByVal callKind As Long, ByVal areaKind As Long, ByVal sourceKind As Long) As String
+ Dim query As Object, source As Variant, value As Variant, failure As String
+ On Error GoTo Failed
+ Range("A1").Value2 = 11: Range("B1").Value2 = 22
+ Range("A2").Value2 = 33: Range("B2").Value2 = 44
+ Range("D1").Value2 = 55: Range("E1").Value2 = 66
+ Range("D2").Value2 = 77: Range("E2").Value2 = 88
+ Select Case sourceKind
+ Case 0: Set source = Application.Union(Range("A1:B2"), Range("D1:E2"))
+ Case 1: Set source = Range("A1:B2")
+ Case 2: source = Range("A1:B2").Value2
+ Case 3: source = Array(11, 22, 33)
+ Case 4: source = 11
+ End Select
+ If receiverKind = 0 Then
+  Set query = Application
+ Else
+  Set query = Application.WorksheetFunction
+ End If
+ If callKind = 0 Then
+  value = query.Index(source, 1, 1, AreaSelector(areaKind))
+ Else
+  value = CallByName(query, "Index", callKind, source, 1, 1, AreaSelector(areaKind))
+ End If
+ Probe = "OK|" & Describe(value) & "|saved=" & CStr(ThisWorkbook.Saved)
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = "ERR|" & failure & "|saved=" & CStr(ThisWorkbook.Saved)
+End Function"####;
+        let expected: &[&str] = &[
+            r####"OK|11:Double:5|saved=False"####,
+            r####"OK|11:Long:3|saved=False"####,
+            r####"OK|55:Double:5|saved=False"####,
+            r####"OK|エラー 2023:Error:10|saved=False"####,
+            r####"OK|エラー 2015:Error:10|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Double:5;55:Double:5|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Double:5;エラー 2023:Error:10|saved=False"####,
+            r####"OK|array:Variant():8204:1:2,;11:Long:3;エラー 2023:Error:10|saved=False"####,
+            r####"OK|エラー 2042:Error:10|saved=False"####,
+            r####"ERR|1004|Microsoft Excel|WorksheetFunction クラスの Index プロパティを取得できません。|xlmain11.chm|1001004|saved=False"####,
+            r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|saved=False"####,
+        ];
+        let cases: &[([i64; 4], usize, &str)] = &[
+            ([0, 0, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 0, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 0, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 0, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 1, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 0, 1, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 1, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 1, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 1, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 2, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 2, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 2, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 2, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 2, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 3, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 3, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 3, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 3, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 3, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 0, 4, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 4, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 4, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 4, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 4, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 5, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 5, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 5, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 5, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 5, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 6, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 0, 6, 1], 6, "ScalarSetterContract.xlsm"),
+            ([0, 0, 6, 2], 6, "ScalarSetterContract.xlsm"),
+            ([0, 0, 6, 3], 6, "ScalarSetterContract.xlsm"),
+            ([0, 0, 6, 4], 7, "ScalarSetterContract.xlsm"),
+            ([0, 0, 7, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 7, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 7, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 7, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 0, 7, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 0, 8, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 8, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 8, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 8, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 8, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 0, 9, 0], 8, "ScalarSetterContract.xlsm"),
+            ([0, 0, 9, 1], 8, "ScalarSetterContract.xlsm"),
+            ([0, 0, 9, 2], 8, "ScalarSetterContract.xlsm"),
+            ([0, 0, 9, 3], 8, "ScalarSetterContract.xlsm"),
+            ([0, 0, 9, 4], 8, "ScalarSetterContract.xlsm"),
+            ([0, 1, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 0, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 0, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 0, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 1, 1, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 1, 1, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 1, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 1, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 1, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 2, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 2, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 2, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 2, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 2, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 3, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 3, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 3, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 3, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 3, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 1, 4, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 4, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 4, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 4, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 4, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 5, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 5, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 5, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 5, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 5, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 1, 6, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 1, 6, 1], 6, "ScalarSetterContract.xlsm"),
+            ([0, 1, 6, 2], 6, "ScalarSetterContract.xlsm"),
+            ([0, 1, 6, 3], 6, "ScalarSetterContract.xlsm"),
+            ([0, 1, 6, 4], 7, "ScalarSetterContract.xlsm"),
+            ([0, 1, 7, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 7, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 7, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 7, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 1, 7, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 1, 8, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 8, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 8, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 8, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 8, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 1, 9, 0], 8, "ScalarSetterContract.xlsm"),
+            ([0, 1, 9, 1], 8, "ScalarSetterContract.xlsm"),
+            ([0, 1, 9, 2], 8, "ScalarSetterContract.xlsm"),
+            ([0, 1, 9, 3], 8, "ScalarSetterContract.xlsm"),
+            ([0, 1, 9, 4], 8, "ScalarSetterContract.xlsm"),
+            ([0, 2, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 0, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 0, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 0, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 2, 1, 0], 2, "ScalarSetterContract.xlsm"),
+            ([0, 2, 1, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 1, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 1, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 1, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 2, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 2, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 2, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 2, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 2, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 3, 0], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 3, 1], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 3, 2], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 3, 3], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 3, 4], 3, "ScalarSetterContract.xlsm"),
+            ([0, 2, 4, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 4, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 4, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 4, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 4, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 5, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 5, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 5, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 5, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 5, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 2, 6, 0], 5, "ScalarSetterContract.xlsm"),
+            ([0, 2, 6, 1], 6, "ScalarSetterContract.xlsm"),
+            ([0, 2, 6, 2], 6, "ScalarSetterContract.xlsm"),
+            ([0, 2, 6, 3], 6, "ScalarSetterContract.xlsm"),
+            ([0, 2, 6, 4], 7, "ScalarSetterContract.xlsm"),
+            ([0, 2, 7, 0], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 7, 1], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 7, 2], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 7, 3], 0, "ScalarSetterContract.xlsm"),
+            ([0, 2, 7, 4], 1, "ScalarSetterContract.xlsm"),
+            ([0, 2, 8, 0], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 8, 1], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 8, 2], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 8, 3], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 8, 4], 4, "ScalarSetterContract.xlsm"),
+            ([0, 2, 9, 0], 8, "ScalarSetterContract.xlsm"),
+            ([0, 2, 9, 1], 8, "ScalarSetterContract.xlsm"),
+            ([0, 2, 9, 2], 8, "ScalarSetterContract.xlsm"),
+            ([0, 2, 9, 3], 8, "ScalarSetterContract.xlsm"),
+            ([0, 2, 9, 4], 8, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 0, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 1, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 0, 1, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 1, 2], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 1, 3], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 1, 4], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 2, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 2, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 2, 2], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 2, 3], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 2, 4], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 3, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 3, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 3, 2], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 3, 3], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 3, 4], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 4, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 4, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 4, 2], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 4, 3], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 4, 4], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 5, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 5, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 5, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 5, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 5, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 6, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 0, 6, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 6, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 6, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 0, 6, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 0, 7, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 7, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 7, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 7, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 0, 7, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 0, 8, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 8, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 8, 2], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 8, 3], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 8, 4], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 9, 0], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 9, 1], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 9, 2], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 9, 3], 9, "ScalarSetterContract.xlsm"),
+            ([1, 0, 9, 4], 9, "ScalarSetterContract.xlsm"),
+            ([1, 1, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 0, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 0, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 0, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 1, 1, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 1, 1, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 1, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 1, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 1, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 2, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 2, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 2, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 2, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 2, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 3, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 3, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 3, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 3, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 3, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 4, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 4, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 4, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 4, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 4, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 5, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 5, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 5, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 5, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 5, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 1, 6, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 1, 6, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 1, 6, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 1, 6, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 1, 6, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 1, 7, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 7, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 7, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 7, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 1, 7, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 1, 8, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 8, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 8, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 8, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 8, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 9, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 9, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 9, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 9, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 1, 9, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 0, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 0, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 0, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 0, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 0, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 2, 1, 0], 2, "ScalarSetterContract.xlsm"),
+            ([1, 2, 1, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 1, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 1, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 1, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 2, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 2, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 2, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 2, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 2, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 3, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 3, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 3, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 3, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 3, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 4, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 4, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 4, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 4, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 4, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 5, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 5, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 5, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 5, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 5, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 2, 6, 0], 5, "ScalarSetterContract.xlsm"),
+            ([1, 2, 6, 1], 6, "ScalarSetterContract.xlsm"),
+            ([1, 2, 6, 2], 6, "ScalarSetterContract.xlsm"),
+            ([1, 2, 6, 3], 6, "ScalarSetterContract.xlsm"),
+            ([1, 2, 6, 4], 7, "ScalarSetterContract.xlsm"),
+            ([1, 2, 7, 0], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 7, 1], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 7, 2], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 7, 3], 0, "ScalarSetterContract.xlsm"),
+            ([1, 2, 7, 4], 1, "ScalarSetterContract.xlsm"),
+            ([1, 2, 8, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 8, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 8, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 8, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 8, 4], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 9, 0], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 9, 1], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 9, 2], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 9, 3], 10, "ScalarSetterContract.xlsm"),
+            ([1, 2, 9, 4], 10, "ScalarSetterContract.xlsm"),
+        ];
+        assert_eq!(cases.len(), 300);
+        check_scalar_native_matrix(probe, "IndexAreaContract.Probe", expected, cases, &[]);
     }
 
     #[test]
