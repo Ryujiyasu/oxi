@@ -1911,6 +1911,105 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     contents.push(ContentElement::RestoreState);
                 }
                 oxidocs_core::layout::LayoutContent::WatermarkText { .. } => {}
+                oxidocs_core::layout::LayoutContent::PresetShape { ref shape_type, ref stroke_color, stroke_width, flip_h, flip_v, arrow_head, arrow_tail, .. }
+                    if std::env::var_os("OXI_PDF_PRESET_DISABLE").is_none() =>
+                {
+                    // OXI_PDF_PRESET (2026-11-08, default ON, opt-out _DISABLE): draw a
+                    // preset shape as the DirectWrite renderer does -- connectors as
+                    // flip-aware lines with filled triangle ends, ellipses as rings,
+                    // brackets as brackets, and nothing for any other preset (its body
+                    // is drawn by its own box / path element). Every other preset came
+                    // out as a black rectangle here: blind-J ja/educational__2aa00bc4's
+                    // turned colour cards each carried an upright black frame.
+                    let lw = (*stroke_width as f64).max(0.5);
+                    let sc = stroke_color.as_deref()
+                        .and_then(|c| parse_hex_color(c))
+                        .unwrap_or(Color::Rgb(0.0, 0.0, 0.0));
+                    let stroke = Some(oxipdf_core::ir::StrokeStyle {
+                        color: sc.clone(),
+                        width: lw,
+                        line_cap: oxipdf_core::ir::LineCap::Butt,
+                        line_join: oxipdf_core::ir::LineJoin::Miter,
+                    });
+                    let line = |ops: Vec<PathOp>| ContentElement::Path(PathData {
+                        operations: ops, stroke: stroke.clone(), fill: None,
+                    });
+                    // the renderer's arrowhead: length max(3w, 3.75pt), half width max(1.8w, 2.25pt)
+                    let arrow = |tx: f64, ty: f64, dx: f64, dy: f64| -> Option<ContentElement> {
+                        let len = (dx * dx + dy * dy).sqrt();
+                        if len < 0.01 { return None; }
+                        let (ux, uy) = (dx / len, dy / len);
+                        let (px, py) = (-uy, ux);
+                        let alen = (lw * 3.0).max(3.75);
+                        let ahw = (lw * 1.8).max(2.25);
+                        let (bx, by) = (tx - ux * alen, ty - uy * alen);
+                        Some(ContentElement::Path(PathData {
+                            operations: vec![
+                                PathOp::MoveTo(tx, ty),
+                                PathOp::LineTo(bx + px * ahw, by + py * ahw),
+                                PathOp::LineTo(bx - px * ahw, by - py * ahw),
+                                PathOp::ClosePath,
+                            ],
+                            stroke: None,
+                            fill: Some(sc.clone()),
+                        }))
+                    };
+                    match shape_type.as_str() {
+                        "line" | "straightConnector1" | "bentConnector3" | "bentConnector2" => {
+                            let (sx, sy) = (if *flip_h { x + ew } else { x }, if *flip_v { y + eh } else { y });
+                            let (ex, ey) = (if *flip_h { x } else { x + ew }, if *flip_v { y } else { y + eh });
+                            let (tf, hf);
+                            if shape_type.starts_with("bentConnector") {
+                                let mx = (sx + ex) * 0.5;
+                                contents.push(line(vec![PathOp::MoveTo(sx, sy), PathOp::LineTo(mx, sy),
+                                    PathOp::LineTo(mx, ey), PathOp::LineTo(ex, ey)]));
+                                tf = (mx, ey); hf = (mx, sy);
+                            } else {
+                                contents.push(line(vec![PathOp::MoveTo(sx, sy), PathOp::LineTo(ex, ey)]));
+                                tf = (sx, sy); hf = (ex, ey);
+                            }
+                            if *arrow_tail {
+                                contents.extend(arrow(ex, ey, ex - tf.0, ey - tf.1));
+                            }
+                            if *arrow_head {
+                                contents.extend(arrow(sx, sy, sx - hf.0, sy - hf.1));
+                            }
+                        }
+                        "ellipse" | "oval" => {
+                            let (cx, cy, rx, ry) = (x + ew / 2.0, y + eh / 2.0, ew / 2.0, eh / 2.0);
+                            let (kx, ky) = (rx * 0.5523, ry * 0.5523);
+                            contents.push(line(vec![
+                                PathOp::MoveTo(cx + rx, cy),
+                                PathOp::CurveTo(cx + rx, cy + ky, cx + kx, cy + ry, cx, cy + ry),
+                                PathOp::CurveTo(cx - kx, cy + ry, cx - rx, cy + ky, cx - rx, cy),
+                                PathOp::CurveTo(cx - rx, cy - ky, cx - kx, cy - ry, cx, cy - ry),
+                                PathOp::CurveTo(cx + kx, cy - ry, cx + rx, cy - ky, cx + rx, cy),
+                                PathOp::ClosePath,
+                            ]));
+                        }
+                        "bracketPair" | "leftBracket" | "rightBracket" => {
+                            let r = eh.min(ew) * 16667.0 / 100000.0;
+                            let k = r * 0.5523;
+                            if shape_type != "rightBracket" {
+                                contents.push(line(vec![
+                                    PathOp::MoveTo(x + r, y),
+                                    PathOp::CurveTo(x + r - k, y, x, y + r - k, x, y + r),
+                                    PathOp::LineTo(x, y + eh - r),
+                                    PathOp::CurveTo(x, y + eh - r + k, x + r - k, y + eh, x + r, y + eh),
+                                ]));
+                            }
+                            if shape_type != "leftBracket" {
+                                contents.push(line(vec![
+                                    PathOp::MoveTo(x + ew - r, y),
+                                    PathOp::CurveTo(x + ew - r + k, y, x + ew, y + r - k, x + ew, y + r),
+                                    PathOp::LineTo(x + ew, y + eh - r),
+                                    PathOp::CurveTo(x + ew, y + eh - r + k, x + ew - r + k, y + eh, x + ew - r, y + eh),
+                                ]));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 oxidocs_core::layout::LayoutContent::PresetShape { ref shape_type, ref stroke_color, stroke_width, .. } => {
                     let sx = x;
                     let sy = y;
