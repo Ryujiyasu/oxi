@@ -2351,6 +2351,15 @@ impl<'a> Runtime<'a> {
         })
     }
 
+    fn source_public_class_field(&self, object: &Expr, name: &str, frame: &Frame) -> bool {
+        let Some(class) = self.source_class_name(object, frame)
+            .or_else(|| self.source_default_value_class(object, frame)) else { return false; };
+        let Some(module) = self.source_class_module(&class) else { return false; };
+        self.public_instance_field(module, name)
+            && self.source_member_type(&class, name).is_some_and(|kind|
+                !kind.is_array && self.source_class_key(&kind.name).is_some())
+    }
+
     fn source_call_parameters(
         &self,
         object: &Expr,
@@ -3099,6 +3108,25 @@ impl<'a> Runtime<'a> {
                 {
                     let mut frame =
                         empty_frame(this.error_environment.clone(), this.project_name.clone());
+                    if !matches!(value, Value::Object(_) | Value::Nothing)
+                        && this.declared_type(&frame, name)
+                            .is_some_and(|kind| this.source_class_key(&kind).is_some()) {
+                        if let Some(Value::Object(destination)) = this.read_variable(&frame, name, line)? {
+                            let parameter = this.declared_type(&frame, name)
+                                .and_then(|kind| this.source_class_procedure(&kind, "_default",
+                                    &[ProcKind::PropertyLet]))
+                                .and_then(|(_, procedure)| procedure.params.last().cloned());
+                            let value = if let Some(parameter) = parameter {
+                                this.prepare_byval_argument(value, &parameter, &frame, line)
+                                    .map_err(|failure| if failure.vba_number == Some(424) {
+                                        language_error(13, "Automation property value type mismatch", line)
+                                    } else { failure })?
+                            } else { value };
+                            this.automation_default_member(&destination, 4, &[value],
+                                &mut frame, line, None)?;
+                            return Ok(true);
+                        }
+                    }
                     this.assign(
                         &Expr::Ident(
                             name.to_string(),
@@ -4724,6 +4752,25 @@ impl<'a> Runtime<'a> {
             } => {
                 let evaluated=self.prepare_named_setter(target,frame,false)?;
                 let value = self.eval_expr(value, frame)?;
+                let storage_parameter = if !matches!(target, Expr::Index { .. })
+                    && self.expression_slot(target, frame).is_some()
+                    && self.source_class_name(target, frame).is_some() {
+                    self.source_setter_signature(target, frame, false)
+                        .and_then(|parameters| parameters.last().cloned())
+                } else { None };
+                if let Some(parameter) = storage_parameter {
+                    let value = self.prepare_byval_argument(value, &parameter, frame, span.line)?;
+                    let view = self.source_class_name(target, frame);
+                    let receiver = self.eval_object(target, frame, span.line)?;
+                    let answer = self.call_instance_set_source(&receiver, "_default", &[], &[],
+                        value, view.as_deref(), frame, span.line, Some(ProcKind::PropertyLet));
+                    drop(receiver);
+                    let collected = self.collect_instances(span.line);
+                    if answer.is_ok() { collected?; }
+                    if answer? { return Ok(Flow::Continue); }
+                    return Err(no_such_member("the class has no writable default member".into(),
+                        Some(span.line)));
+                }
                 let source_value_parameter = match target {
                     Expr::Member { .. } | Expr::WithMember(..)
                         if self.source_module_setter(target, frame, false).is_none() =>
@@ -4779,6 +4826,12 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 if matches!(value, Value::Nothing) {
+                    if let Expr::Member { object, name, .. } = target {
+                        if self.source_public_class_field(object, name, frame) {
+                            // Public field dispatch resolves the receiver before value coercion.
+                            self.eval_object(object, frame, span.line)?;
+                        }
+                    }
                     let member = match target {
                         Expr::Member { object, name, .. }
                             if self.source_class_name(object, frame).is_none()
