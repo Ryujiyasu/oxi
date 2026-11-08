@@ -541,6 +541,13 @@ fn build_content_stream_with_images(
                     write!(buf, "({}) Tj\n", escape_pdf_string(&span.text)).unwrap();
                 }
                 write!(buf, "ET\n").unwrap();
+                // Tc is text STATE, not part of the text object: it outlives ET and
+                // spaced every later span that set none. Put it back after the span
+                // that set it (blind-J ja/administrative__1fc69a4f: a ruby's 1pt and
+                // 5pt spacing widened the whole table that followed, each glyph +1pt).
+                if span.character_spacing.abs() > 0.001 {
+                    write!(buf, "0 Tc\n").unwrap();
+                }
             }
             ContentElement::Path(path) => {
                 if let Some(ref fill) = path.fill {
