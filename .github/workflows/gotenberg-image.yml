@@ -1,0 +1,58 @@
+name: Gotenberg image
+
+# Builds integrations/gotenberg (Gotenberg 9 with .docx converted by Oxi),
+# runs its end-to-end checks against the image, and publishes it to
+# ghcr.io/ryujiyasu/gotenberg-oxi only when they all pass. Run by hand:
+# a published image is a release.
+#
+# Tags: <gotenberg version>-oxi-<short commit> and latest.
+
+on:
+  workflow_dispatch:
+    inputs:
+      oxi_commit:
+        description: Oxi commit to build oxidocs from (default: the commit this run is on)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      IMAGE: ghcr.io/ryujiyasu/gotenberg-oxi
+      GOTENBERG_VERSION: 9.1.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        working-directory: integrations/gotenberg
+        run: |
+          commit="${{ inputs.oxi_commit }}"
+          commit="$(git rev-parse "${commit:-$GITHUB_SHA}")"
+          echo "OXI_COMMIT=$commit" >> "$GITHUB_ENV"
+          echo "TAG=$GOTENBERG_VERSION-oxi-${commit:0:8}" >> "$GITHUB_ENV"
+          docker build \
+            --build-arg GOTENBERG_VERSION="$GOTENBERG_VERSION" \
+            --build-arg OXI_COMMIT="$commit" \
+            -t gotenberg-oxi:test .
+
+      - name: End-to-end checks
+        working-directory: integrations/gotenberg
+        run: |
+          docker run -d --name gotenberg-oxi -p 3000:3000 gotenberg-oxi:test
+          e2e/e2e.sh http://localhost:3000
+          docker rm -f gotenberg-oxi
+
+      - name: Publish
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for t in "$TAG" latest; do
+            docker tag gotenberg-oxi:test "$IMAGE:$t"
+            docker push "$IMAGE:$t"
+          done
+          echo "Published $IMAGE:$TAG (oxidocs $OXI_COMMIT)" >> "$GITHUB_STEP_SUMMARY"
