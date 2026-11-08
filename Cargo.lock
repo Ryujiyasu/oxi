@@ -504,6 +504,7 @@ dependencies = [
  "oxipdf-core",
  "oxivba-core",
  "ring",
+ "rustybuzz",
  "serde_json",
  "subsetter",
 ]

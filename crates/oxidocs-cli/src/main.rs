@@ -1625,6 +1625,8 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
         let w = lp.width as f64;
         let h = lp.height as f64;
         let mut contents: Vec<ContentElement> = Vec::new();
+        // (index in contents, left, top, bottom, right, highlight name) of the last highlight box
+        let mut last_hl: Option<(usize, f64, f64, f64, f64, String)> = None;
 
         for elem in &lp.elements {
             let x = elem.x as f64;
@@ -1636,7 +1638,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                 oxidocs_core::layout::LayoutContent::Text {
                     text, font_size, font_family, bold, italic,
                     underline, underline_style, strikethrough, color, highlight,
-                    character_spacing, text_scale, effects, ..
+                    character_spacing, text_scale, effects, is_vertical, ..
                 } => {
                     // OXI_PDF_TEXT_EFFECTS (2026-11-08, default ON, opt-out _DISABLE): Word's
                     // character effects as the DirectWrite renderer draws them -- no fill
@@ -1661,7 +1663,29 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
 
                     // Highlight background
                     if let Some(ref hl) = highlight {
-                        if let Some(hl_color) = parse_highlight_color(hl) {
+                        // OXI_PDF_HIGHLIGHT_JOIN (2026-11-09, default ON, opt-out _DISABLE): a
+                        // highlight that continues the previous one on the same line widens
+                        // that box instead of starting another; abutting boxes left a light
+                        // anti-aliased seam at every element edge (blind-J ja/policies__28f59048,
+                        // «中央太郎（チュウオウタロウ）» striped where Word draws one band).
+                        let join = std::env::var_os("OXI_PDF_HIGHLIGHT_JOIN_DISABLE").is_none()
+                            && last_hl.as_ref().is_some_and(|(_, _, t, b, r, name)| name == hl
+                                && (t - y).abs() < 0.01 && (b - (y + eh)).abs() < 0.01
+                                && x >= *r - 0.75 && x <= *r + 0.75);
+                        if join {
+                            let (idx, l, t, b, r, _) = last_hl.as_mut().unwrap();
+                            *r = r.max(x + ew);
+                            if let ContentElement::Path(p) = &mut contents[*idx] {
+                                p.operations = vec![
+                                    PathOp::MoveTo(*l, *t),
+                                    PathOp::LineTo(*r, *t),
+                                    PathOp::LineTo(*r, *b),
+                                    PathOp::LineTo(*l, *b),
+                                    PathOp::ClosePath,
+                                ];
+                            }
+                        } else if let Some(hl_color) = parse_highlight_color(hl) {
+                            last_hl = Some((contents.len(), x, y, y + eh, x + ew, hl.clone()));
                             contents.push(ContentElement::Path(PathData {
                                 operations: vec![
                                     PathOp::MoveTo(x, y),
@@ -1748,6 +1772,35 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         }
                     };
 
+                    // OXI_PDF_VERT_GLYPHS (2026-11-09, default ON, opt-out _DISABLE): vertical
+                    // text is drawn as the DirectWrite renderer draws it -- each character
+                    // upright, one em (+ spacing) further down, centred in the element's
+                    // column, with the face's own `vert` glyph (、。 in the upper right,
+                    // brackets and ー turned). The CLI drew the horizontal forms
+                    // (blind-J ja/creative__95f17b17, a tbRl novel).
+                    if *is_vertical && std::env::var_os("OXI_PDF_VERT_GLYPHS_DISABLE").is_none() {
+                        let adv = fs + *character_spacing as f64;
+                        let cx = x + ((ew - fs) * 0.5).max(0.0);
+                        for (k, ch) in chars.iter().enumerate() {
+                            if ch.is_whitespace() {
+                                continue;
+                            }
+                            let key = pdf_face_for(*ch, &font_name, *bold, &embedded_fonts);
+                            let vg = embedded_fonts.get(&key)
+                                .and_then(|f| f.unicode_to_gid.get(&(VERT_GLYPH_KEY | *ch as u32)).copied());
+                            let span = TextSpan {
+                                x: cx, y: text_y + k as f64 * adv,
+                                text: ch.to_string(), font_name: key,
+                                font_size: fs, fill_color,
+                                character_spacing: 0.0, stroke_width: if fake_bold { fs / 35.0 } else { 0.0 }, horizontal_scale: 100.0, stroke_color: None,
+                            };
+                            contents.push(match vg {
+                                Some(g) => ContentElement::GlyphRun(GlyphRun { span, glyph_indices: vec![g] }),
+                                None => ContentElement::Text(span),
+                            });
+                        }
+                        continue;
+                    }
                     let hex = |c: u32| Color::Rgb(((c >> 16) & 255) as f64 / 255.0, ((c >> 8) & 255) as f64 / 255.0, (c & 255) as f64 / 255.0);
                     // (fill, stroke width, stroke colour) of the main pass
                     let (main_fill, main_w, main_stroke) = if fx_on && effects.outline {
@@ -3787,6 +3840,17 @@ enum NativeSubset {
 /// This replaced nine `python3 -c fontTools` runs per document -- three
 /// quarters of a conversion's time, and a dependency a server image need
 /// not have.
+/// OXI_PDF_VERT_GLYPHS: an embedded face's vertical (GSUB `vert`) glyph for a character
+/// is stored in `unicode_to_gid` under this bit plus the code point.
+const VERT_GLYPH_KEY: u32 = 0x4000_0000;
+
+/// Characters whose upright vertical form differs: CJK punctuation and brackets,
+/// small kana, the long-vowel mark, full-width forms and dashes.
+fn vert_candidate(c: char) -> bool {
+    matches!(c as u32, 0x3000..=0x303F | 0xFF01..=0xFF60 | 0x2010..=0x2026 | 0x30FC | 0x2212)
+        || "ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿ".contains(c)
+}
+
 fn subset_font_native(font_path: &str, chars: &std::collections::BTreeSet<char>) -> Result<EmbeddedFont, NativeSubset> {
     subset_font_native_face(font_path, 0, chars)
 }
@@ -3817,6 +3881,32 @@ fn subset_font_native_face(font_path: &str, face: u32, chars: &std::collections:
     }
     if unicode_to_gid.is_empty() {
         return Err(NativeSubset::NoGlyph);
+    }
+    if std::env::var_os("OXI_PDF_VERT_GLYPHS_DISABLE").is_none() {
+        if let Some(face) = rustybuzz::Face::from_slice(data, 0) {
+            for &c in chars {
+                if !vert_candidate(c) {
+                    continue;
+                }
+                let Some(&gid) = cmap.get(&(c as u32)) else { continue };
+                let mut buf = rustybuzz::UnicodeBuffer::new();
+                buf.push_str(&c.to_string());
+                buf.guess_segment_properties();
+                buf.set_direction(rustybuzz::Direction::TopToBottom);
+                let vert = rustybuzz::Feature::new(rustybuzz::ttf_parser::Tag::from_bytes(b"vert"), 1, ..);
+                let shaped = rustybuzz::shape(&face, &[vert], buf);
+                let info = shaped.glyph_infos();
+                if info.len() != 1 || info[0].glyph_id == 0 || info[0].glyph_id == gid as u32 || info[0].glyph_id > u16::MAX as u32 {
+                    continue;
+                }
+                let vg = info[0].glyph_id as u16;
+                let new = remapper.remap(vg);
+                unicode_to_gid.insert(VERT_GLYPH_KEY | c as u32, new);
+                if let Some(&w) = widths.get(&vg) {
+                    cid_widths.insert(new, w);
+                }
+            }
+        }
     }
     let subset = subsetter::subset(data, 0, &remapper).map_err(|e| NativeSubset::Failed(e.to_string()))?;
     let ps_name = font_util::parse_ps_name(data);

@@ -66,7 +66,7 @@ pub use parser::{parse_module, parse_project, source_modules, ProjectSource};
 pub use project_edit::{apply_source_edits, project_edit_requires_reset, SourceEdit, SourceEditOutcome};
 pub use safety::{assess, assess_project, Capability, SafetyReport, Signal};
 pub use runtime::{
-    execute, execute_with_host, host_error, host_error_described, host_error_explained, host_error_from, is_builtin_function, vba_date_text, vba_number_text,
+    execute, execute_with_host, host_error, host_error_described, host_error_explained, host_error_from, host_error_default_from, is_builtin_function, vba_date_text, vba_number_text,
     ArrayDimension,
     ArrayValue, Host, HostEventCall, HostEventDelivery, HostEventResult, ObjectRef,
     ApplicationStorage, ProjectState, Runtime, RuntimeError, RuntimeErrorKind, Value,
