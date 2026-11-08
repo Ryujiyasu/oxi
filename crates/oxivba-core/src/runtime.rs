@@ -2377,12 +2377,12 @@ impl<'a> Runtime<'a> {
         };
         match callee {
             Expr::Member { object, name, .. }
-                if self.source_class_name(object, frame).is_none() =>
+                if self.assignment_receiver_type(object, frame).is_none() =>
             {
                 Some((held(object)?, name.clone()))
             }
             Expr::WithMember(name, _) | Expr::WithBangMember(name, _)
-                if self.source_member_view(callee, frame).is_none() =>
+                if matches!(frame.with_objects.last(), Some(WithSubject::Object { assignment_type: None, .. })) =>
             {
                 match frame.with_objects.last()? {
                     WithSubject::Object { receiver, .. } => Some((receiver.clone(), name.clone())),
@@ -2399,16 +2399,35 @@ impl<'a> Runtime<'a> {
     }
 
     fn prepare_source_dispatch_value(
-        &mut self, receiver: &ObjectRef, name: &str, value: Value, frame: &mut Frame, line: u32,
+        &mut self, receiver: &ObjectRef, name: &str, value: Value, allow_scalar_members: bool, frame: &mut Frame, line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
         if let Some(project) = self.foreign_project(receiver) {
             return self.in_application_project(project, |runtime|
-                runtime.prepare_source_dispatch_value(receiver, name, value, frame, line));
+                runtime.prepare_source_dispatch_value(receiver, name, value, allow_scalar_members, frame, line));
         }
+        let scalar_parameter = |kind: TypeName| {
+            let scalar = self.parameter_scalar_name(&kind.name);
+            (!kind.is_array && matches!(scalar.as_str(),
+                "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double"
+                    | "currency" | "date" | "boolean" | "string"))
+                .then_some(crate::ast::Param {
+                    mode: ParamMode::ByVal, optional: false, name: "Value".into(),
+                    is_array: false, type_name: kind, default: None,
+                })
+        };
         let parameter = match self.internal_objects.get(&receiver.handle) {
             Some(InternalObject::Instance(instance)) => self.source_class_procedure_view(
                 &instance.class, name, &[ProcKind::PropertyLet], receiver.dispatch_view.as_deref(),
-            ).and_then(|(_, procedure)| procedure.params.last().cloned()),
+            ).and_then(|(_, procedure)| procedure.params.last().cloned()).or_else(|| {
+                if !allow_scalar_members || receiver.dispatch_view.is_some() { return None; }
+                let module = self.source_class_module(&instance.class)?;
+                if !self.public_instance_field(module, name) { return None; }
+                scalar_parameter(self.source_member_type(&instance.class, name)?)
+            }),
+            None if allow_scalar_members && name != "_default" && !is_err_object(receiver) => self.host.as_deref()
+                .filter(|host| host.automation_invocation_allowed(receiver, name, 4))
+                .and_then(|host| host.assignment_call_result(Some(&receiver.kind), name))
+                .and_then(|name| scalar_parameter(TypeName { name, ..TypeName::implicit() })),
             _ => None,
         };
         let Some(parameter) = parameter else { return Ok(None); };
@@ -2427,11 +2446,41 @@ impl<'a> Runtime<'a> {
         } else { value };
         self.coerce_runtime(value, &parameter.type_name.name, line, self.this_year())
             .map(Some)
-            .map_err(|failure| if failure.vba_number == Some(424) {
+            .map_err(|failure| if matches!(runtime_error_number(&failure), 424 | 94) {
                 language_error(13, "Automation property value type mismatch", line)
             } else { failure })
     }
 
+
+    fn assign_prepared_dispatch_value(
+        &mut self, receiver: &ObjectRef, name: &str,
+        arguments: (&[Argument], &[EvaluatedArgument]), value: Value,
+        frame: &mut Frame, line: u32,
+    ) -> Result<(), RuntimeError> {
+        if let Some(project) = self.foreign_project(receiver) {
+            return self.in_application_project(project, |runtime|
+                runtime.assign_prepared_dispatch_value(receiver, name, arguments, value, frame, line));
+        }
+        let procedure = match self.internal_objects.get(&receiver.handle) {
+            Some(InternalObject::Instance(instance)) => self.source_class_procedure_view(
+                &instance.class, name, &[ProcKind::PropertyLet], receiver.dispatch_view.as_deref(),
+            ).is_some(),
+            _ => false,
+        };
+        let handled = if procedure {
+            self.call_instance_set_source(receiver, name, arguments.0, arguments.1, value,
+                None, frame, line, Some(ProcKind::PropertyLet))?
+        } else {
+            if !arguments.0.is_empty() {
+                return Err(language_error(451, "field does not take property indices", line));
+            }
+            self.with_callback_error_context(frame, |runtime, _|
+                runtime.host_set(receiver, name, value, line))?
+        };
+        if handled { Ok(()) } else {
+            Err(no_such_member("the object has no writable property".into(), Some(line)))
+        }
+    }
 
     fn source_call_parameters(
         &self,
@@ -2485,6 +2534,30 @@ impl<'a> Runtime<'a> {
         }
     }
 
+
+    fn source_parameterless_procedure(&self, target: &Expr, frame: &Frame) -> Option<Procedure> {
+        if self.expression_slot(target, frame).is_some() { return None; }
+        let procedure = if let Some((module, name)) = self.qualified_standard_member(target, frame) {
+            module.items.iter().find_map(|item| match item {
+                ModuleItem::Procedure(procedure)
+                    if procedure.name.eq_ignore_ascii_case(name)
+                        && matches!(procedure.kind, ProcKind::Function | ProcKind::PropertyGet) =>
+                    Some(procedure.clone()),
+                _ => None,
+            })
+        } else {
+            expr_name(target).and_then(|name| self.resolve_procedure(
+                name, Some(&[ProcKind::Function, ProcKind::PropertyGet])).ok().flatten()
+                .map(|(_, procedure)| procedure))
+        }?;
+        procedure.params.is_empty().then_some(procedure)
+    }
+
+    fn source_object_factory(&self, target: &Expr, frame: &Frame) -> bool {
+        self.source_parameterless_procedure(target, frame)
+            .and_then(|procedure| procedure.return_type)
+            .is_some_and(|kind| !kind.is_array && kind.name.eq_ignore_ascii_case("Object"))
+    }
 
     fn source_default_value_class(&self, target: &Expr, frame: &Frame) -> Option<String> {
         if self.expression_slot(target, frame).is_some() {
@@ -2575,7 +2648,8 @@ impl<'a> Runtime<'a> {
             _ if expr_name(target).is_some_and(|name| self.lookup_slot(frame, name).is_some()) => self.assignment_receiver_type(target, frame),
             _ => None,
         };
-        let late_member = matches!(target.as_ref(), Expr::Member { .. } | Expr::WithMember(..) | Expr::WithBangMember(..))
+        let late_factory = self.source_object_factory(target, frame);
+        let late_member = late_factory || matches!(target.as_ref(), Expr::Member { .. } | Expr::WithMember(..) | Expr::WithBangMember(..))
             && receiver_type.is_none();
         let setter = self.source_setter_parameters(target, frame, object_value);
         if let Some(parameters) = setter {
@@ -2584,7 +2658,7 @@ impl<'a> Runtime<'a> {
             return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters) }));
         }
         if let Some(name) = expr_name(target) {
-            if self.lookup_slot(frame, name).is_none() && self.has_visible_procedure(name) {
+            if !late_factory && self.lookup_slot(frame, name).is_none() && self.has_visible_procedure(name) {
                 if object_value || args.len() < 2 { return Ok(None); }
                 let (_, procedure) = self.find_procedure(name, Some(target.span().line))?;
                 let parameters = procedure.params.clone();
@@ -4825,12 +4899,80 @@ impl<'a> Runtime<'a> {
             } => {
                 let evaluated=self.prepare_named_setter(target,frame,false)?;
                 let value = self.eval_expr(value, frame)?;
+                let factory_target = match target {
+                    Expr::Index { target: factory, args, .. }
+                        if self.source_object_factory(factory, frame) =>
+                        Some((factory.as_ref(), "_default", args.as_slice())),
+                    Expr::Member { object, name, .. }
+                        if self.source_object_factory(object, frame) =>
+                        Some((object.as_ref(), name.as_str(), &[][..])),
+                    _ => None,
+                };
+                if let Some((factory, name, source_arguments)) = factory_target {
+                    // Late factory calls capture indices before the RHS, then
+                    // resolve the returned object before converting its value.
+                    let arguments = self.finish_assignment_arguments(target, evaluated, frame)?
+                        .unwrap_or_default();
+                    let receiver = self.eval_object(factory, frame, span.line)?;
+                    let answer = (|| {
+                        if let Some(prepared) = self.prepare_source_dispatch_value(
+                            &receiver, name, value.clone(), source_arguments.is_empty(), frame, span.line,
+                        )? {
+                            drop(value);
+                            return self.assign_prepared_dispatch_value(&receiver, name,
+                                (source_arguments, &arguments), prepared, frame, span.line);
+                        }
+                        // A source factory can also return a host object.
+                        // Reuse that same receiver without calling it again.
+                        if name != "_default" {
+                            if let Some(prepared) = self.host.as_deref().and_then(|host|
+                                host.property_assignment_value(Some(&receiver), name, &value, false))
+                            {
+                                if self.host_set(&receiver, name, prepared, span.line)? { return Ok(()); }
+                            }
+                            if matches!(value, Value::Nothing) {
+                                if let Some(number) = self.host.as_deref().and_then(|host|
+                                    host.property_assignment_error(Some(&receiver), name, &value))
+                                {
+                                    return Err(language_error(number,
+                                        format!("invalid value for property {name}"), span.line));
+                                }
+                            }
+                            if let Value::Object(source) = &value {
+                                if self.host.as_deref_mut().map(|host|
+                                    host.set_from_object(&receiver, name, source))
+                                    .transpose().map_err(|message| host_failure(message, span.line))?
+                                    .flatten() == Some(true)
+                                { return Ok(()); }
+                            }
+                            let value = self.let_value(value, frame, span.line)?;
+                            return self.assign_member_value(receiver.clone(), name, value,
+                                frame, span.line, None);
+                        }
+                        let value = self.let_value(value, frame, span.line)?;
+                        let indices: Vec<_> = arguments.iter().map(EvaluatedArgument::value).collect();
+                        self.check_host_object_assignment(&receiver, "Item", &value, span.line)?;
+                        if self.host_set_indexed(&receiver, "Item", &indices, value.clone(), span.line)? {
+                            return Ok(());
+                        }
+                        match self.host_call(Some(&receiver), "Item", &indices, span.line)? {
+                            Some(destination) => self.assign_returned_object(destination, value, frame, span.line),
+                            None => Err(no_such_member("the object has no writable default property".into(),
+                                Some(span.line))),
+                        }
+                    })();
+                    drop(receiver);
+                    let collected = self.collect_instances(span.line);
+                    if answer.is_ok() { collected?; }
+                    answer?;
+                    return Ok(Flow::Continue);
+                }
                 // A late-bound source property converts its declared value at
                 // the Automation boundary. Keep typed calls on their direct
                 // binding path, and preserve objects for Variant/Object formals.
                 if let Some((receiver, name)) = self.late_source_assignment_target(target, frame) {
                     if let Some(prepared) = self.prepare_source_dispatch_value(
-                        &receiver, &name, value.clone(), frame, span.line,
+                        &receiver, &name, value.clone(), !matches!(target, Expr::Index { .. }), frame, span.line,
                     )? {
                         drop(value);
                         let answer = if matches!(target, Expr::Index { .. }) {
@@ -4838,12 +4980,8 @@ impl<'a> Runtime<'a> {
                             self.assign_evaluated(target, prepared, frame, span.line,
                                 arguments.as_deref(), Some(ProcKind::PropertyLet))
                         } else {
-                            self.call_instance_set_source(&receiver, &name, &[], &[], prepared,
-                                None, frame, span.line, Some(ProcKind::PropertyLet))
-                                .and_then(|handled| if handled { Ok(()) } else {
-                                    Err(no_such_member("the class has no writable property".into(),
-                                        Some(span.line)))
-                                })
+                            self.assign_prepared_dispatch_value(&receiver, &name,
+                                (&[], &[]), prepared, frame, span.line)
                         };
                         drop(receiver);
                         let collected = self.collect_instances(span.line);
@@ -4869,7 +5007,7 @@ impl<'a> Runtime<'a> {
                 } else { None };
                 if let Some(receiver) = late_storage {
                     if let Some(prepared) = self.prepare_source_dispatch_value(
-                        &receiver, "_default", value.clone(), frame, span.line,
+                        &receiver, "_default", value.clone(), false, frame, span.line,
                     )? {
                         drop(value);
                         let answer = self.automation_default_member(
