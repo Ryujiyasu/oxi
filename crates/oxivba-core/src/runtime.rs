@@ -2360,16 +2360,54 @@ impl<'a> Runtime<'a> {
                 !kind.is_array && self.source_class_key(&kind.name).is_some())
     }
 
-    fn prepare_source_default_dispatch_value(
-        &mut self, receiver: &ObjectRef, value: Value, frame: &mut Frame, line: u32,
+    fn late_source_assignment_target(
+        &self, target: &Expr, frame: &Frame,
+    ) -> Option<(ObjectRef, String)> {
+        let (indexed, callee) = match target {
+            Expr::Index { target, .. } => (true, target.as_ref()),
+            _ => (false, target),
+        };
+        let held = |expression: &Expr| {
+            let slot = self.expression_slot(expression, frame)?;
+            let value = slot.borrow().clone();
+            match value {
+                Value::Object(receiver) => Some(receiver),
+                _ => None,
+            }
+        };
+        match callee {
+            Expr::Member { object, name, .. }
+                if self.source_class_name(object, frame).is_none() =>
+            {
+                Some((held(object)?, name.clone()))
+            }
+            Expr::WithMember(name, _) | Expr::WithBangMember(name, _)
+                if self.source_member_view(callee, frame).is_none() =>
+            {
+                match frame.with_objects.last()? {
+                    WithSubject::Object { receiver, .. } => Some((receiver.clone(), name.clone())),
+                    _ => None,
+                }
+            }
+            Expr::Ident(..) | Expr::TypedIdent { .. }
+                if indexed && self.source_class_name(callee, frame).is_none() =>
+            {
+                Some((held(callee)?, "_default".into()))
+            }
+            _ => None,
+        }
+    }
+
+    fn prepare_source_dispatch_value(
+        &mut self, receiver: &ObjectRef, name: &str, value: Value, frame: &mut Frame, line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
         if let Some(project) = self.foreign_project(receiver) {
             return self.in_application_project(project, |runtime|
-                runtime.prepare_source_default_dispatch_value(receiver, value, frame, line));
+                runtime.prepare_source_dispatch_value(receiver, name, value, frame, line));
         }
         let parameter = match self.internal_objects.get(&receiver.handle) {
             Some(InternalObject::Instance(instance)) => self.source_class_procedure_view(
-                &instance.class, "_default", &[ProcKind::PropertyLet], receiver.dispatch_view.as_deref(),
+                &instance.class, name, &[ProcKind::PropertyLet], receiver.dispatch_view.as_deref(),
             ).and_then(|(_, procedure)| procedure.params.last().cloned()),
             _ => None,
         };
@@ -4787,6 +4825,33 @@ impl<'a> Runtime<'a> {
             } => {
                 let evaluated=self.prepare_named_setter(target,frame,false)?;
                 let value = self.eval_expr(value, frame)?;
+                // A late-bound source property converts its declared value at
+                // the Automation boundary. Keep typed calls on their direct
+                // binding path, and preserve objects for Variant/Object formals.
+                if let Some((receiver, name)) = self.late_source_assignment_target(target, frame) {
+                    if let Some(prepared) = self.prepare_source_dispatch_value(
+                        &receiver, &name, value.clone(), frame, span.line,
+                    )? {
+                        drop(value);
+                        let answer = if matches!(target, Expr::Index { .. }) {
+                            let arguments = self.finish_assignment_arguments(target, evaluated, frame)?;
+                            self.assign_evaluated(target, prepared, frame, span.line,
+                                arguments.as_deref(), Some(ProcKind::PropertyLet))
+                        } else {
+                            self.call_instance_set_source(&receiver, &name, &[], &[], prepared,
+                                None, frame, span.line, Some(ProcKind::PropertyLet))
+                                .and_then(|handled| if handled { Ok(()) } else {
+                                    Err(no_such_member("the class has no writable property".into(),
+                                        Some(span.line)))
+                                })
+                        };
+                        drop(receiver);
+                        let collected = self.collect_instances(span.line);
+                        if answer.is_ok() { collected?; }
+                        answer?;
+                        return Ok(Flow::Continue);
+                    }
+                }
                 let late_storage = if !matches!(target, Expr::Index { .. }) {
                     self.expression_slot(target, frame).and_then(|slot| {
                         if !slot.declared.borrow().as_deref()
@@ -4803,8 +4868,8 @@ impl<'a> Runtime<'a> {
                     })
                 } else { None };
                 if let Some(receiver) = late_storage {
-                    if let Some(prepared) = self.prepare_source_default_dispatch_value(
-                        &receiver, value.clone(), frame, span.line,
+                    if let Some(prepared) = self.prepare_source_dispatch_value(
+                        &receiver, "_default", value.clone(), frame, span.line,
                     )? {
                         drop(value);
                         let answer = self.automation_default_member(
