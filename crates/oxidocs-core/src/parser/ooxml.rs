@@ -113,8 +113,10 @@ fn eq_field_text(instruction: &str) -> Option<String> {
         return None;
     }
     let shown = eq_text(&body.chars().collect::<Vec<_>>(), &mut 0);
-    let shown = shown.trim().to_string();
-    (!shown.is_empty()).then_some(shown)
+    // Only the instruction's own ASCII blanks go: the U+3000 / U+2002 an
+    // \\ad spread puts around a single character are part of its width.
+    let shown = shown.trim_matches(|c: char| c.is_ascii_whitespace()).to_string();
+    (!shown.trim().is_empty()).then_some(shown)
 }
 
 /// The text of an EQ expression from `chars[*at..]`, up to an unmatched `)`,
@@ -188,8 +190,18 @@ fn eq_combine(switches: &[String], args: Vec<String>) -> String {
             };
             return enclosed.map_or_else(|| inner.to_string(), String::from);
         }
-        // Text over a spacer of blanks shows the text; two texts overlaid
-        // (a reading set over a name) both show.
+        // Text over a spacer of blanks: \ad spreads the text across the
+        // spacer, so the field is as wide as the spacer -- a 均等割付 label.
+        // Drawing the text alone made the line narrower than Word's and moved
+        // the breaks after it (the 52995bc8 gate regressions).
+        if has("ad") && !crate::env_flag!("OXI_EQ_AD_WIDTH_DISABLE") {
+            let blank = |a: &String| !a.is_empty() && a.chars().all(char::is_whitespace);
+            let texts: Vec<&str> = args.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect();
+            if let (Some(spacer), [text]) = (args.iter().filter(|a| blank(a)).max_by_key(|a| eq_half_units(a)), texts.as_slice()) {
+                return eq_spread(text, eq_half_units(spacer));
+            }
+        }
+        // Two texts overlaid (a reading set over a name) both show.
         return args.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect();
     }
     if has("f") && args.len() == 2 {
@@ -199,6 +211,37 @@ fn eq_combine(switches: &[String], args: Vec<String>) -> String {
         return format!("√{}", args.last().map_or("", |a| a.trim()));
     }
     args.concat()
+}
+
+/// Width of `s` in half-em units: ASCII is half width, everything else full.
+fn eq_half_units(s: &str) -> usize {
+    s.chars().map(|c| if c.is_ascii() { 1 } else { 2 }).sum()
+}
+
+/// `text` spread over `width` half-em units, as `\o\ad` lays it over its
+/// spacer: the room left over goes between the characters as evenly as whole
+/// half-width steps allow (an ideographic space per two, an en space per one), or
+/// around a single character.
+fn eq_spread(text: &str, width: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let extra = width.saturating_sub(eq_half_units(text));
+    let pad = |n: usize| "\u{3000}".repeat(n / 2) + if n % 2 == 1 { "\u{2002}" } else { "" };
+    if extra == 0 {
+        return text.to_string();
+    }
+    if chars.len() == 1 {
+        return format!("{}{}{}", pad(extra / 2), text, pad(extra - extra / 2));
+    }
+    let gaps = chars.len() - 1;
+    let mut out = String::new();
+    for (i, c) in chars.iter().enumerate() {
+        out.push(*c);
+        if i < gaps {
+            // Bresenham: gap i gets the units between floor(extra*i/gaps) and floor(extra*(i+1)/gaps).
+            out.push_str(&pad(extra * (i + 1) / gaps - extra * i / gaps));
+        }
+    }
+    out
 }
 
 /// Presentation state for visible complex fields. Nested result fields restore
@@ -19495,7 +19538,11 @@ mod eq_field_tests {
 
     #[test]
     fn eq_fields_show_their_text() {
-        assert_eq!(eq_field_text(" eq \\o\\ad(事業所所在地,　　　　　　　　)").as_deref(), Some("事業所所在地"));
+        // 6 characters spread over 8 full-width blanks: 4 half-width steps in 5 gaps.
+        assert_eq!(eq_field_text(" eq \\o\\ad(事業所所在地,　　　　　　　　)").as_deref(), Some("事業\u{2002}所\u{2002}所\u{2002}在\u{2002}地"));
+        assert_eq!(eq_field_text("eq \\o\\ad(氏名,　　　　)").as_deref(), Some("氏\u{3000}\u{3000}名"));
+        assert_eq!(eq_field_text("eq \\o\\ad(印,　　　)").as_deref(), Some("\u{3000}印\u{3000}"));
+        assert_eq!(eq_field_text("eq \\o\\ad(住所,　)").as_deref(), Some("住所"));
         assert_eq!(eq_field_text("EQ \\o\\ac(○,印)").as_deref(), Some("㊞"));
         assert_eq!(eq_field_text("eq \\o\\ac(○,3)").as_deref(), Some("③"));
         assert_eq!(eq_field_text("eq \\o\\ac(〇,済)").as_deref(), Some("済"));
