@@ -8275,6 +8275,11 @@ pub(super) fn parse_color_modifiers_alpha(reader: &mut Reader<&[u8]>, base_hex: 
 }
 
 /// Parse a w:drawing element to extract image, shape, or text box info
+/// A VML shape's relativeHeight: its positive z-index (OXI_VML_ZINDEX).
+fn vml_relative_height(z_index: u32) -> u32 {
+    if std::env::var_os("OXI_VML_ZINDEX_DISABLE").is_some() { 0 } else { z_index }
+}
+
 fn parse_drawing(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
@@ -11385,6 +11390,13 @@ fn parse_vml_pict(
     let mut vml_dist_r: Option<f32> = None;
     let mut vml_v_relative: Option<String> = None;
     let mut vml_negative_z = false;
+    // OXI_VML_ZINDEX (2026-11-08, default ON, opt-out _DISABLE): a positive VML
+    // z-index is the shape's place in the same stacking order as DrawingML's
+    // relativeHeight (Word writes one number to both); VML shapes stacked at 0,
+    // under every DrawingML float. ja/creative__e7038ea5: the network labels
+    // (v:shape z-index 251819008) sit over the locked-canvas ellipses
+    // (relativeHeight 251805696..251809792).
+    let mut vml_z_index: u32 = 0;
     let mut escapes_cell = false; // o:allowincell="f" (S711b)
                                   // VML drawing canvas (<v:group editas="canvas">). Word reserves the
                                   // group's DECLARED height (style height:Npt) in the inline text flow; the
@@ -11729,6 +11741,8 @@ fn parse_vml_pict(
                                             if !in_grp {
                                                 vml_negative_z =
                                                     z.trim().parse::<i64>().is_ok_and(|z| z < 0);
+                                                vml_z_index = z.trim().parse::<i64>().ok()
+                                                    .and_then(|z| u32::try_from(z).ok()).unwrap_or(0);
                                             }
                                         }
                                     }
@@ -11982,6 +11996,8 @@ fn parse_vml_pict(
                                             if !in_grp {
                                                 vml_negative_z =
                                                     z.trim().parse::<i64>().is_ok_and(|z| z < 0);
+                                                vml_z_index = z.trim().parse::<i64>().ok()
+                                                    .and_then(|z| u32::try_from(z).ok()).unwrap_or(0);
                                             }
                                         }
                                     }
@@ -12232,7 +12248,7 @@ fn parse_vml_pict(
             wrap_type: img_wrap,
             crop: None,
             anchor_block_index: 0,
-            relative_height: 0,
+            relative_height: vml_relative_height(vml_z_index),
             // S1006: a zero-offset absolute letterhead with z-index<0 renders
             // BEHIND the body text (S918 behindDoc path), not over it.
             behind_doc: s1006_zero_abs && vml_negative_z,
@@ -12370,7 +12386,7 @@ fn parse_vml_pict(
             inset_bottom: None,
             wrap_type: Some(shape_wrap.unwrap_or(WrapType::None)),
             v_text_anchor: None,
-            relative_height: 0,
+            relative_height: vml_relative_height(vml_z_index),
             behind_doc: vml_negative_z,
             vert_overflow: None,
             compat_line_spacing: false,
@@ -12450,7 +12466,7 @@ fn parse_vml_pict(
             inset_bottom: Some(inset[3]),
             wrap_type: Some(shape_wrap.unwrap_or(WrapType::None)),
             v_text_anchor: v_text_anchor.clone(),
-            relative_height: 0,
+            relative_height: vml_relative_height(vml_z_index),
             behind_doc: vml_negative_z,
             vert_overflow: None,
             compat_line_spacing: false,
