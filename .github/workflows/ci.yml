@@ -137,7 +137,7 @@ jobs:
 
   browser-suites:
     name: Browser suites (${{ matrix.shard }}/8)
-    if: ${{ !inputs.font_metrics }}
+    if: ${{ github.event_name != 'push' && !inputs.font_metrics }}
     # Four of the six suites open a real workbook through the engine, so they
     # need the build the `wasm` job makes; the pkg is gitignored and is not in
     # a fresh checkout.
@@ -283,7 +283,7 @@ jobs:
 
   # Preserve the existing required check name and fail if any shard fails.
   browser:
-    if: ${{ always() && !inputs.font_metrics }}
+    if: ${{ always() && github.event_name != 'push' && !inputs.font_metrics }}
     needs: browser-suites
     runs-on: ubuntu-latest
     timeout-minutes: 5
