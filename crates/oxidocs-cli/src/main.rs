@@ -1702,7 +1702,25 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         let metrics = font_family.as_deref()
                             .map(|ff| registry.get(ff))
                             .unwrap_or_else(|| registry.default_metrics());
-                        y + metrics.word_ascent_pt(fs as f32) as f64
+                        // OXI_PDF_BASELINE (2026-11-08, default ON, opt-out _DISABLE): the
+                        // PDF puts the baseline where the DirectWrite renderer does (the
+                        // renderer the README scores): the layout's own baseline when it
+                        // carries one, else the glyph top
+                        // (line top + text_y_off − 1pt, the renderer's origin) plus the metric table's
+                        // baseline ascent.
+                        // blind-J ja (dev pool, Oxi 7774ac9c, Windows): this CLI's PDF sat
+                        // 0.1em low on MS Mincho (dy +1.14pt at 10.5, +0.91 at 9, +0.79 at
+                        // 8) and 0.6pt high on Calibri against Word's PDF; penalized SSIM
+                        // JA 0.8364 vs 0.9282 through the renderer, EN 0.9466 vs 0.9565.
+                        if std::env::var_os("OXI_PDF_BASELINE_DISABLE").is_none() {
+                            match elem.baseline_offset {
+                                Some(b) => y + b as f64,
+                                None => y + elem.text_y_off as f64 - 1.0
+                                    + (metrics.baseline_ascent() * fs as f32) as f64,
+                            }
+                        } else {
+                            y + metrics.word_ascent_pt(fs as f32) as f64
+                        }
                     };
 
                     for (seg_text, seg_font, sx, _sw) in segments {
