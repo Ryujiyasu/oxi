@@ -3232,6 +3232,7 @@ impl<'a> ParagraphLayouter<'a> {
                         .enumerate()
                         .filter(|(_, tb)| {
                             tb.anchor_block_index == bi
+                                && !tb.canvas
                                 && tb.blocks.is_empty()
                                 && !tb.vector_shapes.is_empty()
                                 && matches!(tb.wrap_type, Some(crate::ir::WrapType::None))

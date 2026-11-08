@@ -409,7 +409,7 @@ fn rect(g: &mut Group, (x, y, w, h): (f32, f32, f32, f32), fill: Option<String>,
         return;
     }
     let (stroke, stroke_width) = stroke.map_or((None, 0.0), |(c, w)| (Some(c), w));
-    g.shapes.push(VectorShape { x, y, w, h, fill, stroke, stroke_width, is_line: false, path: Vec::new(), image: None });
+    g.shapes.push(VectorShape { x, y, w, h, fill, stroke, stroke_width, is_line: false, path: Vec::new(), arrow: None, image: None });
 }
 
 fn line(g: &mut Group, (x1, y1): (f32, f32), (x2, y2): (f32, f32), color: &str, width: f32) {
@@ -423,7 +423,7 @@ fn line(g: &mut Group, (x1, y1): (f32, f32), (x2, y2): (f32, f32), color: &str, 
         stroke_width: width,
         is_line: true,
         path: Vec::new(),
-        image: None,
+        arrow: None, image: None,
     });
 }
 
@@ -454,7 +454,7 @@ fn path(g: &mut Group, segs: Vec<PathSeg>, fill: Option<String>, stroke: Option<
         })
         .collect();
     let (stroke, stroke_width) = stroke.map_or((None, 0.0), |(c, w)| (Some(c), w));
-    g.shapes.push(VectorShape { x: x0, y: y0, w, h, fill, stroke, stroke_width, is_line: false, path: segs, image: None });
+    g.shapes.push(VectorShape { x: x0, y: y0, w, h, fill, stroke, stroke_width, is_line: false, path: segs, arrow: None, image: None });
 }
 
 /// A point on a circle at `deg` clockwise from twelve o'clock.

@@ -8369,6 +8369,9 @@ fn parse_drawing(
     let mut txbx_chain: Option<(u32, u32)> = None;
     // S537b: wordprocessingCanvas marker (wpc:wpc child of graphicData).
     let mut is_canvas = false;
+    // OXI_CANVAS_MEMBERS: the canvas's shapes are open (inside wpc:wpc).
+    let mut canvas_open = false;
+    let mut canvas_open_seen = false;
     // The diagramData relationship of a SmartArt (`dgm:relIds r:dm`), and the
     // chart relationship of a chart (`c:chart r:id`).
     let mut smartart_dm: Option<String> = None;
@@ -8409,6 +8412,11 @@ fn parse_drawing(
         /// the member's own xfrm rotation in degrees.
         adj: Vec<(String, f32)>,
         rot: f32,
+        /// OXI_CANVAS_MEMBERS: the member's own xfrm flips and a:ln line ends.
+        flip_h: bool,
+        flip_v: bool,
+        head_end: bool,
+        tail_end: bool,
     }
     let mut s839_vector_shapes: Vec<crate::ir::VectorShape> = Vec::new();
     // OXI_WPG_TEXT_CHILDREN (2026-10-13, default ON, opt-out _DISABLE): a
@@ -8496,6 +8504,17 @@ fn parse_drawing(
                     }
                     "wpc" => {
                         is_canvas = true;
+                        // OXI_CANVAS_MEMBERS (2026-11-08, default ON, opt-out _DISABLE): a
+                        // drawing canvas's shapes are members like a group's, placed at their
+                        // own a:xfrm from the canvas's top-left (a canvas has no grpSpPr).
+                        // docx-corpus en_forms__ff89e554's referral flowchart (wpc, 20
+                        // text boxes, ellipses, connectors): Word draws each box where it
+                        // stands; Oxi poured all twenty boxes' text into one box.
+                        if wpg_children_on && !crate::env_flag!("OXI_CANVAS_MEMBERS_DISABLE") {
+                            s839_in_wgp = true;
+                            canvas_open = true;
+                            canvas_open_seen = true;
+                        }
                     }
                     // S839: wpg vector-group boundaries + per-shape state.
                     // These arms only toggle piggyback state (the events fell
@@ -8557,6 +8576,10 @@ fn parse_drawing(
                             blocks: Vec::new(),
                             adj: Vec::new(),
                             rot: 0.0,
+                            flip_h: false,
+                            flip_v: false,
+                            head_end: false,
+                            tail_end: false,
                         });
                     }
                     "path" if s839_wsp.is_some() => {
@@ -8873,6 +8896,9 @@ fn parse_drawing(
                                         } else {
                                             arrow_tail = has;
                                         }
+                                        if let Some(wsp) = s839_wsp.as_mut() {
+                                            if sl == "headEnd" { wsp.head_end = has; } else { wsp.tail_end = has; }
+                                        }
                                     }
                                 }
                                 Ok(Event::End(_se)) => {
@@ -9155,9 +9181,15 @@ fn parse_drawing(
                                 // flipH/flipV: connector diagonal direction (S493h).
                                 "flipH" => {
                                     flip_h = val == "1" || val == "true";
+                                    if let Some(wsp) = s839_wsp.as_mut() {
+                                        wsp.flip_h = flip_h;
+                                    }
                                 }
                                 "flipV" => {
                                     flip_v = val == "1" || val == "true";
+                                    if let Some(wsp) = s839_wsp.as_mut() {
+                                        wsp.flip_v = flip_v;
+                                    }
                                 }
                                 _ => {}
                             }
@@ -9683,6 +9715,9 @@ fn parse_drawing(
                             arrow_head = has;
                         } else {
                             arrow_tail = has;
+                        }
+                        if let Some(wsp) = s839_wsp.as_mut() {
+                            if local == "headEnd" { wsp.head_end = has; } else { wsp.tail_end = has; }
                         }
                     }
                     "wrapNone" => {
@@ -10300,7 +10335,10 @@ fn parse_drawing(
                                 && std::env::var_os("OXI_WPG_ELLIPSE_CALLOUT_DISABLE").is_none();
                             let s1120_path = if s1120_path.is_empty() && !is_line && !is_rect
                                 && std::env::var_os("OXI_WPG_PRESET_PATHS_DISABLE").is_none()
-                                && (matches!(w.prst.as_deref(), Some("snip2DiagRect") | Some("roundRect")) || ellipse_callout)
+                                // OXI_CANVAS_MEMBERS: flowChartAlternateProcess is the ECMA
+                                // roundRect at its default ss/6 corner (ff89e554's
+                                // «Identification Meeting» / «IEP Implementation» boxes)
+                                && (matches!(w.prst.as_deref(), Some("snip2DiagRect") | Some("roundRect") | Some("flowChartAlternateProcess")) || ellipse_callout)
                             {
                                 use crate::ir::PathSeg::{C, L, M, Z};
                                 let quarter = ((w.rot / 90.0).round() as i32).rem_euclid(2) == 1;
@@ -10421,7 +10459,12 @@ fn parse_drawing(
                                     fill: None,
                                     anchor_block_index: 0,
                                     corner_radius: None,
-                                    ellipse: false,
+                                    // OXI_MEMBER_ELLIPSE_TEXT (2026-11-08, default ON, opt-out _DISABLE): an
+                                    // ellipse member's text sits in the ellipse's inscribed text
+                                    // rectangle (ff89e554's «Consent Given» ovals: Oxi set the
+                                    // text from the bounding box top, high of Word's)
+                                    ellipse: w.prst.as_deref() == Some("ellipse")
+                                        && std::env::var_os("OXI_MEMBER_ELLIPSE_TEXT_DISABLE").is_none(),
             callout: None,
             outline_cmpd: None,
             outer_shadow: None,
@@ -10443,6 +10486,7 @@ fn parse_drawing(
                                     body_wrap_none: text_wrap_none,
                                     children_on_line: false,
                                     chain: None,
+                                    canvas: canvas_open,
                                 });
                             }
                             if (stroke.is_some() || fill.is_some()) && (is_line || is_rect)
@@ -10482,7 +10526,7 @@ fn parse_drawing(
                                         stroke_width: 0.0,
                                         is_line: false,
                                         path: dots,
-                                        image: None,
+                                        arrow: None, image: None,
                                     });
                                 } else {
                                 s839_vector_shapes.push(crate::ir::VectorShape {
@@ -10494,6 +10538,8 @@ fn parse_drawing(
                                     stroke,
                                     stroke_width: w.ln_w.unwrap_or(0.75).max(0.25),
                                     is_line: is_line && !s1120_curve,
+                                    arrow: (canvas_open && is_line && !s1120_curve && (w.head_end || w.tail_end))
+                                        .then_some((w.flip_h, w.flip_v, w.head_end, w.tail_end)),
                                     // OXI_WPG_DASH (2026-11-07, default ON, opt-out _DISABLE):
                                     // an unfilled dashed outline is drawn as its dashes.
                                     // ja/reports__7b458f1a's answer ovals (custDash d 50000
@@ -10611,14 +10657,21 @@ fn parse_drawing(
                                     body_wrap_none: false,
                                     children_on_line: false,
                                     chain: None,
+                                    canvas: false,
                                 });
                             }
                         }
                     }
                     "wgp" => {
-                        s839_in_wgp = false;
+                        // a group inside a canvas closes into the canvas
+                        s839_in_wgp = canvas_open;
                         s839_wsp = None;
                         s839_grp_stack.clear();
+                    }
+                    "wpc" if canvas_open => {
+                        canvas_open = false;
+                        s839_in_wgp = false;
+                        s839_wsp = None;
                     }
                     "grpSpPr" => {
                         s839_in_grpsppr = false;
@@ -11088,6 +11141,7 @@ fn parse_drawing(
             body_wrap_none: text_wrap_none,
             children_on_line: group_drawn,
             chain: txbx_chain.filter(|_| !crate::env_flag!("OXI_TXBX_LINK_DISABLE")),
+            canvas: canvas_open_seen,
         })
     } else {
         None
@@ -11263,7 +11317,7 @@ fn vml_group_member(e: &quick_xml::events::BytesStart) -> Option<crate::ir::Vect
         stroke_width: if stroked { stroke_width } else { 0.0 },
         is_line: false,
         path: Vec::new(),
-        image: None,
+        arrow: None, image: None,
     })
 }
 
@@ -11311,7 +11365,7 @@ fn vml_group_stroke_member(e: &quick_xml::events::BytesStart, local: &str) -> Op
         let (x2, y2) = pair(attr("to"))?;
         return Some(crate::ir::VectorShape {
             x: x1, y: y1, w: x2 - x1, h: y2 - y1,
-            fill: None, stroke, stroke_width, is_line: true, path: Vec::new(), image: None,
+            fill: None, stroke, stroke_width, is_line: true, path: Vec::new(), arrow: None, image: None,
         });
     }
     let path = attr("path")?;
@@ -11340,7 +11394,7 @@ fn vml_group_stroke_member(e: &quick_xml::events::BytesStart, local: &str) -> Op
     Some(crate::ir::VectorShape {
         x: b[0], y: b[1], w: b[2], h: b[3],
         fill: if filled { attr("fillcolor").map(|c| vml_color_token(&c)) } else { None },
-        stroke, stroke_width, is_line: false, path: segs, image: None,
+        stroke, stroke_width, is_line: false, path: segs, arrow: None, image: None,
     })
 }
 
@@ -11384,6 +11438,7 @@ fn vml_shape_text_box(sh: &Shape) -> TextBox {
         body_wrap_none: false,
         children_on_line: false,
         chain: None,
+        canvas: false,
     }
 }
 
@@ -12137,7 +12192,16 @@ fn parse_vml_pict(
     // canvas figures reserve their declared height. 3a4f/model are
     // template-twins but render their canvases via the DrawingML (w:drawing)
     // path, so this VML-only fix leaves them byte-identical (canary-verified).
-    if is_canvas_group && group_height > 0.0 && std::env::var("OXI_VMLCANVAS_DISABLE").is_err() {
+    // OXI_VML_INLINE_GROUP: a group whose members can be drawn goes on to the group
+    // path below (a width-bearing inline object) instead of this height-only block.
+    let vml_inline_members = vml_group_members_on
+        && grp_member_count >= 2
+        && (!grp_image_rids.is_empty() || !grp_texts.is_empty() || vml_group_rects.len() >= 2)
+        && vml_group_coord.2 > 0.0 && vml_group_coord.3 > 0.0
+        && !crate::env_flag!("OXI_VML_INLINE_GROUP_DISABLE");
+    if is_canvas_group && group_height > 0.0 && std::env::var("OXI_VMLCANVAS_DISABLE").is_err()
+        && !vml_inline_members
+    {
         return Ok(DrawingResult {
             symbol_text: None,
             image: Some(Image {
@@ -12311,8 +12375,17 @@ fn parse_vml_pict(
     let grp_members_path = vml_group_members_on
         && grp_member_count >= 2
         && (!grp_image_rids.is_empty() || !grp_texts.is_empty() || vml_group_rects.len() >= 2);
+    // OXI_VML_INLINE_GROUP (2026-11-08, default ON, opt-out _DISABLE): an INLINE
+    // v:group (no position:absolute; mso-position-*-relative char / line) is a
+    // width-bearing object on its line, its members drawn there like a DrawingML
+    // inline group. docx-corpus ja/correspondence__fd638ffb's two 231 x 91pt
+    // 受信者 boxes (rects, lines and three text members each) sit side by side on
+    // one line in Word's PDF; Oxi dropped both and lost the line's 91pt, so the
+    // later anchored frame rose over the title.
+    let vml_inline_group = !is_absolute && group_depth == 0 && grp_members_path
+        && !crate::env_flag!("OXI_VML_INLINE_GROUP_DISABLE");
     if ((vml_group_rects.len() >= 2 && image.is_none() && text_blocks.is_empty()) || grp_members_path)
-        && is_absolute
+        && (is_absolute || vml_inline_group)
         && group_width > 0.0 && group_height > 0.0 && vml_group_coord.2 > 0.0 && vml_group_coord.3 > 0.0
     {
         let (ox, oy, cw, ch) = vml_group_coord;
@@ -12326,7 +12399,7 @@ fn parse_vml_pict(
                         vml_group_rects.insert(idx.min(vml_group_rects.len()), crate::ir::VectorShape {
                             x: b[0], y: b[1], w: b[2], h: b[3],
                             fill: None, stroke: None, stroke_width: 0.0, is_line: false, path: Vec::new(),
-                            image: Some(std::sync::Arc::new(data.clone())),
+                            arrow: None, image: Some(std::sync::Arc::new(data.clone())),
                         });
                     }
                 }
@@ -12384,6 +12457,7 @@ fn parse_vml_pict(
                 body_wrap_none: false,
                 children_on_line: false,
                 chain: None,
+                canvas: false,
             }
         }).collect();
         let vector_shapes = vml_group_rects.into_iter().map(|mut v| {
@@ -12403,7 +12477,34 @@ fn parse_vml_pict(
             auto_fit: false,
             width: group_width,
             height: group_height,
-            position: vml_position.clone(),
+            position: if vml_inline_group {
+                Some(FloatingPosition {
+                    flow_page_offset: 0,
+                    flow_boundary_offset: 0,
+                    flow_source: None,
+                    x: 0.0,
+                    y: 0.0,
+                    h_relative: Some("column".to_string()),
+                    v_relative: Some("paragraph".to_string()),
+                    h_align: None,
+                    v_align: None,
+                    dist_l: None,
+                    dist_r: None, dist_t: None, dist_b: None, eff_l: 0.0, eff_r: 0.0, eff_t: 0.0, eff_b: 0.0,
+                })
+            } else {
+                // OXI_VML_TEXT_REL (2026-11-08, default ON, opt-out _DISABLE): a VML
+                // group's vertical «text» anchor (the default) is its paragraph, not
+                // the margin. docx-corpus ja/correspondence__fd638ffb: the 484pt
+                // response frame (margin-top 19.85pt, wrap topAndBottom) stands 19.85
+                // below its paragraph in Word's PDF (y 283) and pushes the text below
+                // it; Oxi resolved it from the top margin (y 67) and overlapped.
+                vml_position.clone().map(|mut p| {
+                    if p.v_relative.as_deref() == Some("text") && !crate::env_flag!("OXI_VML_TEXT_REL_DISABLE") {
+                        p.v_relative = Some("paragraph".to_string());
+                    }
+                    p
+                })
+            },
             border: false,
             stroke_color: None,
             stroke_width: None,
@@ -12419,7 +12520,7 @@ fn parse_vml_pict(
             inset_right: None,
             inset_top: None,
             inset_bottom: None,
-            wrap_type: Some(shape_wrap.unwrap_or(WrapType::None)),
+            wrap_type: if vml_inline_group { Some(WrapType::None) } else { Some(shape_wrap.unwrap_or(WrapType::None)) },
             v_text_anchor: None,
             relative_height: vml_relative_height(vml_z_index),
             behind_doc: vml_negative_z,
@@ -12429,8 +12530,9 @@ fn parse_vml_pict(
             host_break_after: false,
             children: grp_children,
             body_wrap_none: false,
-            children_on_line: false,
+            children_on_line: vml_inline_group,
             chain: None,
+            canvas: false,
         });
         return Ok(DrawingResult {
             symbol_text: None,
@@ -12512,6 +12614,7 @@ fn parse_vml_pict(
             body_wrap_none: false,
             children_on_line: false,
             chain: None,
+            canvas: false,
         });
         return Ok(DrawingResult {
             symbol_text: None,
@@ -12590,6 +12693,7 @@ fn parse_vml_pict(
             body_wrap_none: false,
             children_on_line: false,
             chain: None,
+            canvas: false,
         });
         let placeholder = Some(Image {
             rotation: 0.0,

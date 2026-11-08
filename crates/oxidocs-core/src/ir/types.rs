@@ -1418,6 +1418,10 @@ pub struct TextBox {
     /// `wps:linkedTxbx` that continues it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain: Option<(u32, u32)>,
+    /// OXI_CANVAS_MEMBERS: a drawing canvas (wpc) holding its shapes and text
+    /// boxes as members; drawn by the page-level pass even when inline.
+    #[serde(default)]
+    pub canvas: bool,
     /// S1270 (2026-09-02): the host paragraph ends with an explicit page break
     /// that sits AFTER this drawing's run.
     ///
@@ -1465,6 +1469,10 @@ pub struct VectorShape {
     /// over the shape's box; None for drawn shapes.
     #[serde(skip)]
     pub image: Option<std::sync::Arc<Vec<u8>>>,
+    /// OXI_CANVAS_MEMBERS: a member line's (flipH, flipV, headEnd, tailEnd) when it
+    /// carries an arrowhead; None for every other member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrow: Option<(bool, bool, bool, bool)>,
 }
 
 /// One command of a `VectorShape::path` outline (coordinates normalized 0..1

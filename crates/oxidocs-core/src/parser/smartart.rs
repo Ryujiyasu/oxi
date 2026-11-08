@@ -398,7 +398,7 @@ pub(super) fn from_drawing(xml: &str, theme: &ThemeColors) -> Option<Group> {
                             stroke_width,
                             is_line: false,
                             path: place(outline, rect, rot, flip_h, flip_v),
-                            image: None,
+                            arrow: None, image: None,
                         });
                     }
                 }
@@ -520,7 +520,7 @@ pub(super) fn from_locked_canvas(
                 if let Some(data) = rid.and_then(|id| media.get(id)).filter(|_| w > 0.0 && h > 0.0) {
                     art.shapes.push(VectorShape {
                         x, y, w, h, fill: None, stroke: None, stroke_width: 0.0, is_line: false,
-                        path: Vec::new(), image: Some(std::sync::Arc::new(data.clone())),
+                        path: Vec::new(), arrow: None, image: Some(std::sync::Arc::new(data.clone())),
                     });
                 }
             }
@@ -538,7 +538,7 @@ pub(super) fn from_locked_canvas(
                 match connector_outline(n, prst, bx, by, bw, bh) {
                     Some(open) if bw > 0.0 && bh > 0.0 => art.shapes.push(VectorShape {
                         x: bx, y: by, w: bw, h: bh, fill: None, stroke, stroke_width, is_line: false,
-                        path: place(open, rect, rot, flip_h, flip_v), image: None,
+                        path: place(open, rect, rot, flip_h, flip_v), arrow: None, image: None,
                     }),
                     _ => {
                         // A straight connector runs corner to corner; a flip
@@ -547,7 +547,7 @@ pub(super) fn from_locked_canvas(
                         let (y0, y1) = if flip_v { (by + bh, by) } else { (by, by + bh) };
                         art.shapes.push(VectorShape {
                             x: x0, y: y0, w: x1 - x0, h: y1 - y0, fill: None, stroke, stroke_width,
-                            is_line: true, path: Vec::new(), image: None,
+                            is_line: true, path: Vec::new(), arrow: None, image: None,
                         });
                     }
                 }
@@ -570,7 +570,7 @@ pub(super) fn from_locked_canvas(
                     if !outline.is_empty() {
                         art.shapes.push(VectorShape {
                             x: bx, y: by, w: bw, h: bh, fill, stroke, stroke_width, is_line: false,
-                            path: place(outline, rect, rot, flip_h, flip_v), image: None,
+                            path: place(outline, rect, rot, flip_h, flip_v), arrow: None, image: None,
                         });
                     }
                 }

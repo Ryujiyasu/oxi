@@ -9743,7 +9743,8 @@ cells={} pitch={:.2} text={:?}",
             && text_box.blocks.is_empty()
             && !crate::env_flag!("OXI_S839_DISABLE")
         {
-            let is_inline_sig = matches!(text_box.wrap_type, Some(crate::ir::WrapType::None))
+            let is_inline_sig = !text_box.canvas
+                && matches!(text_box.wrap_type, Some(crate::ir::WrapType::None))
                 && text_box.position.as_ref().map_or(false, |p| {
                     p.x == 0.0
                         && p.y == 0.0
@@ -9765,6 +9766,27 @@ cells={} pitch={:.2} text={:?}",
                             crop: None,
                             rotation: 0.0,
                         }));
+                    } else if let (true, Some((fh, fv, head, tail))) = (vs.is_line, vs.arrow) {
+                        // OXI_CANVAS_MEMBERS: a member connector with arrowheads is a
+                        // preset line, its flips giving the direction (ff89e554's
+                        // «Line 6» flipH runs top-right to bottom-left, its tailEnd
+                        // triangle at the bottom left).
+                        elements.push(LayoutElement::new(
+                            vx,
+                            vy,
+                            vs.w,
+                            vs.h,
+                            LayoutContent::PresetShape {
+                                shape_type: "line".to_string(),
+                                stroke_color: vs.stroke.clone(),
+                                stroke_width: vs.stroke_width,
+                                flip_h: fh,
+                                flip_v: fv,
+                                arrow_head: head,
+                                arrow_tail: tail,
+                                dash: None,
+                            },
+                        ));
                     } else if vs.is_line {
                         elements.push(LayoutElement::new(
                             vx,
@@ -10143,7 +10165,13 @@ cells={} pitch={:.2} text={:?}",
         // box whose text overflows gets an open measure and an open clip instead.
         let wrapnone_overflows = wrapnone_text_w
             > text_box.width - text_box.inset_left.unwrap_or(7.2) - text_box.inset_right.unwrap_or(7.2) - 0.5;
-        let wrapnone_clip_w = if wrapnone_overflows { text_box.width + 2000.0 } else { text_box.width };
+        let wrapnone_clip_w = if wrapnone_overflows
+            || (text_box.canvas && !text_box.blocks.is_empty() && !crate::env_flag!("OXI_CANVAS_OVERFLOW_DISABLE"))
+        {
+            text_box.width + 2000.0
+        } else {
+            text_box.width
+        };
         elements.push(LayoutElement::new(
             abs_x,
             abs_y,
@@ -10859,7 +10887,15 @@ cells={} pitch={:.2} text={:?}",
         // every arm's last drawn line is the last whose middle clears the inner bottom.
         // ja/reference__22761439's two 660pt column boxes of «○○○» lines: Word stops at
         // 804 / 811, Oxi ran them on to 1100 across the footer.
-        if !crate::env_flag!("OXI_TXBX_OVERFLOW_MID_DISABLE") && !text_box.vertical_text && !chain_head {
+        // OXI_CANVAS_OVERFLOW (2026-11-08, default ON, opt-out _DISABLE): a canvas
+        // member's text is never cut -- en_forms__ff89e554's «Evaluation Completed» box
+        // shows its two lines past the bottom and «Oral 1.Motor» past the right edge
+        // in Word's PDF. (The parent canvas box itself carries no blocks.)
+        let canvas_member_overflow = text_box.canvas && !text_box.blocks.is_empty()
+            && !crate::env_flag!("OXI_CANVAS_OVERFLOW_DISABLE");
+        if !crate::env_flag!("OXI_TXBX_OVERFLOW_MID_DISABLE") && !text_box.vertical_text && !chain_head
+            && !canvas_member_overflow
+        {
             let inner_bottom = abs_y + text_box.height - inset_b - v_corner_inset;
             elements.retain(|el| match &el.content {
                 LayoutContent::Text { .. } => el.y + el.height / 2.0 <= inner_bottom + 0.01,
