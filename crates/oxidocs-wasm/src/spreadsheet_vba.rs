@@ -51947,6 +51947,158 @@ End Function"#)
     }
 
     #[test]
+    fn source_named_property_rhs_types_and_order_match_native() {
+        let mut template = source_object_rhs_fixture().to_string();
+        let start = template.find("Attribute VB_Name = \"NamedDefaultProbe\"").unwrap();
+        let end = start + template[start..].find("VERSION 1.0 CLASS").unwrap();
+        template.replace_range(start..end, r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+Public Trace As String
+Public Report As String
+Public HeldBox As IndexBox
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function MakeBox() As IndexBox
+ Trace = Trace & "F"
+ Set MakeBox = HeldBox
+End Function
+Public Function ReadRhs(ByVal rhs As Object) As Object
+ Trace = Trace & "R"
+ Set ReadRhs = rhs
+End Function
+Public Function Probe(ByVal useSet As Boolean, ByVal targetKind As Long, ByVal valueKind As Long) As String
+ Dim box As IndexBox
+ Dim rhs As Object
+ Set box = New IndexBox
+ Set HeldBox = box
+ Trace = ""
+ Report = ""
+ ThisWorkbook.Worksheets(1).Range("B2").Value2 = "cell"
+ Select Case valueKind
+ Case 0
+  Set rhs = New ScalarPayload
+ Case 1
+  Set rhs = New PlainPayload
+ Case 2
+  Set rhs = ThisWorkbook.Worksheets(1).Range("B2")
+ Case 3
+  Set rhs = Nothing
+ End Select
+ On Error GoTo Failed
+ If useSet Then
+  Select Case targetKind
+  Case 0
+   Set box.ValueAt = ReadRhs(rhs)
+  Case 1
+   With box
+    Set .ValueAt = ReadRhs(rhs)
+   End With
+  Case 2
+   Set NamedDefaultProbe.HeldBox.ValueAt = ReadRhs(rhs)
+  Case 3
+   Set NamedDefaultProbe.MakeBox.ValueAt = ReadRhs(rhs)
+  End Select
+ Else
+  Select Case targetKind
+  Case 0
+   box.ValueAt = ReadRhs(rhs)
+  Case 1
+   With box
+    .ValueAt = ReadRhs(rhs)
+   End With
+  Case 2
+   NamedDefaultProbe.HeldBox.ValueAt = ReadRhs(rhs)
+  Case 3
+   NamedDefaultProbe.MakeBox.ValueAt = ReadRhs(rhs)
+  End Select
+ End If
+ Probe = "OK|" & Trace & "|" & Report
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Trace & "|" & Report
+End Function
+
+"#);
+        template = template
+            .replace("Property Get ValueAt(ByRef Index As Long) As Variant",
+                "Property Get ValueAt() As Variant")
+            .replace("Property Let ValueAt(ByRef Index As Long, ByVal Value As Variant)",
+                "Property Let ValueAt(ByVal Value As Variant)")
+            .replace("Property Set ValueAt(ByRef Index As Long, ByVal Value As Variant)",
+                "Property Set ValueAt(ByVal Value As Variant)")
+            .replace(" Index = Index + 10\n", "")
+            .replace(" Index = Index + 20\n", "");
+        let cases = [
+            ("Variant", [
+                "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Range:8:True", "OK|RL|Nothing:9:True",
+                "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Range:8:True", "OK|RL|Nothing:9:True",
+                "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Range:8:True", "OK|RL|Nothing:9:True",
+                "OK|RFLP|ScalarPayload:8:True", "OK|RFL|PlainPayload:9:True", "OK|RFL|Range:8:True", "OK|RFL|Nothing:9:True",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RFSP|ScalarPayload:8:True", "OK|RFS|PlainPayload:9:True", "OK|RFS|Range:8:True", "OK|RFS|Nothing:9:True",
+            ]),
+            ("String", [
+                "OK|RPL|String:8:False", "ERR|438|R|", "OK|RL|String:8:False", "ERR|91|R|",
+                "OK|RPL|String:8:False", "ERR|438|R|", "OK|RL|String:8:False", "ERR|91|R|",
+                "OK|RPL|String:8:False", "ERR|438|R|", "OK|RL|String:8:False", "ERR|91|R|",
+                "OK|RPFL|String:8:False", "ERR|438|R|", "OK|RFL|String:8:False", "ERR|91|R|",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RFSP|ScalarPayload:8:True", "OK|RFS|PlainPayload:9:True", "OK|RFS|Range:8:True", "OK|RFS|Nothing:9:True",
+            ]),
+            ("Object", [
+                "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Range:8:True", "OK|RL|Nothing:9:True",
+                "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Range:8:True", "OK|RL|Nothing:9:True",
+                "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Range:8:True", "OK|RL|Nothing:9:True",
+                "OK|RFLP|ScalarPayload:8:True", "OK|RFL|PlainPayload:9:True", "OK|RFL|Range:8:True", "OK|RFL|Nothing:9:True",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RFSP|ScalarPayload:8:True", "OK|RFS|PlainPayload:9:True", "OK|RFS|Range:8:True", "OK|RFS|Nothing:9:True",
+            ]),
+            ("ScalarPayload", [
+                "OK|RLP|ScalarPayload:8:True", "ERR|13|R|", "ERR|13|R|", "OK|RL|Nothing:9:True",
+                "OK|RLP|ScalarPayload:8:True", "ERR|13|R|", "ERR|13|R|", "OK|RL|Nothing:9:True",
+                "OK|RLP|ScalarPayload:8:True", "ERR|13|R|", "ERR|13|R|", "OK|RL|Nothing:9:True",
+                "OK|RFLP|ScalarPayload:8:True", "ERR|13|R|", "ERR|13|R|", "OK|RFL|Nothing:9:True",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RSP|ScalarPayload:8:True", "OK|RS|PlainPayload:9:True", "OK|RS|Range:8:True", "OK|RS|Nothing:9:True",
+                "OK|RFSP|ScalarPayload:8:True", "OK|RFS|PlainPayload:9:True", "OK|RFS|Range:8:True", "OK|RFS|Nothing:9:True",
+            ]),
+        ];
+        for (formal, expected) in cases {
+            let mut source = template
+                .replace("Property Get ValueAt() As Variant",
+                    &format!("Property Get ValueAt() As {formal}"))
+                .replace("Property Let ValueAt(ByVal Value As Variant)",
+                    &format!("Property Let ValueAt(ByVal Value As {formal})"));
+            if matches!(formal, "Object" | "ScalarPayload") {
+                source = source.replace(" ValueAt = NamedDefaultProbe.Report", " Set ValueAt = Nothing");
+            }
+            let control = execute_workbook_vba(workbook(), &source, "NamedDefaultProbe.Control",
+                vec![], 0, failure_context()).unwrap();
+            assert!(control.error.is_none());
+            assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+            let mut book = control.workbook;
+            for (index, expected) in expected.into_iter().enumerate() {
+                let outcome = execute_workbook_vba(book, &source, "NamedDefaultProbe.Probe",
+                    vec![Value::Boolean(index >= 16), Value::Integer(((index % 16) / 4) as i64),
+                        Value::Integer((index % 4) as i64)], 0, failure_context()).unwrap();
+                assert!(outcome.error.is_none(), "{formal} {index}: {:?}",
+                    outcome.error.as_ref().map(|e| &e.message));
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected,
+                    "{formal} {index}");
+                book = outcome.workbook;
+            }
+        }
+    }
+
+    #[test]
     fn indexed_source_default_setters_keep_native_dispatch_and_byref() {
         for object_value in [false, true] {
             for (target, temporary) in [("collection", false), ("NamedDefaultProbe.collection", false),
