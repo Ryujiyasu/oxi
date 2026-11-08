@@ -2415,7 +2415,19 @@ impl<'a> LineBreaker<'a> {
             // b837 jc=left grid-line break needs its own investigation before
             // widening (OXI_S492_JCNATURAL still forces the full scope).
             // Opt-out: OXI_S492_DISABLE restores capacity-break for all paras.
-            let s492_full = crate::env_flag!("OXI_S492_JCNATURAL");
+            // OXI_S492_LAC15 (2026-11-08, default ON, opt-out _DISABLE): an explicit
+            // compat-15 linesAndChars body breaks a non-justified line at natural width
+            // too -- the bracket / 約物 capacity is a justification budget. Faithful
+            // slice of blind-J ja/policies__27858239 p1 「（２）生徒が主体…防止する」
+            // (`_pb_jcleft_pullin_slice.py`, Word PDF): jc=left wraps 「る」 (1.7pt past
+            // the margin at natural width), jc=both / distribute / unset keep it. Golden
+            // A/B of the full scope: the compat-15 docs b837 / 1ec1 / atimesresume
+            // move toward Word, the compat-11 docs harassmanual / parttime away
+            // (their legacy jc=left squeezes, S568) -- hence compat 15 only.
+            let s492_full = crate::env_flag!("OXI_S492_JCNATURAL")
+                || (self.compat_mode >= 15
+                    && self.compat_mode_explicit
+                    && !crate::env_flag!("OXI_S492_LAC15_DISABLE"));
             // S572 (2026-06-14): extend the S568 LEGACY jc=left 約物 OIKOMI to
             // NO-TYPE docGrid docs (S568 covered only linesAndChars). ikujidetail
             // (compat=11, no-type docGrid linePitch=286, jc=left, compressPunctuation)
