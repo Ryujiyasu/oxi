@@ -98,6 +98,24 @@ impl<'a> PageLayouter<'a> {
                     lp.elements.splice(0..0, behind);
                 }
             }
+            // The parts these pages would show (the vertical builder draws only
+            // their boxes, so text they hold counts as not drawn).
+            if let Some(run) = page.header_runs.first() {
+                super::HF_PARTS_SHOWN.with(|shown| {
+                    let mut shown = shown.borrow_mut();
+                    for page_idx in 0..out.len() {
+                        let variant = if page.title_pg && page_idx == 0 {
+                            1
+                        } else if page.even_odd_hf && (first_logical as usize + page_idx) % 2 == 0 {
+                            2
+                        } else {
+                            0
+                        };
+                        shown.extend(run.hf_parts[variant].iter().cloned());
+                        shown.extend(run.hf_parts[variant + 3].iter().cloned());
+                    }
+                });
+            }
             *logical = (logical_base + out.len() as i64 - 1).max(0) as u32;
             return out;
         }
@@ -368,9 +386,14 @@ impl<'a> PageLayouter<'a> {
         let mut s755_geom = s755_geom;
         let mut reference_boxes = std::collections::BTreeMap::new();
         if s1174_have_ref {
+            // The geometry below reads margins and the header/footer stories,
+            // never the body. Cloning the whole page for every laid-out page
+            // copied the body once per page: a 9,403-block reference document
+            // spent 29% of its layout here.
+            let geometry_base = Page { blocks: Vec::new(), text_boxes: Vec::new(), ..page.clone() };
             for (&(ir, pno), resolved) in &references.known {
                 if ir != ir_index { continue; }
-                let mut rp = page.clone();
+                let mut rp = geometry_base.clone();
                 if page.vertical_runs.len() > 1 {
                     let run = page.vertical_runs.iter().rposition(|r| r.0 <= resolved.first_block).unwrap_or(0);
                     let (_,top,bottom,hd,fd) = page.vertical_runs[run];
@@ -1654,6 +1677,13 @@ impl<'a> PageLayouter<'a> {
         // page starts, which is exactly the causal last-before-page set).
         // `snapshots` records each page's resolved map for the emit loop.
         let mut s1174_ingested = 0usize;
+        // The odd and even body boxes the header and footer leave for each
+        // style-reference text they can show. Recomputed for every body block
+        // they were the bulk of a long reference document's layout (two
+        // header and two footer layouts per block, 9,194 blocks); the text
+        // changes only where a referenced heading does.
+        let mut s1174_box_cache: std::collections::HashMap<Vec<(String, String)>, ((f32, f32), (f32, f32))> =
+            std::collections::HashMap::new();
         let mut s1174_snapshots: std::collections::HashMap<
             usize,
             std::collections::HashMap<String, String>,
@@ -1758,24 +1788,29 @@ impl<'a> PageLayouter<'a> {
                     // snapshot keeps the page-START state (first write wins).
                     {
                         let map = references.map(ir_index,pno).cloned().unwrap_or_else(LayoutEngine::s1174_map);
-                        let hdr_sub = LayoutEngine::s1174_substitute(&page.header, &map);
-                        let hb_odd = self.s755_header_bottom(&hdr_sub, page);
-                        let sy_odd = page.body_start_y(hb_odd, self.s1381_header_band(&hdr_sub, page));
-                        let (fr_odd, _) = self
-                            .s755_footer_geom(&LayoutEngine::s1174_substitute(&page.footer, &map), page);
-                        let ch_odd = page.size.height - sy_odd - fr_odd;
-                        let (sy_even, ch_even) = if page.even_odd_hf {
-                            let hdr_even_sub = LayoutEngine::s1174_substitute(&page.header_even, &map);
-                            let hb = self.s755_header_bottom(&hdr_even_sub, page);
-                            let sy = page.body_start_y(hb, self.s1381_header_band(&hdr_even_sub, page));
-                            let (fr, _) = self.s755_footer_geom(
-                                &LayoutEngine::s1174_substitute(&page.footer_even, &map),
-                                page,
-                            );
-                            (sy, page.size.height - sy - fr)
-                        } else {
-                            (sy_odd, ch_odd)
-                        };
+                        let mut key: Vec<(String, String)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                        key.sort();
+                        let ((sy_odd, ch_odd), (sy_even, ch_even)) = *s1174_box_cache.entry(key).or_insert_with(|| {
+                            let hdr_sub = LayoutEngine::s1174_substitute(&page.header, &map);
+                            let hb_odd = self.s755_header_bottom(&hdr_sub, page);
+                            let sy_odd = page.body_start_y(hb_odd, self.s1381_header_band(&hdr_sub, page));
+                            let (fr_odd, _) = self
+                                .s755_footer_geom(&LayoutEngine::s1174_substitute(&page.footer, &map), page);
+                            let ch_odd = page.size.height - sy_odd - fr_odd;
+                            let even = if page.even_odd_hf {
+                                let hdr_even_sub = LayoutEngine::s1174_substitute(&page.header_even, &map);
+                                let hb = self.s755_header_bottom(&hdr_even_sub, page);
+                                let sy = page.body_start_y(hb, self.s1381_header_band(&hdr_even_sub, page));
+                                let (fr, _) = self.s755_footer_geom(
+                                    &LayoutEngine::s1174_substitute(&page.footer_even, &map),
+                                    page,
+                                );
+                                (sy, page.size.height - sy - fr)
+                            } else {
+                                (sy_odd, ch_odd)
+                            };
+                            ((sy_odd, ch_odd), even)
+                        });
                         let first = s755_geom
                             .as_ref()
                             .map(|g| g.first)
@@ -11239,6 +11274,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 }
             };
             let (hf_hv, hf_fv) = (hf_variant(0), hf_variant(3));
+            if let Some(run) = s1553_run.or(page.header_runs.first()) {
+                super::HF_PARTS_SHOWN.with(|shown| {
+                    let mut shown = shown.borrow_mut();
+                    for code in [hf_hv, hf_fv] {
+                        shown.extend(run.hf_parts[code as usize].iter().cloned());
+                    }
+                });
+            }
             let hf_paint = |this: &Self, code: u8, tops: &[f32], fallback_y: f32, blocks: &[Block]| -> Vec<LayoutElement> {
                 let tops: Vec<f32> = if tops.is_empty() { vec![fallback_y] } else { tops.to_vec() };
                 let col_x = vec![page.margin.left; tops.len()];

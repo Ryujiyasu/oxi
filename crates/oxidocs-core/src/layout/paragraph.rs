@@ -8935,7 +8935,20 @@ impl<'a> ParagraphLayouter<'a> {
                         }
                         for vs in &tb.vector_shapes {
                             let (vx, vy) = (el_x + vs.x, oy + vs.y);
-                            if vs.is_line {
+                            if let Some(data) = vs.image.as_ref().filter(|_| !crate::env_flag!("OXI_LOCKED_CANVAS_DISABLE")) {
+                                // A picture member (a locked canvas's a:pic) over its box;
+                                // it fell to the empty-box arm below and drew nothing.
+                                let mut e = LayoutElement::new(vx, vy, vs.w, vs.h, LayoutContent::Image {
+                                    data: data.as_ref().clone(),
+                                    content_type: None,
+                                    crop: None,
+                                    rotation: 0.0,
+                                });
+                                if let Some(pi) = body_para_index {
+                                    e.paragraph_index = Some(pi);
+                                }
+                                elements.push(e);
+                            } else if vs.is_line {
                                 let mut e = LayoutElement::new(
                                     vx,
                                     vy,

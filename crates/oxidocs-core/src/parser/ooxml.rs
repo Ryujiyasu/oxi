@@ -94,6 +94,113 @@ struct ParseField {
     result: bool,
 }
 
+/// The text an `EQ` field instruction draws, or `None` for any other field.
+///
+/// Word builds an equation from the instruction itself; Oxi draws its text and
+/// leaves the geometry to the run: an overlay (`\o`) shows its text argument
+/// -- `\o\ad(氏名,　　　)` spreads 氏名 to the spacer's width, which is not
+/// reproduced, and texts overlaid on each other show one after the other --
+/// or, for a character in a circle, the enclosed character
+/// Unicode has (`\o\ac(○,印)` is ㊞); a fraction reads a/b, a radical √x, and
+/// every other switch shows its arguments in order.
+fn eq_field_text(instruction: &str) -> Option<String> {
+    let trimmed = instruction.trim_start();
+    if !trimmed.get(..2).is_some_and(|name| name.eq_ignore_ascii_case("eq")) {
+        return None;
+    }
+    let body = &trimmed[2..];
+    if !(body.starts_with(char::is_whitespace) || body.starts_with('\\')) {
+        return None;
+    }
+    let shown = eq_text(&body.chars().collect::<Vec<_>>(), &mut 0);
+    let shown = shown.trim().to_string();
+    (!shown.is_empty()).then_some(shown)
+}
+
+/// The text of an EQ expression from `chars[*at..]`, up to an unmatched `)`,
+/// or an argument-separating `,`/`;` when `in_args`.
+fn eq_text(chars: &[char], at: &mut usize) -> String {
+    let mut out = String::new();
+    while *at < chars.len() {
+        match chars[*at] {
+            ')' | ',' | ';' => break,
+            '\\' => {
+                let mut switches = Vec::new();
+                while *at < chars.len() && chars[*at] == '\\' {
+                    *at += 1;
+                    let name: String = chars[*at..].iter().take_while(|c| c.is_ascii_alphabetic()).collect();
+                    *at += name.chars().count();
+                    if name.is_empty() {
+                        // An escaped character: `\(` or `\,` is the character itself.
+                        if let Some(&c) = chars.get(*at) {
+                            out.push(c);
+                            *at += 1;
+                        }
+                        break;
+                    }
+                    // Switch parameters: `\up 10`, `\co3`, `\lc\{` (a bracket character).
+                    while *at < chars.len() && (chars[*at] == ' ' || chars[*at].is_ascii_digit()) {
+                        *at += 1;
+                    }
+                    switches.push(name.to_ascii_lowercase());
+                }
+                if chars.get(*at) == Some(&'(') {
+                    *at += 1;
+                    let mut args = vec![eq_text(chars, at)];
+                    while matches!(chars.get(*at), Some(',') | Some(';')) {
+                        *at += 1;
+                        args.push(eq_text(chars, at));
+                    }
+                    if chars.get(*at) == Some(&')') {
+                        *at += 1;
+                    }
+                    out.push_str(&eq_combine(&switches, args));
+                }
+            }
+            c => {
+                out.push(c);
+                *at += 1;
+            }
+        }
+    }
+    out
+}
+
+/// What one EQ construct shows, from its switch names and argument texts.
+fn eq_combine(switches: &[String], args: Vec<String>) -> String {
+    let has = |name: &str| switches.iter().any(|s| s == name);
+    if has("o") {
+        const RINGS: &[char] = &['○', '〇', '◯', '□', '◇'];
+        let ring = args.iter().any(|a| a.trim().chars().all(|c| RINGS.contains(&c)) && !a.trim().is_empty());
+        let inner = args.iter().find(|a| {
+            let a = a.trim();
+            !a.is_empty() && !a.chars().all(|c| RINGS.contains(&c))
+        });
+        if let (true, Some(inner)) = (ring, inner) {
+            let inner = inner.trim();
+            let enclosed = match inner {
+                "印" => Some('㊞'),
+                "秘" => Some('㊙'),
+                "注" => Some('㊟'),
+                "優" => Some('㊝'),
+                "済" | "可" => None,
+                digits => digits.parse::<u32>().ok().filter(|n| (1..=20).contains(n)).and_then(|n| char::from_u32(0x2460 + n - 1)),
+            };
+            return enclosed.map_or_else(|| inner.to_string(), String::from);
+        }
+        // Text over a spacer of blanks shows the text; two texts overlaid
+        // (a reading set over a name) both show.
+        return args.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect();
+    }
+    if has("f") && args.len() == 2 {
+        return format!("{}/{}", args[0].trim(), args[1].trim());
+    }
+    if has("r") {
+        return format!("√{}", args.last().map_or("", |a| a.trim()));
+    }
+    args.concat()
+}
+
 /// Presentation state for visible complex fields. Nested result fields restore
 /// their parent's cache policy and style-reference continuation on exit.
 #[derive(Default)]
@@ -206,8 +313,22 @@ impl ParseContext {
                 }
                 b"end" => {
                     let visible = fields.iter().take(fields.len().saturating_sub(1)).all(|f| f.result);
-                    fields.pop();
+                    let field = fields.pop();
                     if visible { text.push('\u{FFFF}'); }
+                    // OXI_EQ (2026-11-07, opt-out _DISABLE): an EQ field draws
+                    // the text of its own instruction -- `eq \o\ad(事業所所在地,
+                    // 　　　　)` spreads a form's label across a cell, `eq
+                    // \o\ac(○,印)` circles a character -- and has no result
+                    // to keep. Oxi drew nothing for it; on a 4,988-document
+                    // sample 24 of the 988 Japanese ones lost labels this
+                    // way. The text goes after the field, outside it.
+                    if let Some(field) = field.filter(|f| visible && !f.result) {
+                        if let Some(shown) = eq_field_text(&field.instruction) {
+                            if !crate::env_flag!("OXI_EQ_DISABLE") {
+                                text.push_str(&shown);
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -555,8 +676,7 @@ fn paragraph_base_run_style(styles: &StyleSheet, id: Option<&str>) -> RunStyle {
 
 impl OoxmlParser {
     pub fn new(data: &[u8]) -> Result<Self, ParseError> {
-        let cursor = Cursor::new(data.to_vec());
-        let archive = ZipArchive::new(cursor)?;
+        let archive = oxidocs_common::archive::open_zip(data.to_vec())?;
         Ok(Self { archive })
     }
 
@@ -914,6 +1034,25 @@ impl OoxmlParser {
             };
 
             hf_text_boxes.extend(take_hf_text_boxes().into_iter().map(|t| (5, t)));
+            // The parts each variant came from, for callers that check what the
+            // pages show (the CLI's drawn-text coverage).
+            let part_names = |refs: &[HdrFtrRef]| -> Vec<String> {
+                refs.iter()
+                    .filter_map(|r| ctx._rels.get(&r.rel_id))
+                    .filter_map(|r| oxidocs_common::security::sanitize_rel_target("word", &r.target).ok())
+                    .collect()
+            };
+            let or_fallback = |used: &[HdrFtrRef], refs: &[HdrFtrRef]| -> Vec<String> {
+                if used.is_empty() { part_names(&pick_fallback(refs)) } else { part_names(used) }
+            };
+            let hf_parts: [Vec<String>; 6] = [
+                or_fallback(&use_headers, effective_header_refs),
+                if section.properties.title_pg { part_names(&fh) } else { Vec::new() },
+                if even_odd_hf { part_names(&eh) } else { Vec::new() },
+                or_fallback(&use_footers, effective_footer_refs),
+                if section.properties.title_pg { part_names(&ff) } else { Vec::new() },
+                if even_odd_hf { part_names(&ef) } else { Vec::new() },
+            ];
             // Collect referenced footnotes and endnotes for this section
             let mut footnotes_list = Vec::new();
             let mut endnotes_list = Vec::new();
@@ -1072,6 +1211,7 @@ impl OoxmlParser {
                     title_pg: section.properties.title_pg,
                     even_odd_hf,
                     hf_text_boxes: hf_text_boxes.clone(),
+                    hf_parts: hf_parts.clone(),
                 });
                 last.section_grid_runs.push(crate::ir::SectionGridRun {
                         block_start: last.blocks.len(),
@@ -1212,6 +1352,7 @@ impl OoxmlParser {
                     title_pg: section.properties.title_pg,
                     even_odd_hf,
                     hf_text_boxes: hf_text_boxes.clone(),
+                    hf_parts: hf_parts.clone(),
                 }];
                 // S735: seed the grid-run list with the first section's pitch.
                 let grid_runs = vec![(0usize, section.properties.grid_line_pitch)];
@@ -7640,6 +7781,23 @@ fn parse_run(
             // Conditional fields display the outer cached result. Operand fields
             // are hidden by the enclosing code context and never paint here.
             field_type = Some(FieldType::Cached);
+        } else if field.split_whitespace().next().is_some_and(|name| {
+            ["FORMTEXT", "BIBLIOGRAPHY", "INDEX", "CITATION", "MERGEFIELD", "FILLIN", "EQ"]
+                .iter()
+                .any(|kept| name.eq_ignore_ascii_case(kept))
+        }) && !crate::env_flag!("OXI_RESULT_FIELDS_DISABLE")
+        {
+            // OXI_RESULT_FIELDS (2026-11-07, opt-out _DISABLE): fields whose
+            // display is the result Word cached on save and Oxi cannot rebuild.
+            // Unclassified, their results were cleared by the field-result
+            // suppression. On a 4,988-document docx-corpus sample that was
+            // 34,028 characters of FORMTEXT in 66 documents -- a form's filled-in
+            // answers, e.g. every course description of a JROTC catalogue left
+            // its table cells empty -- plus bibliographies (4 documents, 16,254
+            // characters), an index, citations, a merge field and a fill-in.
+            // An EQ field that was given a result shows it too; one without
+            // draws its instruction's text (`eq_field_text`).
+            field_type = Some(FieldType::Cached);
         } else if command.contains("DATE")
             || command.contains("TIME")
             || command.contains("AUTHOR")
@@ -8117,6 +8275,11 @@ pub(super) fn parse_color_modifiers_alpha(reader: &mut Reader<&[u8]>, base_hex: 
 }
 
 /// Parse a w:drawing element to extract image, shape, or text box info
+/// A VML shape's relativeHeight: its positive z-index (OXI_VML_ZINDEX).
+fn vml_relative_height(z_index: u32) -> u32 {
+    if std::env::var_os("OXI_VML_ZINDEX_DISABLE").is_some() { 0 } else { z_index }
+}
+
 fn parse_drawing(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
@@ -8210,6 +8373,8 @@ fn parse_drawing(
     // chart relationship of a chart (`c:chart r:id`).
     let mut smartart_dm: Option<String> = None;
     let mut chart_rel: Option<String> = None;
+    // The XML of an lc:lockedCanvas graphic, read whole (see below).
+    let mut locked_canvas: Option<String> = None;
     // S839 (2026-07-14): wpg vector-group per-shape extraction. The main
     // loop keeps ALL its existing (last-win, global) prop semantics; the
     // S839 state only PIGGYBACKS per-shape records so a visual-only group
@@ -8283,6 +8448,18 @@ fn parse_drawing(
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
                 depth += 1;
+                // OXI_LOCKED_CANVAS (2026-11-08, default ON, opt-out _DISABLE): a
+                // locked canvas is read whole and drawn as a group (see
+                // smartart::from_locked_canvas); its members' xfrm / fills must
+                // not reach the frame's own shape properties below.
+                if local == "lockedCanvas" && std::env::var_os("OXI_LOCKED_CANVAS_DISABLE").is_none() {
+                    let name = e.name().as_ref().to_vec();
+                    if let Ok(inner) = reader.read_text(quick_xml::name::QName(&name)) {
+                        locked_canvas = Some(format!("<lockedCanvas>{inner}</lockedCanvas>"));
+                        depth -= 1;
+                    }
+                    continue;
+                }
                 match local.as_str() {
                     "wrapPolygon" => { in_wrapping_polygon = true; }
                     "start" | "lineTo" if in_wrapping_polygon => {
@@ -10786,7 +10963,10 @@ fn parse_drawing(
         .filter(|_| std::env::var_os("OXI_CHART_DISABLE").is_none())
         .and_then(|id| ctx.graphic_parts.get(id))
         .and_then(|xml| super::chart::from_chart(xml, &ctx.theme, width, height));
-    let group = smartart.or(chart);
+    let canvas = locked_canvas
+        .as_deref()
+        .and_then(|xml| super::smartart::from_locked_canvas(xml, &ctx.theme, &ctx.media, width, height));
+    let group = smartart.or(chart).or(canvas);
     let group_drawn = group.is_some();
     if let Some(art) = group {
         s839_vector_shapes = art.shapes;
@@ -11244,6 +11424,13 @@ fn parse_vml_pict(
     let mut vml_dist_r: Option<f32> = None;
     let mut vml_v_relative: Option<String> = None;
     let mut vml_negative_z = false;
+    // OXI_VML_ZINDEX (2026-11-08, default ON, opt-out _DISABLE): a positive VML
+    // z-index is the shape's place in the same stacking order as DrawingML's
+    // relativeHeight (Word writes one number to both); VML shapes stacked at 0,
+    // under every DrawingML float. ja/creative__e7038ea5: the network labels
+    // (v:shape z-index 251819008) sit over the locked-canvas ellipses
+    // (relativeHeight 251805696..251809792).
+    let mut vml_z_index: u32 = 0;
     let mut escapes_cell = false; // o:allowincell="f" (S711b)
                                   // VML drawing canvas (<v:group editas="canvas">). Word reserves the
                                   // group's DECLARED height (style height:Npt) in the inline text flow; the
@@ -11588,6 +11775,8 @@ fn parse_vml_pict(
                                             if !in_grp {
                                                 vml_negative_z =
                                                     z.trim().parse::<i64>().is_ok_and(|z| z < 0);
+                                                vml_z_index = z.trim().parse::<i64>().ok()
+                                                    .and_then(|z| u32::try_from(z).ok()).unwrap_or(0);
                                             }
                                         }
                                     }
@@ -11841,6 +12030,8 @@ fn parse_vml_pict(
                                             if !in_grp {
                                                 vml_negative_z =
                                                     z.trim().parse::<i64>().is_ok_and(|z| z < 0);
+                                                vml_z_index = z.trim().parse::<i64>().ok()
+                                                    .and_then(|z| u32::try_from(z).ok()).unwrap_or(0);
                                             }
                                         }
                                     }
@@ -12091,7 +12282,7 @@ fn parse_vml_pict(
             wrap_type: img_wrap,
             crop: None,
             anchor_block_index: 0,
-            relative_height: 0,
+            relative_height: vml_relative_height(vml_z_index),
             // S1006: a zero-offset absolute letterhead with z-index<0 renders
             // BEHIND the body text (S918 behindDoc path), not over it.
             behind_doc: s1006_zero_abs && vml_negative_z,
@@ -12230,7 +12421,7 @@ fn parse_vml_pict(
             inset_bottom: None,
             wrap_type: Some(shape_wrap.unwrap_or(WrapType::None)),
             v_text_anchor: None,
-            relative_height: 0,
+            relative_height: vml_relative_height(vml_z_index),
             behind_doc: vml_negative_z,
             vert_overflow: None,
             compat_line_spacing: false,
@@ -12311,7 +12502,7 @@ fn parse_vml_pict(
             inset_bottom: Some(inset[3]),
             wrap_type: Some(shape_wrap.unwrap_or(WrapType::None)),
             v_text_anchor: v_text_anchor.clone(),
-            relative_height: 0,
+            relative_height: vml_relative_height(vml_z_index),
             behind_doc: vml_negative_z,
             vert_overflow: None,
             compat_line_spacing: false,
@@ -19192,4 +19383,22 @@ fn dash_path(segs: &[crate::ir::PathSeg], w: f32, h: f32, pattern: &[f32]) -> Ve
         }
     }
     out
+}
+
+#[cfg(test)]
+mod eq_field_tests {
+    use super::eq_field_text;
+
+    #[test]
+    fn eq_fields_show_their_text() {
+        assert_eq!(eq_field_text(" eq \\o\\ad(事業所所在地,　　　　　　　　)").as_deref(), Some("事業所所在地"));
+        assert_eq!(eq_field_text("EQ \\o\\ac(○,印)").as_deref(), Some("㊞"));
+        assert_eq!(eq_field_text("eq \\o\\ac(○,3)").as_deref(), Some("③"));
+        assert_eq!(eq_field_text("eq \\o\\ac(〇,済)").as_deref(), Some("済"));
+        assert_eq!(eq_field_text("eq \\f(1,2)").as_deref(), Some("1/2"));
+        assert_eq!(eq_field_text("eq \\o\\ad(\\s\\up 9(ふりがな),氏名)").as_deref(), Some("ふりがな氏名"));
+        assert_eq!(eq_field_text("eq \\o\\ad(　,　)"), None);
+        assert_eq!(eq_field_text("SEQ Figure"), None);
+        assert_eq!(eq_field_text("equation"), None);
+    }
 }

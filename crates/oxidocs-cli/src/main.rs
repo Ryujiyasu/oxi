@@ -197,11 +197,272 @@ fn convert(input: &str, output: &str, strict: bool) -> Result<Converted, Convert
         }
     }
 
-    let pdf_doc = doc_to_pdf(&doc);
+    let (pdf_doc, hf_parts_shown) = doc_to_pdf(&doc);
+
+    if let Some((coverage, chars)) = drawn_coverage(&data, &pdf_doc, &hf_parts_shown) {
+        eprintln!("Drawn text coverage: {coverage:.4} of {chars} characters");
+        if strict && coverage < MIN_DRAWN_COVERAGE {
+            // Nothing in the census named it, but text was lost all the same,
+            // by the parser or the layout: a table's cells, a text box, half
+            // a form. Answered like any other content Oxi does not draw, so
+            // the caller can fall back.
+            return Err(ConvertError::Unsupported(vec![oxidocs_core::ir::UnsupportedContent {
+                kind: format!("undrawn-text ({:.0}% drawn)", coverage * 100.0),
+                part: "layout".to_string(),
+                count: 1,
+            }]));
+        }
+    }
+
     let pdf_bytes = oxipdf_core::write_pdf(&pdf_doc);
 
     fs::write(output, &pdf_bytes).map_err(|e| ConvertError::Failed(format!("write {output}: {e}")))?;
     Ok(Converted { bytes: pdf_bytes.len(), pages: pdf_doc.pages.len() })
+}
+
+/// Below this share of its own text drawn, `--strict` refuses a document.
+const MIN_DRAWN_COVERAGE: f64 = 0.90;
+
+/// The share of the document's own text that the pages draw, counting each
+/// character as often as it occurs (case folded, whitespace left out), and
+/// how many characters that was out of. `None` for a document with too
+/// little text to judge or one whose parts cannot be read.
+///
+/// "Its own text" is read off the package, not the parsed document: every
+/// `w:t` of the main story, the header and footer parts some page shows
+/// (`hf_parts_shown`, the variants the layout picked page by page: a
+/// section's references to parts its pages never use count for nothing),
+/// footnotes and endnotes, less the `mc:Fallback` copies that repeat a text
+/// box and the runs a `w:vanish` or a hiding style takes out. Text the
+/// parser never picked up is exactly what a check on the parsed document
+/// cannot see, and on a 4,988-document sample most lost text was lost there.
+/// Symbol-font codes are left out because they are drawn as the Unicode
+/// symbol they stand for.
+fn drawn_coverage(data: &[u8], pdf: &PdfDocument, hf_parts_shown: &std::collections::BTreeSet<String>) -> Option<(f64, usize)> {
+    fn counted(c: char) -> bool {
+        !c.is_whitespace() && !c.is_control() && !('\u{E000}'..='\u{F8FF}').contains(&c)
+    }
+    let mut package = oxidocs_common::archive::OoxmlArchive::new(data).ok()?;
+    package.read_part("word/document.xml").ok()?;
+    let mut stories = vec!["word/document.xml".to_string()];
+    stories.extend(hf_parts_shown.iter().cloned());
+    stories.extend(
+        ["word/footnotes.xml", "word/endnotes.xml"]
+            .into_iter()
+            .filter(|name| package.file_names().iter().any(|n| n == name))
+            .map(str::to_string),
+    );
+    let hidden = package.read_part("word/styles.xml").map(|xml| hidden_styles(&xml)).unwrap_or_default();
+    let mut wanted: HashMap<char, usize> = HashMap::new();
+    for name in stories {
+        let Ok(xml) = package.read_part(&name) else { continue };
+        for text in story_text(&xml, &hidden) {
+            for c in text.chars().flat_map(char::to_lowercase).filter(|c| counted(*c)) {
+                *wanted.entry(c).or_default() += 1;
+            }
+        }
+    }
+    let total: usize = wanted.values().sum();
+    if total < 50 {
+        return None;
+    }
+    let mut drawn: HashMap<char, usize> = HashMap::new();
+    for span in pdf.pages.iter().flat_map(|page| &page.contents).filter_map(|e| e.text_span()) {
+        for c in span.text.chars().flat_map(char::to_lowercase) {
+            *drawn.entry(c).or_default() += 1;
+        }
+    }
+    let found: usize = wanted.iter().map(|(c, n)| (*n).min(drawn.get(c).copied().unwrap_or(0))).sum();
+    Some((found as f64 / total as f64, total))
+}
+
+/// The text of every visible run in one WordprocessingML story part: the
+/// `w:t` contents of each `w:r` that neither its own `w:vanish`, its
+/// character style nor its paragraph's style hides (`hidden` holds the style
+/// IDs that hide), with `mc:Fallback` blocks (a second copy of what their
+/// `mc:Choice` holds) skipped, and so are the cached results of the fields
+/// the engine recomputes (`recomputed_field`). A scan rather than a parse: it only has to
+/// count characters, and it must see what the parser may have missed.
+fn story_text(xml: &str, hidden: &std::collections::HashSet<String>) -> Vec<String> {
+    let mut visible = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(start) = rest.find("<mc:Fallback") {
+        visible.push_str(&rest[..start]);
+        rest = match rest[start..].find("</mc:Fallback>") {
+            Some(end) => &rest[start + end + "</mc:Fallback>".len()..],
+            None => "",
+        };
+    }
+    visible.push_str(rest);
+
+    let mut texts = Vec::new();
+    let mut paragraph_hidden = false;
+    // Open complex fields: (instruction so far, past its `separate`).
+    let mut fields: Vec<(String, bool)> = Vec::new();
+    let mut pos = 0;
+    while let Some(offset) = visible[pos..].find("<w:") {
+        let at = pos + offset;
+        let tail = &visible[at + 3..];
+        let tag_end = tail.find('>').map_or(visible.len(), |e| at + 3 + e + 1);
+        if tail.starts_with("p>") || tail.starts_with("p ") {
+            paragraph_hidden = false;
+            pos = tag_end;
+        } else if tail.starts_with("pStyle ") {
+            paragraph_hidden = attr_value(&visible[at..tag_end], "w:val").is_some_and(|id| hidden.contains(id));
+            pos = tag_end;
+        } else if tail.starts_with("fldSimple ") {
+            let tag = &visible[at..tag_end];
+            pos = tag_end;
+            if !tag.ends_with("/>") && attr_value(tag, "w:instr").is_some_and(|i| recomputed_field(&unescape_xml(i))) {
+                pos = visible[pos..].find("</w:fldSimple>").map_or(visible.len(), |e| pos + e);
+            }
+        } else if tail.starts_with("r>") || tail.starts_with("r ") {
+            // <w:r> or <w:r ...>, not <w:rPr>, <w:rFonts>, <w:rStyle>...
+            let end = tail.find("</w:r>").map_or(visible.len(), |e| at + 3 + e);
+            let run = &visible[at..end];
+            pos = end;
+            let styled = run.find("<w:rStyle ").is_some_and(|i| {
+                let tag = &run[i..run[i..].find('>').map_or(run.len(), |e| i + e)];
+                attr_value(tag, "w:val").is_some_and(|id| hidden.contains(id))
+            });
+            let run_hidden = vanish_in(run).unwrap_or(styled || paragraph_hidden);
+            let mut body = run;
+            while let Some(t) = body.find("<w:") {
+                let tail = &body[t + 3..];
+                let Some(open_end) = tail.find('>') else { break };
+                let tag = &tail[..open_end];
+                let content = &tail[open_end + 1..];
+                body = content;
+                if tag.starts_with("fldChar ") {
+                    match attr_value(tag, "w:fldCharType") {
+                        Some("begin") => fields.push((String::new(), false)),
+                        Some("separate") => if let Some(f) = fields.last_mut() { f.1 = true },
+                        Some("end") => { fields.pop(); }
+                        _ => {}
+                    }
+                    continue;
+                }
+                let is_text = tag == "t" || tag.starts_with("t ");
+                let is_instr = tag == "instrText" || tag.starts_with("instrText ");
+                if !(is_text || is_instr) || tag.ends_with('/') {
+                    continue;
+                }
+                let close = content.find("</w:").unwrap_or(content.len());
+                let text = unescape_xml(&content[..close]);
+                body = &content[close..];
+                if is_instr {
+                    if let Some(f) = fields.last_mut().filter(|f| !f.1) { f.0.push_str(&text) }
+                } else if !run_hidden && !fields.iter().any(|(instr, result)| *result && recomputed_field(instr)) {
+                    texts.push(text);
+                }
+            }
+        } else {
+            pos = at + 3;
+        }
+    }
+    texts
+}
+
+/// A field whose result the engine works out itself (page numbers, a
+/// running style reference), so the cached result in the package is not
+/// what the page shows.
+fn recomputed_field(instruction: &str) -> bool {
+    let name = instruction.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
+    matches!(name.as_str(), "PAGE" | "NUMPAGES" | "SECTIONPAGES" | "SECTION" | "STYLEREF")
+}
+
+/// What the first `w:vanish` in `xml` says, if there is one: hidden unless
+/// its `w:val` is 0 or false.
+fn vanish_in(xml: &str) -> Option<bool> {
+    toggle_in(xml, "<w:vanish")
+}
+
+/// What the first on/off element opening with `open` (`<w:titlePg`, say) in
+/// `xml` says, if there is one: on unless its `w:val` is 0, false or off.
+fn toggle_in(xml: &str, open: &str) -> Option<bool> {
+    let i = xml.match_indices(open).map(|(i, _)| i).find(|i| {
+        xml[i + open.len()..].starts_with(['/', '>', ' '])
+    })?;
+    let tag = &xml[i..xml[i..].find('>').map_or(xml.len(), |e| i + e)];
+    Some(!["0", "false", "off"].iter().any(|off| tag.contains(&format!("w:val=\"{off}\""))))
+}
+
+/// The value of attribute `name` in the tag text `tag`.
+fn attr_value<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let start = tag.find(&format!("{name}=\""))? + name.len() + 2;
+    let len = tag[start..].find('"')?;
+    Some(&tag[start..start + len])
+}
+
+/// IDs of the styles in `styles.xml` that hide their text: by their own
+/// `w:vanish`, or by one inherited through `w:basedOn`. A style's `w:rPr` is
+/// its run formatting, so any `w:vanish` in it hides the text it styles --
+/// "Note to specifier" paragraphs of a specification template are the usual
+/// case, printed by neither Word nor any other engine.
+fn hidden_styles(xml: &str) -> std::collections::HashSet<String> {
+    let mut styles: HashMap<String, (Option<bool>, Option<String>)> = HashMap::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<w:style ") {
+        let tail = &rest[start..];
+        let end = tail.find("</w:style>").unwrap_or(tail.len());
+        let style = &tail[..end];
+        rest = &tail[end..];
+        let open = &style[..style.find('>').unwrap_or(style.len())];
+        let Some(id) = attr_value(open, "w:styleId") else { continue };
+        let based_on = style.find("<w:basedOn ").and_then(|i| attr_value(&style[i..], "w:val")).map(str::to_string);
+        styles.insert(id.to_string(), (vanish_in(style), based_on));
+    }
+    styles
+        .keys()
+        .filter(|id| {
+            let mut current = id.as_str();
+            for _ in 0..16 {
+                match styles.get(current) {
+                    Some((Some(hides), _)) => return *hides,
+                    Some((None, Some(parent))) => current = parent,
+                    _ => return false,
+                }
+            }
+            false
+        })
+        .cloned()
+        .collect()
+}
+
+/// `text` with XML's five named entities and numeric character references
+/// replaced by the characters they stand for.
+fn unescape_xml(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let tail = &rest[amp..];
+        let Some(semi) = tail.find(';') else {
+            out.push_str(tail);
+            return out;
+        };
+        let entity = &tail[1..semi];
+        let decoded = match entity {
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "amp" => Some('&'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => entity
+                .strip_prefix("#x")
+                .map(|hex| u32::from_str_radix(hex, 16))
+                .or_else(|| entity.strip_prefix('#').map(|dec| dec.parse::<u32>()))
+                .and_then(|n| n.ok())
+                .and_then(char::from_u32),
+        };
+        match decoded {
+            Some(c) => out.push(c),
+            None => out.push_str(&tail[..=semi]),
+        }
+        rest = &tail[semi + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn docx_to_pdf(input: &str, output: &str, strict: bool) {
@@ -1098,11 +1359,22 @@ fn bundled_font_dirs() -> Vec<std::path::PathBuf> {
     // Installed with `cargo install`, neither of those exists: only the binary
     // is copied, and the faces it needs are compiled into it. So they are
     // written out once, next to the binary, and found by the first path on
-    // every run after that.
+    // every run after that. Next to the binary is often not writable -- a
+    // container runs /usr/bin/oxidocs as an unprivileged user -- so the user's
+    // cache and then the temporary directory are tried after it. Without
+    // this, such an install ran with none of its own faces at all.
     if dirs.iter().all(|dir| !dir.is_dir()) {
-        if let Some(dir) = exe.as_ref().and_then(|e| e.parent()) {
-            if let Some(written) = lay_out_fonts(&dir.join("fonts")) {
+        let cache = std::env::var_os("XDG_CACHE_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cache")))
+            .map(|dir| dir.join("oxidocs").join(concat!("fonts-", env!("CARGO_PKG_VERSION"))));
+        let candidates = exe.as_ref().and_then(|e| e.parent()).map(|dir| dir.join("fonts")).into_iter()
+            .chain(cache)
+            .chain(std::iter::once(std::env::temp_dir().join(concat!("oxidocs-fonts-", env!("CARGO_PKG_VERSION")))));
+        for candidate in candidates {
+            if let Some(written) = lay_out_fonts(&candidate) {
                 dirs.insert(0, written);
+                break;
             }
         }
     }
@@ -1163,25 +1435,54 @@ fn resolve_font_styled(family: Option<&str>, bold: bool, italic: bool) -> String
         }
     }
 
-    // Nothing embedded for this face: fall back to the base-14 mapping, which
-    // at least names a font every viewer has.
+    // Nothing embedded for this face: draw it with an embedded stand-in. Times
+    // goes there too, not to base-14 Times-Roman: its substitute is only
+    // missing here when the run asks for glyphs it lacks, and a base-14 name
+    // is a font with no file, which a PDF/A check rejects.
     if bold {
         match base {
             "Calibri" | "Arial" | "Helvetica" => "OxiLatin-Bold".to_string(),
             "Cambria" | "Century" => "OxiCambria-Bold".to_string(),
-            "Times New Roman" | "Times" => "Times-Bold".to_string(),
             "Courier New" | "Courier" => "Courier-Bold".to_string(),
-            other => other.to_string(),
+            other => stand_in_face(other, true),
         }
     } else {
         match base {
             "Calibri" | "Arial" | "Helvetica" => "OxiLatin-Regular".to_string(),
             "Cambria" | "Century" => "OxiCambria-Regular".to_string(),
-            "Times New Roman" => "Times-Roman".to_string(),
             "Courier New" => "Courier".to_string(),
-            other => other.to_string(),
+            other => stand_in_face(other, false),
         }
     }
+}
+
+/// The always-embedded face that draws a family this machine does not have
+/// and no base-14 name stands for: Verdana, Aptos, Segoe UI, Wingdings and
+/// the like. The family's own name used to go into the PDF instead, as a
+/// simple font with no file and no width table. A viewer then drew it with
+/// whatever it picked, at that face's widths; a PDF/A check rejects it
+/// outright; and a symbol font's codes, mapped to Unicode for want of the
+/// face, came out as whatever those bytes mean in WinAnsi. An embedded
+/// stand-in draws the same glyphs everywhere, and what it lacks goes on to
+/// the fallback faces. Serif families get the serif stand-in, the rest the
+/// sans one.
+fn stand_in_face(family: &str, bold: bool) -> String {
+    let lower = family.to_lowercase();
+    const SERIF: &[&str] = &[
+        "serif", "times", "roman", "georgia", "garamond", "book", "century", "cambria", "palatino",
+        "baskerville", "bodoni", "caslon", "minion", "constantia", "didot", "perpetua", "rockwell",
+        "sabon", "goudy", "cochin", "charter", "mincho", "ming", "song",
+    ];
+    // Century Gothic and Franklin Gothic are sans faces whatever else their
+    // names hold.
+    let serif = SERIF.iter().any(|k| lower.contains(k)) && !lower.contains("sans") && !lower.contains("gothic");
+    match (serif, bold) {
+        (true, true) => "OxiCambria-Bold",
+        (true, false) => "OxiCambria-Regular",
+        (false, true) => "OxiLatin-Bold",
+        (false, false) => "OxiLatin-Regular",
+    }
+    .to_string()
 }
 
 fn parse_hex_color(hex: &str) -> Option<Color> {
@@ -1299,7 +1600,8 @@ fn classify_paragraph(para: &Paragraph, block_index: usize, _total_blocks: usize
     ParaRole::Body
 }
 
-fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
+/// The PDF, and the header and footer parts its pages draw.
+fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::BTreeSet<String>) {
     // Use LayoutEngine for layout (single source of truth with WASM path)
     let engine = oxidocs_core::layout::LayoutEngine::for_document(doc);
     let layout_result = engine.layout(doc);
@@ -1700,7 +2002,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
             _ => None,
         });
 
-    PdfDocument {
+    let pdf = PdfDocument {
         version: PdfVersion::new(1, 7),
         info: DocumentInfo {
             title,
@@ -1710,7 +2012,8 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> PdfDocument {
         pages,
         outline: Vec::new(),
         embedded_fonts,
-    }
+    };
+    (pdf, layout_result.hf_parts_shown)
 }
 
 /// Render cover page elements with professional layout
@@ -3040,6 +3343,20 @@ fn build_embedded_fonts(
     embed_latin_fonts(&used_chars_latin, &mut fonts);
     embed_cambria_fonts(&used_chars_latin, &mut fonts);
 
+    // The body blocks are not the only place East Asian text lives: a form
+    // drawn in text boxes, a header, a shape's label. Deciding from them alone
+    // left such a document with no East Asian face at all, and its text went
+    // out under a bare font name no viewer can draw it with.
+    // An East Asian family drawing only Latin text -- MS Gothic for the digits
+    // of an English form -- needs its face as much: its runs are named after
+    // it whatever they hold.
+    let east_asian_runs = layout.pages.iter().flat_map(|page| &page.elements).any(|elem| {
+        matches!(&elem.content, oxidocs_core::layout::LayoutContent::Text { text, font_family: Some(family), .. }
+            if is_cjk_family(family) && !text.trim().is_empty())
+    });
+    if east_asian_runs || drawn_chars.iter().any(|c| is_cjk_char(*c)) {
+        needs_cjk_font = true;
+    }
     if !needs_cjk_font {
         return fonts;
     }
@@ -4011,5 +4328,58 @@ mod serve_tests {
         let no_output = serve_one(r#"{"id": "a", "input": "x.docx"}"#);
         assert_eq!(no_output["id"], "a");
         assert_eq!(no_output["ok"].as_bool(), Some(false));
+    }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    #[test]
+    fn story_text_leaves_out_results_the_engine_recomputes() {
+        let xml = r#"<w:hdr><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> STYLEREF  Divider </w:instrText></w:r>
+            <w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Error! No text of specified style in document.</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>
+            <w:r><w:t>Table 1</w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>7</w:t></w:r></w:fldSimple>
+            <w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>REF note</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>
+            <w:r><w:t>kept</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:fldSimple w:instr="DATE"><w:r><w:t>today</w:t></w:r></w:fldSimple></w:p></w:hdr>"#;
+        assert_eq!(story_text(xml, &Default::default()), vec!["Table 1", "kept", "today"]);
+    }
+
+    #[test]
+    fn story_text_keeps_visible_runs_once() {
+        let xml = r#"<w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="A"/></w:rPr><w:t>One</w:t></w:r>
+            <w:r><w:rPr><w:vanish/></w:rPr><w:t>hidden</w:t></w:r>
+            <w:r><w:rPr><w:vanish w:val="0"/></w:rPr><w:t xml:space="preserve"> two &amp; &#x41;</w:t></w:r>
+            <w:r><mc:AlternateContent><mc:Choice><w:txbxContent><w:p><w:r><w:t>box</w:t></w:r></w:p></w:txbxContent></mc:Choice>
+            <mc:Fallback><w:txbxContent><w:p><w:r><w:t>box</w:t></w:r></w:p></w:txbxContent></mc:Fallback></mc:AlternateContent></w:r>
+            <w:r><w:t/><w:tab/><w:t>end</w:t></w:r></w:p></w:body>"#;
+        assert_eq!(story_text(xml, &Default::default()), vec!["One", " two & A", "box", "end"]);
+    }
+
+    #[test]
+    fn story_text_leaves_out_what_styles_hide() {
+        let styles = r#"<w:styles><w:style w:type="paragraph" w:styleId="Note"><w:rPr><w:vanish/></w:rPr></w:style>
+            <w:style w:type="paragraph" w:styleId="NoteChild"><w:basedOn w:val="Note"/></w:style>
+            <w:style w:type="paragraph" w:styleId="Shown"><w:basedOn w:val="Note"/><w:rPr><w:vanish w:val="0"/></w:rPr></w:style>
+            <w:style w:type="character" w:styleId="Secret"><w:rPr><w:vanish/></w:rPr></w:style></w:styles>"#;
+        let hidden = hidden_styles(styles);
+        let xml = r#"<w:body><w:p><w:pPr><w:pStyle w:val="NoteChild"/></w:pPr><w:r><w:t>note</w:t></w:r>
+            <w:r><w:rPr><w:vanish w:val="0"/></w:rPr><w:t>shown anyway</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Shown"/></w:pPr><w:r><w:t>body</w:t></w:r><w:r><w:rPr><w:rStyle w:val="Secret"/></w:rPr><w:t>secret</w:t></w:r></w:p>
+            <w:p><w:r><w:t>plain</w:t></w:r></w:p></w:body>"#;
+        assert_eq!(story_text(xml, &hidden), vec!["shown anyway", "body", "plain"]);
+    }
+
+    #[test]
+    fn toggle_in_reads_on_off_elements() {
+        assert_eq!(toggle_in("<w:sectPr><w:titlePg/></w:sectPr>", "<w:titlePg"), Some(true));
+        assert_eq!(toggle_in(r#"<w:titlePg w:val="0"/>"#, "<w:titlePg"), Some(false));
+        assert_eq!(toggle_in("<w:titlePgX/>", "<w:titlePg"), None);
+        assert_eq!(toggle_in("<w:specVanish/>", "<w:vanish"), None);
+    }
+
+    #[test]
+    fn unescape_xml_leaves_unknown_entities() {
+        assert_eq!(unescape_xml("a&lt;b&#65;&nbsp;&"), "a<bA&nbsp;&");
     }
 }

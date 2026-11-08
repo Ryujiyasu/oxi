@@ -2271,6 +2271,9 @@ fn apply_revision_styling_to_run(
 /// Result of layout: positioned elements across pages
 pub struct LayoutResult {
     pub pages: Vec<LayoutPage>,
+    /// The header and footer parts some page draws (see
+    /// `HeaderFooterRun::hf_parts`), whatever variant chose them.
+    pub hf_parts_shown: std::collections::BTreeSet<String>,
 }
 
 pub struct LayoutPage {
@@ -3968,6 +3971,8 @@ thread_local! {
     static IN_HF_FRAME_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// OXI_HF_FRAME_OUTSIDE: true while an even page's header / footer is painted.
     pub(crate) static HF_PAGE_EVEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The header/footer parts the pages of the current pass draw.
+    pub(crate) static HF_PARTS_SHOWN: std::cell::RefCell<std::collections::BTreeSet<String>> = const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
     /// OXI_HF_TXBX_NO_CHARGRID: set while a header / footer text box is laid out.
     static IN_HF_TEXT_BOX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// OXI_VERT_TCY: set while an eaVert text box lays out its columns -- the
@@ -4762,6 +4767,7 @@ impl LayoutEngine {
     }
 
     fn layout_pass_with_columns(&self, doc: &Document, columns: &mut GridColumnSearch, references: &mut style_pagination::StylePagination, source_anchors: &mut FloatSourceAnchors) -> LayoutResult {
+        HF_PARTS_SHOWN.with(|s| s.borrow_mut().clear());
         // Pre-pass: resolve fitText runs using actual font metrics
         let mut doc_resolved = doc.clone();
         // Contextual spacing follows neighboring source paragraphs across
@@ -5397,7 +5403,8 @@ impl LayoutEngine {
                 }
             }
         }
-        LayoutResult { pages }
+        let hf_parts_shown = HF_PARTS_SHOWN.with(|s| std::mem::take(&mut *s.borrow_mut()));
+        LayoutResult { pages, hf_parts_shown }
     }
 
     /// Resolve font size for a run, considering paragraph style defaults and heading level
