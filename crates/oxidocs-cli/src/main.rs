@@ -1205,7 +1205,16 @@ struct FontPlan {
     keys: HashMap<(String, bool, bool), String>,
 }
 
-static FONT_PLAN: std::sync::OnceLock<FontPlan> = std::sync::OnceLock::new();
+thread_local! {
+    /// The plan of the conversion running on this thread. It was a process-wide
+    /// OnceLock: `oxidocs serve` converts many documents per process, so every
+    /// document after the first was drawn with the FIRST document's plan --
+    /// Arial runs, say, went to the OxiLatin (Carlito-width) stand-in although
+    /// Liberation Sans had just been embedded for them. A conversion runs on
+    /// one thread from layout to PDF, so the plan lives with the thread and is
+    /// replaced by every conversion.
+    static FONT_PLAN: std::cell::RefCell<FontPlan> = std::cell::RefCell::new(FontPlan::default());
+}
 
 /// Metric-compatible free substitutes, used only when the real family is
 /// absent. Measured 2026-09-02 against the Microsoft originals: Carlito and
@@ -1429,10 +1438,8 @@ fn resolve_font_styled(family: Option<&str>, bold: bool, italic: bool) -> String
     // A face the plan actually embedded wins over the base-14 mapping: the
     // document's own family drawn with its own outlines and widths, rather
     // than every sans family collapsed onto one file.
-    if let Some(plan) = FONT_PLAN.get() {
-        if let Some(key) = plan.keys.get(&(base.trim().to_lowercase(), bold, italic)) {
-            return key.clone();
-        }
+    if let Some(key) = FONT_PLAN.with(|plan| plan.borrow().keys.get(&(base.trim().to_lowercase(), bold, italic)).cloned()) {
+        return key;
     }
 
     // Nothing embedded for this face: draw it with an embedded stand-in. Times
@@ -3174,6 +3181,9 @@ fn embed_document_faces(
 ) {
     use std::collections::{BTreeMap, BTreeSet};
 
+    // A plan left by this thread's previous conversion must not survive into
+    // this one, even when this document embeds nothing.
+    FONT_PLAN.with(|p| *p.borrow_mut() = FontPlan::default());
     let mut wanted: BTreeMap<(String, bool, bool), BTreeSet<char>> = BTreeMap::new();
     for page in &layout.pages {
         for elem in &page.elements {
@@ -3277,7 +3287,7 @@ fn embed_document_faces(
         );
     }
 
-    let _ = FONT_PLAN.set(plan);
+    FONT_PLAN.with(|p| *p.borrow_mut() = plan);
 }
 
 /// Build embedded fonts map from system fonts.
@@ -4328,6 +4338,20 @@ mod serve_tests {
         let no_output = serve_one(r#"{"id": "a", "input": "x.docx"}"#);
         assert_eq!(no_output["id"], "a");
         assert_eq!(no_output["ok"].as_bool(), Some(false));
+    }
+
+    /// One conversion's font plan must not reach the next one on the same
+    /// thread: serve converts many documents per process, and a stale plan
+    /// drew every later document's runs with the first one's faces.
+    #[test]
+    fn a_conversion_starts_from_an_empty_font_plan() {
+        FONT_PLAN.with(|p| {
+            p.borrow_mut().keys.insert(("arial".to_string(), false, false), "FStale".to_string());
+        });
+        assert_eq!(resolve_font_styled(Some("Arial"), false, false), "FStale");
+        let empty = oxidocs_core::layout::LayoutResult { pages: Vec::new(), hf_parts_shown: Default::default() };
+        embed_document_faces(&empty, &mut HashMap::new());
+        assert_ne!(resolve_font_styled(Some("Arial"), false, false), "FStale");
     }
 }
 
