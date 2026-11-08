@@ -24,9 +24,12 @@ pub fn open_zip(mut data: Vec<u8>) -> zip::result::ZipResult<ZipArchive<Cursor<V
 fn clamp_eocd_comment(data: &mut [u8]) -> bool {
     const SIG: &[u8; 4] = b"PK\x05\x06";
     const FIXED: usize = 22;
+    if data.len() < FIXED {
+        return false;
+    }
     let start = data.len().saturating_sub(FIXED + u16::MAX as usize);
     let mut found = None;
-    for at in (start..=data.len().saturating_sub(FIXED)).rev() {
+    for at in (start..=data.len() - FIXED).rev() {
         if &data[at..at + 4] != SIG {
             continue;
         }
@@ -151,6 +154,18 @@ mod open_zip_tests {
         let mut text = String::new();
         archive.by_name("a.xml").unwrap().read_to_string(&mut text).unwrap();
         assert_eq!(text, "<a/>");
+    }
+
+    #[test]
+    fn truncated_eocd_records_return_errors_without_panicking() {
+        let mut record = [0u8; 22];
+        record[..4].copy_from_slice(b"PK\x05\x06");
+        for len in 0..record.len() {
+            let mut input = record[..len].to_vec();
+            assert!(!clamp_eocd_comment(&mut input), "length {len}");
+            assert_eq!(input, record[..len], "length {len}");
+            assert!(open_zip(input).is_err(), "length {len}");
+        }
     }
 
     #[test]
