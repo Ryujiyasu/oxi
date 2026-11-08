@@ -10109,10 +10109,29 @@ cells={} pitch={:.2} text={:?}",
         let s1644_overflow = !crate::env_flag!("OXI_S1644_DISABLE")
             && text_box.vert_overflow.as_deref() != Some("clip");
         let s1644_extra = if s1644_overflow { 2000.0 } else { 0.0 };
+        // OXI_WRAPNONE_OVERFLOW (2026-11-08, default ON, opt-out _DISABLE): a
+        // wrap="none" line longer than the box is drawn whole from the left inset,
+        // past the right edge -- never wrapped, never cut. Word PDFs: docx-corpus
+        // ja/administrative__d33417cd «提出日　2020年10月29日» (jc right, 12pt, 144pt
+        // box, spAutoFit) starts at the inner left 345.2 and runs to 496; ja/forms__
+        // f62f5a80 (185pt box, no autofit) draws both 第12条 / 第30条 lines whole on
+        // one line each. Oxi cut the first at the box edge and wrapped the second.
+        let wrapnone_text_w = if text_box.body_wrap_none
+            && !crate::env_flag!("OXI_WRAPNONE_OVERFLOW_DISABLE")
+        {
+            self.textbox_unwrapped_text_width(text_box)
+        } else {
+            0.0
+        };
+        // The estimate can run short of the drawn line (grid pitch, kerning), so a
+        // box whose text overflows gets an open measure and an open clip instead.
+        let wrapnone_overflows = wrapnone_text_w
+            > text_box.width - text_box.inset_left.unwrap_or(7.2) - text_box.inset_right.unwrap_or(7.2) - 0.5;
+        let wrapnone_clip_w = if wrapnone_overflows { text_box.width + 2000.0 } else { text_box.width };
         elements.push(LayoutElement::new(
             abs_x,
             abs_y,
-            text_box.width,
+            wrapnone_clip_w,
             text_box.height + s1644_extra,
             LayoutContent::ClipStart,
         ));
@@ -10171,6 +10190,8 @@ cells={} pitch={:.2} text={:?}",
         };
         let inner_x = abs_x + inset_l + corner_inset;
         let inner_width = (text_box.width - inset_l - inset_r - 2.0 * corner_inset).max(0.0);
+        // OXI_WRAPNONE_OVERFLOW: the unwrapped line sets the measure.
+        let inner_width = if wrapnone_overflows { inner_width + 2000.0 } else { inner_width };
         let inner_height = (text_box.height - inset_t - inset_b - 2.0 * v_corner_inset).max(0.0);
         // S481 (REVERTED, finding only): rendering vertOverflow="overflow" lines
         // (e.g. 2ea81a "＜＜記載例＞＞", dropped via avail=0) REGRESSED p2 −0.0009 —
