@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       oxi_commit:
-        description: Oxi commit to build oxidocs from (default: the commit this run is on)
+        description: 'Oxi commit to build oxidocs from (default: the commit this run is on)'
         type: string
         default: ''
 
