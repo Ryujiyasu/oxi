@@ -51946,6 +51946,93 @@ End Function"#)
         }
     }
 
+    fn source_default_storage_probe() -> &'static str {
+        r#"Attribute VB_Name = "NamedDefaultProbe"
+Option Explicit
+Public Trace As String
+Public Report As String
+Public HeldOwner As FieldOwner
+Public HeldBox As IndexBox
+Public Function Control() As String
+ Control = "ready"
+End Function
+Public Function MakeOwner() As FieldOwner
+ Trace = Trace & "F"
+ Set MakeOwner = HeldOwner
+End Function
+Public Function ReadRhs(ByVal rhs As Variant) As Variant
+ Trace = Trace & "R"
+ If IsObject(rhs) Then
+  Set ReadRhs = rhs
+ Else
+  ReadRhs = rhs
+ End If
+End Function
+Public Function Probe(ByVal targetKind As Long, ByVal valueKind As Long) As String
+ Dim owner As FieldOwner
+ Dim box As IndexBox
+ Dim rhs As Variant
+ Set owner = New FieldOwner
+ Set box = New IndexBox
+ Set owner.ItemBox = box
+ Set HeldOwner = owner
+ Set HeldBox = box
+ Trace = ""
+ Report = ""
+ Select Case valueKind
+ Case 0
+  rhs = 17
+ Case 1
+  rhs = "abc"
+ Case 2
+  Set rhs = New ScalarPayload
+ Case 3
+  Set rhs = New PlainPayload
+ Case 4
+  Set rhs = Nothing
+ End Select
+ On Error GoTo Failed
+ Select Case targetKind
+ Case 0
+  box = ReadRhs(rhs)
+ Case 1
+  NamedDefaultProbe.HeldBox = ReadRhs(rhs)
+ End Select
+ Probe = "OK|" & Trace & "|" & Report
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Trace & "|" & Report
+End Function
+
+"#
+    }
+
+    fn source_default_storage_fixture(probe: &str, formal: &str, storage_kind: Option<&str>) -> String {
+        let mut source = source_object_rhs_fixture().to_string();
+        let start = source.find("Attribute VB_Name = \"NamedDefaultProbe\"").unwrap();
+        let end = start + source[start..].find("VERSION 1.0 CLASS").unwrap();
+        source.replace_range(start..end, probe);
+        source = source
+            .replace("Property Get ValueAt(ByRef Index As Long) As Variant",
+                &format!("Property Get ValueAt() As {formal}"))
+            .replace("Property Let ValueAt(ByRef Index As Long, ByVal Value As Variant)",
+                &format!("Property Let ValueAt(ByVal Value As {formal})"))
+            .replace("Property Set ValueAt(ByRef Index As Long, ByVal Value As Variant)",
+                "Property Set ValueAt(ByVal Value As Variant)")
+            .replace(" Index = Index + 10\n", "")
+            .replace(" Index = Index + 20\n", "");
+        if matches!(formal, "Object" | "ScalarPayload") {
+            source = source.replace(" ValueAt = NamedDefaultProbe.Report", " Set ValueAt = Nothing");
+        }
+        source.push_str("\nVERSION 1.0 CLASS\nAttribute VB_Name = \"FieldOwner\"\nPublic ItemBox As IndexBox\n");
+        if let Some(storage_kind) = storage_kind.filter(|kind| *kind != "IndexBox") {
+            source = source
+                .replace("Public HeldBox As IndexBox", &format!("Public HeldBox As {storage_kind}"))
+                .replace("Dim box As IndexBox", &format!("Dim box As {storage_kind}"));
+        }
+        source
+    }
+
     #[test]
     fn source_default_storage_and_public_fields_keep_binding_context() {
         let field_probe = r#"Attribute VB_Name = "NamedDefaultProbe"
@@ -52010,141 +52097,182 @@ Failed:
 End Function
 
 "#;
-        let storage_probe = r#"Attribute VB_Name = "NamedDefaultProbe"
-Option Explicit
-Public Trace As String
-Public Report As String
-Public HeldOwner As FieldOwner
-Public HeldBox As IndexBox
-Public Function Control() As String
- Control = "ready"
-End Function
-Public Function MakeOwner() As FieldOwner
- Trace = Trace & "F"
- Set MakeOwner = HeldOwner
-End Function
-Public Function ReadRhs(ByVal rhs As Variant) As Variant
- Trace = Trace & "R"
- If IsObject(rhs) Then
-  Set ReadRhs = rhs
- Else
-  ReadRhs = rhs
- End If
-End Function
-Public Function Probe(ByVal targetKind As Long, ByVal valueKind As Long) As String
- Dim owner As FieldOwner
- Dim box As IndexBox
- Dim rhs As Variant
- Set owner = New FieldOwner
- Set box = New IndexBox
- Set owner.ItemBox = box
- Set HeldOwner = owner
- Set HeldBox = box
- Trace = ""
- Report = ""
- Select Case valueKind
- Case 0
-  rhs = 17
- Case 1
-  rhs = "abc"
- Case 2
-  Set rhs = New ScalarPayload
- Case 3
-  Set rhs = New PlainPayload
- Case 4
-  Set rhs = Nothing
- End Select
- On Error GoTo Failed
- Select Case targetKind
- Case 0
-  box = ReadRhs(rhs)
- Case 1
-  NamedDefaultProbe.HeldBox = ReadRhs(rhs)
- End Select
- Probe = "OK|" & Trace & "|" & Report
- Exit Function
-Failed:
- Probe = "ERR|" & CStr(Err.Number) & "|" & Trace & "|" & Report
-End Function
-
-"#;
-        let cases: [(&str, bool, &[&str]); 8] = [
-            ("Variant", false, &[
+        let storage_probe = source_default_storage_probe();
+        let cases: [(&str, &str, &[&str]); 16] = [
+            ("Variant", "field", &[
                 "OK|RL|Integer:2:False", "OK|RL|String:8:False", "OK|RPL|String:8:False", "ERR|438|R|", "ERR|91|R|",
                 "OK|RL|Integer:2:False", "OK|RL|String:8:False", "OK|RPL|String:8:False", "ERR|438|R|", "ERR|91|R|",
                 "OK|RL|Integer:2:False", "OK|RL|String:8:False", "OK|RPL|String:8:False", "ERR|438|R|", "ERR|91|R|",
                 "OK|RFL|Integer:2:False", "OK|RFL|String:8:False", "OK|RFPL|String:8:False", "ERR|438|RF|", "ERR|91|RF|",
             ]),
-            ("Variant", true, &[
+            ("Variant", "IndexBox", &[
                 "OK|RL|Integer:2:False", "OK|RL|String:8:False", "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Nothing:9:True",
                 "OK|RL|Integer:2:False", "OK|RL|String:8:False", "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Nothing:9:True",
             ]),
-            ("String", false, &[
+            ("String", "field", &[
                 "OK|RL|String:8:False", "OK|RL|String:8:False", "OK|RPL|String:8:False", "ERR|438|R|", "ERR|91|R|",
                 "OK|RL|String:8:False", "OK|RL|String:8:False", "OK|RPL|String:8:False", "ERR|438|R|", "ERR|91|R|",
                 "OK|RL|String:8:False", "OK|RL|String:8:False", "OK|RPL|String:8:False", "ERR|438|R|", "ERR|91|R|",
                 "OK|RFL|String:8:False", "OK|RFL|String:8:False", "OK|RFPL|String:8:False", "ERR|438|RF|", "ERR|91|RF|",
             ]),
-            ("Object", false, &[
+            ("Object", "field", &[
                 "ERR|13|R|", "ERR|13|R|", "ERR|13|RP|", "ERR|438|R|", "ERR|91|R|",
                 "ERR|13|R|", "ERR|13|R|", "ERR|13|RP|", "ERR|438|R|", "ERR|91|R|",
                 "ERR|13|R|", "ERR|13|R|", "ERR|13|RP|", "ERR|438|R|", "ERR|91|R|",
                 "ERR|13|RF|", "ERR|13|RF|", "ERR|13|RFP|", "ERR|438|RF|", "ERR|91|RF|",
             ]),
-            ("ScalarPayload", false, &[
+            ("ScalarPayload", "field", &[
                 "ERR|13|R|", "ERR|13|R|", "ERR|13|RP|", "ERR|438|R|", "ERR|91|R|",
                 "ERR|13|R|", "ERR|13|R|", "ERR|13|RP|", "ERR|438|R|", "ERR|91|R|",
                 "ERR|13|R|", "ERR|13|R|", "ERR|13|RP|", "ERR|438|R|", "ERR|91|R|",
                 "ERR|13|RF|", "ERR|13|RF|", "ERR|13|RFP|", "ERR|438|RF|", "ERR|91|RF|",
             ]),
-            ("String", true, &[
+            ("String", "IndexBox", &[
                 "OK|RL|String:8:False", "OK|RL|String:8:False", "OK|RPL|String:8:False", "ERR|438|R|", "ERR|91|R|",
                 "OK|RL|String:8:False", "OK|RL|String:8:False", "OK|RPL|String:8:False", "ERR|438|R|", "ERR|91|R|",
             ]),
-            ("Object", true, &[
+            ("Object", "IndexBox", &[
                 "ERR|424|R|", "ERR|424|R|", "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Nothing:9:True",
                 "ERR|424|R|", "ERR|424|R|", "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Nothing:9:True",
             ]),
-            ("ScalarPayload", true, &[
+            ("ScalarPayload", "IndexBox", &[
                 "ERR|424|R|", "ERR|424|R|", "OK|RLP|ScalarPayload:8:True", "ERR|13|R|", "OK|RL|Nothing:9:True",
                 "ERR|424|R|", "ERR|424|R|", "OK|RLP|ScalarPayload:8:True", "ERR|13|R|", "OK|RL|Nothing:9:True",
+            ]),
+            ("Variant", "Object", &[
+                "OK|RL|Integer:2:False", "OK|RL|String:8:False", "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Nothing:9:True",
+                "OK|RL|Integer:2:False", "OK|RL|String:8:False", "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Nothing:9:True",
+            ]),
+            ("String", "Object", &[
+                "OK|RL|String:8:False", "OK|RL|String:8:False", "OK|RPL|String:8:False", "ERR|13|R|", "ERR|13|R|",
+                "OK|RL|String:8:False", "OK|RL|String:8:False", "OK|RPL|String:8:False", "ERR|13|R|", "ERR|13|R|",
+            ]),
+            ("Object", "Object", &[
+                "ERR|13|R|", "ERR|13|R|", "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Nothing:9:True",
+                "ERR|13|R|", "ERR|13|R|", "OK|RLP|ScalarPayload:8:True", "OK|RL|PlainPayload:9:True", "OK|RL|Nothing:9:True",
+            ]),
+            ("ScalarPayload", "Object", &[
+                "ERR|13|R|", "ERR|13|R|", "OK|RLP|ScalarPayload:8:True", "ERR|13|R|", "OK|RL|Nothing:9:True",
+                "ERR|13|R|", "ERR|13|R|", "OK|RLP|ScalarPayload:8:True", "ERR|13|R|", "OK|RL|Nothing:9:True",
+            ]),
+            ("Variant", "Variant", &[
+                "OK|R|", "OK|R|", "OK|RP|", "ERR|438|R|", "ERR|91|R|",
+                "OK|R|", "OK|R|", "OK|RP|", "ERR|438|R|", "ERR|91|R|",
+            ]),
+            ("String", "Variant", &[
+                "OK|R|", "OK|R|", "OK|RP|", "ERR|438|R|", "ERR|91|R|",
+                "OK|R|", "OK|R|", "OK|RP|", "ERR|438|R|", "ERR|91|R|",
+            ]),
+            ("Object", "Variant", &[
+                "OK|R|", "OK|R|", "OK|RP|", "ERR|438|R|", "ERR|91|R|",
+                "OK|R|", "OK|R|", "OK|RP|", "ERR|438|R|", "ERR|91|R|",
+            ]),
+            ("ScalarPayload", "Variant", &[
+                "OK|R|", "OK|R|", "OK|RP|", "ERR|438|R|", "ERR|91|R|",
+                "OK|R|", "OK|R|", "OK|RP|", "ERR|438|R|", "ERR|91|R|",
             ]),
         ];
-        for (formal, storage, expected) in cases {
-            let mut source = source_object_rhs_fixture().to_string();
-            let start = source.find("Attribute VB_Name = \"NamedDefaultProbe\"").unwrap();
-            let end = start + source[start..].find("VERSION 1.0 CLASS").unwrap();
-            source.replace_range(start..end, if storage { storage_probe } else { field_probe });
-            source = source
-                .replace("Property Get ValueAt(ByRef Index As Long) As Variant",
-                    &format!("Property Get ValueAt() As {formal}"))
-                .replace("Property Let ValueAt(ByRef Index As Long, ByVal Value As Variant)",
-                    &format!("Property Let ValueAt(ByVal Value As {formal})"))
-                .replace("Property Set ValueAt(ByRef Index As Long, ByVal Value As Variant)",
-                    "Property Set ValueAt(ByVal Value As Variant)")
-                .replace(" Index = Index + 10\n", "")
-                .replace(" Index = Index + 20\n", "");
-            if matches!(formal, "Object" | "ScalarPayload") {
-                source = source.replace(" ValueAt = NamedDefaultProbe.Report", " Set ValueAt = Nothing");
-            }
-            source.push_str("\nVERSION 1.0 CLASS\nAttribute VB_Name = \"FieldOwner\"\nPublic ItemBox As IndexBox\n");
-            let control = execute_workbook_vba(workbook(), &source, "NamedDefaultProbe.Control",
-                vec![], 0, failure_context()).unwrap();
+        for (formal, storage_kind, expected) in cases {
+            let source = source_default_storage_fixture(
+                if storage_kind == "field" { field_probe } else { storage_probe },
+                formal, (storage_kind != "field").then_some(storage_kind),
+            );
+            let mut session = None;
+            let control = execute_workbook_action_in_session(workbook(), &source, Some("NamedDefaultProbe.Control"),
+                vec![], 0, failure_context(), &mut session).unwrap();
             assert!(control.error.is_none());
             assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
             let mut book = control.workbook;
             for (index, expected) in expected.iter().enumerate() {
-                let outcome = execute_workbook_vba(book, &source, "NamedDefaultProbe.Probe",
+                let outcome = execute_workbook_action_in_session(book, &source, Some("NamedDefaultProbe.Probe"),
                     vec![Value::Integer((index / 5) as i64), Value::Integer((index % 5) as i64)],
-                    0, failure_context()).unwrap();
-                assert!(outcome.error.is_none(), "{formal} storage={storage} {index}: {:?}",
+                    0, failure_context(), &mut session).unwrap();
+                assert!(outcome.error.is_none(), "{formal} storage={storage_kind} {index}: {:?}",
                     outcome.error.as_ref().map(|e| &e.message));
                 assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], *expected,
-                    "{formal} storage={storage} {index}");
+                    "{formal} storage={storage_kind} {index}");
                 book = outcome.workbook;
             }
         }
     }
+
+    #[test]
+    fn source_default_dispatch_conversion_and_setter_errors_match_native() {
+        let probe = source_default_storage_probe().replace(
+            "Public Report As String", "Public Report As String\nPublic ThrowCode As Long",
+        ) + "\nPublic Function SetThrowCode(ByVal code As Long) As String\n ThrowCode = code\n SetThrowCode = \"set\"\nEnd Function\n";
+        for setter_body in [false, true] {
+            let mut source = source_default_storage_fixture(&probe, "String", Some("Object"));
+            if setter_body {
+                source = source.replace(
+                    " NamedDefaultProbe.Trace = NamedDefaultProbe.Trace & \"L\"",
+                    " NamedDefaultProbe.Trace = NamedDefaultProbe.Trace & \"L\"\n Err.Raise NamedDefaultProbe.ThrowCode",
+                );
+            } else {
+                source = source.replace(
+                    " Value = \"payload\"",
+                    " Err.Raise NamedDefaultProbe.ThrowCode\n Value = \"payload\"",
+                );
+            }
+            let mut session = None;
+            let control = execute_workbook_action_in_session(workbook(), &source, Some("NamedDefaultProbe.Control"),
+                vec![], 0, failure_context(), &mut session).unwrap();
+            assert!(control.error.is_none());
+            assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+            let mut book = control.workbook;
+            for code in [91, 424, 438, 193] {
+                let setting = execute_workbook_action_in_session(book, &source, Some("NamedDefaultProbe.SetThrowCode"),
+                    vec![Value::Integer(code)], 0, failure_context(), &mut session).unwrap();
+                assert!(setting.error.is_none());
+                assert_eq!(serde_json::to_value(&setting.result).unwrap()["value"], "set");
+                let outcome = execute_workbook_action_in_session(setting.workbook, &source, Some("NamedDefaultProbe.Probe"),
+                    vec![Value::Integer(0), Value::Integer(2)], 0, failure_context(), &mut session).unwrap();
+                assert!(outcome.error.is_none());
+                let expected = format!("ERR|{}|{}|", if setter_body { code } else { 13 },
+                    if setter_body { "RPL" } else { "RP" });
+                assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected,
+                    "setter_body={setter_body} code={code}");
+                book = outcome.workbook;
+            }
+        }
+    }
+
+
+    #[test]
+    fn source_default_dispatch_preserves_scalar_overflow_after_getter() {
+        let probe = source_default_storage_probe().replace(
+            "Public Report As String", "Public Report As String\nPublic PayloadText As String",
+        ) + "\nPublic Function SetPayloadText(ByVal text As String) As String\n PayloadText = text\n SetPayloadText = \"set\"\nEnd Function\n";
+        let source = source_default_storage_fixture(&probe, "Byte", Some("Object")).replace(
+            " Value = \"payload\"", " Value = NamedDefaultProbe.PayloadText",
+        );
+        let mut session = None;
+        let control = execute_workbook_action_in_session(workbook(), &source,
+            Some("NamedDefaultProbe.Control"), vec![], 0, failure_context(), &mut session).unwrap();
+        assert!(control.error.is_none());
+        assert_eq!(serde_json::to_value(&control.result).unwrap()["value"], "ready");
+        let mut book = control.workbook;
+        for (text, expected) in [
+            ("255", "OK|RPL|Byte:17:False"),
+            ("256", "ERR|6|RP|"),
+            ("-1", "ERR|6|RP|"),
+            ("1e1000", "ERR|6|RP|"),
+            ("abc", "ERR|13|RP|"),
+        ] {
+            let setting = execute_workbook_action_in_session(book, &source,
+                Some("NamedDefaultProbe.SetPayloadText"), vec![Value::String(text.into())],
+                0, failure_context(), &mut session).unwrap();
+            assert!(setting.error.is_none());
+            assert_eq!(serde_json::to_value(&setting.result).unwrap()["value"], "set");
+            let outcome = execute_workbook_action_in_session(setting.workbook, &source,
+                Some("NamedDefaultProbe.Probe"), vec![Value::Integer(0), Value::Integer(2)],
+                0, failure_context(), &mut session).unwrap();
+            assert!(outcome.error.is_none());
+            assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], expected, "{text}");
+            book = outcome.workbook;
+        }
+    }
+
 
     #[test]
     fn source_named_property_rhs_types_and_order_match_native() {
