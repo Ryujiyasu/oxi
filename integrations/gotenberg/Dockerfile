@@ -7,14 +7,14 @@
 #
 # OXI_COMMIT is the Oxi commit the oxidocs binary is built from (fetched from
 # GitHub, so the build context stays this directory). The default is the one
-# the 4,988-document run in README.md measured.
+# the Word-fidelity run in README.md measured.
 #
 # The official image, with its gotenberg binary replaced by a build that adds
 # the oxi module, and the oxidocs binary next to it. OXI_ENABLE=true is set
 # here; everything else is the official image's behaviour.
 
 ARG GOTENBERG_VERSION=9.1.0
-ARG OXI_COMMIT=7774ac9cd25f992abf94b6ec9a631d32c99703c2
+ARG OXI_COMMIT=de905fbaddb2d38ce8c9c9638f6410b51d414fec
 
 FROM rust:1.93-trixie AS oxi-stage
 ARG OXI_COMMIT
