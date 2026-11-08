@@ -86,6 +86,42 @@ for (const item of unicodeCases) {
   const text = wasm.spreadsheet_vba_source(bytes, item.source_code_page);
   assert.deepEqual(Buffer.from(wasm.save_spreadsheet_vba_source(bytes, text, item.source_code_page)), bytes, item.name);
 }
+// A calculation-host locale is not an edit to the loaded document.
+const languageSeed = await readFile(path.join(root, 'tests/fixtures/vba/uniform_core_operations.xlsm'));
+const languageModule = '\nAttribute VB_Name = "SavedLanguageProbe"\n'
+  + 'Public Function Probe() As Boolean\nProbe = ThisWorkbook.Saved\nEnd Function\n'
+  + 'Public Sub SameValue()\nThisWorkbook.Worksheets(1).Range("A1").Value2 = ThisWorkbook.Worksheets(1).Range("A1").Value2\nEnd Sub\n';
+const languageBytes = wasm.save_spreadsheet_vba_source(languageSeed, wasm.spreadsheet_vba_source(languageSeed) + languageModule);
+const languageSource = wasm.spreadsheet_vba_source(languageBytes);
+for (const language of [false, true]) {
+  const options = { worksheetDbcsLanguage: language,
+    fileContext: { packageBytes: languageBytes, editRevision: 0 } };
+  const session = new wasm.SpreadsheetVbaSession();
+  try {
+    const first = session.run(wasm.parse_spreadsheet(languageBytes), languageSource,
+      'SavedLanguageProbe.Probe', [], 0, 'SavedLanguage.xlsm', options);
+    assert.equal(first.error, undefined);
+    assert.deepEqual(first.result, { type: 'boolean', value: true }, 'host language preserves loaded Saved state');
+    assert.equal(first.workbook_changed, false);
+    const changed = session.run(first.workbook, languageSource,
+      'SavedLanguageProbe.SameValue', [], 0, 'SavedLanguage.xlsm', options);
+    assert.equal(changed.error, undefined);
+    const after = session.run(changed.workbook, languageSource,
+      'SavedLanguageProbe.Probe', [], 0, 'SavedLanguage.xlsm', options);
+    assert.deepEqual(after.result, { type: 'boolean', value: false }, 'same-value writes still dirty the workbook');
+  } finally { session.free(); }
+  for (const [text, revision] of [[languageSource + "\n' source edit\n", 0], [languageSource, 1]]) {
+    const edited = new wasm.SpreadsheetVbaSession();
+    try {
+      const result = edited.run(wasm.parse_spreadsheet(languageBytes), text,
+        'SavedLanguageProbe.Probe', [], 0, 'SavedLanguage.xlsm',
+        { ...options, fileContext: { ...options.fileContext, editRevision: revision } });
+      assert.equal(result.error, undefined);
+      assert.deepEqual(result.result, { type: 'boolean', value: false }, 'source/editor changes still start unsaved');
+    } finally { edited.free(); }
+  }
+}
+
 const shim = `import init, { SpreadsheetVbaSession, run_spreadsheet_vba_with_outcome, prepare_spreadsheet_vba_save, spreadsheet_vba_project_name, spreadsheet_vba_source } from ${JSON.stringify(bindingUrl)};
 import { readFile } from 'node:fs/promises';
 await init({ module_or_path: await readFile(${JSON.stringify(path.join(pkg, 'oxidocs_wasm_bg.wasm'))}) });
