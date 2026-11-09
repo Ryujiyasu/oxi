@@ -15494,8 +15494,33 @@ cells={} pitch={:.2} text={:?}",
             .inside_horizontal_border
             .as_ref()
             .filter(|d| d.style != "none");
-        let above = self.s1188_side(table.rows.get(row_idx - 1), true, ih);
         let own = self.s1188_side(table.rows.get(row_idx), false, ih);
+        // OXI_ROW_BOTTOM_IN_MARGIN (2026-11-09, default ON, opt-out _DISABLE): the row
+        // above's BOTTOM border sits inside that cell's bottom margin -- only what is
+        // wider than the margin takes height. `_pb_row_border_pitch_gen.py` (zh / en
+        // packages, 25 arms): margin 0 -> +w (0.48 for sz4, the 00178ea9 tables);
+        // margin 2.85 (57tw) -> +0 for sz4 and sz12; margin 0.25 / 0.5 / 1.0 with
+        // sz12 / sz24 -> +1.26 / 2.76, +0.96 / 2.46, +0.48 / 1.98 = w - margin.
+        // A TOP border takes its full width (top sz4 under a 2.85 margin +0.48).
+        // zh dev administrative__003ed1b3: every bottom-ruled row was 0.5 too tall.
+        let above = if crate::env_flag!("OXI_ROW_BOTTOM_IN_MARGIN_DISABLE") {
+            self.s1188_side(table.rows.get(row_idx - 1), true, ih)
+        } else {
+            let inherited = ih.map_or(0.0, |d| self.s1188_drawn(&d.style, d.width));
+            table.rows.get(row_idx - 1).map_or(0.0, |prev| {
+                prev.cells.iter().map(|c| {
+                    let w = match c.borders.as_ref().and_then(|b| b.bottom.as_ref()) {
+                        Some(d) => self.s1188_drawn(&d.style, d.width),
+                        None => inherited,
+                    };
+                    let mar = c.margins.as_ref().and_then(|m| m.bottom)
+                        .or_else(|| prev.cell_margins_override.as_ref().and_then(|m| m.bottom))
+                        .or_else(|| table.style.default_cell_margins.as_ref().and_then(|m| m.bottom))
+                        .unwrap_or(0.0);
+                    (w - mar).max(0.0)
+                }).fold(0.0f32, f32::max)
+            })
+        };
         above.max(own)
     }
 
