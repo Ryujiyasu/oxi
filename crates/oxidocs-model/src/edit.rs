@@ -2110,6 +2110,85 @@ pub fn table_edits(model: &DocxModel, at: &Pos, rows: usize, cols: usize) -> Res
     Ok((edits, before))
 }
 
+/// The character style Word's Insert Hyperlink gives link text
+/// ("Hyperlink": the theme's hyperlink colour, underlined), defined if the
+/// document lacks it. Returns its id.
+fn hyperlink_style(model: &DocxModel, edits: &mut Vec<Edit>) -> Result<String, EditError> {
+    use crate::docparts::Style;
+    let styles = model.styles.as_ref().map(|s| s.styles.as_slice()).unwrap_or(&[]);
+    let is_char = |s: &Style| attr(&s.attrs, "w:type") == Some("character");
+    if let Some(s) = styles.iter().find(|s| is_char(s) && s.meta.iter().any(|m| m.name == "w:name" && m.attr("w:val") == Some("Hyperlink"))) {
+        return Ok(attr(&s.attrs, "w:styleId").unwrap_or("Hyperlink").to_string());
+    }
+    let taken = |id: &str| styles.iter().any(|s| attr(&s.attrs, "w:styleId") == Some(id));
+    let mut id = "Hyperlink".to_string();
+    let mut n = 1;
+    while taken(&id) {
+        n += 1;
+        id = format!("Hyperlink{n}");
+    }
+    let mut meta = vec![Element::new("w:name").with_attr("w:val", "Hyperlink")];
+    if let Some(base) = styles.iter().find(|s| is_char(s) && matches!(attr(&s.attrs, "w:default"), Some("1") | Some("true") | Some("on"))) {
+        if let Some(b) = attr(&base.attrs, "w:styleId") {
+            meta.push(Element::new("w:basedOn").with_attr("w:val", b));
+        }
+    }
+    meta.push(Element::new("w:uiPriority").with_attr("w:val", "99"));
+    meta.push(Element::new("w:unhideWhenUsed"));
+    let mut rpr = Element::new("w:rPr");
+    rpr.children.push(Node::Element(Element::new("w:color").with_attr("w:val", "467886").with_attr("w:themeColor", "hyperlink")));
+    rpr.children.push(Node::Element(Element::new("w:u").with_attr("w:val", "single")));
+    let run = Props::read("w:style", &rpr).map_err(|u| EditError(u.to_string()))?;
+    edits.push(Edit::DefineStyle {
+        with_effects: false,
+        style: Box::new(Style {
+            attrs: vec![("w:type".into(), "character".into()), ("w:styleId".into(), id.clone())],
+            meta,
+            run: Some(run),
+            ..Default::default()
+        }),
+    });
+    Ok(id)
+}
+
+/// The edits Word's Insert Hyperlink makes for `url` over `[from, to)`
+/// (measured over COM): the range goes into a hyperlink (w:history="1")
+/// and its runs take the "Hyperlink" character style, keeping their own
+/// formatting; with nothing selected, the URL itself is typed and linked.
+/// Returns the edits and the position just after the link, for the cursor.
+pub fn link_edits(model: &DocxModel, from: &Pos, to: &Pos, url: &str) -> Result<(Vec<Edit>, Pos), EditError> {
+    if url.trim().is_empty() {
+        return err("a link needs an address");
+    }
+    let (from, to) = if (to.para, to.offset) < (from.para, from.offset) { (to, from) } else { (from, to) };
+    if from.story != to.story || from.para != to.para {
+        return err("a link covers text in one paragraph");
+    }
+    let mut edits = Vec::new();
+    let style = hyperlink_style(model, &mut edits)?;
+    let original_to = to.offset;
+    let mut to = to.clone();
+    if from.offset == to.offset {
+        edits.push(Edit::InsertText { at: from.clone(), text: url.to_string() });
+        to.offset += count(url);
+    }
+    let patch = Patch { set: vec![Element::new("w:rStyle").with_attr("w:val", style.as_str())], ..Default::default() };
+    edits.push(Edit::FormatText { from: from.clone(), to: to.clone(), patch });
+    let link = Inline::Hyperlink(Hyperlink {
+        target: Some(url.to_string()),
+        attrs: vec![("w:history".into(), "1".into())],
+        content: Vec::new(),
+    });
+    edits.push(Edit::Wrap { from: from.clone(), to: to.clone(), wrapper: link, outside: 0 });
+    // The link's code and end take positions too. What follows the range
+    // is unchanged, so the link ends where that tail begins.
+    let mut trial = model.clone();
+    let tail = paragraph_end(&trial, &from.story, from.para)? - original_to;
+    apply_all(&mut trial, &edits)?;
+    let end = Pos { offset: paragraph_end(&trial, &from.story, from.para)? - tail, ..from.clone() };
+    Ok((edits, end))
+}
+
 /// Join neighbouring runs with the same properties, as Word does when it
 /// saves, so cutting a run to edit it leaves no seam.
 fn coalesce(v: &mut Vec<Inline>) {

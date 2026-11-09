@@ -198,3 +198,33 @@ fn insert_table_shares_the_text_width_as_word_does() {
     let (again, _) = edit::table_edits(&m, &Pos::body(3, 0), 1, 1).unwrap();
     assert!(!again.iter().any(|e| matches!(e, Edit::DefineStyle { .. })));
 }
+
+#[test]
+fn insert_link_wraps_the_selection_as_words_does() {
+    let mut m = DocxModel { body: vec![para(vec![run("see abc here", false)])], ..Default::default() };
+    let (edits, end) = edit::link_edits(&m, &Pos::body(0, 4), &Pos::body(0, 7), "https://example.com/").unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let Block::Paragraph(p) = &m.body[0] else { panic!() };
+    let Inline::Hyperlink(h) = &p.content[1] else { panic!("{:?}", p.content) };
+    assert_eq!(h.target.as_deref(), Some("https://example.com/"));
+    assert_eq!(h.attrs, vec![("w:history".to_string(), "1".to_string())]);
+    let Inline::Run(r) = &h.content[0] else { panic!() };
+    assert_eq!(r.props.as_ref().unwrap().get("w:rStyle").unwrap().attr("w:val"), Some("Hyperlink"));
+    // The cursor goes after the link: typing there lands outside it, before " here".
+    apply(&mut m, &Edit::InsertText { at: end, text: "!".into() }).unwrap();
+    let shown: String = edit::shown_positions(&edit::paragraph_texts(&m, &Story::Body).unwrap()[0]).into_iter().map(|(c, _)| c).collect();
+    assert_eq!(shown, "see abc! here");
+    let style = &m.styles.as_ref().unwrap().styles[0];
+    assert!(style.run.as_ref().unwrap().get("w:u").is_some());
+}
+
+#[test]
+fn insert_link_with_nothing_selected_types_the_address() {
+    let mut m = DocxModel { body: vec![para(vec![run("go ", false)])], ..Default::default() };
+    let (edits, end) = edit::link_edits(&m, &Pos::body(0, 3), &Pos::body(0, 3), "https://oxi.example/").unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let text = &edit::paragraph_texts(&m, &Story::Body).unwrap()[0];
+    let shown: String = edit::shown_positions(text).into_iter().map(|(c, _)| c).collect();
+    assert_eq!(shown, "go https://oxi.example/");
+    assert_eq!(end.offset, text.encode_utf16().count());
+}
