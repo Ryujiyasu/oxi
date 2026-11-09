@@ -44817,7 +44817,7 @@ fn prepare_spreadsheet_vba(
             }
             for name in js_sys::Object::keys(&js_sys::Object::from(state.clone())).iter() {
                 let name = name.as_string().unwrap_or_default();
-                if !matches!(name.as_str(), "calculation" | "calculateBeforeSave" | "screenUpdating" | "enableEvents" | "displayAlerts" | "statusBar" | "cursor" | "interactive" | "directoryState") {
+                if !matches!(name.as_str(), "calculation" | "calculateBeforeSave" | "screenUpdating" | "enableEvents" | "displayAlerts" | "statusBar" | "cursor" | "interactive" | "directoryState" | "newWorkbookFont" | "captionSuffixUtf16" | "captionWithoutWindow") {
                     return Err(JsError::new(&format!("invalid VBA options: unknown applicationState field {name}")));
                 }
             }
@@ -45566,7 +45566,7 @@ mod tests {
             let package = packets[offset..offset + length].to_vec();
             let expected_bytes = decode(fields[6]);
             assert_eq!(expected_bytes.len() % 2, 0);
-            let expected_units: Vec<_> = expected_bytes.chunks_exact(2)
+            let expected_units: Vec<_> = expected_bytes.as_chunks::<2>().0.iter()
                 .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]])).collect();
             let expected = String::from_utf16(&expected_units).unwrap();
             let source = crate::vba_project::read_project_source_with_code_page(&package, Some(932)).unwrap().unwrap();

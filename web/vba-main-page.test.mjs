@@ -971,4 +971,47 @@ for(const cancel of [true,false]){
  closeVbaProject();
 }
 
-console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 8, canvas_project_compilation_ui_cases: 4, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, saved_state_validation_cases: 6, saved_state_worker_save: true, same_value_editor_save: true, saved_state_cancel_and_after_save_cases: 2, saved_state_read_only_case: 1, passed: true }));
+// State returned by a macro must be accepted by the next worker call.
+// The suffix contains a lone UTF16 unit; it must survive the transport intact.
+const captionStateSource = 'Attribute VB_Name = "CaptionState"\n'
+ +'Public Function SetSuffix() As String\nApplication.Caption = ChrW(&HD800)\n'
+ +'SetSuffix = Hex$(AscW(Right$(Application.Caption, 1)) And &HFFFF&)\nEnd Function\n'
+ +'Public Function ReadSuffix() As String\nReadSuffix = Hex$(AscW(Right$(Application.Caption, 1)) And &HFFFF&)\nEnd Function\n'
+ +'Public Function ReadFont() As String\nReadFont = Application.StandardFont & "|" & CStr(Application.StandardFontSize)\nEnd Function\n';
+const captionStatePacket = wasm.save_spreadsheet_vba_source(bytes, captionStateSource);
+closeVbaProject();
+let captionStateRun = await runVbaInWorker(wasm.parse_spreadsheet(captionStatePacket), captionStateSource,
+ 'CaptionState.SetSuffix', [], 0, 'CaptionState.xlsm', {applicationState:{}}, captionStatePacket);
+assert.equal(captionStateRun.result.value, 'D800');
+captionStateRun = await runVbaInWorker(captionStateRun.workbook, captionStateSource,
+ 'CaptionState.ReadSuffix', [], 0, 'CaptionState.xlsm', {}, captionStatePacket);
+assert.equal(captionStateRun.result.value, 'D800', 'returned UTF16 caption state survives the next worker invocation');
+// Seed the SDK's application-owned font profile. Property setters have a
+// separate VBA compatibility contract; this test checks response-state input.
+const captionFontProfile = { ...wasm.parse_spreadsheet(captionStatePacket).default_style,
+ font_name:'Arial', font_size:13 };
+captionStateRun = await runVbaInWorker(captionStateRun.workbook, captionStateSource,
+ 'CaptionState.ReadFont', [], 0, 'CaptionState.xlsm',
+ {applicationState:{newWorkbookFont:captionFontProfile}}, captionStatePacket);
+assert.equal(captionStateRun.result.value, 'Arial|13');
+captionStateRun = await runVbaInWorker(captionStateRun.workbook, captionStateSource,
+ 'CaptionState.ReadFont', [], 0, 'CaptionState.xlsm', {}, captionStatePacket);
+assert.equal(captionStateRun.result.value, 'Arial|13', 'returned font state survives the next worker invocation');
+const captionInvalidStateSession = new wasm.SpreadsheetVbaSession();
+try {
+ assert.throws(() => captionInvalidStateSession.run(wasm.parse_spreadsheet(captionStatePacket),
+  captionStateSource, 'CaptionState.ReadSuffix', [], 0, 'CaptionState.xlsm',
+  {applicationState:{unknownCaptionSetting:true}}), /unknown applicationState field unknownCaptionSetting/);
+ for(const applicationState of [
+  {captionSuffixUtf16:[-1]}, {captionSuffixUtf16:[65536]},
+  {captionSuffixUtf16:[1.5]}, {captionWithoutWindow:'true'},
+  {newWorkbookFont:{font_name:'Arial',font_size:0}},
+ ]){
+  assert.throws(() => captionInvalidStateSession.run(wasm.parse_spreadsheet(captionStatePacket),
+   captionStateSource, 'CaptionState.ReadSuffix', [], 0, 'CaptionState.xlsm',
+   {applicationState}), /invalid VBA options|newWorkbookFont/);
+ }
+} finally { captionInvalidStateSession.free(); }
+closeVbaProject();
+
+console.log(JSON.stringify({ caption_state_sequences: 2, caption_unknown_field_controls: 1, caption_invalid_state_controls: 5, main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 8, canvas_project_compilation_ui_cases: 4, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, saved_state_validation_cases: 6, saved_state_worker_save: true, same_value_editor_save: true, saved_state_cancel_and_after_save_cases: 2, saved_state_read_only_case: 1, passed: true }));
