@@ -423,6 +423,33 @@ pub const SETTINGS: &[&str] = &[
     "w:decimalSymbol", "w:listSeparator",
 ];
 
+/// The compatibility options of w:compat (§17.15.3). Some generators write
+/// them straight under w:settings; they are kept where they were written.
+pub const COMPAT_OPTIONS: &[&str] = &[
+    "w:useSingleBorderforContiguousCells", "w:wpJustification", "w:noTabHangInd",
+    "w:noLeading", "w:spaceForUL", "w:noColumnBalance", "w:balanceSingleByteDoubleByteWidth",
+    "w:noExtraLineSpacing", "w:doNotLeaveBackslashAlone", "w:ulTrailSpace",
+    "w:doNotExpandShiftReturn", "w:spacingInWholePoints", "w:lineWrapLikeWord6",
+    "w:printBodyTextBeforeHeader", "w:printColBlack", "w:wpSpaceWidth", "w:showBreaksInFrames",
+    "w:subFontBySize", "w:suppressBottomSpacing", "w:suppressTopSpacing",
+    "w:suppressSpacingAtTopOfPage", "w:suppressTopSpacingWP", "w:suppressSpBfAfterPgBrk",
+    "w:swapBordersFacingPages", "w:convMailMergeEsc", "w:truncateFontHeightsLikeWP6",
+    "w:mwSmallCaps", "w:usePrinterMetrics", "w:doNotSuppressParagraphBorders",
+    "w:wrapTrailSpaces", "w:footnoteLayoutLikeWW8", "w:shapeLayoutLikeWW8",
+    "w:alignTablesRowByRow", "w:forgetLastTabAlignment", "w:adjustLineHeightInTable",
+    "w:autoSpaceLikeWord95", "w:noSpaceRaiseLower", "w:doNotUseHTMLParagraphAutoSpacing",
+    "w:layoutRawTableWidth", "w:layoutTableRowsApart", "w:useWord97LineBreakRules",
+    "w:doNotBreakWrappedTables", "w:doNotSnapToGridInCell", "w:selectFldWithFirstOrLastChar",
+    "w:applyBreakingRules", "w:doNotWrapTextWithPunct", "w:doNotUseEastAsianBreakRules",
+    "w:useWord2002TableStyleRules", "w:growAutofit", "w:useFELayout", "w:useNormalStyleForList",
+    "w:doNotUseIndentAsNumberingTabStop", "w:useAltKinsokuLineBreakRules",
+    "w:allowSpaceOfSameStyleInTable", "w:doNotSuppressIndentation",
+    "w:doNotAutofitConstrainedTables", "w:autofitToFirstFixedWidthCell",
+    "w:underlineTabInNumList", "w:displayHangulFixedWidth", "w:splitPgBreakAndParaMark",
+    "w:doNotVertAlignCellWithSp", "w:doNotBreakConstrainedForcedTable",
+    "w:doNotVertAlignInTxbx", "w:useAnsiKerningPairs", "w:cachedColBalance",
+];
+
 /// CT_WebSettings (§17.15.2.44).
 pub const WEB_SETTINGS: &[&str] = &[
     "w:frameset", "w:divs", "w:encoding", "w:optimizeForBrowser", "w:relyOnVML",
@@ -452,7 +479,8 @@ pub fn read_settings_bag(
         if c.name == "w:rsids" {
             continue; // editing-session ids
         }
-        if !order.contains(&c.name.as_str()) && !crate::schema::is_extension(&c.name) {
+        let misplaced_compat = root_name == "w:settings" && COMPAT_OPTIONS.contains(&c.name.as_str());
+        if !order.contains(&c.name.as_str()) && !crate::schema::is_extension(&c.name) && !misplaced_compat {
             return unsupported(format!("{root_name}/{}", c.name));
         }
         kept.children.push(Node::Element(c.clone()));

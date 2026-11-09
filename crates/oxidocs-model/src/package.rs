@@ -623,7 +623,6 @@ fn link_sections(
     model: &mut DocxModel,
     seen: &mut HashMap<String, usize>,
 ) -> Result<(), Error> {
-    let mut err = None;
     let el = props.element_mut();
     for c in el.elements_mut() {
         if c.name != "w:headerReference" && c.name != "w:footerReference" {
@@ -631,8 +630,10 @@ fn link_sections(
         }
         let Some(rid) = c.attr("r:id").map(|s| s.to_string()) else { continue };
         let Some(rel) = rels.get(&rid) else {
-            err = Some(Unsupported { path: format!("w:sectPr/{}#{rid}(dangling)", c.name) });
-            break;
+            // The reference names a relationship the document lacks: it
+            // points nowhere, and so does the copy.
+            c.set_attr("r:id", content::dangling(&rid));
+            continue;
         };
         let index = match seen.get(&rel.target) {
             Some(i) => *i,
@@ -647,9 +648,6 @@ fn link_sections(
             }
         };
         c.set_attr("r:id", format!("#{index}"));
-    }
-    if let Some(u) = err {
-        return Err(Error::Unsupported(u));
     }
     Ok(())
 }

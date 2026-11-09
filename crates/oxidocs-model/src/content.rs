@@ -380,7 +380,13 @@ pub fn read_object(e: &Element, res: &mut dyn Resolver) -> Result<Object, Unsupp
         if let Some(i) = seen.iter().position(|s| s == rid) {
             return Ok(format!("#{i}"));
         }
-        let part = res.part(rid)?;
+        let part = match res.part(rid) {
+            Ok(p) => p,
+            // A reference to a relationship the part does not have: it
+            // points nowhere, and so must the copy.
+            Err(u) if u.path.ends_with("(dangling)") => return Ok(dangling(rid)),
+            Err(u) => return Err(u),
+        };
         seen.push(rid.to_string());
         parts.push(part);
         Ok(format!("#{}", parts.len() - 1))
@@ -394,6 +400,12 @@ fn strip_session(e: &mut Element) {
     for c in e.elements_mut() {
         strip_session(c);
     }
+}
+
+/// The id written for a reference whose relationship is missing: one no
+/// writer allocates, so it stays unresolved.
+pub fn dangling(rid: &str) -> String {
+    format!("oxiMissing_{rid}")
 }
 
 /// Attributes in the relationships namespace hold relationship ids.
@@ -508,6 +520,7 @@ fn read_inline(e: &Element, path: &str, res: &mut dyn Resolver, out: &mut Vec<In
             Inline::Revision(read_revision(e, &here, res, &mut |c, p, r, v| read_inline(c, p, r, v))?)
         }
         "m:oMath" | "m:oMathPara" => Inline::Math(read_object(e, res)?),
+        "w:rPr" => Inline::Loose(RunItem::Props(Props::read("w:r", e)?)),
         "w:br" | "w:tab" | "w:cr" | "w:t" => {
             let holder = Element { name: "w:r".into(), attrs: vec![], children: vec![Node::Element(e.clone())] };
             let mut run = read_run(&holder, path, res)?;
