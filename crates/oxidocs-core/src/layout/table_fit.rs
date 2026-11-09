@@ -1558,16 +1558,29 @@ impl<'a> TableFitLayouter<'a> {
                         // byte-identical (no corpus table pairs an exact
                         // trHeight with a non-zero bottom cell margin).
                         let s1164 = !crate::env_flag!("OXI_S1164_DISABLE");
-                        row_height = if s1164 {
-                            h + table
-                                .style
-                                .default_cell_margins
-                                .as_ref()
-                                .and_then(|m| m.bottom)
-                                .unwrap_or(0.0)
+                        let table_bottom = table
+                            .style
+                            .default_cell_margins
+                            .as_ref()
+                            .and_then(|m| m.bottom)
+                            .unwrap_or(0.0);
+                        // OXI_S1164_CELL_MARGIN (2026-11-10, default ON, opt-out _DISABLE): the
+                        // addend is the CELL's effective bottom margin -- its own tcMar, else
+                        // the row's tblPrEx, else the table's -- the widest in the row. Probe
+                        // (exact 1200tw, table bottom 200): cell none 69.96, cell 0 60.00, cell
+                        // 400 80.04; table 0 + cell 400 80.04. zh dev technical__006f0290's footer
+                        // bar (exact 115tw, tblCellMar bottom 144, cells tcMar 0): Word 5.8,
+                        // Oxi 12.9 -- the page number sat 7pt low on every page.
+                        let addend = if crate::env_flag!("OXI_S1164_CELL_MARGIN_DISABLE") {
+                            table_bottom
                         } else {
-                            h
+                            row.cells.iter().map(|c| {
+                                c.margins.as_ref().and_then(|m| m.bottom)
+                                    .or_else(|| row.cell_margins_override.as_ref().and_then(|m| m.bottom))
+                                    .unwrap_or(table_bottom)
+                            }).fold(0.0f32, f32::max)
                         };
+                        row_height = if s1164 { h + addend } else { h };
                     }
                     // Default (None) or explicit "atLeast": atLeast semantics.
                     // S445 (2026-05-30, FALSIFIED — tombstone): 7ead52 has
