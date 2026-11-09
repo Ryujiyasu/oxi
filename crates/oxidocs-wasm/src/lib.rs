@@ -248,6 +248,18 @@ impl DocxDocument {
         Ok(serde_json::json!({ "edits": edits, "cell": cell }).to_string())
     }
 
+    /// The edits Word's Insert Hyperlink makes for `url` over a model range
+    /// (`{para, offset}` each; equal for no selection), as JSON
+    /// `{"edits": [...], "end": {para, offset}}`, `end` being just after the
+    /// link once they are applied.
+    pub fn link_edits(&self, from_json: &str, to_json: &str, url: &str) -> Result<String, JsError> {
+        let from: oxidocs_model::edit::Pos = serde_json::from_str(from_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let to: oxidocs_model::edit::Pos = serde_json::from_str(to_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let (edits, end) =
+            oxidocs_model::edit::link_edits(&self.model, &from, &to, url).map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(serde_json::json!({ "edits": edits, "end": end }).to_string())
+    }
+
     pub fn paragraph_text(&self, para: usize) -> Result<String, JsError> {
         let texts = oxidocs_model::edit::paragraph_texts(&self.model, &Default::default()).map_err(|e| JsError::new(&e.to_string()))?;
         texts.into_iter().nth(para).ok_or_else(|| JsError::new(&format!("no paragraph {para}")))

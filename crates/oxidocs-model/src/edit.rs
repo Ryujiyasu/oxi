@@ -1235,6 +1235,16 @@ fn insert_in(v: &mut Vec<Inline>, off: usize, text: &str, fallback: &Option<Prop
                 return err("position inside a field code");
             }
             let k = off - pos - p;
+            // At either end of a hyperlink's text, typing goes outside the
+            // link, as at its outer edges: a caret after a link's last
+            // character is both places, and Word does not lengthen a link.
+            if matches!(it, Inline::Hyperlink(_)) {
+                let clen = l - p - count(suffix(it));
+                if k == 0 || k == clen {
+                    let edge = if k == 0 { pos } else { pos + l };
+                    return insert_in(v, edge, text, fallback);
+                }
+            }
             let props = edge_run_props(it, false).flatten();
             let inner = children_mut(&mut v[i]).unwrap();
             if !insert_in(inner, k, text, fallback)? {

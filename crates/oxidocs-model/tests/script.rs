@@ -228,3 +228,22 @@ fn insert_link_with_nothing_selected_types_the_address() {
     assert_eq!(shown, "go https://oxi.example/");
     assert_eq!(end.offset, text.encode_utf16().count());
 }
+
+#[test]
+fn typing_at_either_end_of_a_links_text_stays_outside_it() {
+    let m0 = DocxModel { body: vec![para(vec![run("a", false), link(vec![run("bc", false)])])], ..Default::default() };
+    let text = edit::paragraph_texts(&m0, &Story::Body).unwrap()[0].clone();
+    let start = text.find('\u{14}').unwrap() + 1; // first character of the link's text
+    let end = text.find('\u{15}').unwrap(); // just after its last character, inside
+    for (at, want) in [(start, "a!bc"), (end, "abc!")] {
+        let mut m = m0.clone();
+        apply(&mut m, &Edit::InsertText { at: Pos::body(0, at), text: "!".into() }).unwrap();
+        let Block::Paragraph(p) = &m.body[0] else { panic!() };
+        let link_text: String = p.content.iter().filter_map(|i| if let Inline::Hyperlink(h) = i { Some(h) } else { None })
+            .flat_map(|h| h.content.iter()).filter_map(|i| if let Inline::Run(r) = i { Some(r) } else { None })
+            .flat_map(|r| r.content.iter()).filter_map(|c| if let RunItem::Text(t) = c { Some(t.as_str()) } else { None }).collect();
+        assert_eq!(link_text, "bc", "typed at {at}");
+        let shown: String = edit::shown_positions(&edit::paragraph_texts(&m, &Story::Body).unwrap()[0]).into_iter().map(|(c, _)| c).collect();
+        assert_eq!(shown, want);
+    }
+}
