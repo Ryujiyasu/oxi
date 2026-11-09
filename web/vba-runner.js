@@ -144,7 +144,8 @@ function getProjectWorker(action = 'run') {
             workersWithFiles.add(worker);
         }
         if (event.data?.ok) {
-            execution.resolve(event.data.selection ?? event.data.compilation ?? event.data.execution);
+            execution.resolve(execution.action === 'compile-project' ? event.data.execution
+                : event.data.selection ?? event.data.compilation ?? event.data.execution);
         } else {
             const error = new Error(event.data?.error || 'VBA worker failed.');
             if (event.data?.compilation) {
@@ -152,7 +153,7 @@ function getProjectWorker(action = 'run') {
                 error.compilation = event.data.compilation;
             }
             if (event.data?.execution) {
-                error.name = 'VbaExecutionError';
+                if (!event.data.compilation) error.name = 'VbaExecutionError';
                 error.execution = event.data.execution;
             }
             execution.reject(error);
@@ -406,6 +407,12 @@ export function compileVbaInWorker(source, options = {}, workbook, packageBytes)
         codeName: sheet.code_name ?? sheet.codeName,
     })).filter(sheet => typeof sheet.codeName === 'string' && sheet.codeName.length) };
     return startVbaWorker('compile', context, source, undefined, [], undefined, undefined, options, packageBytes);
+}
+
+// Explicit project compilation shares the workbook worker and its live storage.
+// `compileVbaInWorker` remains the independent, read-only source validator.
+export function compileVbaProjectInWorker(workbook, source, activeSheet, fileName, options = {}, packageBytes) {
+    return startVbaWorker('compile-project', workbook, source, undefined, [], activeSheet, fileName, options, packageBytes);
 }
 
 function startVbaWorker(action, workbook, source, procedure, args, activeSheet, fileName, options, packageBytes, actionData = {}) {

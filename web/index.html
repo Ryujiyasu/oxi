@@ -1543,7 +1543,7 @@ document.addEventListener('keydown', (e) => {
 <script type="module">
 import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_xlsx_from_workbook, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, spreadsheet_vba_source, save_spreadsheet_vba_source, format_cell_number } from './oxidocs_wasm.js';
 import { collectAdvances, familyPresent } from './face-metrics.js';
-import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, saveVbaWorkbookInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
+import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, saveVbaWorkbookInWorker, compileVbaProjectInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
 import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
 import * as vbaProjectApi from './oxidocs_wasm.js';
 
@@ -2677,7 +2677,7 @@ function applyVbaWorkbookView(selection, previous) {
     // The returned IR already contains pending editor cells and any changes
     // made from another book. Replaying an old edit list could overwrite them.
     xlsxVbaEdits.clear();
-    xlsxWorkbookChanged = true;
+    xlsxWorkbookChanged = !selected.saved;
     document.getElementById('vbaSource').value = selected.source;
     document.getElementById('vbaProcedure').value = previous?.procedure ?? '';
     document.getElementById('vbaArguments').value = previous?.args ?? '[]';
@@ -2889,10 +2889,15 @@ async function compileVbaFromDialog() {
     result.classList.remove('error');
     result.textContent = 'Compiling...';
     try {
-        await compileVbaInWorker(document.getElementById('vbaSource').value, vbaEditorSettings.options(), currentDocIR,
-            currentFileBytes ? new Uint8Array(currentFileBytes) : undefined);
-        result.textContent = 'Compilation succeeded.';
+        syncPendingXlsxEditsToIr();
+        const before = currentDocIR;
+        const execution = await compileVbaProjectInWorker(currentDocIR,
+            document.getElementById('vbaSource').value, currentXlsxSheetIndex, currentFileName,
+            xlsxRuntimeOptions(), currentFileBytes ? new Uint8Array(currentFileBytes) : undefined);
+        applyVbaExecution(execution, before);
+        result.textContent = execution.compilation.performed ? 'Compilation succeeded.' : 'No changes to compile.';
     } catch (error) {
+        if (error?.execution) applyVbaExecution(error.execution, currentDocIR);
         result.textContent = error?.message || String(error);
         result.classList.add('error');
     } finally { compileButton.disabled = runButton.disabled = false;
@@ -2961,7 +2966,9 @@ async function downloadEdited() {
     else if (currentFileType === 'xlsx') edits = collectXlsxEdits();
     else if (currentFileType === 'pptx') edits = collectPptxEdits();
     else return;
-    let wholeWorkbook = currentFileType === 'xlsx' && (xlsxWorkbookChanged || xlsxVbaSourceDirty
+    // A new workbook can be Saved=true before it has its first file name.
+    const needsInitialSave = currentFileType === 'xlsx' && !/\.(xlsx|xlsm|xltx|xltm)$/i.test(currentFileName || '');
+    let wholeWorkbook = currentFileType === 'xlsx' && (needsInitialSave || xlsxWorkbookChanged || xlsxVbaSourceDirty
         || (currentDocIR.calculation?.mode ?? 'auto') !== currentXlsxSavedCalculation.mode
         || (currentDocIR.calculation?.on_save ?? true) !== currentXlsxSavedCalculation.on_save);
     if (edits.length === 0 && !wholeWorkbook && !(currentFileType === 'xlsx' && xlsxEditRevision)) {

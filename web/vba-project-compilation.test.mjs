@@ -134,5 +134,61 @@ try {
     await assert.rejects(pending, error => error.name === 'AbortError');
     await run('4');
   }
+  // Exact self-authored Native packages distinguish project readiness from
+  // whole-source validation, including uncalled invalid procedures and dead branches.
+  const nativeCompileRows = (await readFile(path.join(fixtures, 'project_compile_native_saved.tsv'), 'utf8'))
+    .split(/\r?\n/).filter(line => line && !line.startsWith('#') && !line.startsWith('id\t'))
+    .map(line => line.split('\t'));
+  assert.equal(nativeCompileRows.length, 12);
+  let nativeCompileObservations = 0;
+  for (const row of nativeCompileRows) {
+    const [id, compiled, performed, saved, , procedure, packageHex] = row;
+    const bytes = new Uint8Array(Buffer.from(packageHex, 'hex'));
+    const source = wasm.spreadsheet_vba_source(bytes, 932);
+    const modes = id.startsWith('warm_') ? ['warm'] : id.startsWith('cold_') ? ['cold', 'warm'] : ['cold'];
+    for (const mode of modes) {
+      const readyAfterWarm = mode === 'warm';
+      const expected = {compiled: readyAfterWarm || compiled === '1',
+        performed: !readyAfterWarm && performed === '1', saved: readyAfterWarm || saved === '1'};
+      const options = {errorLanguage: 'ja-JP', hostAnsiCodePage: 932, worksheetDbcsLanguage: true,
+        projectName: 'OxiNamedProject', applicationState: {enableEvents: false, displayAlerts: false, calculation: -4105},
+        fileContext: {packageBytes: bytes, sourceCodePage: 932, readOnly: true, editRevision: 0}};
+      for (const pathKind of ['direct', 'worker']) {
+        let book = wasm.parse_spreadsheet(bytes);
+        const direct = pathKind === 'direct' ? new wasm.SpreadsheetVbaSession() : null;
+        if (!direct) runner.closeVbaProject();
+        try {
+          if (direct) assert.equal(typeof direct.compile_project, 'function', 'A newly built implementation is required');
+          if (mode === 'warm') {
+            const run = direct ? direct.run(book, source, procedure, [], 0, 'CompileState.xlsm', options)
+              : await runner.runVbaInWorker(book, source, procedure, [], 0, 'CompileState.xlsm', options, bytes);
+            assert.equal(run.error, undefined, id);
+            assert.deepEqual(run.result, {type: 'string', value: id.startsWith('warm_') ? 'CONTROL' : 'BS'}, id);
+            book = run.workbook;
+          }
+          let outcome;
+          if (direct) outcome = direct.compile_project(book, source, 0, 'CompileState.xlsm', options);
+          else {
+            try { outcome = await runner.compileVbaProjectInWorker(book, source, 0, 'CompileState.xlsm', options, bytes); }
+            catch (error) {
+              assert.equal(expected.compiled, false, id);
+              assert.equal(error.name, 'VbaCompileError', id);
+              assert.equal(error.compilation.compiled, false, id);
+              assert.ok(error.execution, 'Compile diagnostics retain the loaded project');
+              outcome = error.execution;
+            }
+          }
+          assert.equal(outcome.compilation.compiled, expected.compiled, `${id} ${mode} ${pathKind}`);
+          assert.equal(outcome.compilation.performed, expected.performed, `${id} ${mode} ${pathKind}`);
+          assert.equal(outcome.workbook_selection.selected.saved, expected.saved, `${id} ${mode} ${pathKind}`);
+          assert.equal(outcome.workbook_changed, false, id);
+          assert.equal(outcome.error, undefined, id);
+          if (!direct) assert.equal(runner.getVbaSourceForSave(), source, 'Project compilation retains editor source');
+          nativeCompileObservations++;
+        } finally { direct?.free(); if (!direct) runner.closeVbaProject(); }
+      }
+    }
+  }
+  assert.equal(nativeCompileObservations, 28);
 } finally { runner.closeVbaProject(); globalThis.Worker = priorWorker; }
 console.log(JSON.stringify({ excel_project_cases: allCases.length, document_compile_only_cases: documents.length, package_context_cases: 2, state_sequences: 2, direct_and_worker: true, passed: true }));

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import {Worker as ThreadWorker} from 'node:worker_threads';
 import { bindVbaEditorSettings } from './vba-editor-settings.js';
-import { closeVbaProject, getVbaSourceForSave, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, saveVbaWorkbookInWorker, compileVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
+import { closeVbaProject, getVbaSourceForSave, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, saveVbaWorkbookInWorker, compileVbaInWorker, compileVbaProjectInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = path.resolve(process.argv[2] || path.join(root, 'crates/oxidocs-wasm/pkg'));
 const wasm = await import('data:text/javascript;base64,' + Buffer.from(await readFile(path.join(pkg, 'oxidocs_wasm.js'))).toString('base64'));
@@ -84,6 +84,7 @@ const context = vm.createContext({
   runVbaInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker,
   prepareVbaSaveInWorker, saveVbaWorkbookInWorker,
   compileVbaInWorker,
+  compileVbaProjectInWorker,
   closeVbaProject, bindVbaEditorSettings, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType,
   recordVbaSourceChange, getVbaSourceForSave, setTimeout() { return 0; }, clearTimeout() {},
 });
@@ -247,9 +248,30 @@ node('vbaSource').value = saveSource.replace('Twice = amount * 2', 'Twice = amou
 node('vbaSource').fire('input');
 await vm.runInContext('downloadEdited()', context);
 assert.equal(savedCell(wasm.parse_spreadsheet(written[0].parts[0]), 1).value.Number, 21, 'Save uses the pending editor body without rerunning Configure');
-for (const [file, succeeds] of [['project_compile_valid.bas', true], ['project_compile_uncalled_undefined.bas', false]]) {
-  await prepare();
-  node('vbaSource').value = await readFile(path.join(root, 'tests/fixtures/vba', file), 'utf8');
+// Use the exact saved Native packets: changing source in a live project is
+// itself a dirtying edit, even if the subsequent compilation fails.
+const nativeCompilePackets = new Map((await readFile(path.join(root, 'tests/fixtures/vba/project_compile_native_saved.tsv'), 'utf8'))
+  .split(/\r?\n/).filter(line => line && !line.startsWith('#') && !line.startsWith('id\t'))
+  .map(line => { const row = line.split('\t'); return [row[0], new Uint8Array(Buffer.from(row[6], 'hex'))]; }));
+const nativeCompilePreviousName = vm.runInContext('currentFileName', context);
+context.nativeCompileOptions = vm.runInContext('vbaEditorSettings.options', context);
+vm.runInContext('vbaEditorSettings.options=()=>({...nativeCompileOptions(),applicationState:{enableEvents:false,displayAlerts:false,calculation:-4105}});', context);
+async function prepareNativeCompilation(id) {
+  closeVbaProject();
+  const packet = nativeCompilePackets.get(id);
+  assert.ok(packet, id);
+  context.seeded = wasm.parse_spreadsheet(packet); context.packageBytes = packet;
+  vm.runInContext('currentDocIR=seeded;currentFileBytes=packageBytes;currentFileName="NativeState.xlsm";currentXlsxSheetIndex=0;xlsxWorkbookChanged=false;currentXlsxVbaSource="";xlsxVbaSourceBound=false;xlsxVbaSourceBaseline="";xlsxVbaSourceDirty=false;xlsxVbaSourceRevision=0;xlsxEditRevision=0;xlsxVbaEdits.clear();vbaWorkbookPicker.reset(currentFileName);', context);
+  node('vbaSource').value = wasm.spreadsheet_vba_source(packet, 932);
+  pending = [];
+}
+context.compileVbaProjectInWorker = async (...args) => {
+  const execution = await compileVbaProjectInWorker(...args);
+  context.lastCompilation = execution;
+  return execution;
+};
+for (const [id, succeeds] of [['cold_valid', true], ['cold_invalid', false]]) {
+  await prepareNativeCompilation(id);
   const before = vm.runInContext('JSON.stringify(currentDocIR)', context);
   await vm.runInContext('compileVbaFromDialog()', context);
   assert.equal(node('vbaCompile').disabled, false);
@@ -257,8 +279,26 @@ for (const [file, succeeds] of [['project_compile_valid.bas', true], ['project_c
   assert.equal(node('vbaResult').classList.values.has('error'), !succeeds);
   if (succeeds) assert.equal(node('vbaResult').textContent, 'Compilation succeeded.');
   assert.equal(vm.runInContext('JSON.stringify(currentDocIR)', context), before);
-  assert.equal(vm.runInContext('xlsxWorkbookChanged', context), false);
+  assert.equal(vm.runInContext('xlsxWorkbookChanged', context), succeeds, 'Native successful compile dirties Saved; failed compile preserves the saved packet state');
 }
+// Native already-current projects perform no action, rather than a fresh validation.
+await prepareNativeCompilation('native_full_saved');
+await vm.runInContext('compileVbaFromDialog()', context);
+assert.equal(node('vbaResult').textContent, 'No changes to compile.');
+assert.equal(node('vbaResult').classList.values.has('error'), false);
+assert.equal(vm.runInContext('xlsxWorkbookChanged', context), false, 'Native already-current compilation remains saved');
+assert.equal(context.lastCompilation.workbook_selection.selected.saved, true);
+// An accepted grid edit retains its history even if the final cell value equals
+// the original. A no-op compile must still transmit that editor revision.
+vm.runInContext('xlsxEditRevision++', context);
+await vm.runInContext('compileVbaFromDialog()', context);
+assert.equal(context.lastCompilation.compilation.performed, false);
+assert.equal(context.lastCompilation.workbook_changed, false);
+assert.equal(context.lastCompilation.workbook_selection.selected.saved, false, 'Compile receives accepted editor write history');
+context.compileVbaProjectInWorker = compileVbaProjectInWorker;
+vm.runInContext('vbaEditorSettings.options=nativeCompileOptions;', context);
+context.nativeCompilePreviousName = nativeCompilePreviousName;
+vm.runInContext('currentFileName=nativeCompilePreviousName;', context);
 for (const kind of ['sheet', 'book']) {
   await prepare();
   const packageBytes = new Uint8Array(await readFile(path.join(root, 'tests/fixtures/vba', `document_context_${kind}.xlsm`)));
@@ -269,11 +309,12 @@ for (const kind of ['sheet', 'book']) {
   for (const valid of [true, false]) {
     node('vbaSource').value = valid ? source : source.replace('.Helper(7)', '.Helper()');
     const before = vm.runInContext('JSON.stringify(currentDocIR)', context);
+    const beforeChanged = vm.runInContext('xlsxWorkbookChanged', context);
     await vm.runInContext('compileVbaFromDialog()', context);
     assert.equal(node('vbaResult').classList.values.has('error'), !valid, `${kind} package compilation`);
     if (valid) assert.equal(node('vbaResult').textContent, 'Compilation succeeded.');
     assert.equal(vm.runInContext('JSON.stringify(currentDocIR)', context), before);
-    assert.equal(vm.runInContext('xlsxWorkbookChanged', context), false);
+    assert.equal(vm.runInContext('xlsxWorkbookChanged', context), valid || beforeChanged, 'Compilation failure preserves existing dirty state');
   }
 }
 // Exercise the main grid with the actual sparse workbook returned by VBA and
@@ -522,6 +563,34 @@ vm.runInContext('let book=closeSeed.workbook, source=closePacketA, fileName="Clo
  +'\nconst macroWorkbookPicker=bindVbaWorkbookPicker(document.getElementById("picker"),{capture:captureMacroWorkbookView,apply:applyMacroWorkbookView,busy:()=>false,report:sayMacro});\n',demo);
 const handlerStart=demoPage.indexOf('macroRun.onclick = async () => {');
 vm.runInContext(demoPage.slice(handlerStart,demoPage.indexOf('macroCompile.onclick =',handlerStart)),demo);
+const compileHandlerStart = demoPage.indexOf('macroCompile.onclick = async () => {', handlerStart);
+vm.runInContext(demoPage.slice(compileHandlerStart, demoPage.indexOf('\napplyLang();', compileHandlerStart)), demo);
+demo.compileVbaProjectInWorker = async (...args) => {
+  try { const execution = await compileVbaProjectInWorker(...args); demo.lastCompilation = execution; return execution; }
+  catch (error) { demo.lastCompilation = error.execution; throw error; }
+};
+vm.runInContext('macroEditorSettings.options=()=>({hostAnsiCodePage:932,applicationState:{enableEvents:false,displayAlerts:false,calculation:-4105}});', demo);
+for (const [id, compiled, performed, saved] of [['cold_valid',true,true,false], ['cold_invalid',false,true,true], ['native_full_saved',true,false,true]]) {
+  closeVbaProject();
+  demo.nativePacket = nativeCompilePackets.get(id);
+  vm.runInContext('source=nativePacket;book=parse_spreadsheet(source);fileName="NativeCanvas.xlsm";shown=0;macroProjectSource=spreadsheet_vba_source(source,932);macroSource.value=macroProjectSource;macroSourceBound=true;macroSourceBaseline=macroProjectSource;macroSourceDirty=false;macroSourceRevision=0;macroEditRevision=0;macroSavedEditRevision=0;macroSaveBusy=false;beyondValues=false;changes.clear();pristine.clear();savedCalculation={mode:"auto",on_save:true};macroRun.disabled=macroCompile.disabled=false;macroWorkbookPicker.reset(fileName);markSaved();', demo);
+  const before = vm.runInContext('JSON.stringify(book)', demo);
+  await vm.runInContext('macroCompile.onclick()', demo);
+  assert.equal(demo.lastCompilation.compilation.compiled, compiled, id);
+  assert.equal(demo.lastCompilation.compilation.performed, performed, id);
+  assert.equal(demo.lastCompilation.workbook_selection.selected.saved, saved, id);
+  assert.equal(vm.runInContext('beyondValues', demo), !saved, id);
+  assert.equal(demoNode('save').disabled, saved, id);
+  assert.equal(demoNode('result').classList.values.has('error'), !compiled, id);
+  assert.equal(vm.runInContext('JSON.stringify(book)', demo), before, 'Canvas compile never executes workbook code');
+  if (compiled) assert.equal(demoNode('result').textContent, performed ? 'macroCompiled' : 'macroAlreadyCompiled');
+}
+vm.runInContext('macroEditRevision++', demo);
+await vm.runInContext('macroCompile.onclick()', demo);
+assert.equal(demo.lastCompilation.compilation.performed, false);
+assert.equal(demo.lastCompilation.workbook_selection.selected.saved, false, 'Canvas compile keeps accepted editor write history');
+assert.equal(demoNode('save').disabled, false);
+vm.runInContext('macroEditorSettings.options=()=>({});', demo);
 closeVbaProject();
 const demoSeed=await runVbaInWorker(wasm.parse_spreadsheet(closePacketA),closeSource,'Driver.Seed',[],0,'CloseUI-A.xlsm',
  {applicationState:{},fileContext:{fullName:'C:\\CloseUI-A.xlsm',files:[{path:'C:\\CloseUI-B.xlsm',bytes:closePacketB}]}},closePacketA);
@@ -902,4 +971,4 @@ for(const cancel of [true,false]){
  closeVbaProject();
 }
 
-console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 6, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, saved_state_validation_cases: 6, saved_state_worker_save: true, same_value_editor_save: true, saved_state_cancel_and_after_save_cases: 2, saved_state_read_only_case: 1, passed: true }));
+console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 8, canvas_project_compilation_ui_cases: 4, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, saved_state_validation_cases: 6, saved_state_worker_save: true, same_value_editor_save: true, saved_state_cancel_and_after_save_cases: 2, saved_state_read_only_case: 1, passed: true }));
