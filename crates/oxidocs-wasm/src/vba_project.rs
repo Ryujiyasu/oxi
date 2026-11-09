@@ -336,6 +336,72 @@ pub(crate) fn read_project_name(
     project_name_from_stream(&project, &bytes, name_code_page).map(Some)
 }
 
+/// Native project readiness controls whether the VBE exposes Compile Project.
+/// A ready module can still contain a procedure compiled only on first use;
+/// this is deliberately independent of the pure whole-source validator.
+/// Unknown cache contexts never establish an already-current project.
+pub(crate) struct NativeCompilationReadiness {
+    pub modules: std::collections::BTreeSet<String>,
+    pub ready: std::collections::BTreeSet<String>,
+}
+
+#[cfg(test)]
+pub(crate) fn has_current_native_compilation(package: &[u8]) -> Result<bool, String> {
+    Ok(native_compilation_readiness(package, None)?.is_some_and(|state|state.modules==state.ready))
+}
+
+pub(crate) fn native_compilation_readiness(package: &[u8], name_code_page: Option<u16>) -> Result<Option<NativeCompilationReadiness>, String> {
+    use oxivba_core::native_cache::{
+        decode_project_cache, decode_runtime_project_heap, CacheContext, RuntimeNameEncoding,
+        RuntimeProjectModuleState,
+    };
+    fn current(project: &ovba::Project, name_code_page: Option<u16>) -> Option<NativeCompilationReadiness> {
+        let context = CacheContext::B5_WIN64;
+        let metadata = project.read_stream("/VBA/_VBA_PROJECT").ok()?;
+        let metadata = decode_project_cache(&metadata, context).ok()?;
+        let global = project.read_stream("/VBA/__SRP_0").ok()?;
+        let heap = decode_runtime_project_heap(&global, context).ok()?;
+        if heap.consumed != global.len() || heap.modules.is_empty()
+            || heap.modules.len() != metadata.modules.len()
+            || heap.modules.len() != project.modules.len() { return None; }
+        let identities = identities(project, None).ok()?;
+        let mut declared = identities.iter().map(|module|module.name.to_ascii_lowercase())
+            .collect::<std::collections::BTreeSet<_>>();
+        if declared.len() != identities.len() { return None; }
+        let modules = declared.clone();
+        let mut ready_modules = std::collections::BTreeSet::new();
+        // Runtime ANSI names use the native host encoding, independently of
+        // source/identifier-table code pages. ASCII and explicit UTF-16 names
+        // are unambiguous even when that host context is unavailable.
+        let encoding = name_code_page.and_then(codepage::to_encoding);
+        let wide = |bytes: &[u8]| {
+            if bytes.len() % 2 != 0 { return None; }
+            String::from_utf16(&bytes.chunks_exact(2)
+                .map(|pair|u16::from_le_bytes([pair[0],pair[1]])).collect::<Vec<_>>()).ok()
+        };
+        for (index, module) in heap.modules.iter().enumerate() {
+            let cached_name = wide(metadata.modules[index].name?)?;
+            let name = heap.module_name(index)?;
+            let name = match name.encoding {
+                RuntimeNameEncoding::Utf16Le => wide(name.bytes)?,
+                RuntimeNameEncoding::Ansi if name.bytes.is_ascii() =>
+                    std::str::from_utf8(name.bytes).ok()?.to_owned(),
+                RuntimeNameEncoding::Ansi => encoding?
+                    .decode_without_bom_handling_and_without_replacement(name.bytes)?.into_owned(),
+            };
+            if !name.eq_ignore_ascii_case(&cached_name)
+                || !declared.remove(&cached_name.to_ascii_lowercase()) { return None; }
+            if !matches!(module.state, RuntimeProjectModuleState::Ready(_)) { continue; }
+            ready_modules.insert(cached_name.to_ascii_lowercase());
+            // VBE availability is project declaration state, not executable-cache
+            // integrity. Missing or invalid physical module images do not by
+            // themselves re-enable Compile Project; no image is executed here.
+        }
+        declared.is_empty().then_some(NativeCompilationReadiness { modules, ready: ready_modules })
+    }
+    Ok(open_workbook_project(package)?.as_ref().and_then(|project|current(project,name_code_page)))
+}
+
 fn open_workbook_project(package: &[u8]) -> Result<Option<ovba::Project>, String> {
     let Some((_, bytes)) = workbook_project_part(package)? else { return Ok(None) };
     ovba::open_project(bytes)

@@ -247,6 +247,10 @@ pub struct HostEventResult {
 }
 
 pub trait Host {
+    /// Successfully bound source modules in the identified code project.
+    /// Called before procedure execution; storage initialization is independent.
+    fn project_modules_compiled(&mut self, _project: u64, _modules: &BTreeSet<String>) {}
+
     /// Resolve an Automation name using the target host's encoding and name
     /// comparison. `candidates` contains public members of a source class;
     /// hosts may also resolve their own object's members. Ordinary VBA string
@@ -4441,9 +4445,9 @@ impl<'a> Runtime<'a> {
         if !self.compiled_procedures.contains(&compile_key) {
             let checked=match &self.document_references {
                 Some(references)=>crate::compiler::check_with_document_globals(self.module,self.main_module,&self.classes,procedure,references,self.this_year(),&self.project_name),
-                None=>crate::compiler::check_with_globals(self.module, self.main_module, &self.classes, procedure, &self.project_name),
+                None=>crate::compiler::check_with_globals(self.module, self.main_module, &self.classes, procedure, &self.project_name, self.host.is_some()),
             };
-            checked.map_err(|failure| {
+            let dependencies = checked.map_err(|failure| {
                 let prefix = match self.error_environment.language {
                     crate::ErrorLanguage::English => "Compile error",
                     crate::ErrorLanguage::Japanese => "コンパイル エラー",
@@ -4459,6 +4463,9 @@ impl<'a> Runtime<'a> {
                     vba_default_description: false,
                 }
             })?;
+            if let Some(host) = &mut self.host {
+                host.project_modules_compiled(self.project_identity, &dependencies);
+            }
             self.compiled_procedures.insert(compile_key);
         }
         self.initialize_module()?;

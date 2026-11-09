@@ -41,7 +41,7 @@ self.addEventListener('message', async event => {
             self.postMessage({ ok: compilation.compiled, compilation, error: compilation.error?.message });
             return;
         }
-        if (!['run', 'save', 'save-workbook', 'invoke', 'release', 'release-all'].includes(action)) throw new Error('Invalid VBA worker action.');
+        if (!['run', 'save', 'save-workbook', 'compile-project', 'invoke', 'release', 'release-all'].includes(action)) throw new Error('Invalid VBA worker action.');
         if (action === 'invoke' && (typeof reference !== 'string' || typeof member !== 'string'
             || !Number.isSafeInteger(callKind))) throw new Error('Invalid VBA member invocation.');
         if (action === 'release' && (!Array.isArray(references)
@@ -53,6 +53,13 @@ self.addEventListener('message', async event => {
         if (inputPackage) {
             runtimeOptions.fileContext = { ...runtimeOptions.fileContext, packageBytes: inputPackage,
                 ...(projectSourceCodePage != null ? { sourceCodePage: projectSourceCodePage } : {}) };
+        }
+        if (action === 'compile-project') {
+            const execution = session.compile_project(workbook, source, activeSheet, fileName, runtimeOptions);
+            const compilation = execution.compilation;
+            self.postMessage({ ok: compilation.compiled, execution, compilation,
+                error: compilation.error?.message });
+            return;
         }
         const execution = action === 'save-workbook'
             ? session.save_workbook(workbook, source, activeSheet, fileName, runtimeOptions, copyName)

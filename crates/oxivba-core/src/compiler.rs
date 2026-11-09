@@ -214,7 +214,7 @@ pub fn compile_project_with_references(
     for (name, scope) in &ordered {
         for item in &scope.items {
             if let ModuleItem::Procedure(procedure) = item {
-                check_with_environment(scope, &globals, &classes, procedure, Some(context), None, context.project_name)
+                check_with_environment(scope, &globals, &classes, procedure, Some(context), None, (context.project_name,false))
                     .map_err(|error| ProjectCompileError {
                         module: name.clone(),
                         error,
@@ -385,7 +385,7 @@ impl std::error::Error for CompileError {}
 /// Checks a procedure using declarations in its module. This is a semantic pass:
 /// parsing and migration analysis can still inspect source that fails this check.
 pub fn check_procedure(module: &Module, procedure: &Procedure) -> Result<(), CompileError> {
-    check_with_globals(module, module, &BTreeMap::new(), procedure, "VBAProject")
+    check_with_globals(module, module, &BTreeMap::new(), procedure, "VBAProject", false).map(|_| ())
 }
 
 pub(crate) fn check_with_globals(
@@ -394,8 +394,9 @@ pub(crate) fn check_with_globals(
     classes: &BTreeMap<String, &Module>,
     procedure: &Procedure,
     project_name: &str,
-) -> Result<(), CompileError> {
-    check_with_environment(module, globals, classes, procedure, None, None, project_name)
+    report_dependencies: bool,
+) -> Result<BTreeSet<String>, CompileError> {
+    check_with_environment(module, globals, classes, procedure, None, None, (project_name,report_dependencies))
 }
 
 /// Compile on demand with host document surfaces, retaining the ordinary Run
@@ -408,7 +409,7 @@ pub(crate) fn check_with_document_globals(
     references: &CompileReferences,
     current_year: i64,
     project_name: &str,
-) -> Result<(), CompileError> {
+) -> Result<BTreeSet<String>, CompileError> {
     let documents = references
         .document_modules
         .iter()
@@ -439,7 +440,7 @@ pub(crate) fn check_with_document_globals(
             library: &references.library,
         }),
         Some(references),
-        project_name,
+        (project_name,true),
     )
 }
 
@@ -450,11 +451,13 @@ fn check_with_environment<'a>(
     procedure: &'a Procedure,
     references: Option<ReferenceContext<'a>>,
     call_references: Option<&'a CompileReferences>,
-    project_name: &'a str,
-) -> Result<(), CompileError> {
+    project: (&'a str,bool),
+) -> Result<BTreeSet<String>, CompileError> {
+    let (project_name,report_dependencies)=project;
     let mut checker =
         Checker::for_context_with_references(module, globals, classes, Some(procedure), references);
     checker.project_name = project_name;
+    checker.report_dependencies = report_dependencies;
     checker.call_references = call_references;
     if checker.known_types.is_none() {
         // Initial headers belong to the module declaration section, even in an
@@ -508,7 +511,14 @@ fn check_with_environment<'a>(
     }) {
         return Err(checker.failure(CompileErrorKind::SyntaxError, found.span));
     }
-    Ok(())
+    if report_dependencies {
+        if let Some((name, _)) = classes.iter().find(|(_, scope)|std::ptr::eq(**scope,module)) {
+            checker.module_dependencies.borrow_mut().insert(name.clone());
+        } else if let Some((name, _)) = globals.standard_modules.iter().find(|(_, scope)|std::ptr::eq(scope,module)) {
+            checker.module_dependencies.borrow_mut().insert(key(name));
+        }
+    }
+    Ok(checker.module_dependencies.into_inner())
 }
 
 fn reserved_declaration_name(name: &str) -> bool {
@@ -655,6 +665,10 @@ struct Checker<'a> {
     explicit: bool,
     syntax_lines: BTreeMap<usize, Vec<(&'a Expr, bool)>>,
     checked_syntax_lines: std::cell::RefCell<BTreeSet<usize>>,
+    // Source modules whose declarations were needed to bind this procedure.
+    // This does not assert that their unused procedure bodies were compiled.
+    module_dependencies: std::cell::RefCell<BTreeSet<String>>,
+    report_dependencies: bool,
     line_syntax_errors: BTreeMap<usize, Span>,
 }
 
@@ -708,6 +722,8 @@ impl<'a> Checker<'a> {
             with_types: Vec::new(),
             syntax_lines: BTreeMap::new(),
             checked_syntax_lines: std::cell::RefCell::new(BTreeSet::new()),
+            module_dependencies: std::cell::RefCell::new(BTreeSet::new()),
+            report_dependencies: false,
             line_syntax_errors: BTreeMap::new(),
             explicit: module
                 .items
@@ -2860,6 +2876,7 @@ impl<'a> Checker<'a> {
 
     fn check_class(&self, name: &str, span: Span) -> Result<(), CompileError> {
         if let Some(module) = self.classes.get(&self.source_type_key(name)) {
+            if self.report_dependencies { self.module_dependencies.borrow_mut().insert(self.source_type_key(name)); }
             let inherited = |member: &str| {
                 inherited_object_member(member)
                     || self.document_member(&key(name), member).is_some()
@@ -3037,15 +3054,25 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    fn record_source_type(&self, kind: Type) {
+        if let Type::Class(name) = kind {
+            if self.report_dependencies && self.classes.contains_key(&name) {
+                self.module_dependencies.borrow_mut().insert(name);
+            }
+        }
+    }
+
     fn resolve_expression_name(
         &self,
         part: &Expr,
         is_call_target: bool,
     ) -> Result<(), CompileError> {
+        if self.report_dependencies { self.record_source_type(self.infer(part)); }
         if let Expr::Member {
             object, name, span, ..
         } = part
         {
+            if self.report_dependencies { self.record_source_type(self.infer(object)); }
             if let Type::Reference(owner, true) = self.infer(object) {
                 if self
                     .reference_library
@@ -3069,6 +3096,7 @@ impl<'a> Checker<'a> {
                         .iter()
                         .find(|(found, _)| found.eq_ignore_ascii_case(qualifier))
                     {
+                        if self.report_dependencies { self.module_dependencies.borrow_mut().insert(key(qualifier)); }
                         let own = std::ptr::eq(scope, self.module);
                         let visible = scope.items.iter().any(|item| match item {
                             ModuleItem::Procedure(p) => {
@@ -3108,6 +3136,7 @@ impl<'a> Checker<'a> {
                 }
             }
             if let Some(Type::Class(class)) = self.with_types.last() {
+                self.record_source_type(Type::Class(class.clone()));
                 if !self.class_member_visible(class, name) {
                     return Err(self.failure(CompileErrorKind::MemberNotFound, *span));
                 }
@@ -3116,6 +3145,15 @@ impl<'a> Checker<'a> {
         if let Some(name) = bare_name(part) {
             let symbol = key(name);
             if !self.own_symbols.contains(&symbol) && !self.later_locals.contains(&symbol) {
+                for (owner, scope) in self.globals.standard_modules.iter().filter(|_|self.report_dependencies) {
+                    if scope.items.iter().any(|item| match item {
+                        ModuleItem::Procedure(found) => found.visibility != Visibility::Private
+                            && found.name.eq_ignore_ascii_case(name),
+                        ModuleItem::Variables(found) => matches!(found.visibility,Visibility::Public|Visibility::Global)
+                            && found.items.iter().any(|variable|variable.name.eq_ignore_ascii_case(name)),
+                        _ => false,
+                    }) { self.module_dependencies.borrow_mut().insert(key(owner)); }
+                }
                 if self.ambiguous.contains(&symbol) {
                     let mut found = self.failure(CompileErrorKind::AmbiguousName, part.span());
                     found.symbol = Some(name.to_string());

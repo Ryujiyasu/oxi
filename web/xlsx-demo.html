@@ -520,7 +520,7 @@ import init, { parse_spreadsheet, format_cell_number, edit_xlsx,
                row_height_px, spreadsheet_vba_source } from './oxidocs_wasm.js';
 // A macro runs in a worker: the interpreter is free to take as long as the
 // macro asks for without the grid stopping being drawable meanwhile.
-import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, saveVbaWorkbookInWorker, compileVbaInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
+import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, saveVbaWorkbookInWorker, compileVbaProjectInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
 import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
 import * as vbaProjectApi from './oxidocs_wasm.js';
 // The row model is the renderer's own, written out once in JS: what the grid
@@ -579,7 +579,7 @@ const I18N = {
     noWorkbook: 'No workbook is open.',
     macroNeeds: 'A procedure name and some VBA are both needed.',
     macroRunning: 'Running…',
-    compile: 'Compile', macroCompiling: 'Compiling…', macroCompiled: 'Compilation succeeded.',
+    compile: 'Compile', macroCompiling: 'Compiling…', macroCompiled: 'Compilation succeeded.', macroAlreadyCompiled: 'No changes to compile.',
     save: 'Save', saveSome: (n) => `Save (${n} cell${n === 1 ? '' : 's'})`,
     saving: 'Saving…', engine: 'Loading the engine…',
     opening: 'Opening a new workbook…', reading: 'Reading the sample…',
@@ -635,7 +635,7 @@ const I18N = {
     noWorkbook: '開いているブックはありません。',
     macroNeeds: 'プロシージャ名と VBA の両方が必要です。',
     macroRunning: '実行しています…',
-    compile: 'コンパイル', macroCompiling: 'コンパイルしています…', macroCompiled: 'コンパイルに成功しました。',
+    compile: 'コンパイル', macroCompiling: 'コンパイルしています…', macroCompiled: 'コンパイルに成功しました。', macroAlreadyCompiled: 'コンパイルする変更はありません。',
     save: '保存', saveSome: (n) => `保存（${n} セル）`,
     saving: '保存しています…', engine: 'エンジンを読み込んでいます…',
     opening: '新しいブックを開いています…', reading: 'サンプルを読み込んでいます…',
@@ -4354,14 +4354,15 @@ function markSaved() {
   // A column's width and a cell's formatting are changes with no cell value
   // behind them, so counting values alone would leave the button dark with
   // work outstanding.
-  saveButton.disabled = macroSaveBusy || (count === 0 && !beyondValues && !macroSourceDirty && !calculationPendingSave() && macroEditRevision === macroSavedEditRevision);
+  const needsInitialSave = !/\.(xlsx|xlsm|xltx|xltm)$/i.test(fileName || '');
+  saveButton.disabled = macroSaveBusy || (!needsInitialSave && count === 0 && !beyondValues && !macroSourceDirty && !calculationPendingSave() && macroEditRevision === macroSavedEditRevision);
   saveButton.textContent = count === 0 ? t('save') : t('saveSome')(count);
 }
 
 async function save() {
   if (!source || !book || macroSaveBusy) return;
   if (editor) commit();
-  if (changes.size === 0 && !beyondValues && !macroSourceDirty && !calculationPendingSave()
+  if (/\.(xlsx|xlsm|xltx|xltm)$/i.test(fileName || '') && changes.size === 0 && !beyondValues && !macroSourceDirty && !calculationPendingSave()
       && macroEditRevision === macroSavedEditRevision) return;
   const originalSource = source;
   const submittedRevision = macroEditRevision;
@@ -5425,7 +5426,7 @@ function applyMacroWorkbookView(selection, previous) {
     mode: book.calculation?.mode ?? 'auto', on_save: book.calculation?.on_save ?? true,
   };
   changes.clear(); pristine.clear(); undone.length = 0; redone.length = 0;
-  beyondValues = true;
+  beyondValues = !selected.saved;
   macroSource.value = selected.source;
   macroProc.value = previous?.procedure ?? '';
   macroArgs.value = previous?.args ?? '[]';
@@ -5629,9 +5630,14 @@ macroCompile.onclick = async () => {
   const endVbaOperation = macroEditorSettings.beginOperation();
   sayMacro(t('macroCompiling'));
   try {
-    await compileVbaInWorker(macroSource.value, macroEditorSettings.options(), book, source);
-    sayMacro(t('macroCompiled'));
-  } catch (error) { sayMacro(error?.message || String(error), error?.name !== 'AbortError'); }
+    document.activeElement?.blur();
+    const execution = await compileVbaProjectInWorker(book, macroSource.value, shown, fileName, macroRuntimeOptions(), source);
+    applyMacroExecution(execution);
+    sayMacro(t(execution.compilation.performed ? 'macroCompiled' : 'macroAlreadyCompiled'));
+  } catch (error) {
+    if (error?.execution) applyMacroExecution(error.execution);
+    sayMacro(error?.message || String(error), error?.name !== 'AbortError');
+  }
   finally { macroCompile.disabled = macroRun.disabled = !book; macroWorkbookPicker?.refresh(); endVbaOperation(); }
 };
 
