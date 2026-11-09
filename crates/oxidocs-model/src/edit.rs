@@ -188,8 +188,8 @@ pub enum Edit {
         outside: usize,
     },
     /// Insert a table before (or after) the block that holds a paragraph.
-    /// The table's cells must be empty; each has one paragraph to edit
-    /// afterwards.
+    /// The table's cells hold nothing, or only empty paragraphs; each has
+    /// one paragraph to edit afterwards.
     InsertTable {
         #[serde(default)]
         story: Story,
@@ -1789,7 +1789,7 @@ pub fn inline_width(i: &Inline) -> usize {
 fn cells_empty(rows: &[RowItem]) -> bool {
     fn cells(c: &[CellItem]) -> bool {
         c.iter().all(|c| match c {
-            CellItem::Cell(c) => c.content.is_empty(),
+            CellItem::Cell(c) => c.content.iter().all(|b| matches!(b, Block::Paragraph(p) if p.content.is_empty())),
             CellItem::Sdt(s) => cells(&s.content),
             CellItem::CustomXml(w) => cells(&w.content),
             CellItem::Revision(r) => cells(&r.content),
@@ -1807,7 +1807,7 @@ fn cells_empty(rows: &[RowItem]) -> bool {
 
 fn insert_table(model: &mut DocxModel, story: &Story, para: usize, after: bool, table: &Table) -> Result<(), EditError> {
     if !cells_empty(&table.rows) {
-        return err("insert_table takes a table whose cells are empty; edit their paragraphs afterwards");
+        return err("insert_table takes a table whose cells hold nothing but empty paragraphs; edit those afterwards");
     }
     // A table goes after a paragraph in the file, never an implied one.
     let (path, _) = locate(model, story, para, after)?;
@@ -1928,6 +1928,186 @@ pub fn paragraph_end(model: &DocxModel, story: &Story, para: usize) -> Result<us
     let all = entries(model, story)?;
     let e = all.get(para).ok_or_else(|| EditError(format!("no paragraph {para}")))?;
     Ok(e.lead + list_len(&e.para.content) + field_data_points(e.para).len())
+}
+
+// ---------------------------------------------------------------------------
+// Word's own commands, as edits
+// ---------------------------------------------------------------------------
+
+fn twips(e: Option<&Element>, name: &str, default: i64) -> i64 {
+    e.and_then(|e| e.attr(name)).and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
+/// The width text runs in, in twips, for the section that holds body
+/// paragraph `para` (its own section break, or the next one after it, or
+/// the document's last section).
+fn text_width(model: &DocxModel, story: &Story, para: usize) -> Result<i64, EditError> {
+    let paras = paragraphs(model, story)?;
+    let sect = if *story == Story::Body {
+        paras.iter().skip(para).find_map(|p| p.props.as_ref().and_then(|pp| pp.get("w:sectPr")))
+    } else {
+        None
+    }
+    .or_else(|| model.section.as_ref().map(|s| s.element()));
+    let size = sect.and_then(|s| s.child("w:pgSz"));
+    let mar = sect.and_then(|s| s.child("w:pgMar"));
+    Ok(twips(size, "w:w", 12240) - twips(mar, "w:left", 1440) - twips(mar, "w:right", 1440) - twips(mar, "w:gutter", 0))
+}
+
+/// Whether body paragraph `para` sits in a table.
+fn in_table(model: &DocxModel, para: usize) -> bool {
+    fn walk(blocks: &[Block], para: usize, seen: &mut usize) -> Option<bool> {
+        for b in blocks {
+            match b {
+                Block::Paragraph(_) => {
+                    if *seen == para {
+                        return Some(false);
+                    }
+                    *seen += 1;
+                }
+                Block::Sdt(s) => {
+                    if let Some(r) = walk(&s.content, para, seen) {
+                        return Some(r);
+                    }
+                }
+                Block::CustomXml(w) => {
+                    if let Some(r) = walk(&w.content, para, seen) {
+                        return Some(r);
+                    }
+                }
+                Block::Revision(r) => {
+                    if let Some(r) = walk(&r.content, para, seen) {
+                        return Some(r);
+                    }
+                }
+                Block::Table(_) => {
+                    let mut inner = Vec::new();
+                    collect(std::slice::from_ref(b), &mut inner);
+                    if para < *seen + inner.len() {
+                        return Some(true);
+                    }
+                    *seen += inner.len();
+                }
+                Block::Marker(_) | Block::AltChunk(_) => {}
+            }
+        }
+        None
+    }
+    walk(&model.body, para, &mut 0).unwrap_or(false)
+}
+
+fn attr_of<'a>(e: &'a Element, name: &str) -> Option<&'a str> {
+    e.attr(name)
+}
+
+/// The table style Word's Insert Table uses ("Table Grid": a single line
+/// on every edge), defined if the document lacks it. Returns its id.
+fn table_grid_style(model: &DocxModel, edits: &mut Vec<Edit>) -> Result<String, EditError> {
+    use crate::docparts::Style;
+    let styles = model.styles.as_ref().map(|s| s.styles.as_slice()).unwrap_or(&[]);
+    let is_table = |s: &Style| attr(&s.attrs, "w:type") == Some("table");
+    if let Some(s) = styles.iter().find(|s| is_table(s) && s.meta.iter().any(|m| m.name == "w:name" && attr_of(m, "w:val") == Some("Table Grid"))) {
+        return Ok(attr(&s.attrs, "w:styleId").unwrap_or("TableGrid").to_string());
+    }
+    let taken = |id: &str| styles.iter().any(|s| attr(&s.attrs, "w:styleId") == Some(id));
+    let mut id = "TableGrid".to_string();
+    let mut n = 1;
+    while taken(&id) {
+        n += 1;
+        id = format!("TableGrid{n}");
+    }
+    let mut meta = vec![Element::new("w:name").with_attr("w:val", "Table Grid")];
+    if let Some(base) = styles.iter().find(|s| is_table(s) && matches!(attr(&s.attrs, "w:default"), Some("1") | Some("true") | Some("on"))) {
+        if let Some(b) = attr(&base.attrs, "w:styleId") {
+            meta.push(Element::new("w:basedOn").with_attr("w:val", b));
+        }
+    }
+    meta.push(Element::new("w:uiPriority").with_attr("w:val", "39"));
+    let mut borders = Element::new("w:tblBorders");
+    for edge in ["w:top", "w:left", "w:bottom", "w:right", "w:insideH", "w:insideV"] {
+        borders.children.push(Node::Element(
+            Element::new(edge).with_attr("w:val", "single").with_attr("w:sz", "4").with_attr("w:space", "0").with_attr("w:color", "auto"),
+        ));
+    }
+    let mut tbl = Element::new("w:tblPr");
+    tbl.children.push(Node::Element(borders));
+    let table = Props::read("w:style", &tbl).map_err(|u| EditError(u.to_string()))?;
+    edits.push(Edit::DefineStyle {
+        with_effects: false,
+        style: Box::new(Style {
+            attrs: vec![("w:type".into(), "table".into()), ("w:styleId".into(), id.clone())],
+            meta,
+            table: Some(table),
+            ..Default::default()
+        }),
+    });
+    Ok(id)
+}
+
+/// The edits Word's Insert Table makes for a table of `rows` by `cols` at
+/// `at` (measured over COM): a cursor inside a paragraph splits it and the
+/// table goes between the halves; at a paragraph's start the table goes
+/// before it. The table takes the "Table Grid" style, the columns share the
+/// text width less 10 twips evenly (the last takes what is left over), and
+/// each cell holds an empty paragraph. The first cell's paragraph is
+/// returned with the edits, for the cursor.
+pub fn table_edits(model: &DocxModel, at: &Pos, rows: usize, cols: usize) -> Result<(Vec<Edit>, usize), EditError> {
+    use crate::content::{Cell, Row};
+    if rows == 0 || cols == 0 {
+        return err("a table needs a row and a column");
+    }
+    if at.story == Story::Body && in_table(model, at.para) {
+        return err("a table inside a table cell is not made yet");
+    }
+    let mut edits = Vec::new();
+    let style = table_grid_style(model, &mut edits)?;
+    let before = if at.offset > 0 {
+        edits.push(Edit::SplitParagraph { at: at.clone() });
+        at.para + 1
+    } else {
+        at.para
+    };
+    let total = (text_width(model, &at.story, at.para)? - 10).max(cols as i64);
+    let each = total / cols as i64;
+    let widths: Vec<i64> = (0..cols).map(|c| if c + 1 == cols { total - each * (cols as i64 - 1) } else { each }).collect();
+    let mut tbl = Element::new("w:tblPr");
+    for e in [
+        Element::new("w:tblStyle").with_attr("w:val", style.as_str()),
+        Element::new("w:tblW").with_attr("w:w", "0").with_attr("w:type", "auto"),
+        Element::new("w:tblLook")
+            .with_attr("w:val", "04A0")
+            .with_attr("w:firstRow", "1")
+            .with_attr("w:lastRow", "0")
+            .with_attr("w:firstColumn", "1")
+            .with_attr("w:lastColumn", "0")
+            .with_attr("w:noHBand", "0")
+            .with_attr("w:noVBand", "1"),
+    ] {
+        tbl.children.push(Node::Element(e));
+    }
+    let props = Props::read("w:tbl", &tbl).map_err(|u| EditError(u.to_string()))?;
+    let mut grid = Element::new("w:tblGrid");
+    for w in &widths {
+        grid.children.push(Node::Element(Element::new("w:gridCol").with_attr("w:w", w.to_string())));
+    }
+    let cell = |w: i64| -> Result<CellItem, EditError> {
+        let mut tc = Element::new("w:tcPr");
+        tc.children.push(Node::Element(Element::new("w:tcW").with_attr("w:w", w.to_string()).with_attr("w:type", "dxa")));
+        let props = Props::read("w:tc", &tc).map_err(|u| EditError(u.to_string()))?;
+        Ok(CellItem::Cell(Cell { props: Some(props), content: vec![Block::Paragraph(Paragraph::default())], attrs: vec![] }))
+    };
+    let mut table_rows = Vec::new();
+    for _ in 0..rows {
+        let cells = widths.iter().map(|w| cell(*w)).collect::<Result<Vec<_>, _>>()?;
+        table_rows.push(RowItem::Row(Row { cells, ..Default::default() }));
+    }
+    edits.push(Edit::InsertTable {
+        story: at.story.clone(),
+        para: before,
+        after: false,
+        table: Table { props, grid: Some(grid), rows: table_rows },
+    });
+    Ok((edits, before))
 }
 
 /// Join neighbouring runs with the same properties, as Word does when it

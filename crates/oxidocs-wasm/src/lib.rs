@@ -237,6 +237,17 @@ impl DocxDocument {
     }
 
     /// One body paragraph's characters, one per position (see `paragraphs`).
+    /// The edits Word's Insert Table makes for a table of `rows` by `cols`
+    /// at a model position (`{para, offset}`), as JSON
+    /// `{"edits": [...], "cell": para}`, `cell` being the first cell's
+    /// paragraph once they are applied.
+    pub fn table_edits(&self, at_json: &str, rows: usize, cols: usize) -> Result<String, JsError> {
+        let at: oxidocs_model::edit::Pos = serde_json::from_str(at_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let (edits, cell) =
+            oxidocs_model::edit::table_edits(&self.model, &at, rows, cols).map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(serde_json::json!({ "edits": edits, "cell": cell }).to_string())
+    }
+
     pub fn paragraph_text(&self, para: usize) -> Result<String, JsError> {
         let texts = oxidocs_model::edit::paragraph_texts(&self.model, &Default::default()).map_err(|e| JsError::new(&e.to_string()))?;
         texts.into_iter().nth(para).ok_or_else(|| JsError::new(&format!("no paragraph {para}")))

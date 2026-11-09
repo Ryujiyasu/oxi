@@ -145,3 +145,56 @@ fn what_no_edit_makes_is_named() {
     let err = script::script(&DocxModel { body, ..Default::default() }).unwrap_err();
     assert!(err.0.contains("empty block container"), "{err}");
 }
+
+/// A body of "abcd" / "next" on an A4 page with 30 mm side margins
+/// (text width 8504 twips), as Word's own new documents have.
+fn a4_doc() -> DocxModel {
+    let mut sect = Element::new("w:sectPr");
+    sect.children.push(oxidocs_model::xml::Node::Element(Element::new("w:pgSz").with_attr("w:w", "11906").with_attr("w:h", "16838")));
+    sect.children.push(oxidocs_model::xml::Node::Element(Element::new("w:pgMar").with_attr("w:left", "1701").with_attr("w:right", "1701")));
+    DocxModel {
+        body: vec![para(vec![run("abcd", false)]), para(vec![run("next", false)])],
+        section: Some(Props::read("w:body", &sect).unwrap()),
+        ..Default::default()
+    }
+}
+
+fn texts(m: &DocxModel) -> Vec<String> {
+    edit::paragraphs(m, &Story::Body).unwrap().into_iter().map(edit::paragraph_text).collect()
+}
+
+#[test]
+fn insert_table_goes_where_words_does() {
+    // Measured over COM (Tables.Add with Word 9 table behaviour): inside a
+    // paragraph or at its end, the paragraph splits and the table goes
+    // between; at its start, the table goes before it.
+    let cases = [
+        (0, vec!["", "", "", "", "", "", "abcd", "next"], 0),
+        (2, vec!["ab", "", "", "", "", "", "", "cd", "next"], 1),
+        (4, vec!["abcd", "", "", "", "", "", "", "", "next"], 1),
+    ];
+    for (offset, want, first_cell) in cases {
+        let mut m = a4_doc();
+        let (edits, cell) = edit::table_edits(&m, &Pos::body(0, offset), 2, 3).unwrap();
+        apply_all(&mut m, &edits).unwrap();
+        assert_eq!(texts(&m), want, "cursor at {offset}");
+        assert_eq!(cell, first_cell);
+    }
+}
+
+#[test]
+fn insert_table_shares_the_text_width_as_word_does() {
+    let mut m = a4_doc();
+    let (edits, _) = edit::table_edits(&m, &Pos::body(0, 0), 1, 3).unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let Block::Table(t) = &m.body[0] else { panic!() };
+    let cols: Vec<&str> = t.grid.as_ref().unwrap().elements().map(|g| g.attr("w:w").unwrap()).collect();
+    // 8504 - 10 = 8494 = 2831 + 2831 + 2832 (Word's own numbers).
+    assert_eq!(cols, ["2831", "2831", "2832"]);
+    let style = &m.styles.as_ref().unwrap().styles[0];
+    assert!(style.meta.iter().any(|e| e.attr("w:val") == Some("Table Grid")));
+    assert_eq!(t.props.get("w:tblStyle").unwrap().attr("w:val"), Some("TableGrid"));
+    // A second table reuses the style.
+    let (again, _) = edit::table_edits(&m, &Pos::body(3, 0), 1, 1).unwrap();
+    assert!(!again.iter().any(|e| matches!(e, Edit::DefineStyle { .. })));
+}

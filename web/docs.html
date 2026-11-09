@@ -704,6 +704,10 @@ let pendingModelCursor = null;
 let fileName = '';
 let layoutResult = null;   // latest layout_document() result
 let cursorPos = null;       // { pageIndex, elemIndex, charOffset }
+// A model position the cursor is at when the page shows nothing to hold it
+// (an empty table cell has no element): typing goes there, and the caret is
+// drawn from the table's borders (see looseCaretXY).
+let modelCursorOnly = null;
 let cursorVisible = false;
 let cursorBlinkTimer = null;
 let currentScale = 1;
@@ -999,6 +1003,7 @@ async function renderDocument(docxBytes) {
 
     // Expose for automation
     window.__oxiRenderDone = true;
+    window.__oxiLayout = result;
     window.__oxiLayoutMs = layoutMs;
     window.__oxiTotalMs = totalMs;
     window.__oxiPageCount = result.pages.length;
@@ -1063,6 +1068,7 @@ function onCanvasClick(e, pageIndex) {
   if (!hit) return;
 
   cursorPos = hit;
+  modelCursorOnly = null;
   // Start a drag selection anchored here
   selAnchor = { ...hit };
   selFocus = null;
@@ -1240,8 +1246,7 @@ function drawCursor() {
   // Remove old overlay
   if (cursorOverlay) { cursorOverlay.remove(); cursorOverlay = null; }
 
-  if (!cursorPos) return;
-  const pos = getCursorXY();
+  const pos = cursorPos ? getCursorXY() : modelCursorOnly ? looseCaretXY(modelCursorOnly) : null;
   if (!pos) return;
 
   const pageCanvas = $(`page-${pos.pageIndex}`);
@@ -1286,7 +1291,7 @@ function stopCursorBlink() {
 
 // ---- Text input handling ----
 hiddenInput.addEventListener('input', e => {
-  if (!cursorPos || !currentDocx || !layoutResult) return;
+  if (!(cursorPos || modelCursorOnly) || !currentDocx || !layoutResult) return;
   const typed = hiddenInput.value;
   if (!typed) return;
   hiddenInput.value = '';
@@ -1294,7 +1299,7 @@ hiddenInput.addEventListener('input', e => {
 });
 
 hiddenInput.addEventListener('compositionend', e => {
-  if (!cursorPos || !currentDocx) return;
+  if (!(cursorPos || modelCursorOnly) || !currentDocx) return;
   const text = e.data;
   hiddenInput.value = '';
   if (text) insertText(text);
@@ -1303,7 +1308,7 @@ hiddenInput.addEventListener('compositionend', e => {
 // Fallback: handle printable characters via keypress/keydown for browsers
 // where hidden textarea doesn't fire 'input' events
 hiddenInput.addEventListener('keypress', e => {
-  if (!cursorPos || !currentDocx || !layoutResult) return;
+  if (!(cursorPos || modelCursorOnly) || !currentDocx || !layoutResult) return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const ch = e.key;
   if (ch && ch.length === 1) {
@@ -1369,7 +1374,7 @@ function scheduleRender() {
     try {
       result = await fontLoader.resolveLayout(() => layout_document(bytes), result, () => fontEpoch === fontRenderEpoch);
     } catch (e) {
-      if (fontEpoch !== fontRenderEpoch) return;
+        if (fontEpoch !== fontRenderEpoch) return;
       const loading = document.createElement("div");
       loading.className = "loading-state";
       canvasArea.appendChild(loading);
@@ -1440,6 +1445,8 @@ function scheduleRender() {
     }
     $('pgInfo').textContent = `${result.pages.length} ${t('pages')}`;
     $('statusText').textContent = `Layout ${layoutMs}ms`;
+    window.__oxiLayout = result;
+    window.__oxiRenderDone = true;
 
     if (pendingModelCursor && modelDoc) {
       restoreModelCursor(pendingModelCursor);
@@ -1454,7 +1461,7 @@ function scheduleRender() {
 }
 
 async function insertText(text) {
-  if (!cursorPos || !layoutResult) return;
+  if (!(cursorPos || modelCursorOnly) || !layoutResult) return;
   if (modelDoc) { modelInsert(text); return; }
   clearSelection(); // v1: typing does not replace the selection, it just clears it
   const page = layoutResult.pages[cursorPos.pageIndex];
@@ -1565,7 +1572,7 @@ function restoreCursor(paraIndex, runIndex, globalCharOff) {
 }
 
 hiddenInput.addEventListener('keydown', e => {
-  if (!cursorPos || !currentDocx) return;
+  if (!(cursorPos || modelCursorOnly) || !currentDocx) return;
   if (e.ctrlKey || e.metaKey) {
     const k = e.key.toLowerCase();
     if (!e.altKey && (k === 'b' || k === 'i' || k === 'u')) {
@@ -1702,7 +1709,7 @@ function moveCursor(dir) {
 }
 
 async function deleteChar(dir) {
-  if (!cursorPos || !layoutResult || !currentDocx) return;
+  if (!(cursorPos || modelCursorOnly) || !layoutResult || !currentDocx) return;
   if (modelDoc) { modelDelete(dir); return; }
   const page = layoutResult.pages[cursorPos.pageIndex];
   const el = page.elements[cursorPos.elemIndex];
@@ -1778,6 +1785,7 @@ function modelPosAt(el, charInEl) {
 }
 
 function cursorModelPos() {
+  if (!cursorPos && modelCursorOnly) return modelCursorOnly;
   if (!cursorPos || !layoutResult) return null;
   const el = layoutResult.pages[cursorPos.pageIndex]?.elements[cursorPos.elemIndex];
   return modelPosAt(el, cursorPos.charOffset);
@@ -1803,6 +1811,9 @@ function applyModelEdits(edits, cursorAfter) {
   pendingCursorRestore = null;
   pendingModelCursor = cursorAfter || null;
   clearSelection();
+  // Until the pages are laid out again, the cursor is the model position:
+  // keys typed meanwhile go after what was just typed.
+  if (cursorAfter) { cursorPos = null; modelCursorOnly = cursorAfter; }
   scheduleRender();
   return true;
 }
@@ -1811,8 +1822,56 @@ function sameCells(a, b) {
   return a.length === b.length && a.every((s, i) => s[0] === b[i][0] && s[1] === b[i][1] && s[2] === b[i][2]);
 }
 
-// Put the cursor at a model position on the freshly laid-out pages.
+// Put the cursor at a model position on the freshly laid-out pages. A
+// position the pages show nothing at (an empty table cell) is kept as the
+// model cursor.
 function restoreModelCursor(pos) {
+  modelCursorOnly = null;
+  if (findModelCursor(pos)) return true;
+  cursorPos = null;
+  modelCursorOnly = pos;
+  startCursorBlink();
+  hiddenInput.focus();
+  return false;
+}
+
+// Where the caret goes for a model position with no element: the top left
+// of its table cell, read off the table's border lines (the cell's row and
+// column count the distinct horizontal and vertical border positions
+// between the text before the table and the text after it).
+function looseCaretXY(pos) {
+  let p;
+  try { const r = modelDoc.place(JSON.stringify(pos)); if (!r) return null; p = JSON.parse(r); }
+  catch (e) { return null; }
+  if (!p.cells || !p.cells.length) return null;
+  const [row, col] = p.cells[p.cells.length - 1];
+  const sec = el => el.source_container_index || 0;
+  const before = el => sec(el) < p.section || (sec(el) === p.section && el.paragraph_index < p.block);
+  const after = el => sec(el) > p.section || (sec(el) === p.section && el.paragraph_index > p.block);
+  for (let pi = 0; pi < layoutResult.pages.length; pi++) {
+    const els = layoutResult.pages[pi].elements;
+    const texts = els.filter(el => el.kind === 'text' && el.paragraph_index != null);
+    const prev = texts.filter(before).pop();
+    const next = texts.find(after);
+    const top = prev ? prev.y + prev.height - 1 : 0;
+    const bottom = next ? next.y + 1 : layoutResult.pages[pi].height;
+    const borders = els.filter(el => el.kind === 'border' && Math.min(el.y1, el.y2) >= top && Math.max(el.y1, el.y2) <= bottom);
+    if (!borders.length) continue;
+    const near = (list, v) => list.some(x => Math.abs(x - v) < 0.5);
+    const xs = [], ys = [];
+    for (const b of borders) {
+      if (Math.abs(b.x1 - b.x2) < 0.5 && !near(xs, b.x1)) xs.push(b.x1);
+      if (Math.abs(b.y1 - b.y2) < 0.5 && !near(ys, b.y1)) ys.push(b.y1);
+    }
+    xs.sort((a, b) => a - b);
+    ys.sort((a, b) => a - b);
+    if (col >= xs.length || row >= ys.length) continue;
+    return { pageIndex: pi, x: xs[col] + 5.4, y: ys[row] + 2, h: 14 };
+  }
+  return null;
+}
+
+function findModelCursor(pos) {
   let p;
   try { const r = modelDoc.place(JSON.stringify(pos)); if (!r) return false; p = JSON.parse(r); }
   catch (e) { return false; }
@@ -1821,7 +1880,8 @@ function restoreModelCursor(pos) {
     for (let ei = 0; ei < els.length; ei++) {
       const el = els[ei];
       if (el.kind !== 'text' || el.paragraph_index !== p.block || (el.source_container_index || 0) !== p.section) continue;
-      if ((el.run_index || 0) !== p.run || !sameCells(elCells(el), p.cells || [])) continue;
+      // An empty paragraph's mark element has no run.
+      if ((el.run_index || 0) !== (p.run || 0) || !sameCells(elCells(el), p.cells || [])) continue;
       const start = el.char_offset || 0, end = start + (el.text || '').length;
       if (p.char_offset >= start && p.char_offset <= end) {
         cursorPos = { pageIndex: pi, elemIndex: ei, charOffset: p.char_offset - start };
@@ -1934,6 +1994,18 @@ function modelFormatRuns(style) {
   return applyModelEdits([{ op: 'format_text', from: sel.from, to: sel.to, patch: runPatch(style) }], sel.to);
 }
 
+// Word's Insert Table at the cursor: rows by cols, cursor in the first cell.
+function modelInsertTable(rows, cols) {
+  if (!modelDoc) return false;
+  const sel = selectionModelRange();
+  const at = sel ? sel.from : cursorModelPos();
+  if (!at) { $('statusText').textContent = t('noCursor'); return false; }
+  let plan;
+  try { plan = JSON.parse(modelDoc.table_edits(JSON.stringify(at), rows, cols)); }
+  catch (e) { $('statusText').textContent = String(e.message || e); return false; }
+  return applyModelEdits(plan.edits, { para: plan.cell, offset: 0 });
+}
+
 function modelFormatParagraphs(style) {
   const sel = selectionModelRange();
   const at = cursorModelPos();
@@ -1968,6 +2040,7 @@ function doNew() {
   fontRenderEpoch++;
   currentDocx = null;
   modelDoc = null;
+  modelCursorOnly = null;
   layoutResult = null;
   stopCursorBlink();
   cursorPos = null;
@@ -2338,7 +2411,7 @@ $('renameCancel').addEventListener('click', () => $('renameOv').classList.remove
 $('renameIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('renameOk').click(); });
 $('infoOk').addEventListener('click', () => $('infoOv').classList.remove('show'));
 
-// ---- Table grid (kept for future editing) ----
+// ---- Table grid: Insert Table ----
 const tg = $('tgGrid');
 for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
   const b = document.createElement('button');
@@ -2349,7 +2422,7 @@ for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
     tg.querySelectorAll('.tc').forEach(t => t.classList.toggle('hl', +t.dataset.r <= r && +t.dataset.c <= c));
     $('tgLbl').textContent = `${c + 1} x ${r + 1}`;
   });
-  b.addEventListener('click', e => { e.stopPropagation(); $('tgPop').classList.remove('show'); });
+  b.addEventListener('click', e => { e.stopPropagation(); $('tgPop').classList.remove('show'); modelInsertTable(r + 1, c + 1); });
   tg.appendChild(b);
 }
 $('btnTbl2').addEventListener('click', e => { e.stopPropagation(); $('tgPop').classList.toggle('show'); });
