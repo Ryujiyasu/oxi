@@ -456,27 +456,25 @@ fn check_with_environment<'a>(
         Checker::for_context_with_references(module, globals, classes, Some(procedure), references);
     checker.project_name = project_name;
     checker.call_references = call_references;
+    if checker.known_types.is_none() {
+        // Initial headers belong to the module declaration section, even in an
+        // otherwise unreferenced component. Later headers compile on demand.
+        for scope in std::iter::once(module)
+            .chain(std::iter::once(globals))
+            .chain(globals.standard_modules.iter().map(|(_, scope)| scope))
+            .chain(classes.values().copied())
+        {
+            if let Some(found) = invalid_initial_procedure(scope) {
+                return Err(checker.failure(CompileErrorKind::ExpectedIdentifier, found.span));
+            }
+        }
+    }
     checker.module_storage_syntax()?;
     if checker.call_references.is_some() {
         checker.module_declaration_types()?;
     }
     if checker.known_types.is_some() && intrinsic_operator(&key(&procedure.name)) {
         return Err(checker.failure(CompileErrorKind::SyntaxError, procedure.span));
-    }
-    if !classes.values().any(|class| std::ptr::eq(*class, module)) {
-        if let Some(found) = module.items.iter().find_map(|item| match item {
-            ModuleItem::Procedure(found)
-                if matches!(
-                    key(&found.name).as_str(),
-                    "clng" | "cint" | "cstr" | "cbool" | "len" | "abs"
-                ) =>
-            {
-                Some(found)
-            }
-            _ => None,
-        }) {
-            return Err(checker.failure(CompileErrorKind::SyntaxError, found.span));
-        }
     }
     if let Some(span) = procedure.syntax_errors.iter().find(|span| {
         references.is_none_or(|references| !references.strict)
@@ -501,7 +499,16 @@ fn check_with_environment<'a>(
         checker.check_class(&kind.name, procedure.span)?;
         checker.validate_type(kind, procedure.span)?;
     }
-    checker.body(&procedure.body)
+    checker.body(&procedure.body)?;
+    // Binding a missing member or an intrinsic call in the called body can
+    // fail before a later invalid header. Uncalled modules remain untouched.
+    if let Some(found) = module.items.iter().find_map(|item| match item {
+        ModuleItem::Procedure(found) if intrinsic_operator(&key(&found.name)) => Some(found),
+        _ => None,
+    }) {
+        return Err(checker.failure(CompileErrorKind::SyntaxError, found.span));
+    }
+    Ok(())
 }
 
 fn reserved_declaration_name(name: &str) -> bool {
@@ -561,8 +568,15 @@ fn intrinsic_operator(name: &str) -> bool {
     )
 }
 
+pub(crate) fn invalid_initial_procedure(module: &Module) -> Option<&Procedure> {
+    module.items.iter().find_map(|item| match item {
+        ModuleItem::Procedure(procedure) => Some(procedure),
+        _ => None,
+    }).filter(|procedure| intrinsic_operator(&key(&procedure.name)))
+}
+
 pub(crate) fn procedure_header_valid(procedure: &Procedure) -> bool {
-    !procedure
+    !intrinsic_operator(&key(&procedure.name)) && !procedure
         .params
         .iter()
         .any(|parameter| reserved_declaration_name(&parameter.name))
@@ -853,7 +867,9 @@ impl<'a> Checker<'a> {
                         {
                             if !procedure_header_valid(found) {
                                 checker.own_symbols.remove(&key(&found.name));
-                                checker.hidden_functions.insert(key(&found.name));
+                                if !intrinsic_operator(&key(&found.name)) {
+                                    checker.hidden_functions.insert(key(&found.name));
+                                }
                                 continue;
                             }
                             let result = found
@@ -1998,6 +2014,7 @@ impl<'a> Checker<'a> {
                     }
                     ModuleItem::Procedure(procedure) => {
                         procedure.name.eq_ignore_ascii_case(name)
+                            && procedure_header_valid(procedure)
                             && procedure.visibility != Visibility::Private
                     }
                     _ => false,
@@ -2495,6 +2512,7 @@ impl<'a> Checker<'a> {
                 .filter_map(|item| match item {
                     ModuleItem::Procedure(p)
                         if p.name.eq_ignore_ascii_case(name)
+                            && procedure_header_valid(p)
                             && (std::ptr::eq(scope, self.module)
                                 || p.visibility != Visibility::Private) =>
                     {
@@ -3055,6 +3073,7 @@ impl<'a> Checker<'a> {
                         let visible = scope.items.iter().any(|item| match item {
                             ModuleItem::Procedure(p) => {
                                 p.name.eq_ignore_ascii_case(name)
+                                    && procedure_header_valid(p)
                                     && (own || p.visibility != Visibility::Private)
                             }
                             ModuleItem::Variables(d) => {
@@ -3331,11 +3350,27 @@ impl<'a> Checker<'a> {
             // against the host's complete globals without enabling the separate
             // whole-project declaration and call-signature checks.
             if self.known_types.is_none() && self.call_references.is_some() {
-                if let Expr::Index { target, .. } = part {
+                if let Expr::Index { target, args, .. } = part {
                     if bare_name(target).is_some() {
                         if let Err(error) = self.resolve_expression_name(target, true) {
                             failure = Some(error);
                             return;
+                        }
+                    }
+                    if self.reference_function(target).is_some() {
+                        if let Err(error) = self.check_call_syntax(part, bare_call && std::ptr::eq(part, expr)) {
+                            failure = Some(error);
+                            return;
+                        }
+                        // Global object getters can forward their subscripts to
+                        // the returned object's default member, e.g. Rows(2).
+                        if let Some(signature) = self.reference_index_signature(target, args) {
+                            if let Some(kind) = Self::reference_argument_error(signature, args)
+                                .filter(|_| !self.is_call_by_name(target))
+                            {
+                                failure = Some(self.failure(kind, part.span()));
+                                return;
+                            }
                         }
                     }
                 }
@@ -6194,6 +6229,77 @@ End Function
             }
         }
         assert_eq!(cases.len(), 23);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod intrinsic_declaration_native_tests {
+    use super::*;
+    use crate::runtime::{Host, ObjectRef, Runtime, RuntimeErrorKind};
+
+    #[test]
+    fn intrinsic_declaration_macro_discovery_matches_native() {
+        struct MacroHost<'a>(&'a str);
+        impl Host for MacroHost<'_> {
+            fn call(&mut self, _: Option<&ObjectRef>, _: &str, _: &[Value]) -> Result<Option<Value>, String> { Ok(None) }
+            fn get(&mut self, _: &ObjectRef, _: &str) -> Result<Option<Value>, String> { Ok(None) }
+            fn set(&mut self, _: &ObjectRef, _: &str, _: Value) -> Result<bool, String> { Ok(false) }
+            fn macro_reference(&self, requested: &str) -> Result<String, String> {
+                Ok(requested.split_once('!').map_or(requested, |(_, name)| name).to_string())
+            }
+            fn macro_unavailable(&self, _: &str) -> String {
+                crate::runtime::host_error_from(1004, "Microsoft Excel", self.0)
+            }
+        }
+        let cases: &[(&str, &str, &str, &str)] = &[
+            (r####"order_first_unused_standard_cdec"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function CDec() As String
+ CDec = "UNUSED"
+End Function
+Public Function Probe() As String
+ Probe = "OK|DECLARED"
+End Function
+"####, r####"'owned-type-visibility-541695127dcb4c95aa1a22466cb078e2.xlsm'!UnusedDeclarationProbe.Probe"####, r####"マクロ ''owned-type-visibility-541695127dcb4c95aa1a22466cb078e2.xlsm'!UnusedDeclarationProbe.Probe' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。"####),
+            (r####"order_first_unused_standard_abs"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function Abs() As String
+ Abs = "UNUSED"
+End Function
+Public Function Probe() As String
+ Probe = "OK|DECLARED"
+End Function
+"####, r####"'owned-type-visibility-f31a0af6f56e4706b50bdd497d0ac7d9.xlsm'!UnusedDeclarationProbe.Probe"####, r####"マクロ ''owned-type-visibility-f31a0af6f56e4706b50bdd497d0ac7d9.xlsm'!UnusedDeclarationProbe.Probe' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。"####),
+            (r####"order_first_paired_minimal_cdec_called"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function CDec() As String
+ CDec = "UNUSED"
+End Function
+Public Function Probe() As String
+ Probe = UnusedDeclarationProbe.CDec()
+End Function
+"####, r####"'owned-type-visibility-d5a46ecda81e40a09989d64f63004212.xlsm'!UnusedDeclarationProbe.Probe"####, r####"マクロ ''owned-type-visibility-d5a46ecda81e40a09989d64f63004212.xlsm'!UnusedDeclarationProbe.Probe' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。"####),
+            (r####"order_first_paired_minimal_abs_called"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function Abs() As String
+ Abs = "UNUSED"
+End Function
+Public Function Probe() As String
+ Probe = UnusedDeclarationProbe.Abs()
+End Function
+"####, r####"'owned-type-visibility-536ff7732f3f4a6daf2f46ff46bea88a.xlsm'!UnusedDeclarationProbe.Probe"####, r####"マクロ ''owned-type-visibility-536ff7732f3f4a6daf2f46ff46bea88a.xlsm'!UnusedDeclarationProbe.Probe' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。"####),
+        ];
+        let mut differences = Vec::new();
+        for &(label, source, requested, description) in cases {
+            let (module, _) = crate::parse_project(source).unwrap();
+            let result = Runtime::new(&module).with_host(&mut MacroHost(description)).call_macro(requested, vec![]);
+            let matched = result.as_ref().is_err_and(|error| error.kind == RuntimeErrorKind::Host
+                && error.vba_number == Some(1004) && error.vba_source.as_deref() == Some("Microsoft Excel")
+                && error.message.ends_with(description));
+            if !matched { differences.push(format!("{label}: {result:?}")); }
+        }
+        assert_eq!(cases.len(), 4);
         assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
     }
 }

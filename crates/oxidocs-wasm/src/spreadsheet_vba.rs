@@ -29292,7 +29292,7 @@ impl Host for WorkbookHost<'_> {
     fn macro_unavailable(&self, requested: &str) -> String {
         let description = match self.error_language {
             ErrorLanguage::English => format!("Cannot run the macro '{requested}'. The macro may not be available in this workbook or all macros may be disabled."),
-            ErrorLanguage::Japanese => format!("\u{30de}\u{30af}\u{30ed} '{requested}' \u{3092}\u{5b9f}\u{884c}\u{3067}\u{304d}\u{307e}\u{305b}\u{3093}\u{3002}\u{3053}\u{306e}\u{30d6}\u{30c3}\u{30af}\u{3067}\u{30de}\u{30af}\u{30ed}\u{304c}\u{4f7f}\u{7528}\u{3067}\u{304d}\u{306a}\u{3044}\u{304b}\u{3001}\u{3059}\u{3079}\u{3066}\u{306e}\u{30de}\u{30af}\u{30ed}\u{304c}\u{7121}\u{52b9}\u{306b}\u{306a}\u{3063}\u{3066}\u{3044}\u{308b}\u{53ef}\u{80fd}\u{6027}\u{304c}\u{3042}\u{308a}\u{307e}\u{3059}\u{3002}"),
+            ErrorLanguage::Japanese => format!("\u{30de}\u{30af}\u{30ed} '{requested}' \u{3092}\u{5b9f}\u{884c}\u{3067}\u{304d}\u{307e}\u{305b}\u{3093}\u{3002}\u{3053}\u{306e}\u{30d6}\u{30c3}\u{30af}\u{3067}\u{30de}\u{30af}\u{30ed}\u{304c}\u{4f7f}\u{7528}\u{3067}\u{304d}\u{306a}\u{3044}\u{304b}\u{3001}\u{307e}\u{305f}\u{306f}\u{3059}\u{3079}\u{3066}\u{306e}\u{30de}\u{30af}\u{30ed}\u{304c}\u{7121}\u{52b9}\u{306b}\u{306a}\u{3063}\u{3066}\u{3044}\u{308b}\u{53ef}\u{80fd}\u{6027}\u{304c}\u{3042}\u{308a}\u{307e}\u{3059}\u{3002}"),
         };
         oxivba_core::host_error_from(1004, "Microsoft Excel", description)
     }
@@ -56749,6 +56749,1106 @@ End Function
             }
         }
         assert_eq!(native_count_invocation_cases().len(), 46);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
+    fn intrinsic_declaration_execution_matches_native() {
+        // Run compiles on demand; these are not explicit Compile Project expectations.
+        let cases: &[(&str, &str, &str, &str, &str, &str)] = &[
+            (r####"procedure_name_cstr"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CStr(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CStr(ByRef value As ScopeTypes.SharedRecord) As String
+ CStr = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-69d87bde502c48d792b3cbe2fd5ffc46.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"procedure_name_clng"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CLng(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CLng(ByRef value As ScopeTypes.SharedRecord) As String
+ CLng = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-5d2a34cf147b4a5d9355296d3e2da60c.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"procedure_name_abs"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.Abs(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function Abs(ByRef value As ScopeTypes.SharedRecord) As String
+ Abs = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-d6d768ebace8476d9fdbc5796d074c1a.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"procedure_name_len"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.Len(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function Len(ByRef value As ScopeTypes.SharedRecord) As String
+ Len = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-8bfcb7ecc62d4dda90bd121e2791cc98.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"conversion_module_cdec_shadow_control"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CDec(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CDec(ByRef value As ScopeTypes.SharedRecord) As String
+ CDec = CStr(value.Value)
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-8d9b474385db41ad9ca3974485b33ae9.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_lenb"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.LenB(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function LenB(ByRef value As ScopeTypes.SharedRecord) As String
+ LenB = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-2ea18e3bc7b540f6bd2fccb88ff385e3.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_int"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.Int(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function Int(ByRef value As ScopeTypes.SharedRecord) As String
+ Int = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-ad0dc2d056bd47f6ba058ec00b82c9df.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_fix"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.Fix(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function Fix(ByRef value As ScopeTypes.SharedRecord) As String
+ Fix = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-8b3ba0df6fdb436ab13acdd16417d0ed.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_sgn"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.Sgn(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function Sgn(ByRef value As ScopeTypes.SharedRecord) As String
+ Sgn = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-0f772d4d5d2248cba494794b5aeed3e3.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_cbool"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CBool(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CBool(ByRef value As ScopeTypes.SharedRecord) As String
+ CBool = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-f9ace9aaedf5415d84f1990835747435.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_cbyte"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CByte(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CByte(ByRef value As ScopeTypes.SharedRecord) As String
+ CByte = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-69cb2a1472c144dd8ebc15a1a8eb5ff6.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_ccur"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CCur(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CCur(ByRef value As ScopeTypes.SharedRecord) As String
+ CCur = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-302b5b8ae2104779869317b9cf0569f9.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_cdate"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CDate(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CDate(ByRef value As ScopeTypes.SharedRecord) As String
+ CDate = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-f628c3fe671b4870b39003179c07dd3a.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_cdbl"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CDbl(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CDbl(ByRef value As ScopeTypes.SharedRecord) As String
+ CDbl = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-f1d947569a1944919de200f9a758854d.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_cint"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CInt(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CInt(ByRef value As ScopeTypes.SharedRecord) As String
+ CInt = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-1fb9d2ae5af847e0b1f1753351d9e71e.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_clnglng"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CLngLng(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CLngLng(ByRef value As ScopeTypes.SharedRecord) As String
+ CLngLng = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-7dd543388d6446d39c2feb7d2b54c49a.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_clngptr"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CLngPtr(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CLngPtr(ByRef value As ScopeTypes.SharedRecord) As String
+ CLngPtr = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-5c049223c0bd4717b23e608770a83000.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_csng"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CSng(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CSng(ByRef value As ScopeTypes.SharedRecord) As String
+ CSng = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-fff18ea16d9f4eb7924ee2b6916ab8c3.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_cvar"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CVar(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CVar(ByRef value As ScopeTypes.SharedRecord) As String
+ CVar = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-65d062329380466cb956f16e9cd60b63.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"declaration_typename"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.TypeName(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function TypeName(ByRef value As ScopeTypes.SharedRecord) As String
+ TypeName = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-03d558dbfb074ee882dd0812e50d8413.xlsm"####, r####"value"####, r####"OK|DECLARED"####),
+            (r####"declaration_left"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.Left(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function Left(ByRef value As ScopeTypes.SharedRecord) As String
+ Left = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-c88ffb941c38418cb7478c3b0c2afe53.xlsm"####, r####"value"####, r####"OK|DECLARED"####),
+            (r####"declaration_isnumeric"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.IsNumeric(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function IsNumeric(ByRef value As ScopeTypes.SharedRecord) As String
+ IsNumeric = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-ecaee0763ac942eab36a4da29dde7dd1.xlsm"####, r####"value"####, r####"OK|DECLARED"####),
+            (r####"declaration_ownnamecontrol"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.OwnNameControl(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function OwnNameControl(ByRef value As ScopeTypes.SharedRecord) As String
+ OwnNameControl = "DECLARED"
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-a9afd708c2464094b7481fad257b22ba.xlsm"####, r####"value"####, r####"OK|DECLARED"####),
+            (r####"class_function_cstr"####, r####"Attribute VB_Name = "ClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As NameDeclarationClass
+ Set c = New NameDeclarationClass
+ Probe = "OK|" & TypeName(c) & "|" & CStr(c.CStr())
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "NameDeclarationClass"
+Option Explicit
+Public Function CStr() As String
+ CStr = "DECLARED"
+End Function
+"####, r####"ClassDeclarationProbe.Probe"####, r####"owned-type-visibility-b139b6ca0013479fbba420fd78c268e9.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"class_function_abs"####, r####"Attribute VB_Name = "ClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As NameDeclarationClass
+ Set c = New NameDeclarationClass
+ Probe = "OK|" & TypeName(c) & "|" & CStr(c.Abs())
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "NameDeclarationClass"
+Option Explicit
+Public Function Abs() As String
+ Abs = "DECLARED"
+End Function
+"####, r####"ClassDeclarationProbe.Probe"####, r####"owned-type-visibility-13298f728dfd41ceaae0a092587862a3.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"class_function_typename"####, r####"Attribute VB_Name = "ClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As NameDeclarationClass
+ Set c = New NameDeclarationClass
+ Probe = "OK|" & TypeName(c) & "|" & CStr(c.TypeName())
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "NameDeclarationClass"
+Option Explicit
+Public Function TypeName() As String
+ TypeName = "DECLARED"
+End Function
+"####, r####"ClassDeclarationProbe.Probe"####, r####"owned-type-visibility-9f6ec57d6048452f811d66f8af182be1.xlsm"####, r####"value"####, r####"OK|NameDeclarationClass|DECLARED"####),
+            (r####"class_property_get_clng"####, r####"Attribute VB_Name = "ClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As NameDeclarationClass
+ Set c = New NameDeclarationClass
+ Probe = "OK|" & TypeName(c) & "|" & CStr(c.CLng)
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "NameDeclarationClass"
+Option Explicit
+Public Property Get CLng() As Long
+ CLng = 7
+End Property
+"####, r####"ClassDeclarationProbe.Probe"####, r####"owned-type-visibility-7b40399058e341969d25d733fed4635e.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"class_function_ownnamecontrol"####, r####"Attribute VB_Name = "ClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As NameDeclarationClass
+ Set c = New NameDeclarationClass
+ Probe = "OK|" & TypeName(c) & "|" & CStr(c.OwnNameControl())
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "NameDeclarationClass"
+Option Explicit
+Public Function OwnNameControl() As String
+ OwnNameControl = "DECLARED"
+End Function
+"####, r####"ClassDeclarationProbe.Probe"####, r####"owned-type-visibility-59213892ea5e482bb892ea066ed75aed.xlsm"####, r####"value"####, r####"OK|NameDeclarationClass|DECLARED"####),
+            (r####"unused_standard_cdec"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Probe = "OK|DECLARED"
+End Function
+Public Function CDec() As String
+ CDec = "UNUSED"
+End Function
+"####, r####"UnusedDeclarationProbe.Probe"####, r####"owned-type-visibility-714dfef111f643ec8d0d0eda3c69ee58.xlsm"####, r####"compile"####, r####"構文エラー"####),
+            (r####"unused_standard_abs"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Probe = "OK|DECLARED"
+End Function
+Public Function Abs() As String
+ Abs = "UNUSED"
+End Function
+"####, r####"UnusedDeclarationProbe.Probe"####, r####"owned-type-visibility-9f60f5aba3d64cefb1cfef455c5757e8.xlsm"####, r####"compile"####, r####"構文エラー"####),
+            (r####"unused_class_cstr"####, r####"Attribute VB_Name = "UnusedClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As UnusedDeclarationClass
+ Set c = New UnusedDeclarationClass
+ Probe = "OK|" & TypeName(c) & "|" & c.ValidControl()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "UnusedDeclarationClass"
+Option Explicit
+Public Function ValidControl() As String
+ ValidControl = "DECLARED"
+End Function
+Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"UnusedClassDeclarationProbe.Probe"####, r####"owned-type-visibility-e45a7874232a41f1a307bd387d2d934d.xlsm"####, r####"compile"####, r####"構文エラー"####),
+            (r####"paired_udt_cdec_unused"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|DECLARED"
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Conversion"
+Option Explicit
+Public Function CDec(ByRef value As ScopeTypes.SharedRecord) As String
+ CDec = CStr(value.Value)
+End Function
+"####, r####"ScopeProbe.Probe"####, r####"owned-type-visibility-c95c18e9810d4fefae964386aee59c20.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"paired_class_cstr_unused_same_header"####, r####"Attribute VB_Name = "ClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As NameDeclarationClass
+ Set c = New NameDeclarationClass
+ Probe = "OK|" & TypeName(c) & "|" & CStr("DECLARED")
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "NameDeclarationClass"
+Option Explicit
+Public Function CStr() As String
+ CStr = "DECLARED"
+End Function
+"####, r####"ClassDeclarationProbe.Probe"####, r####"owned-type-visibility-50f38f65b856450cb3112c8069733153.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"paired_minimal_cdec_called"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Probe = UnusedDeclarationProbe.CDec()
+End Function
+Public Function CDec() As String
+ CDec = "UNUSED"
+End Function
+"####, r####"UnusedDeclarationProbe.Probe"####, r####"owned-type-visibility-fb9032f2867842b1b736d8e710d37adb.xlsm"####, r####"compile"####, r####"メソッドまたはデータ メンバーが見つかりません。"####),
+            (r####"paired_minimal_abs_called"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Probe = UnusedDeclarationProbe.Abs()
+End Function
+Public Function Abs() As String
+ Abs = "UNUSED"
+End Function
+"####, r####"UnusedDeclarationProbe.Probe"####, r####"owned-type-visibility-8a6d88fafe454157b66eb1e8d8a51dd8.xlsm"####, r####"compile"####, r####"メソッドまたはデータ メンバーが見つかりません。"####),
+            (r####"order_first_unused_standard_cdec"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function CDec() As String
+ CDec = "UNUSED"
+End Function
+Public Function Probe() As String
+ Probe = "OK|DECLARED"
+End Function
+"####, r####"UnusedDeclarationProbe.Probe"####, r####"owned-type-visibility-541695127dcb4c95aa1a22466cb078e2.xlsm"####, r####"runtime"####, r####"マクロ ''owned-type-visibility-541695127dcb4c95aa1a22466cb078e2.xlsm'!UnusedDeclarationProbe.Probe' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。"####),
+            (r####"order_first_unused_standard_abs"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function Abs() As String
+ Abs = "UNUSED"
+End Function
+Public Function Probe() As String
+ Probe = "OK|DECLARED"
+End Function
+"####, r####"UnusedDeclarationProbe.Probe"####, r####"owned-type-visibility-f31a0af6f56e4706b50bdd497d0ac7d9.xlsm"####, r####"runtime"####, r####"マクロ ''owned-type-visibility-f31a0af6f56e4706b50bdd497d0ac7d9.xlsm'!UnusedDeclarationProbe.Probe' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。"####),
+            (r####"order_first_unused_class_cstr"####, r####"Attribute VB_Name = "UnusedClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As UnusedDeclarationClass
+ Set c = New UnusedDeclarationClass
+ Probe = "OK|" & TypeName(c) & "|" & c.ValidControl()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "UnusedDeclarationClass"
+Option Explicit
+Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+Public Function ValidControl() As String
+ ValidControl = "DECLARED"
+End Function
+"####, r####"UnusedClassDeclarationProbe.Probe"####, r####"owned-type-visibility-26da1f93e1484602a851df90ffe9f7c1.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"order_first_paired_minimal_cdec_called"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function CDec() As String
+ CDec = "UNUSED"
+End Function
+Public Function Probe() As String
+ Probe = UnusedDeclarationProbe.CDec()
+End Function
+"####, r####"UnusedDeclarationProbe.Probe"####, r####"owned-type-visibility-d5a46ecda81e40a09989d64f63004212.xlsm"####, r####"runtime"####, r####"マクロ ''owned-type-visibility-d5a46ecda81e40a09989d64f63004212.xlsm'!UnusedDeclarationProbe.Probe' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。"####),
+            (r####"order_first_paired_minimal_abs_called"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function Abs() As String
+ Abs = "UNUSED"
+End Function
+Public Function Probe() As String
+ Probe = UnusedDeclarationProbe.Abs()
+End Function
+"####, r####"UnusedDeclarationProbe.Probe"####, r####"owned-type-visibility-536ff7732f3f4a6daf2f46ff46bea88a.xlsm"####, r####"runtime"####, r####"マクロ ''owned-type-visibility-536ff7732f3f4a6daf2f46ff46bea88a.xlsm'!UnusedDeclarationProbe.Probe' を実行できません。このブックでマクロが使用できないか、またはすべてのマクロが無効になっている可能性があります。"####),
+            (r####"minimal_separate_cdec_unused"####, r####"Attribute VB_Name = "MinimalCaller"
+Option Explicit
+Public Function Probe() As String
+ Probe = "OK|DECLARED"
+End Function
+Attribute VB_Name = "MinimalConversion"
+Option Explicit
+Public Function CDec() As String
+ CDec = "UNUSED"
+End Function
+"####, r####"MinimalCaller.Probe"####, r####"owned-type-visibility-b58699deaa194570a59a16fbcbfb6d45.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"later_called_unused_class_cstr"####, r####"Attribute VB_Name = "UnusedClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As UnusedDeclarationClass
+ Set c = New UnusedDeclarationClass
+ Probe = "OK|" & TypeName(c) & "|" & c.CStr()
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "UnusedDeclarationClass"
+Option Explicit
+Public Function ValidControl() As String
+ ValidControl = "DECLARED"
+End Function
+Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"UnusedClassDeclarationProbe.Probe"####, r####"owned-type-visibility-2fbe353a0ed0488984fb66a5784aa0db.xlsm"####, r####"compile"####, r####"メソッドまたはデータ メンバーが見つかりません。"####),
+            (r####"later_called_unused_standard_cdec"####, r####"Attribute VB_Name = "UnusedDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Probe = CDec()
+End Function
+Public Function CDec() As String
+ CDec = "UNUSED"
+End Function
+"####, r####"UnusedDeclarationProbe.Probe"####, r####"owned-type-visibility-2586b717b5764faea7b6e9582a4ba969.xlsm"####, r####"compile"####, r####"引数は省略できません。"####),
+            (r####"unreferenced_later_class"####, r####"Attribute VB_Name = "UnusedClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Probe = "OK|DECLARED"
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "UnusedDeclarationClass"
+Option Explicit
+Public Function ValidControl() As String
+ ValidControl = "DECLARED"
+End Function
+Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"UnusedClassDeclarationProbe.Probe"####, r####"owned-type-visibility-1364407752e84c0aa368152167ecc485.xlsm"####, r####"value"####, r####"OK|DECLARED"####),
+            (r####"declared_only_later_class"####, r####"Attribute VB_Name = "UnusedClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As UnusedDeclarationClass
+ Probe = "OK|DECLARED"
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "UnusedDeclarationClass"
+Option Explicit
+Public Function ValidControl() As String
+ ValidControl = "DECLARED"
+End Function
+Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"UnusedClassDeclarationProbe.Probe"####, r####"owned-type-visibility-bee8894c46eb4f44a13f6f040d4a72cd.xlsm"####, r####"value"####, r####"OK|DECLARED"####),
+            (r####"new_only_later_class"####, r####"Attribute VB_Name = "UnusedClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As UnusedDeclarationClass
+ Set c = New UnusedDeclarationClass
+ Probe = "OK|DECLARED"
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "UnusedDeclarationClass"
+Option Explicit
+Public Function ValidControl() As String
+ ValidControl = "DECLARED"
+End Function
+Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"UnusedClassDeclarationProbe.Probe"####, r####"owned-type-visibility-ec3e0eae46d24766b4bad314c3e350db.xlsm"####, r####"value"####, r####"OK|DECLARED"####),
+            (r####"unreferenced_later_standard"####, r####"Attribute VB_Name = "UnusedStandardCaller"
+Option Explicit
+Public Function Probe() As String
+ Probe = "OK|DECLARED"
+End Function
+Attribute VB_Name = "UnusedStandardTarget"
+Option Explicit
+Public Function ValidControl() As String
+ ValidControl = "DECLARED"
+End Function
+Public Function CDec() As String
+ CDec = "UNUSED"
+End Function
+"####, r####"UnusedStandardCaller.Probe"####, r####"owned-type-visibility-e31c2bd8f508439c8d8e844657148623.xlsm"####, r####"value"####, r####"OK|DECLARED"####),
+            (r####"initial_unreferenced_later_class"####, r####"Attribute VB_Name = "UnusedClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Probe = "OK|DECLARED"
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "UnusedDeclarationClass"
+Option Explicit
+Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+Public Function ValidControl() As String
+ ValidControl = "DECLARED"
+End Function
+"####, r####"UnusedClassDeclarationProbe.Probe"####, r####"owned-type-visibility-c21b905ec7c244dca150021ac122bd0e.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"initial_declared_only_later_class"####, r####"Attribute VB_Name = "UnusedClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As UnusedDeclarationClass
+ Probe = "OK|DECLARED"
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "UnusedDeclarationClass"
+Option Explicit
+Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+Public Function ValidControl() As String
+ ValidControl = "DECLARED"
+End Function
+"####, r####"UnusedClassDeclarationProbe.Probe"####, r####"owned-type-visibility-6eb13935ce2946abb3fe50381c582777.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+            (r####"initial_new_only_later_class"####, r####"Attribute VB_Name = "UnusedClassDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As UnusedDeclarationClass
+ Set c = New UnusedDeclarationClass
+ Probe = "OK|DECLARED"
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "UnusedDeclarationClass"
+Option Explicit
+Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+Public Function ValidControl() As String
+ ValidControl = "DECLARED"
+End Function
+"####, r####"UnusedClassDeclarationProbe.Probe"####, r####"owned-type-visibility-9fde9cc191ef46fcb068f5bf56f1f888.xlsm"####, r####"compile"####, r####"修正候補: 識別子"####),
+        ];
+        println!("NATIVE_DECLARATION_INPUTS={}", serde_json::to_string(cases).unwrap());
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let mut differences = Vec::new();
+        for &(label, source, procedure, file_name, expected_kind, expected) in cases {
+            let bytes = crate::vba_project::write_project_source(seed, source, None).unwrap();
+            let source = crate::vba_project::read_project_source_with_code_page(&bytes, None).unwrap().unwrap();
+            let mut book = oxicells_core::parse_xlsx(&bytes).unwrap();
+            book.calculation.dbcs_language = Some(true);
+            let mut context = failure_context();
+            context.project_name = "OxiNamedProject".into();
+            context.file_name = Some(file_name.into());
+            context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+            context.environment.help_file = r"C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm".into();
+            context.application_state = Some(serde_json::from_value(serde_json::json!({
+                "enableEvents":false, "displayAlerts":false, "calculation":-4105
+            })).unwrap());
+            context.file_context = Some(serde_json::from_value(serde_json::json!({
+                "packageBytes":bytes, "readOnly":true, "editRevision":0
+            })).unwrap());
+            let requested = format!("'{}'!{procedure}", file_name.replace('\'', "''"));
+            let outcome = execute_workbook_action_in_session(book, &source, Some(&requested),
+                Vec::new(), 0, context, &mut None).unwrap();
+            let actual = serde_json::to_value(&outcome.result).unwrap();
+            let matched = if expected_kind == "value" {
+                outcome.error.is_none() && actual == serde_json::json!({"type":"string", "value":expected})
+            } else {
+                outcome.error.as_ref().is_some_and(|error|
+                    error.kind == expected_kind && error.message.ends_with(expected))
+            };
+            if !matched || outcome.workbook_changed {
+                differences.push(format!("{label}: error={:?} result={actual} changed={} expected={expected_kind}:{expected}",
+                    outcome.error.as_ref().map(|error| (error.kind, error.message.as_str())), outcome.workbook_changed));
+            }
+        }
+        assert_eq!(cases.len(), 50);
         assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
     }
 
