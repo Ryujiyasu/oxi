@@ -21,6 +21,7 @@ pub mod edit;
 pub mod package;
 pub mod props;
 pub mod schema;
+pub mod script;
 pub mod xml;
 
 pub use content::{Block, Cell, CellItem, Inline, Paragraph, Row, RowItem, Run, RunItem, Table};

@@ -183,12 +183,12 @@ impl DocxDocument {
         Ok(DocxDocument { model, map: RefCell::new(None) })
     }
 
-    /// Apply edits given as a JSON array (`insert_text`, `delete`, `replace`,
-    /// `split_paragraph`, `join_paragraphs`, `format_text`,
-    /// `format_paragraphs`). All apply or, on an error, none.
+    /// Apply edits given as a JSON array (`oxidocs_model::edit::Edit`:
+    /// typing, deleting, splitting and joining paragraphs, formatting, and
+    /// the structural edits that make any document from an empty one). All
+    /// apply or, on an error, none.
     pub fn apply(&mut self, edits_json: &str) -> Result<(), JsError> {
-        let edits: Vec<oxidocs_model::edit::Edit> =
-            serde_json::from_str(edits_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let edits = oxidocs_model::edit::from_json(edits_json).map_err(|e| JsError::new(&e.to_string()))?;
         oxidocs_model::edit::apply_all(&mut self.model, &edits).map_err(|e| JsError::new(&e.to_string()))?;
         *self.map.borrow_mut() = None;
         Ok(())

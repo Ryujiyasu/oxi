@@ -29,7 +29,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::content::{Block, CellItem, Hyperlink, Inline, Paragraph, RowItem, Run, RunItem};
+use crate::content::{Block, CellItem, Hyperlink, Inline, Object, Paragraph, RowItem, Run, RunItem, Table};
 use crate::package::DocxModel;
 use crate::props::Props;
 use crate::xml::{Element, Node};
@@ -80,6 +80,65 @@ pub struct Patch {
     pub merge: Vec<Element>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub remove: Vec<String>,
+    /// Take every property away first, so the bag holds just `set` and
+    /// `merge` afterwards.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear: bool,
+}
+
+/// The kind of story `add_story` appends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoryKind {
+    /// A header (`w:hdr`) or footer (`w:ftr`).
+    HeaderFooter { kind: String },
+    Footnote,
+    Endnote,
+    Comment,
+}
+
+/// The document-wide definitions: styles, numbering, settings, theme, fonts
+/// and the parts Word keeps for its own features. Each one given replaces
+/// what the document had.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct DocumentParts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<Element>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub styles: Option<crate::docparts::Styles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub styles_with_effects: Option<crate::docparts::Styles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering: Option<crate::docparts::Numbering>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<Object>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_settings: Option<Object>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_table: Option<Object>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<Object>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<crate::content::Part>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_xml: Vec<crate::content::Part>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glossary: Option<crate::content::Part>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub app_data: Vec<crate::content::Part>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments_extended: Option<Object>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments_ids: Option<Object>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments_extensible: Option<Object>,
+    /// Keep a notes or comments part even with nothing in it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub footnotes: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub endnotes: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub comments: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,6 +168,112 @@ pub enum Edit {
     FormatText { from: Pos, to: Pos, patch: Patch },
     /// Change paragraph properties of every paragraph the range touches.
     FormatParagraphs { from: Pos, to: Pos, patch: Patch },
+    /// Put one thing at a position: a run (its properties and content), a
+    /// marker (bookmark, comment range, permission range), an equation, or
+    /// a run item written outside any run. It goes after anything of no
+    /// width already at the position, inside the innermost container
+    /// (hyperlink, field, content control) whose content takes the position
+    /// in.
+    InsertInline { at: Pos, inline: Inline },
+    /// Put what lies between two positions of one paragraph into a
+    /// container: a hyperlink, a simple field, a content control, a smart
+    /// tag, custom XML, a tracked change, a bidirectional embedding.
+    /// `wrapper` is the container with no content. Things of no width at
+    /// either end go inside, except the first `outside` at the start.
+    Wrap {
+        from: Pos,
+        to: Pos,
+        wrapper: Inline,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        outside: usize,
+    },
+    /// Insert a table before (or after) the block that holds a paragraph.
+    /// The table's cells must be empty; each has one paragraph to edit
+    /// afterwards.
+    InsertTable {
+        #[serde(default)]
+        story: Story,
+        para: usize,
+        #[serde(default)]
+        after: bool,
+        table: Table,
+    },
+    /// Insert a block of no text before the block that holds a paragraph: a
+    /// bookmark or comment range between paragraphs, an altChunk.
+    InsertBlock {
+        #[serde(default)]
+        story: Story,
+        para: usize,
+        block: Block,
+    },
+    /// Put the `count` blocks just before the block that holds a paragraph
+    /// into a container: a content control, custom XML, a tracked change.
+    /// `wrapper` is the container with no content.
+    WrapBlocks {
+        #[serde(default)]
+        story: Story,
+        para: usize,
+        count: usize,
+        wrapper: Block,
+    },
+    /// Take out a paragraph with nothing in it.
+    RemoveParagraph {
+        #[serde(default)]
+        story: Story,
+        para: usize,
+    },
+    /// Set a paragraph's own attributes (w14:paraId, w14:textId, ...).
+    SetParagraphAttrs {
+        #[serde(default)]
+        story: Story,
+        para: usize,
+        attrs: Vec<(String, String)>,
+    },
+    /// Set the document's last section (the body's own w:sectPr); `at`
+    /// places it among the body's blocks when it is not last.
+    SetSection {
+        #[serde(default)]
+        props: Option<Props>,
+        #[serde(default)]
+        at: Option<usize>,
+    },
+    /// Add an empty header, footer, footnote, endnote or comment at the end
+    /// of its list; edit it as a story afterwards.
+    AddStory {
+        story: StoryKind,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attrs: Vec<(String, String)>,
+    },
+    /// Replace document-wide definitions.
+    SetDocumentParts { parts: Box<DocumentParts> },
+    /// Add a style, or change the one with its w:styleId. `with_effects`
+    /// edits the Word 2010 copy of the styles (stylesWithEffects).
+    DefineStyle {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        with_effects: bool,
+        style: Box<crate::docparts::Style>,
+    },
+    /// Set the formatting every style starts from (docDefaults) and the
+    /// built-in styles' visibility defaults (latentStyles). `declared` keeps
+    /// an empty docDefaults.
+    SetStyleDefaults {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        with_effects: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run: Option<Props>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        paragraph: Option<Props>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        declared: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latent: Option<Element>,
+    },
+    /// Add a list definition (w:abstractNum), or change the one with its
+    /// w:abstractNumId.
+    DefineList { list: Box<crate::docparts::AbstractNum> },
+    /// Add a list that paragraphs number with (w:num), or change the one
+    /// with its w:numId.
+    DefineListInstance { num: crate::docparts::Num },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,6 +286,10 @@ impl std::fmt::Display for EditError {
 }
 
 impl std::error::Error for EditError {}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
 
 fn err<T>(msg: impl Into<String>) -> Result<T, EditError> {
     Err(EditError(msg.into()))
@@ -564,49 +733,6 @@ fn empty_paragraph() -> &'static Paragraph {
     EMPTY.get_or_init(Paragraph::default)
 }
 
-/// Write out the final paragraph of every cell that lacks one (Word gives
-/// each cell a paragraph mark, and writes `<w:p/>` there when it saves).
-fn fill_cells(blocks: &mut [Block]) {
-    for b in blocks {
-        match b {
-            Block::Table(t) => fill_rows(&mut t.rows),
-            Block::Sdt(s) => fill_cells(&mut s.content),
-            Block::CustomXml(w) => fill_cells(&mut w.content),
-            Block::Revision(r) => fill_cells(&mut r.content),
-            _ => {}
-        }
-    }
-}
-
-fn fill_rows(rows: &mut [RowItem]) {
-    for r in rows {
-        match r {
-            RowItem::Row(row) => fill_cell_items(&mut row.cells),
-            RowItem::Sdt(s) => fill_rows(&mut s.content),
-            RowItem::CustomXml(w) => fill_rows(&mut w.content),
-            RowItem::Revision(v) => fill_rows(&mut v.content),
-            RowItem::Marker(_) => {}
-        }
-    }
-}
-
-fn fill_cell_items(cells: &mut [CellItem]) {
-    for c in cells {
-        match c {
-            CellItem::Cell(cell) => {
-                fill_cells(&mut cell.content);
-                if lacks_final_paragraph(&cell.content) {
-                    cell.content.push(Block::Paragraph(Paragraph::default()));
-                }
-            }
-            CellItem::Sdt(s) => fill_cell_items(&mut s.content),
-            CellItem::CustomXml(w) => fill_cell_items(&mut w.content),
-            CellItem::Revision(v) => fill_cell_items(&mut v.content),
-            CellItem::Marker(_) => {}
-        }
-    }
-}
-
 /// Whether the last thing in a list of blocks is a paragraph mark: a
 /// paragraph, or a content control (custom XML, revision) ending in one.
 fn lacks_final_paragraph(blocks: &[Block]) -> bool {
@@ -714,6 +840,9 @@ fn localize_edit(model: &DocxModel, edit: &Edit) -> Result<Edit, EditError> {
         Edit::JoinParagraphs { .. } => edit.clone(),
         Edit::FormatText { from, to, patch } => Edit::FormatText { from: l(from)?, to: l(to)?, patch: patch.clone() },
         Edit::FormatParagraphs { from, to, patch } => Edit::FormatParagraphs { from: l(from)?, to: l(to)?, patch: patch.clone() },
+        Edit::InsertInline { at, inline } => Edit::InsertInline { at: l(at)?, inline: inline.clone() },
+        Edit::Wrap { from, to, wrapper, outside } => Edit::Wrap { from: l(from)?, to: l(to)?, wrapper: wrapper.clone(), outside: *outside },
+        _ => edit.clone(),
     })
 }
 
@@ -732,17 +861,6 @@ fn story_blocks<'a>(model: &'a DocxModel, story: &Story) -> Result<&'a Vec<Block
     })
 }
 
-/// A story's blocks for editing, with the final paragraph Word gives a
-/// story that ends in another block written out (see [`paragraphs`]).
-fn story_blocks_mut<'a>(model: &'a mut DocxModel, story: &Story) -> Result<&'a mut Vec<Block>, EditError> {
-    let blocks = story_list_mut(model, story)?;
-    fill_cells(blocks);
-    if story_lacks_final_paragraph(blocks, story) {
-        blocks.push(Block::Paragraph(Paragraph::default()));
-    }
-    Ok(blocks)
-}
-
 fn story_list_mut<'a>(model: &'a mut DocxModel, story: &Story) -> Result<&'a mut Vec<Block>, EditError> {
     let missing = || EditError(format!("no story {story:?}"));
     Ok(match story {
@@ -754,78 +872,119 @@ fn story_list_mut<'a>(model: &'a mut DocxModel, story: &Story) -> Result<&'a mut
     })
 }
 
-/// The path to paragraph `n`: indexes through blocks, rows and cells, the
-/// last one into the list of blocks that holds the paragraph.
-fn path_of(blocks: &[Block], n: usize) -> Result<Vec<usize>, EditError> {
-    let mut left = n;
-    let mut path = Vec::new();
-    if find(blocks, &mut left, &mut path) {
-        Ok(path)
-    } else {
-        err(format!("no paragraph {n}"))
-    }
+enum Reach {
+    No,
+    Real,
+    /// The paragraph Word gives a story or cell that does not end in one.
+    Virtual,
 }
 
-fn find(blocks: &[Block], n: &mut usize, path: &mut Vec<usize>) -> bool {
-    for (i, b) in blocks.iter().enumerate() {
+/// Find paragraph `n` of a list of blocks, pushing the indexes that lead to
+/// it onto `path`. Paragraphs Word implies at the end of a cell count; with
+/// `make`, the one sought is written out (Word writes `<w:p/>` there when it
+/// saves). Only that one: a cell nobody edits stays as the file had it.
+fn reach(blocks: &mut [Block], n: &mut usize, path: &mut Vec<usize>, make: bool) -> Reach {
+    for (i, item) in blocks.iter_mut().enumerate() {
         path.push(i);
-        let hit = match b {
+        let r = match item {
             Block::Paragraph(_) => {
                 if *n == 0 {
-                    true
+                    Reach::Real
                 } else {
                     *n -= 1;
-                    false
+                    Reach::No
                 }
             }
-            Block::Table(t) => find_rows(&t.rows, n, path),
-            Block::Sdt(s) => find(&s.content, n, path),
-            Block::CustomXml(w) => find(&w.content, n, path),
-            Block::Revision(r) => find(&r.content, n, path),
-            Block::Marker(_) | Block::AltChunk(_) => false,
+            Block::Table(t) => reach_rows(&mut t.rows, n, path, make),
+            Block::Sdt(s) => reach(&mut s.content, n, path, make),
+            Block::CustomXml(w) => reach(&mut w.content, n, path, make),
+            Block::Revision(r) => reach(&mut r.content, n, path, make),
+            Block::Marker(_) | Block::AltChunk(_) => Reach::No,
         };
-        if hit {
-            return true;
+        if !matches!(r, Reach::No) {
+            return r;
         }
         path.pop();
     }
-    false
+    Reach::No
 }
 
-fn find_rows(rows: &[RowItem], n: &mut usize, path: &mut Vec<usize>) -> bool {
-    for (i, r) in rows.iter().enumerate() {
+fn reach_rows(rows: &mut [RowItem], n: &mut usize, path: &mut Vec<usize>, make: bool) -> Reach {
+    for (i, item) in rows.iter_mut().enumerate() {
         path.push(i);
-        let hit = match r {
-            RowItem::Row(row) => find_cells(&row.cells, n, path),
-            RowItem::Sdt(s) => find_rows(&s.content, n, path),
-            RowItem::CustomXml(w) => find_rows(&w.content, n, path),
-            RowItem::Revision(v) => find_rows(&v.content, n, path),
-            RowItem::Marker(_) => false,
+        let r = match item {
+            RowItem::Row(row) => reach_cells(&mut row.cells, n, path, make),
+            RowItem::Sdt(s) => reach_rows(&mut s.content, n, path, make),
+            RowItem::CustomXml(w) => reach_rows(&mut w.content, n, path, make),
+            RowItem::Revision(v) => reach_rows(&mut v.content, n, path, make),
+            RowItem::Marker(_) => Reach::No,
         };
-        if hit {
-            return true;
+        if !matches!(r, Reach::No) {
+            return r;
         }
         path.pop();
     }
-    false
+    Reach::No
 }
 
-fn find_cells(cells: &[CellItem], n: &mut usize, path: &mut Vec<usize>) -> bool {
-    for (i, c) in cells.iter().enumerate() {
+fn reach_cells(cells: &mut [CellItem], n: &mut usize, path: &mut Vec<usize>, make: bool) -> Reach {
+    for (i, item) in cells.iter_mut().enumerate() {
         path.push(i);
-        let hit = match c {
-            CellItem::Cell(cell) => find(&cell.content, n, path),
-            CellItem::Sdt(s) => find_cells(&s.content, n, path),
-            CellItem::CustomXml(w) => find_cells(&w.content, n, path),
-            CellItem::Revision(v) => find_cells(&v.content, n, path),
-            CellItem::Marker(_) => false,
+        let r = match item {
+            CellItem::Cell(c) => match reach(&mut c.content, n, path, make) {
+                Reach::No if lacks_final_paragraph(&c.content) => implied_slot(&mut c.content, n, path, make),
+                r => r,
+            },
+            CellItem::Sdt(s) => reach_cells(&mut s.content, n, path, make),
+            CellItem::CustomXml(w) => reach_cells(&mut w.content, n, path, make),
+            CellItem::Revision(v) => reach_cells(&mut v.content, n, path, make),
+            CellItem::Marker(_) => Reach::No,
         };
-        if hit {
-            return true;
+        if !matches!(r, Reach::No) {
+            return r;
         }
         path.pop();
     }
-    false
+    Reach::No
+}
+
+/// The implied final paragraph of `list`, if it is the one sought.
+fn implied_slot(list: &mut Vec<Block>, n: &mut usize, path: &mut Vec<usize>, make: bool) -> Reach {
+    if *n > 0 {
+        *n -= 1;
+        return Reach::No;
+    }
+    path.push(list.len());
+    if make {
+        list.push(Block::Paragraph(Paragraph::default()));
+        Reach::Real
+    } else {
+        Reach::Virtual
+    }
+}
+
+/// The path to paragraph `n` of a story: indexes through blocks, rows and
+/// cells, the last one into the list of blocks that holds the paragraph
+/// (for an implied paragraph not made, that list's length). Says whether
+/// the paragraph is in the file.
+fn locate(model: &mut DocxModel, story: &Story, n: usize, make: bool) -> Result<(Vec<usize>, bool), EditError> {
+    let blocks = story_list_mut(model, story)?;
+    let lacks = story_lacks_final_paragraph(blocks, story);
+    let mut left = n;
+    let mut path = Vec::new();
+    let r = match reach(blocks, &mut left, &mut path, make) {
+        Reach::No if lacks => implied_slot(blocks, &mut left, &mut path, make),
+        r => r,
+    };
+    match r {
+        Reach::No => err(format!("no paragraph {n}")),
+        Reach::Real => Ok((path, true)),
+        Reach::Virtual => Ok((path, false)),
+    }
+}
+
+fn path_mut(model: &mut DocxModel, story: &Story, n: usize) -> Result<Vec<usize>, EditError> {
+    Ok(locate(model, story, n, true)?.0)
 }
 
 /// The list of blocks the path's last index points into.
@@ -871,9 +1030,8 @@ fn para_at<'a>(blocks: &'a mut Vec<Block>, path: &[usize]) -> &'a mut Paragraph 
 }
 
 fn para_mut<'a>(model: &'a mut DocxModel, story: &Story, n: usize) -> Result<&'a mut Paragraph, EditError> {
-    let blocks = story_blocks_mut(model, story)?;
-    let path = path_of(blocks, n)?;
-    Ok(para_at(blocks, &path))
+    let path = path_mut(model, story, n)?;
+    Ok(para_at(story_list_mut(model, story)?, &path))
 }
 
 // ---------------------------------------------------------------------------
@@ -1278,9 +1436,9 @@ fn delete_within(p: &mut Paragraph, s: usize, e: usize) -> Result<(), EditError>
 
 /// Two paragraphs of a story, checked to be in one list of blocks, `a`
 /// before `b`. Returns the shared path prefix and the two indexes.
-fn siblings(blocks: &[Block], a: usize, b: usize) -> Result<(Vec<usize>, usize, usize), EditError> {
-    let pa = path_of(blocks, a)?;
-    let pb = path_of(blocks, b)?;
+fn siblings(model: &mut DocxModel, story: &Story, a: usize, b: usize) -> Result<(Vec<usize>, usize, usize), EditError> {
+    let pa = path_mut(model, story, a)?;
+    let pb = path_mut(model, story, b)?;
     if pa.len() != pb.len() || pa[..pa.len() - 1] != pb[..pb.len() - 1] {
         return err(format!("paragraphs {a} and {b} are in different containers"));
     }
@@ -1318,12 +1476,11 @@ fn delete(model: &mut DocxModel, from: &Pos, to: &Pos, join: bool) -> Result<(),
         return err("a range across stories");
     }
     let (from, to) = if (to.para, to.offset) < (from.para, from.offset) { (to, from) } else { (from, to) };
-    let blocks = story_blocks_mut(model, &from.story)?;
     if from.para == to.para {
-        let path = path_of(blocks, from.para)?;
-        return delete_within(para_at(blocks, &path), from.offset, to.offset);
+        return delete_within(para_mut(model, &from.story, from.para)?, from.offset, to.offset);
     }
-    let (path, ia, ib) = siblings(blocks, from.para, to.para)?;
+    let (path, ia, ib) = siblings(model, &from.story, from.para, to.para)?;
+    let blocks = story_list_mut(model, &from.story)?;
     let first_len = {
         let p = para_at(blocks, &path);
         check_offset(p, from.offset)?;
@@ -1352,8 +1509,8 @@ fn delete(model: &mut DocxModel, from: &Pos, to: &Pos, join: bool) -> Result<(),
 }
 
 fn split_paragraph(model: &mut DocxModel, at: &Pos) -> Result<(), EditError> {
-    let blocks = story_blocks_mut(model, &at.story)?;
-    let path = path_of(blocks, at.para)?;
+    let path = path_mut(model, &at.story, at.para)?;
+    let blocks = story_list_mut(model, &at.story)?;
     let p = para_at(blocks, &path);
     check_offset(p, at.offset)?;
     split_at(&mut p.content, at.offset)?;
@@ -1382,8 +1539,8 @@ fn split_paragraph(model: &mut DocxModel, at: &Pos) -> Result<(), EditError> {
 }
 
 fn join_paragraphs(model: &mut DocxModel, story: &Story, para: usize) -> Result<(), EditError> {
-    let blocks = story_blocks_mut(model, story)?;
-    let (path, ia, ib) = siblings(blocks, para, para + 1)?;
+    let (path, ia, ib) = siblings(model, story, para, para + 1)?;
+    let blocks = story_list_mut(model, story)?;
     if ib != ia + 1 {
         return err(format!("paragraph {} does not follow paragraph {para} directly", para + 1));
     }
@@ -1394,6 +1551,10 @@ fn join_paragraphs(model: &mut DocxModel, story: &Story, para: usize) -> Result<
 /// Apply a patch to a property element, then check and order it as `parent`'s bag.
 fn patched(current: Option<&Props>, name: &str, parent: &str, patch: &Patch) -> Result<Option<Props>, EditError> {
     let mut el = current.map(|p| p.element().clone()).unwrap_or_else(|| Element::new(name));
+    if patch.clear {
+        el.children.clear();
+        el.attrs.clear();
+    }
     let drop: Vec<&str> = patch.remove.iter().map(|s| s.as_str()).chain(patch.set.iter().map(|e| e.name.as_str())).collect();
     el.children.retain(|n| !matches!(n, Node::Element(c) if drop.contains(&c.name.as_str())));
     el.children.extend(patch.set.iter().cloned().map(Node::Element));
@@ -1512,6 +1673,263 @@ fn replace(model: &mut DocxModel, from: &Pos, to: &Pos, text: &str) -> Result<()
     insert_text(model, from, text)
 }
 
+/// Put a leaf at `off` (a run boundary): after the zero-width things there,
+/// inside the innermost container whose content takes the position in.
+fn place_in(v: &mut Vec<Inline>, off: usize, new: Inline) -> Result<(), EditError> {
+    let mut pos = 0;
+    for i in 0..v.len() {
+        let l = inline_len(&v[i]);
+        if pos < off && off < pos + l {
+            let p = count(&prefix(&v[i]));
+            if off - pos < p {
+                return err("position inside a field code");
+            }
+            let inner = children_mut(&mut v[i]).ok_or_else(|| EditError("position inside an object".into()))?;
+            return place_in(inner, off - pos - p, new);
+        }
+        if pos > off || (pos == off && l > 0) {
+            v.insert(i, new);
+            return Ok(());
+        }
+        pos += l;
+    }
+    v.push(new);
+    Ok(())
+}
+
+fn insert_inline(model: &mut DocxModel, at: &Pos, inline: &Inline) -> Result<(), EditError> {
+    if !matches!(inline, Inline::Run(_) | Inline::Marker(_) | Inline::Math(_) | Inline::Loose(_)) {
+        return err("insert_inline takes a run, a marker, an equation or a loose item; put content into containers with wrap");
+    }
+    let p = para_mut(model, &at.story, at.para)?;
+    check_offset(p, at.offset)?;
+    split_at(&mut p.content, at.offset)?;
+    place_in(&mut p.content, at.offset, inline.clone())
+}
+
+/// Wrap `[s, e)` (run boundaries) of a list in `shell`, inside the innermost
+/// container whose content holds the range.
+fn wrap_in(v: &mut Vec<Inline>, s: usize, e: usize, mut shell: Inline, outside: usize) -> Result<(), EditError> {
+    let mut pos = 0;
+    let mut spans = Vec::with_capacity(v.len());
+    for it in v.iter() {
+        let l = inline_len(it);
+        spans.push((pos, pos + l));
+        pos += l;
+    }
+    for (i, &(a, b)) in spans.iter().enumerate() {
+        if children(&v[i]).is_none() {
+            continue;
+        }
+        let p = count(&prefix(&v[i]));
+        let q = count(suffix(&v[i]));
+        let (cs, ce) = (a + p, b - q);
+        if cs <= s && e <= ce && (a < s || e < b) {
+            return wrap_in(children_mut(&mut v[i]).unwrap(), s - cs, e - cs, shell, outside);
+        }
+    }
+    if spans.iter().any(|&(a, b)| (a < s && s < b) || (a < e && e < b)) {
+        return err("the range takes in part of a container");
+    }
+    // The first `outside` things of no width at the start stay out.
+    let mut left = outside;
+    let inside: Vec<bool> = spans
+        .iter()
+        .map(|&(a, b)| {
+            if a == s && b == s && left > 0 {
+                left -= 1;
+                return false;
+            }
+            a >= s && b <= e
+        })
+        .collect();
+    if left > 0 {
+        return err(format!("fewer than {outside} things of no width at the start of the range"));
+    }
+    let first = inside
+        .iter()
+        .position(|x| *x)
+        .unwrap_or_else(|| spans.iter().position(|&(a, b)| a >= e && b > a).unwrap_or(v.len()));
+    let mut kept = Vec::with_capacity(v.len());
+    let inner = children_mut(&mut shell).unwrap();
+    for (it, &x) in std::mem::take(v).into_iter().zip(&inside) {
+        if x {
+            inner.push(it);
+        } else {
+            kept.push(it);
+        }
+    }
+    let at = first.min(kept.len());
+    kept.insert(at, shell);
+    *v = kept;
+    Ok(())
+}
+
+fn wrap(model: &mut DocxModel, from: &Pos, to: &Pos, wrapper: &Inline, outside: usize) -> Result<(), EditError> {
+    if from.story != to.story || from.para != to.para {
+        return err("wrap takes a range in one paragraph");
+    }
+    if !children(wrapper).is_some_and(|c| c.is_empty()) {
+        return err("wrap takes a container with no content");
+    }
+    let (s, e) = (from.offset.min(to.offset), from.offset.max(to.offset));
+    let p = para_mut(model, &from.story, from.para)?;
+    check_offset(p, s)?;
+    check_offset(p, e)?;
+    split_at(&mut p.content, e)?;
+    split_at(&mut p.content, s)?;
+    wrap_in(&mut p.content, s, e, wrapper.clone(), outside)
+}
+
+/// Positions an inline takes up, as Word counts them.
+pub fn inline_width(i: &Inline) -> usize {
+    inline_len(i)
+}
+
+fn cells_empty(rows: &[RowItem]) -> bool {
+    fn cells(c: &[CellItem]) -> bool {
+        c.iter().all(|c| match c {
+            CellItem::Cell(c) => c.content.is_empty(),
+            CellItem::Sdt(s) => cells(&s.content),
+            CellItem::CustomXml(w) => cells(&w.content),
+            CellItem::Revision(r) => cells(&r.content),
+            CellItem::Marker(_) => true,
+        })
+    }
+    rows.iter().all(|r| match r {
+        RowItem::Row(r) => cells(&r.cells),
+        RowItem::Sdt(s) => cells_empty(&s.content),
+        RowItem::CustomXml(w) => cells_empty(&w.content),
+        RowItem::Revision(r) => cells_empty(&r.content),
+        RowItem::Marker(_) => true,
+    })
+}
+
+fn insert_table(model: &mut DocxModel, story: &Story, para: usize, after: bool, table: &Table) -> Result<(), EditError> {
+    if !cells_empty(&table.rows) {
+        return err("insert_table takes a table whose cells are empty; edit their paragraphs afterwards");
+    }
+    // A table goes after a paragraph in the file, never an implied one.
+    let (path, _) = locate(model, story, para, after)?;
+    let list = nav(story_list_mut(model, story)?, &path);
+    let i = (*path.last().unwrap() + after as usize).min(list.len());
+    list.insert(i, Block::Table(table.clone()));
+    Ok(())
+}
+
+fn insert_block(model: &mut DocxModel, story: &Story, para: usize, block: &Block) -> Result<(), EditError> {
+    if !matches!(block, Block::Marker(_) | Block::AltChunk(_)) {
+        return err("insert_block takes a marker or an altChunk; paragraphs come from split_paragraph, tables from insert_table");
+    }
+    let (path, _) = locate(model, story, para, false)?;
+    let list = nav(story_list_mut(model, story)?, &path);
+    let i = (*path.last().unwrap()).min(list.len());
+    list.insert(i, block.clone());
+    Ok(())
+}
+
+fn wrap_blocks(model: &mut DocxModel, story: &Story, para: usize, count: usize, wrapper: &Block) -> Result<(), EditError> {
+    let mut shell = wrapper.clone();
+    let content = match &mut shell {
+        Block::Sdt(s) => &mut s.content,
+        Block::CustomXml(w) => &mut w.content,
+        Block::Revision(r) => &mut r.content,
+        _ => return err("wrap_blocks takes a content control, custom XML or a tracked change"),
+    };
+    if !content.is_empty() {
+        return err("wrap_blocks takes a container with no content");
+    }
+    let (path, _) = locate(model, story, para, false)?;
+    let list = nav(story_list_mut(model, story)?, &path);
+    let end = (*path.last().unwrap()).min(list.len());
+    if count == 0 || count > end {
+        return err(format!("{count} blocks do not come before paragraph {para} in its list"));
+    }
+    content.extend(list.drain(end - count..end));
+    list.insert(end - count, shell);
+    Ok(())
+}
+
+fn remove_paragraph(model: &mut DocxModel, story: &Story, para: usize) -> Result<(), EditError> {
+    let (path, real) = locate(model, story, para, false)?;
+    if !real {
+        return err(format!("paragraph {para} is not in the file"));
+    }
+    let list = nav(story_list_mut(model, story)?, &path);
+    let i = *path.last().unwrap();
+    match &list[i] {
+        Block::Paragraph(p) if p.content.is_empty() => {
+            list.remove(i);
+            Ok(())
+        }
+        _ => err(format!("paragraph {para} is not empty")),
+    }
+}
+
+/// Whether a paragraph is one Word implies at the end of a story or cell
+/// that does not end in one (see [`paragraphs`]), not in the file.
+pub fn implied(model: &DocxModel, story: &Story, para: usize) -> Result<bool, EditError> {
+    let all = entries(model, story)?;
+    let e = all.get(para).ok_or_else(|| EditError(format!("no paragraph {para}")))?;
+    Ok(std::ptr::eq(e.para, empty_paragraph()))
+}
+
+fn add_story(model: &mut DocxModel, story: &StoryKind, attrs: &[(String, String)]) {
+    use crate::package::{HeaderFooter, Note};
+    let note = || Note { attrs: attrs.to_vec(), content: Vec::new() };
+    match story {
+        StoryKind::HeaderFooter { kind } => model.headers_footers.push(HeaderFooter { kind: kind.clone(), content: Vec::new() }),
+        StoryKind::Footnote => model.footnotes.get_or_insert_with(Vec::new).push(note()),
+        StoryKind::Endnote => model.endnotes.get_or_insert_with(Vec::new).push(note()),
+        StoryKind::Comment => model.comments.get_or_insert_with(Vec::new).push(note()),
+    }
+}
+
+fn styles_mut(model: &mut DocxModel, with_effects: bool) -> &mut crate::docparts::Styles {
+    let st = if with_effects { &mut model.styles_with_effects } else { &mut model.styles };
+    st.get_or_insert_with(Default::default)
+}
+
+/// Replace the definition with the same id, or add it at the end.
+fn define<T>(list: &mut Vec<T>, new: T, id: impl Fn(&T) -> Option<String>) {
+    let key = id(&new);
+    match key.and_then(|k| list.iter().position(|x| id(x).as_deref() == Some(k.as_str()))) {
+        Some(i) => list[i] = new,
+        None => list.push(new),
+    }
+}
+
+fn set_document_parts(model: &mut DocxModel, parts: &DocumentParts) {
+    let p = parts.clone();
+    macro_rules! take {
+        ($($f:ident),*) => { $( if p.$f.is_some() { model.$f = p.$f; } )* };
+    }
+    take!(background, styles, styles_with_effects, numbering, settings, web_settings, font_table, people, theme, glossary, comments_extended, comments_ids, comments_extensible);
+    if !p.custom_xml.is_empty() {
+        model.custom_xml = p.custom_xml;
+    }
+    if !p.app_data.is_empty() {
+        model.app_data = p.app_data;
+    }
+    if p.footnotes {
+        model.footnotes.get_or_insert_with(Vec::new);
+    }
+    if p.endnotes {
+        model.endnotes.get_or_insert_with(Vec::new);
+    }
+    if p.comments {
+        model.comments.get_or_insert_with(Vec::new);
+    }
+}
+
+/// Where a paragraph's content ends, as a position: what an edit at the end
+/// of the paragraph gives as `offset`.
+pub fn paragraph_end(model: &DocxModel, story: &Story, para: usize) -> Result<usize, EditError> {
+    let all = entries(model, story)?;
+    let e = all.get(para).ok_or_else(|| EditError(format!("no paragraph {para}")))?;
+    Ok(e.lead + list_len(&e.para.content) + field_data_points(e.para).len())
+}
+
 /// Join neighbouring runs with the same properties, as Word does when it
 /// saves, so cutting a run to edit it leaves no seam.
 fn coalesce(v: &mut Vec<Inline>) {
@@ -1549,7 +1967,9 @@ fn touched(edit: &Edit) -> (Story, usize, usize) {
             (s, a, a + 1)
         }
         Edit::FormatText { from, to, .. } => span(from, to),
-        Edit::FormatParagraphs { .. } => (Story::Body, 1, 0),
+        Edit::InsertInline { at, .. } => (at.story.clone(), at.para, at.para),
+        Edit::Wrap { from, .. } => (from.story.clone(), from.para, from.para),
+        _ => (Story::Body, 1, 0),
     }
 }
 
@@ -1559,8 +1979,11 @@ pub fn apply(model: &mut DocxModel, edit: &Edit) -> Result<(), EditError> {
     apply_one(model, edit)?;
     let (story, a, b) = touched(edit);
     for n in a..=b {
-        if let Ok(p) = para_mut(model, &story, n) {
-            coalesce(&mut p.content);
+        // Only paragraphs in the file: tidying does not write out an implied one.
+        if let Ok((path, true)) = locate(model, &story, n, false) {
+            if let Ok(blocks) = story_list_mut(model, &story) {
+                coalesce(&mut para_at(blocks, &path).content);
+            }
         }
     }
     Ok(())
@@ -1575,7 +1998,64 @@ fn apply_one(model: &mut DocxModel, edit: &Edit) -> Result<(), EditError> {
         Edit::JoinParagraphs { story, para } => join_paragraphs(model, story, *para),
         Edit::FormatText { from, to, patch } => format_text(model, from, to, patch),
         Edit::FormatParagraphs { from, to, patch } => format_paragraphs(model, from, to, patch),
+        Edit::InsertInline { at, inline } => insert_inline(model, at, inline),
+        Edit::Wrap { from, to, wrapper, outside } => wrap(model, from, to, wrapper, *outside),
+        Edit::InsertTable { story, para, after, table } => insert_table(model, story, *para, *after, table),
+        Edit::InsertBlock { story, para, block } => insert_block(model, story, *para, block),
+        Edit::WrapBlocks { story, para, count, wrapper } => wrap_blocks(model, story, *para, *count, wrapper),
+        Edit::RemoveParagraph { story, para } => remove_paragraph(model, story, *para),
+        Edit::SetParagraphAttrs { story, para, attrs } => {
+            para_mut(model, story, *para)?.attrs = attrs.clone();
+            Ok(())
+        }
+        Edit::SetSection { props, at } => {
+            model.section = props.clone();
+            model.section_at = *at;
+            Ok(())
+        }
+        Edit::AddStory { story, attrs } => {
+            add_story(model, story, attrs);
+            Ok(())
+        }
+        Edit::SetDocumentParts { parts } => {
+            set_document_parts(model, parts);
+            Ok(())
+        }
+        Edit::DefineStyle { with_effects, style } => {
+            let list = &mut styles_mut(model, *with_effects).styles;
+            define(list, (**style).clone(), |x| attr(&x.attrs, "w:styleId").map(str::to_string));
+            Ok(())
+        }
+        Edit::SetStyleDefaults { with_effects, run, paragraph, declared, latent } => {
+            let st = styles_mut(model, *with_effects);
+            st.default_run = run.clone();
+            st.default_paragraph = paragraph.clone();
+            st.has_defaults = *declared;
+            st.latent = latent.clone();
+            Ok(())
+        }
+        Edit::DefineList { list } => {
+            let n = model.numbering.get_or_insert_with(Default::default);
+            define(&mut n.abstracts, (**list).clone(), |x| attr(&x.attrs, "w:abstractNumId").map(str::to_string));
+            Ok(())
+        }
+        Edit::DefineListInstance { num } => {
+            let n = model.numbering.get_or_insert_with(Default::default);
+            define(&mut n.nums, num.clone(), |x| attr(&x.attrs, "w:numId").map(str::to_string));
+            Ok(())
+        }
     }
+}
+
+/// Read edits from JSON. Edits that carry deeply nested content (a table
+/// in a table in a table ...) go deeper than serde_json's default limit of
+/// 128 levels, so the limit is lifted, as for a model.
+pub fn from_json(json: &str) -> Result<Vec<Edit>, serde_json::Error> {
+    let mut de = serde_json::Deserializer::from_str(json);
+    de.disable_recursion_limit();
+    let edits = Vec::<Edit>::deserialize(&mut de)?;
+    de.end()?;
+    Ok(edits)
 }
 
 /// Apply edits in order. On an error the model is left as it was.

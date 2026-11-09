@@ -38,11 +38,14 @@ const DROPPED: &[&str] = &["w:proofErr", "w:lastRenderedPageBreak", "w:rsids", "
 struct Canon<'a> {
     pkg: &'a Package,
     digests: HashMap<String, String>,
+    /// Read neighbouring runs with the same properties as one run, and runs
+    /// holding nothing as absent (see [`compare_content`]).
+    runs_as_text: bool,
 }
 
 impl<'a> Canon<'a> {
     fn new(pkg: &'a Package) -> Self {
-        Canon { pkg, digests: HashMap::new() }
+        Canon { pkg, digests: HashMap::new(), runs_as_text: false }
     }
 
     fn part(&mut self, name: &str) -> Option<Element> {
@@ -103,6 +106,9 @@ impl<'a> Canon<'a> {
                 (Some(Node::Text(a)), Node::Text(b)) => a.push_str(&b),
                 (_, n) => merged.push(n),
             }
+        }
+        if self.runs_as_text {
+            merged = join_runs(merged);
         }
         // Property bags are sets: their order means nothing, so both sides
         // are put in schema order.
@@ -281,12 +287,26 @@ pub fn undeclared_prefixes(pkg: &Package) -> Vec<(String, String)> {
 /// Compare the content of two packages: the main document (with everything
 /// its relationships reach) and the note parts.
 pub fn compare(a: &Package, b: &Package) -> Vec<Diff> {
+    compare_with(a, b, false)
+}
+
+/// Compare as [`compare`] does, reading where runs begin and end as
+/// meaning nothing: neighbouring runs with the same properties are one run,
+/// and a run with nothing in it is not there. Word itself joins such runs
+/// when it saves, and so does editing; what the document says is the same.
+pub fn compare_content(a: &Package, b: &Package) -> Vec<Diff> {
+    compare_with(a, b, true)
+}
+
+fn compare_with(a: &Package, b: &Package, runs_as_text: bool) -> Vec<Diff> {
     let mut diffs = Vec::new();
     let (Ok(ma), Ok(mb)) = (a.main_part(), b.main_part()) else {
         return vec![Diff { part: "package".into(), path: String::new(), detail: "no main part".into() }];
     };
     let mut ca = Canon::new(a);
     let mut cb = Canon::new(b);
+    ca.runs_as_text = runs_as_text;
+    cb.runs_as_text = runs_as_text;
     let (Some(da), Some(db)) = (ca.part(&ma), cb.part(&mb)) else {
         return vec![Diff { part: ma, path: String::new(), detail: "unreadable".into() }];
     };
@@ -295,7 +315,7 @@ pub fn compare(a: &Package, b: &Package) -> Vec<Diff> {
         // part and compare it so the report points inside it.
         diffs.push(Diff { part: "document".into(), path: path.clone(), detail: detail.clone() });
         if detail.contains("header:") || detail.contains("footer:") {
-            diffs.extend(compare_linked(a, &ma, b, &mb));
+            diffs.extend(compare_linked(a, &ma, b, &mb, runs_as_text));
         }
     }
     // Notes, and every document-wide part the main document links to
@@ -337,7 +357,7 @@ pub fn compare(a: &Package, b: &Package) -> Vec<Diff> {
 }
 
 /// Compare header and footer parts pairwise in reference order.
-fn compare_linked(a: &Package, ma: &str, b: &Package, mb: &str) -> Vec<Diff> {
+fn compare_linked(a: &Package, ma: &str, b: &Package, mb: &str, runs_as_text: bool) -> Vec<Diff> {
     let mut out = Vec::new();
     let refs = |p: &Package, m: &str| -> Vec<String> {
         let rels: HashMap<String, Rel> = p.rels(m).into_iter().map(|r| (r.id.clone(), r)).collect();
@@ -353,6 +373,8 @@ fn compare_linked(a: &Package, ma: &str, b: &Package, mb: &str) -> Vec<Diff> {
     let rb = refs(b, mb);
     let mut ca = Canon::new(a);
     let mut cb = Canon::new(b);
+    ca.runs_as_text = runs_as_text;
+    cb.runs_as_text = runs_as_text;
     for (x, y) in ra.iter().zip(rb.iter()) {
         if let (Some(ex), Some(ey)) = (ca.part(x), cb.part(y)) {
             if let Some((path, detail)) = first_difference(&ex, &ey, "") {
@@ -362,4 +384,53 @@ fn compare_linked(a: &Package, ma: &str, b: &Package, mb: &str) -> Vec<Diff> {
         }
     }
     out
+}
+
+/// Join neighbouring runs with the same properties, drop runs with nothing
+/// in them, and join neighbouring text of one kind inside a run.
+fn join_runs(children: Vec<Node>) -> Vec<Node> {
+    let props = |e: &Element| e.child("w:rPr").cloned();
+    let mut out: Vec<Node> = Vec::with_capacity(children.len());
+    for n in children {
+        let Node::Element(mut r) = n else {
+            out.push(n);
+            continue;
+        };
+        if r.name != "w:r" {
+            out.push(Node::Element(r));
+            continue;
+        }
+        if r.elements().all(|c| c.name == "w:rPr") {
+            continue;
+        }
+        if let Some(Node::Element(prev)) = out.last_mut() {
+            if prev.name == "w:r" && props(prev) == props(&r) {
+                prev.children.extend(r.children.drain(..).filter(|c| !matches!(c, Node::Element(e) if e.name == "w:rPr")));
+                join_text(prev);
+                continue;
+            }
+        }
+        join_text(&mut r);
+        out.push(Node::Element(r));
+    }
+    out
+}
+
+fn join_text(r: &mut Element) {
+    let mut out: Vec<Node> = Vec::with_capacity(r.children.len());
+    for n in std::mem::take(&mut r.children) {
+        if let (Some(Node::Element(prev)), Node::Element(e)) = (out.last_mut(), &n) {
+            if prev.name == e.name && matches!(e.name.as_str(), "w:t" | "w:delText" | "w:instrText" | "w:delInstrText") {
+                let text: String = e.children.iter().filter_map(|c| if let Node::Text(t) = c { Some(t.as_str()) } else { None }).collect();
+                match prev.children.last_mut() {
+                    Some(Node::Text(t)) => t.push_str(&text),
+                    _ if text.is_empty() => {}
+                    _ => prev.children.push(Node::Text(text)),
+                }
+                continue;
+            }
+        }
+        out.push(n);
+    }
+    r.children = out;
 }

@@ -9,7 +9,7 @@ The goal is to parse, render, and eventually edit .docx / .xlsx / .pptx files na
 
 - **oxidocs-common**: Shared OOXML utilities (ZIP, XML, relationships) — renamed from oxi-common 2026-07-07 (crates.io oxidocs-* unification; the oxi-* prefix is squatted by an unrelated active project)
 - **oxidocs-core**: .docx engine — parser, IR, layout, font metrics
-- **oxidocs-model**: lossless, schema-ordered .docx document model — the creation API speaks it (JSON in, .docx out); `cargo run -p oxidocs-model --release --example rebuild` rebuilds every corpus document through it and compares canonically
+- **oxidocs-model**: lossless, schema-ordered .docx document model — the creation API speaks it (JSON in, .docx out); `cargo run -p oxidocs-model --release --example rebuild` rebuilds every corpus document through it and compares canonically; `--example recreate` makes every corpus document from an empty one with edits only (`edit::Edit`, written by `script::script`) and compares the same way
 - **oxicells-core**: .xlsx engine — parser, IR
 - **oxislides-core**: .pptx engine — parser, IR
 - **oxidocs-wasm**: WebAssembly bindings via wasm-bindgen (renamed from oxi-wasm 2026-07-07; web/ artifacts are oxidocs_wasm.js / oxidocs_wasm_bg.wasm)
