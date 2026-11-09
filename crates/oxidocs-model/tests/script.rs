@@ -247,3 +247,48 @@ fn typing_at_either_end_of_a_links_text_stays_outside_it() {
         assert_eq!(shown, want);
     }
 }
+
+#[test]
+fn insert_footnote_as_words_does() {
+    let mut m = DocxModel { body: vec![para(vec![run("abc def", false)])], ..Default::default() };
+    let (edits, end) = edit::footnote_edits(&m, &Pos::body(0, 3), "note").unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    assert_eq!(end.offset, 4);
+    // Separator, continuation separator, then the note.
+    let notes = m.footnotes.as_ref().unwrap();
+    assert_eq!(notes.len(), 3);
+    assert_eq!(notes[2].attrs, vec![("w:id".to_string(), "1".to_string())]);
+    let note = &edit::paragraph_texts(&m, &Story::Footnote(2)).unwrap()[0];
+    assert!(note.ends_with(" note"), "{note:?}");
+    let Block::Paragraph(p) = &m.body[0] else { panic!() };
+    let Inline::Run(r) = &p.content[1] else { panic!("{:?}", p.content) };
+    assert!(matches!(&r.content[0], RunItem::Mark { name, .. } if name == "w:footnoteReference"));
+    // A second footnote reuses the styles and separators.
+    let (again, _) = edit::footnote_edits(&m, &Pos::body(0, 0), "first").unwrap();
+    assert!(!again.iter().any(|e| matches!(e, Edit::DefineStyle { .. })));
+    assert!(!again.iter().any(|e| matches!(e, Edit::AddStory { attrs, .. } if attrs.iter().any(|(k, _)| k == "w:type"))));
+    apply_all(&mut m, &again).unwrap();
+    assert_eq!(m.footnotes.as_ref().unwrap()[3].attrs[0].1, "2");
+}
+
+#[test]
+fn a_footnote_mark_keeps_the_formatting_around_it_and_typing_beside_it_is_plain() {
+    // Measured: in Arial 14 text the reference run is Arial 14 plus the
+    // reference style; text typed just before or after it is not superscript.
+    let mut m = DocxModel { body: vec![para(vec![run("Hello ", true), run("world", true)])], ..Default::default() };
+    let (edits, end) = edit::footnote_edits(&m, &Pos::body(0, 6), "note").unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    apply(&mut m, &Edit::InsertText { at: end, text: "!".into() }).unwrap();
+    apply(&mut m, &Edit::InsertText { at: Pos::body(0, 6), text: "?".into() }).unwrap();
+    let Block::Paragraph(p) = &m.body[0] else { panic!() };
+    let runs: Vec<(String, bool, Option<String>)> = p.content.iter().filter_map(|i| if let Inline::Run(r) = i { Some(r) } else { None }).map(|r| {
+        let t: String = r.content.iter().map(|c| match c { RunItem::Text(t) => t.clone(), RunItem::Mark { .. } => "^".into(), _ => String::new() }).collect();
+        let pr = r.props.as_ref();
+        (t, pr.is_some_and(|p| p.get("w:b").is_some()), pr.and_then(|p| p.get("w:rStyle")).and_then(|e| e.attr("w:val")).map(str::to_string))
+    }).collect();
+    assert_eq!(runs, vec![
+        ("Hello ?".to_string(), true, None),
+        ("^".to_string(), true, Some("FootnoteReference".to_string())),
+        ("!world".to_string(), true, None),
+    ]);
+}

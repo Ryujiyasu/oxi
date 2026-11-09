@@ -260,6 +260,17 @@ impl DocxDocument {
         Ok(serde_json::json!({ "edits": edits, "end": end }).to_string())
     }
 
+    /// The edits Word's Insert Footnote makes at a model position
+    /// (`{para, offset}`), the note holding `text`, as JSON
+    /// `{"edits": [...], "end": {para, offset}}`, `end` being just after the
+    /// reference mark once they are applied.
+    pub fn footnote_edits(&self, at_json: &str, text: &str) -> Result<String, JsError> {
+        let at: oxidocs_model::edit::Pos = serde_json::from_str(at_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let (edits, end) =
+            oxidocs_model::edit::footnote_edits(&self.model, &at, text).map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(serde_json::json!({ "edits": edits, "end": end }).to_string())
+    }
+
     pub fn paragraph_text(&self, para: usize) -> Result<String, JsError> {
         let texts = oxidocs_model::edit::paragraph_texts(&self.model, &Default::default()).map_err(|e| JsError::new(&e.to_string()))?;
         texts.into_iter().nth(para).ok_or_else(|| JsError::new(&format!("no paragraph {para}")))

@@ -1260,6 +1260,28 @@ fn insert_in(v: &mut Vec<Inline>, off: usize, text: &str, fallback: &Option<Prop
         }
         pos += l;
     }
+    // Beside a footnote or endnote reference mark, typed text is plain text
+    // of its own, not in the mark's run (measured: not superscript, no
+    // reference style), as beside a hyperlink.
+    let note_ref = |i: Option<usize>, v: &Vec<Inline>| {
+        i.is_some_and(|i| {
+            matches!(&v[i], Inline::Run(r) if r.content.iter().any(|c| matches!(c,
+                RunItem::Mark { name, .. } if name == "w:footnoteReference" || name == "w:endnoteReference")))
+        })
+    };
+    if note_ref(prev, v) || (prev.is_none() && note_ref(next, v)) {
+        let near = prev.or(next).unwrap();
+        let props = edge_run_props(&v[near], prev.is_some())
+            .flatten()
+            .map(|mut p| {
+                p.remove("w:rStyle");
+                p
+            })
+            .filter(|p| !p.is_empty());
+        let at = if prev.is_some() { near + 1 } else { near };
+        v.insert(at, Inline::Run(Run { props, content: text_items(text) }));
+        return Ok(true);
+    }
     if let Some(i) = prev {
         match &mut v[i] {
             Inline::Run(r) => {
@@ -2197,6 +2219,166 @@ pub fn link_edits(model: &DocxModel, from: &Pos, to: &Pos, url: &str) -> Result<
     apply_all(&mut trial, &edits)?;
     let end = Pos { offset: paragraph_end(&trial, &from.story, from.para)? - tail, ..from.clone() };
     Ok((edits, end))
+}
+
+/// The id of the style of `kind` (`paragraph`, `character`) named `name`,
+/// with `make` defining it (given a free id near `preferred`) when the
+/// document lacks it. Styles defined earlier in `edits` count.
+fn style_named(
+    model: &DocxModel,
+    edits: &mut Vec<Edit>,
+    kind: &str,
+    name: &str,
+    preferred: &str,
+    make: impl FnOnce(&str) -> crate::docparts::Style,
+) -> String {
+    let mut all: Vec<crate::docparts::Style> = model.styles.as_ref().map(|s| s.styles.clone()).unwrap_or_default();
+    all.extend(edits.iter().filter_map(|e| if let Edit::DefineStyle { style, .. } = e { Some((**style).clone()) } else { None }));
+    let named = |s: &crate::docparts::Style| s.meta.iter().any(|m| m.name == "w:name" && m.attr("w:val").is_some_and(|v| v.eq_ignore_ascii_case(name)));
+    if let Some(s) = all.iter().find(|s| attr(&s.attrs, "w:type") == Some(kind) && named(s)) {
+        return attr(&s.attrs, "w:styleId").unwrap_or(preferred).to_string();
+    }
+    let taken = |id: &str| all.iter().any(|s| attr(&s.attrs, "w:styleId") == Some(id));
+    let mut id = preferred.to_string();
+    let mut n = 1;
+    while taken(&id) {
+        n += 1;
+        id = format!("{preferred}{n}");
+    }
+    edits.push(Edit::DefineStyle { with_effects: false, style: Box::new(make(&id)) });
+    id
+}
+
+/// The id of a document's default style of `kind`, if it names one.
+fn default_style(model: &DocxModel, kind: &str) -> Option<String> {
+    model.styles.as_ref()?.styles.iter().find(|s| {
+        attr(&s.attrs, "w:type") == Some(kind) && matches!(attr(&s.attrs, "w:default"), Some("1") | Some("true") | Some("on"))
+    }).and_then(|s| attr(&s.attrs, "w:styleId").map(str::to_string))
+}
+
+fn val(name: &str, v: &str) -> Element {
+    Element::new(name).with_attr("w:val", v)
+}
+
+fn bag(parent: &str, name: &str, children: Vec<Element>) -> Result<Props, EditError> {
+    let mut e = Element::new(name);
+    e.children.extend(children.into_iter().map(Node::Element));
+    Props::read(parent, &e).map_err(|u| EditError(u.to_string()))
+}
+
+fn mark_run(style: Option<&str>, name: &str, attrs: Vec<(String, String)>) -> Result<Inline, EditError> {
+    let props = style.map(|s| bag("w:r", "w:rPr", vec![val("w:rStyle", s)])).transpose()?;
+    Ok(Inline::Run(Run { props, content: vec![RunItem::Mark { name: name.into(), attrs }] }))
+}
+
+/// The run properties text typed at `at` would take.
+fn typed_props(model: &DocxModel, at: &Pos) -> Result<Option<Props>, EditError> {
+    const PROBE: &str = "\u{E000}";
+    let mut trial = model.clone();
+    apply(&mut trial, &Edit::InsertText { at: at.clone(), text: PROBE.into() })?;
+    fn find(v: &[Inline]) -> Option<Option<Props>> {
+        v.iter().find_map(|i| match i {
+            Inline::Run(r) => r.content.iter().any(|c| matches!(c, RunItem::Text(t) if t.contains(PROBE))).then(|| r.props.clone()),
+            _ => children(i).and_then(|c| find(c)),
+        })
+    }
+    let p = paragraphs(&trial, &at.story)?[at.para];
+    Ok(find(&p.content).flatten())
+}
+
+/// The edits Word's Insert Footnote makes at `at`, the note holding `text`
+/// (measured over COM): a reference mark in the "footnote reference"
+/// character style (superscript) at the position; a note whose paragraph
+/// takes the "footnote text" style and starts with the note's own mark and
+/// a space; the separator notes and the styles when the document lacks
+/// them. Returns the edits and the position just after the reference mark.
+pub fn footnote_edits(model: &DocxModel, at: &Pos, text: &str) -> Result<(Vec<Edit>, Pos), EditError> {
+    use crate::docparts::Style;
+    check_text(text)?;
+    if at.story != Story::Body {
+        return err("a footnote goes in the body");
+    }
+    let mut edits = Vec::new();
+    let normal = default_style(model, "paragraph");
+    let chars = default_style(model, "character");
+    let based = |meta: &mut Vec<Element>, on: &Option<String>| {
+        if let Some(b) = on {
+            meta.push(val("w:basedOn", b));
+        }
+    };
+    let text_char_id = {
+        let all: Vec<&Style> = model.styles.as_ref().map(|s| s.styles.iter().collect()).unwrap_or_default();
+        all.iter().any(|s| s.meta.iter().any(|m| m.name == "w:name" && m.attr("w:val").is_some_and(|v| v.eq_ignore_ascii_case("footnote text"))))
+    };
+    let note_style = style_named(model, &mut edits, "paragraph", "footnote text", "FootnoteText", |id| {
+        let mut meta = vec![val("w:name", "footnote text")];
+        based(&mut meta, &normal);
+        meta.push(val("w:link", &format!("{id}Char")));
+        meta.extend([val("w:uiPriority", "99"), Element::new("w:semiHidden"), Element::new("w:unhideWhenUsed")]);
+        Style {
+            attrs: vec![("w:type".into(), "paragraph".into()), ("w:styleId".into(), id.into())],
+            meta,
+            paragraph: bag("w:style", "w:pPr", vec![val("w:snapToGrid", "0")]).ok(),
+            ..Default::default()
+        }
+    });
+    if !text_char_id {
+        // Word's linked character style for the note text.
+        let link = format!("{note_style}Char");
+        style_named(model, &mut edits, "character", "Footnote Text Char", &link, |id| {
+            let mut meta = vec![val("w:name", "Footnote Text Char")];
+            based(&mut meta, &chars);
+            meta.extend([val("w:link", &note_style), val("w:uiPriority", "99"), Element::new("w:semiHidden")]);
+            Style {
+                attrs: vec![("w:type".into(), "character".into()), ("w:customStyle".into(), "1".into()), ("w:styleId".into(), id.into())],
+                meta,
+                ..Default::default()
+            }
+        });
+    }
+    let ref_style = style_named(model, &mut edits, "character", "footnote reference", "FootnoteReference", |id| {
+        let mut meta = vec![val("w:name", "footnote reference")];
+        based(&mut meta, &chars);
+        meta.extend([val("w:uiPriority", "99"), Element::new("w:semiHidden"), Element::new("w:unhideWhenUsed")]);
+        Style {
+            attrs: vec![("w:type".into(), "character".into()), ("w:styleId".into(), id.into())],
+            meta,
+            run: bag("w:style", "w:rPr", vec![val("w:vertAlign", "superscript")]).ok(),
+            ..Default::default()
+        }
+    });
+    // The separator notes Word writes with the first footnote.
+    let notes = model.footnotes.clone().unwrap_or_default();
+    let mut count = notes.len();
+    for (kind, id, mark) in [("separator", "-1", "w:separator"), ("continuationSeparator", "0", "w:continuationSeparator")] {
+        if notes.iter().any(|n| attr(&n.attrs, "w:type") == Some(kind)) {
+            continue;
+        }
+        edits.push(Edit::AddStory { story: StoryKind::Footnote, attrs: vec![("w:type".into(), kind.into()), ("w:id".into(), id.into())] });
+        edits.push(Edit::InsertInline { at: Pos { story: Story::Footnote(count), para: 0, offset: 0 }, inline: mark_run(None, mark, vec![])? });
+        count += 1;
+    }
+    let id = notes.iter().filter_map(|n| attr(&n.attrs, "w:id")?.parse::<i64>().ok()).max().unwrap_or(0).max(0) + 1;
+    let id = id.to_string();
+    edits.push(Edit::AddStory { story: StoryKind::Footnote, attrs: vec![("w:id".into(), id.clone())] });
+    let note = Story::Footnote(count);
+    let start = Pos { story: note.clone(), para: 0, offset: 0 };
+    edits.push(Edit::FormatParagraphs { from: start.clone(), to: start.clone(), patch: Patch { set: vec![val("w:pStyle", &note_style)], ..Default::default() } });
+    edits.push(Edit::InsertInline { at: start, inline: mark_run(Some(&ref_style), "w:footnoteRef", vec![])? });
+    edits.push(Edit::InsertInline {
+        at: Pos { story: note, para: 0, offset: 1 },
+        inline: Inline::Run(Run { props: None, content: vec![RunItem::Text(format!(" {text}"))] }),
+    });
+    // The mark keeps the direct formatting text typed there would take
+    // (measured: Arial 14 around it stays), with the reference style.
+    let mut reference = mark_run(Some(&ref_style), "w:footnoteReference", vec![("w:id".into(), id)])?;
+    if let (Some(mut props), Inline::Run(r)) = (typed_props(model, at)?, &mut reference) {
+        props.remove("w:rStyle");
+        props.set(val("w:rStyle", &ref_style)).map_err(|u| EditError(u.to_string()))?;
+        r.props = Some(props);
+    }
+    edits.push(Edit::InsertInline { at: at.clone(), inline: reference });
+    Ok((edits, Pos { offset: at.offset + 1, ..at.clone() }))
 }
 
 /// Join neighbouring runs with the same properties, as Word does when it
