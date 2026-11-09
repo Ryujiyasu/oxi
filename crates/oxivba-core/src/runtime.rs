@@ -3582,29 +3582,32 @@ impl<'a> Runtime<'a> {
             .transpose().map_err(|message|host_failure(message,line.unwrap_or(0)))?.flatten();
         if let Some((owner,resolved))=binding {
             if owner==self.project_identity {
-                return self.call_macro_procedure_resolved(&resolved,args,line,source);
+                return self.call_macro_procedure_resolved(&resolved,requested,args,line,source);
             }
             let callback=self.worksheet_callback_key.take();
             return self.in_application_project(owner,|runtime|{
                 let previous=std::mem::replace(&mut runtime.worksheet_callback_key,callback);
-                let result=runtime.call_macro_procedure_resolved(&resolved,args,line,source);
+                let result=runtime.call_macro_procedure_resolved(&resolved,requested,args,line,source);
                 runtime.worksheet_callback_key=previous;
                 result
             });
         }
-        self.call_macro_procedure_resolved(requested,args,line,source)
+        self.call_macro_procedure_resolved(requested,requested,args,line,source)
     }
 
-    fn call_macro_procedure_resolved(&mut self, requested: &str, args: Vec<Value>, line: Option<u32>,
+    fn call_macro_procedure_resolved(&mut self, lookup: &str, requested: &str, args: Vec<Value>, line: Option<u32>,
         source: Option<(&[Argument], &[EvaluatedArgument], bool, &mut Frame)>) -> Result<Value, RuntimeError> {
         let worksheet_key = self.worksheet_callback_key.take();
         let resolved = match self.host.as_deref() {
-            Some(host) => host.macro_reference(requested).map_err(|message| host_failure(message, line.unwrap_or(0)))?,
-            None => requested.to_string(),
+            Some(host) => host.macro_reference(lookup).map_err(|message| host_failure(message, line.unwrap_or(0)))?,
+            None => lookup.to_string(),
         };
         let name = resolved.split_once('.').filter(|(project, _)| project.eq_ignore_ascii_case(&self.project_name))
             .map_or(resolved.as_str(), |(_, name)| name);
         let find = |module: &Module, name: &str| {
+            if crate::compiler::invalid_initial_procedure(module).is_some() {
+                return None;
+            }
             module.items.iter().find_map(|item| match item {
                 ModuleItem::Procedure(procedure) if procedure.name.eq_ignore_ascii_case(name)
                     && matches!(procedure.kind, ProcKind::Sub | ProcKind::Function)
