@@ -971,4 +971,122 @@ for(const cancel of [true,false]){
  closeVbaProject();
 }
 
-console.log(JSON.stringify({ main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 8, canvas_project_compilation_ui_cases: 4, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, saved_state_validation_cases: 6, saved_state_worker_save: true, same_value_editor_save: true, saved_state_cancel_and_after_save_cases: 2, saved_state_read_only_case: 1, passed: true }));
+// State returned by a macro must be accepted by the next worker call.
+// The suffix contains a lone UTF16 unit; it must survive the transport intact.
+const captionStateSource = 'Attribute VB_Name = "CaptionState"\n'
+ +'Public Function SetSuffix() As String\nApplication.Caption = ChrW(&HD800)\n'
+ +'SetSuffix = Hex$(AscW(Right$(Application.Caption, 1)) And &HFFFF&)\nEnd Function\n'
+ +'Public Function ReadSuffix() As String\nReadSuffix = Hex$(AscW(Right$(Application.Caption, 1)) And &HFFFF&)\nEnd Function\n'
+ +'Public Function ReadFont() As String\nReadFont = Application.StandardFont & "|" & CStr(Application.StandardFontSize)\nEnd Function\n';
+const captionStatePacket = wasm.save_spreadsheet_vba_source(bytes, captionStateSource);
+closeVbaProject();
+let captionStateRun = await runVbaInWorker(wasm.parse_spreadsheet(captionStatePacket), captionStateSource,
+ 'CaptionState.SetSuffix', [], 0, 'CaptionState.xlsm', {applicationState:{}}, captionStatePacket);
+assert.equal(captionStateRun.result.value, 'D800');
+captionStateRun = await runVbaInWorker(captionStateRun.workbook, captionStateSource,
+ 'CaptionState.ReadSuffix', [], 0, 'CaptionState.xlsm', {}, captionStatePacket);
+assert.equal(captionStateRun.result.value, 'D800', 'returned UTF16 caption state survives the next worker invocation');
+// Seed the SDK's application-owned font profile. Property setters have a
+// separate VBA compatibility contract; this test checks response-state input.
+const captionFontProfile = { ...wasm.parse_spreadsheet(captionStatePacket).default_style,
+ font_name:'Arial', font_size:13 };
+captionStateRun = await runVbaInWorker(captionStateRun.workbook, captionStateSource,
+ 'CaptionState.ReadFont', [], 0, 'CaptionState.xlsm',
+ {applicationState:{newWorkbookFont:captionFontProfile}}, captionStatePacket);
+assert.equal(captionStateRun.result.value, 'Arial|13');
+captionStateRun = await runVbaInWorker(captionStateRun.workbook, captionStateSource,
+ 'CaptionState.ReadFont', [], 0, 'CaptionState.xlsm', {}, captionStatePacket);
+assert.equal(captionStateRun.result.value, 'Arial|13', 'returned font state survives the next worker invocation');
+
+// The displayed prefix and its originating window survive worker responses.
+const captionFrameSource = `Attribute VB_Name = "CaptionFrame"
+Public Function Prepare() As String
+ Dim other As Workbook
+ ActiveWindow.Caption = "OriginalWin"
+ Set other = Workbooks.Add(-4167)
+ ActiveWindow.Caption = "OtherWin"
+ ThisWorkbook.Activate
+ Prepare = Application.Caption
+End Function
+Public Function ReadFrame() As String
+ ReadFrame = Application.Caption
+End Function
+Public Function ReadPrefixUnit() As String
+ ReadPrefixUnit = Hex$(AscW(Left$(Application.Caption, 1)) And &HFFFF&)
+End Function
+`;
+const captionFramePacket = wasm.save_spreadsheet_vba_source(bytes, captionFrameSource);
+closeVbaProject();
+let captionFrameRun = await runVbaInWorker(wasm.parse_spreadsheet(captionFramePacket), captionFrameSource,
+ 'CaptionFrame.Prepare', [], 0, 'CaptionFrame.xlsm', {applicationState:{}}, captionFramePacket);
+assert.equal(captionFrameRun.result.value, 'OtherWin - Excel');
+assert.deepEqual(captionFrameRun.application_state.captionWindow.prefixUtf16,
+ [...'OtherWin'].map(c=>c.charCodeAt(0)));
+assert.ok(captionFrameRun.application_state.captionWindow.workbook);
+captionFrameRun = await runVbaInWorker(captionFrameRun.workbook, captionFrameSource,
+ 'CaptionFrame.ReadFrame', [], 0, 'CaptionFrame.xlsm', {}, captionFramePacket);
+assert.equal(captionFrameRun.result.value, 'OtherWin - Excel', 'cached frame prefix survives the next worker call');
+const coldFrameSession = new wasm.SpreadsheetVbaSession();
+try {
+ const cold = coldFrameSession.run(wasm.parse_spreadsheet(captionFramePacket), captionFrameSource,
+  'CaptionFrame.ReadFrame', [], 0, 'CaptionFrame.xlsm',
+  {applicationState:captionFrameRun.application_state});
+ assert.equal(cold.result.value, 'OtherWin - Excel', 'new session accepts returned frame state');
+ const units = coldFrameSession.run(cold.workbook, captionFrameSource,
+  'CaptionFrame.ReadPrefixUnit', [], 0, 'CaptionFrame.xlsm',
+  {applicationState:{captionWindow:{workbook:'Other.xlsm',prefixUtf16:[0xD800]}}});
+ assert.equal(units.result.value, 'D800', 'frame prefix preserves unpaired UTF16 units');
+} finally { coldFrameSession.free(); }
+closeVbaProject();
+
+
+const captionInactiveSource = `Attribute VB_Name = "CaptionInactiveFrame"
+Public Function Prepare() As String
+ Dim other As Workbook
+ Dim held As Object
+ Set other = Workbooks.Add(-4167)
+ Set held = ActiveWindow
+ ThisWorkbook.Activate
+ held.Caption = "InactiveWin"
+ Prepare = Application.Caption & "|" & ActiveWorkbook.Name
+End Function
+Public Function ReadFrame() As String
+ ReadFrame = Application.Caption & "|" & ActiveWorkbook.Name
+End Function
+`;
+const captionInactivePacket = wasm.save_spreadsheet_vba_source(bytes, captionInactiveSource);
+closeVbaProject();
+let captionInactiveRun = await runVbaInWorker(wasm.parse_spreadsheet(captionInactivePacket), captionInactiveSource,
+ 'CaptionInactiveFrame.Prepare', [], 0, 'CaptionInactiveFrame.xlsm', {applicationState:{}}, captionInactivePacket);
+assert.equal(captionInactiveRun.result.value, 'InactiveWin - Excel|CaptionInactiveFrame.xlsm');
+captionInactiveRun = await runVbaInWorker(captionInactiveRun.workbook, captionInactiveSource,
+ 'CaptionInactiveFrame.ReadFrame', [], 0, 'CaptionInactiveFrame.xlsm', {}, captionInactivePacket);
+assert.equal(captionInactiveRun.result.value, 'InactiveWin - Excel|CaptionInactiveFrame.xlsm',
+ 'inactive Window setter changes the returned frame state while the source remains active');
+closeVbaProject();
+
+const captionInvalidStateSession = new wasm.SpreadsheetVbaSession();
+try {
+ assert.throws(() => captionInvalidStateSession.run(wasm.parse_spreadsheet(captionStatePacket),
+  captionStateSource, 'CaptionState.ReadSuffix', [], 0, 'CaptionState.xlsm',
+  {applicationState:{unknownCaptionSetting:true}}), /unknown applicationState field unknownCaptionSetting/);
+ for(const applicationState of [
+  {captionSuffixUtf16:[-1]}, {captionSuffixUtf16:[65536]},
+  {captionSuffixUtf16:[1.5]}, {captionWithoutWindow:'true'},
+  {newWorkbookFont:{font_name:'Arial',font_size:0}},
+  {captionWindow:[]},
+  {captionWindow:{workbook:'Other.xlsm',prefixUtf16:[65536]}},
+  {captionWindow:{workbook:'',prefixUtf16:[]}},
+  {captionWindow:{workbook:'Other.xlsm',prefixUtf16:[0],unknown:true}},
+  {captionWindow:{workbook:1,prefixUtf16:[0]}},
+  {captionWindow:{workbook:'Other.xlsm',prefixUtf16:'x'}},
+  {captionWindow:{workbook:'Other.xlsm'}},
+ ]){
+  assert.throws(() => captionInvalidStateSession.run(wasm.parse_spreadsheet(captionStatePacket),
+   captionStateSource, 'CaptionState.ReadSuffix', [], 0, 'CaptionState.xlsm',
+   {applicationState}), /invalid VBA options|newWorkbookFont|captionWindow/, JSON.stringify(applicationState));
+ }
+} finally { captionInvalidStateSession.free(); }
+closeVbaProject();
+
+console.log(JSON.stringify({ caption_state_sequences: 2, caption_unknown_field_controls: 1, caption_invalid_state_controls: 12, caption_frame_transport_controls: 3, caption_inactive_frame_sequences: 1, main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 8, canvas_project_compilation_ui_cases: 4, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, saved_state_validation_cases: 6, saved_state_worker_save: true, same_value_editor_save: true, saved_state_cancel_and_after_save_cases: 2, saved_state_read_only_case: 1, passed: true }));

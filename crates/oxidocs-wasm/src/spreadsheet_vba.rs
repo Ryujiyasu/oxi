@@ -3668,6 +3668,7 @@ struct WorkbookHost<'a> {
     /// never saves one anywhere it can name, so what the page hands over is
     /// the file's own name and nothing else 窶・no folder in front of it.
     file_name: Option<String>,
+    window_caption: Option<Value>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
     /// One handle apiece for the workbook, the application and each sheet,
@@ -3954,6 +3955,7 @@ impl<'a> WorkbookHost<'a> {
             blocks: Vec::new(),
             name_handles: Vec::new(),
             file_name: None,
+            window_caption: None,
             debug_output: Vec::new(),
             messages: Vec::new(),
             automation_code_page: None,
@@ -4924,6 +4926,120 @@ impl<'a> WorkbookHost<'a> {
     /// A3:A4, which only touch. What is left is a range with as many areas as
     /// there are blocks 窶・or, where they all came to one, an ordinary range.
     /// An Application setting: what the macro set, else Excel's default.
+    fn window_caption_value(&self) -> Value {
+        self.window_caption.clone().unwrap_or_else(|| Value::String(
+            self.file_name.clone().unwrap_or_else(|| "Book1".to_string())))
+    }
+
+    fn reset_caption_prefix(&mut self) {
+        self.app_settings.remove("_caption_without_window");
+        self.app_settings.remove("_caption_window_prefix");
+        self.app_settings.remove("_caption_window_owner");
+    }
+
+    fn application_caption_prefix(&self) -> Vec<u16> {
+        self.caption_prefix(&self.app_settings)
+    }
+
+    fn caption_prefix(&self, settings: &std::collections::HashMap<String, Value>) -> Vec<u16> {
+        if settings.get("_caption_without_window") == Some(&Value::Boolean(true)) {
+            Vec::new()
+        } else if let Some(prefix) = settings.get("_caption_window_prefix") {
+            prefix.string_units().expect("cached caption prefix text").into_owned()
+        } else if let Some(caption) = self.window_caption.as_ref() {
+            caption.string_units().expect("window caption text").into_owned()
+        } else {
+            let name = self.file_name.as_deref().unwrap_or("Book1");
+            let name = name.rsplit_once('.').filter(|(_, extension)| matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "xls" | "xlsx" | "xlsm" | "xlsb" | "xlt" | "xltx" | "xltm" | "xla" | "xlam"
+            )).map_or(name, |(stem, _)| stem);
+            let mut title: Vec<u16> = name.encode_utf16().collect();
+            if self.file_io.read_only {
+                let marker = if matches!(self.error_language, ErrorLanguage::Japanese) {
+                    "  -  \u{8aad}\u{307f}\u{53d6}\u{308a}\u{5c02}\u{7528}"
+                } else {
+                    "  -  Read-Only"
+                };
+                title.extend(marker.encode_utf16());
+            }
+            title
+        }
+    }
+
+    fn application_caption_value(&self) -> Value {
+        let mut units = self.application_caption_prefix();
+        if !units.is_empty() {
+            units.extend(" - ".encode_utf16());
+        }
+        if let Some(suffix) = self.app_settings.get("caption") {
+            units.extend(suffix.string_units().expect("application caption text").iter().copied());
+        } else {
+            units.extend("Excel".encode_utf16());
+        }
+        Value::from_utf16(units)
+    }
+
+    fn set_caption_value(&mut self, application: bool, value: Value) -> Result<(), String> {
+        if application {
+            if matches!(value, Value::Null | Value::Nothing) {
+                return Err(host_error(13, "Type mismatch"));
+            }
+            let text = oxivba_core::runtime::coerce_automation_scalar(
+                &value, oxivba_core::runtime::AutomationScalarType::Bstr)?;
+            if text.string_units().is_some_and(|units| units.is_empty()) {
+                self.app_settings.remove("caption");
+            } else {
+                self.app_settings.insert("caption".to_string(), text);
+            }
+        } else {
+            let array_value = matches!(value, Value::Array(_));
+            let mut pending = vec![&value];
+            let mut scalars = Vec::new();
+            while let Some(scalar) = pending.pop() {
+                match scalar {
+                    Value::Array(array) => {
+                        if array.values.is_empty() {
+                            return Err(host_error(13, "Empty caption array"));
+                        }
+                        pending.extend(array.values.iter().rev());
+                    }
+                    Value::Null if array_value => return Err(host_error(13, "Null caption array element")),
+                    scalar => scalars.push(scalar),
+                }
+            }
+            let mut failure = None;
+            for scalar in scalars {
+                let caption = match scalar {
+                    Value::Nothing => {
+                        failure.get_or_insert_with(|| host_error(5, "Invalid caption object"));
+                        continue;
+                    }
+                    Value::Error(_) => {
+                        failure.get_or_insert_with(|| host_error(1004, "Invalid caption value"));
+                        continue;
+                    }
+                    Value::Boolean(false) if !array_value => None,
+                    Value::Empty | Value::Missing | Value::Null => Some(Value::String(String::new())),
+                    value if value.string_units().is_some() => Some(value.clone()),
+                    value => Some(Value::String(shown_text(value, None))),
+                };
+                self.window_caption = caption;
+                self.reset_caption_prefix();
+                // A held inactive Window can update the frame title without
+                // changing either ActiveWindow or ActiveWorkbook.
+                let prefix = self.application_caption_prefix();
+                self.app_settings.insert("_caption_window_prefix".into(), Value::from_utf16(prefix));
+                self.app_settings.insert("_caption_window_owner".into(),
+                    Value::String(self.file_name.clone().unwrap_or_else(|| "Book1".into())));
+            }
+            if let Some(error) = failure {
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
     fn application_setting(&self, name: &str) -> Option<Value> {
         let lower = name.to_ascii_lowercase();
         let (_, default, _) = APPLICATION_SETTINGS.iter().find(|(held, _, _)| held.eq_ignore_ascii_case(name))?;
@@ -26832,7 +26948,47 @@ impl<'a> WorkbookApplication<'a> {
         self.force_activate(owner);
     }
 
+    fn caption_settings(&self) -> Option<&std::collections::HashMap<String, Value>> {
+        if let Some(owner) = self.application_owner {
+            self.hosts.get(&owner).map(|host| &host.app_settings)
+        } else {
+            self.parked_application.as_ref().map(|properties| &properties.app_settings)
+        }
+    }
+
+    fn caption_settings_mut(&mut self) -> Option<&mut std::collections::HashMap<String, Value>> {
+        if let Some(owner) = self.application_owner {
+            self.hosts.get_mut(&owner).map(|host| &mut host.app_settings)
+        } else {
+            self.parked_application.as_mut().map(|properties| &mut properties.app_settings)
+        }
+    }
+
     fn force_activate(&mut self, owner: u64) {
+        if self.active != owner {
+            // An editor selection may activate an identity while its host is
+            // detached. Caption refresh belongs to attached native windows.
+            if let (Some(previous), Some(target), Some(settings)) = (
+                self.hosts.get(&self.active), self.hosts.get(&owner), self.caption_settings(),
+            ) {
+                let cached = target.window_caption.is_some().then(|| {
+                    let prefix = previous.caption_prefix(settings);
+                    let window = settings.get("_caption_window_owner").cloned()
+                        .unwrap_or_else(|| Value::String(previous.file_name.clone().unwrap_or_else(|| "Book1".into())));
+                    (Value::from_utf16(prefix), window)
+                });
+                if let Some(settings) = self.caption_settings_mut() {
+                    if let Some((prefix, window)) = cached {
+                        settings.insert("_caption_window_prefix".into(), prefix);
+                        settings.insert("_caption_window_owner".into(), window);
+                    } else {
+                        settings.remove("_caption_without_window");
+                        settings.remove("_caption_window_prefix");
+                        settings.remove("_caption_window_owner");
+                    }
+                }
+            }
+        }
         self.active=owner;
         self.activation_order.retain(|held|*held!=owner);
         self.activation_order.push(owner);
@@ -26942,6 +27098,9 @@ impl<'a> WorkbookApplication<'a> {
             let phase = self.close_operations[&frame].phase.clone();
             let next = match phase {
                 WorkbookClosePhase::BeforeClose => {
+                    if self.hosts[&owner].window_caption.is_none() {
+                        self.hosts.get_mut(&owner).expect("closing default-caption window").reset_caption_prefix();
+                    }
                     self.force_activate(owner);
                     if self.hosts[&owner].enable_events {
                         let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, activation_owner: Some(owner), saving: false },
@@ -27070,9 +27229,21 @@ impl<'a> WorkbookApplication<'a> {
         self.pending_closed.push(owner);
         *self.hosts.get_mut(&owner).expect("registered closed workbook").user_functions.borrow_mut()=UserFunctions::default();
         if self.active==owner {
-            if let Some(next)=self.hosts.keys().rev().find(|id|!self.closed.contains(id)).copied() {
-                self.active=next;
+            self.ensure_application_owner(owner);
+            let next = self.hosts.keys().rev().find(|id| !self.closed.contains(id)).copied();
+            let default_caption = next.is_some_and(|next| self.hosts[&next].window_caption.is_none());
+            let host = self.hosts.get_mut(&owner).expect("registered closed workbook");
+            let closed_name = host.file_name.as_deref().unwrap_or("Book1");
+            let prefix_survives = host.app_settings.get("_caption_window_owner")
+                .and_then(|value| value.string_units())
+                .is_some_and(|name| name.as_ref() != closed_name.encode_utf16().collect::<Vec<_>>());
+            if default_caption || !prefix_survives || next.is_none() {
+                host.reset_caption_prefix();
+                if !default_caption {
+                    host.app_settings.insert("_caption_without_window".into(), Value::Boolean(true));
+                }
             }
+            if let Some(next) = next { self.active = next; }
         }
         self.activation_order.retain(|id|*id!=owner);
     }
@@ -27903,6 +28074,8 @@ impl<'a> WorkbookApplication<'a> {
         if let Some(key) = key { self.workbook_names.insert(key, next_name); }
         else { self.opened_template_name = next_name; }
         self.activate(owner);
+        self.ensure_application_owner(owner);
+        self.hosts.get_mut(&owner).expect("newly activated workbook").reset_caption_prefix();
         Ok(book)
     }
 
@@ -28267,7 +28440,7 @@ impl<'a> ApplicationHost<'a> {
         let mut application = self.application.borrow_mut();
         if let Some(owner) = application.native_owner(receiver) {
             let host = application.hosts.get(&owner).expect("native workbook");
-            if host.is_workbook(receiver)
+            if host.is_workbook(receiver) || host.is_window(receiver)
                 || matches!(
                     host.objects.get(host_object_index(receiver.handle)),
                     Some(HostObject::Worksheet(_))
@@ -29158,6 +29331,14 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn property_assignment_error(&self, receiver: Option<&ObjectRef>, name: &str, value: &Value) -> Option<i64> {
+        if name.eq_ignore_ascii_case("caption") && matches!(value, Value::Nothing) {
+            match receiver {
+                None => return Some(5),
+                Some(receiver) if self.is_window(receiver) => return Some(5),
+                Some(receiver) if self.is_application(receiver) => return Some(13),
+                _ => {}
+            }
+        }
         if let Some(receiver) = receiver {
             if self.is_application(receiver) && (application_variant_boolean_setting(name).is_some()
                 || name.eq_ignore_ascii_case("screenupdating"))
@@ -29709,6 +29890,10 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(receiver) = receiver {
             if !args.is_empty() {
+                if name.eq_ignore_ascii_case("caption")
+                    && (self.is_application(receiver) || self.is_window(receiver)) {
+                    return Err(host_error(451, "The caption getter takes no indices"));
+                }
                 if let Some((_, number)) = self.scalar_property_dispatch_errors(receiver, name) {
                     if number == 451 {
                         // Ordinary scalar getters run before their result is
@@ -29971,8 +30156,7 @@ impl Host for WorkbookHost<'_> {
             }
             // The window's title: measured, "Book1 - Excel" on a new book.
             if self.is_application(receiver) && name.eq_ignore_ascii_case("caption") {
-                let book = self.file_name.clone().unwrap_or_else(|| "Book1".to_string());
-                return Ok(Some(Value::String(format!("{book} - Excel"))));
+                return Ok(Some(self.application_caption_value()));
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("build") {
                 if !args.is_empty() {
@@ -32822,7 +33006,7 @@ impl Host for WorkbookHost<'_> {
             // gridlines (ColorIndex -4105, Color 0), TabRatio 0.6, the first
             // window of a book of one (Index 1, WindowNumber 1, Type 1).
             if name.eq_ignore_ascii_case("caption") {
-                return Ok(Some(Value::String(self.file_name.clone().unwrap_or_else(|| "Book1".to_string()))));
+                return Ok(Some(self.window_caption_value()));
             }
             let plain = match name.to_ascii_lowercase().as_str() {
                 "displayhorizontalscrollbar" | "displayverticalscrollbar" | "displayoutline" | "displayruler"
@@ -34549,6 +34733,10 @@ impl Host for WorkbookHost<'_> {
         }
         if self.is_application(receiver) && name.eq_ignore_ascii_case("build") {
             return Err(self.scalar_set_error("Application", "Build"));
+        }
+        if name.eq_ignore_ascii_case("caption") && (self.is_application(receiver) || self.is_window(receiver)) {
+            self.set_caption_value(self.is_application(receiver), value)?;
+            return Ok(true);
         }
         if self.is_workbook(receiver) && name.eq_ignore_ascii_case("readonlyrecommended") {
             let recommended = application_switch(&value, "Workbook.ReadOnlyRecommended")
@@ -43604,6 +43792,7 @@ struct WorkbookHostState {
     compilation_stamp: Option<String>,
     compiled_modules: BTreeSet<String>,
     file_name: Option<String>,
+    window_caption: Option<Value>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
     singletons: BTreeMap<(u8, usize), u64>,
@@ -43693,13 +43882,13 @@ struct WorkbookHostState {
 
 impl<'a> WorkbookHost<'a> {
     fn into_parts(self) -> (WorkbookStorage<'a>,WorkbookHostState) {
-        let Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = self;
-        (workbook,WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects })
+        let Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = self;
+        (workbook,WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects })
     }
 
     fn resume_storage(workbook:WorkbookStorage<'a>, state: WorkbookHostState) -> Self {
-        let WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = state;
-        Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects }
+        let WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = state;
+        Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects }
     }
 }
 
@@ -43941,6 +44130,9 @@ fn selection_snapshot(state: &ProjectSessionState) -> Result<WorkbookSelection, 
         cursor: host.cursor, interactive: host.interactive,
         directory_state: Some(VbaDirectoryState::capture(&host.file_io.files)),
         new_workbook_font: (host.application_font!=default_application_font()).then(||host.application_font.clone()),
+        caption_suffix_utf16: host.app_settings.get("caption").and_then(|value|value.string_units()).map(|units|units.into_owned()),
+        caption_without_window: (host.app_settings.get("_caption_without_window") == Some(&Value::Boolean(true))).then_some(true),
+        caption_window: VbaCaptionWindow::capture(&host.app_settings),
     };
     Ok(WorkbookSelection { package_bytes: host.file_io.package.clone(), selected, other_workbooks, application_state,
         file_system_state: host.file_io.snapshot() })
@@ -44371,6 +44563,21 @@ impl VbaDirectoryState {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VbaCaptionWindow {
+    workbook: String,
+    prefix_utf16: Vec<u16>,
+}
+
+impl VbaCaptionWindow {
+    fn capture(settings: &std::collections::HashMap<String, Value>) -> Option<Self> {
+        let Value::String(workbook) = settings.get("_caption_window_owner")? else { return None; };
+        let prefix_utf16 = settings.get("_caption_window_prefix")?.string_units()?.into_owned();
+        Some(Self { workbook: workbook.clone(), prefix_utf16 })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 struct VbaApplicationState {
     calculation: i64,
@@ -44384,12 +44591,18 @@ struct VbaApplicationState {
     directory_state: Option<VbaDirectoryState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     new_workbook_font: Option<CellStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caption_suffix_utf16: Option<Vec<u16>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caption_without_window: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caption_window: Option<VbaCaptionWindow>,
 }
 
 impl Default for VbaApplicationState {
     fn default() -> Self {
         Self { calculation: -4105, calculate_before_save: true, screen_updating: true, enable_events: true,
-            display_alerts: true, status_bar: None, cursor: CURSOR_DEFAULT, interactive: true, directory_state: None, new_workbook_font: None }
+            display_alerts: true, status_bar: None, cursor: CURSOR_DEFAULT, interactive: true, directory_state: None, new_workbook_font: None, caption_suffix_utf16: None, caption_without_window: None, caption_window: None }
     }
 }
 
@@ -44401,6 +44614,9 @@ impl VbaApplicationState {
             self.status_bar = status_bar_text(&Value::String(status))?;
         }
         self.directory_state=self.directory_state.map(VbaDirectoryState::validate).transpose()?;
+        if self.caption_window.as_ref().is_some_and(|window| window.workbook.is_empty()) {
+            return Err("captionWindow requires a workbook name".into());
+        }
         if let Some(font)=self.new_workbook_font.as_ref() {
             if font.font_name.as_deref().is_none_or(str::is_empty)
                 || font.font_size.is_none_or(|size|!size.is_finite() || size<=0.0) {
@@ -44420,6 +44636,21 @@ impl VbaApplicationState {
         host.cursor = self.cursor;
         host.interactive = self.interactive;
         if let Some(font)=self.new_workbook_font {host.application_font=font;}
+        host.reset_caption_prefix();
+        if let Some(window) = self.caption_window {
+            host.app_settings.insert("_caption_window_owner".into(), Value::String(window.workbook));
+            host.app_settings.insert("_caption_window_prefix".into(), Value::from_utf16(window.prefix_utf16));
+        }
+        if self.caption_without_window == Some(true) {
+            host.app_settings.insert("_caption_without_window".to_string(), Value::Boolean(true));
+        } else {
+            host.app_settings.remove("_caption_without_window");
+        }
+        if let Some(suffix) = self.caption_suffix_utf16.filter(|units| !units.is_empty()) {
+            host.app_settings.insert("caption".to_string(), Value::from_utf16(suffix));
+        } else {
+            host.app_settings.remove("caption");
+        }
     }
 
     fn capture(host: &WorkbookHost<'_>) -> Self {
@@ -44427,7 +44658,10 @@ impl VbaApplicationState {
             enable_events: host.enable_events, display_alerts: host.display_alerts,
             status_bar: host.status_bar.clone(), cursor: host.cursor, interactive: host.interactive,
             directory_state: Some(VbaDirectoryState::capture(&host.file_io.files)),
-            new_workbook_font: (host.application_font!=default_application_font()).then(||host.application_font.clone()) }
+            new_workbook_font: (host.application_font!=default_application_font()).then(||host.application_font.clone()),
+            caption_suffix_utf16: host.app_settings.get("caption").and_then(|value|value.string_units()).map(|units|units.into_owned()),
+        caption_without_window: (host.app_settings.get("_caption_without_window") == Some(&Value::Boolean(true))).then_some(true),
+            caption_window: VbaCaptionWindow::capture(&host.app_settings) }
     }
 }
 
@@ -44683,8 +44917,21 @@ fn prepare_spreadsheet_vba(
             }
             for name in js_sys::Object::keys(&js_sys::Object::from(state.clone())).iter() {
                 let name = name.as_string().unwrap_or_default();
-                if !matches!(name.as_str(), "calculation" | "calculateBeforeSave" | "screenUpdating" | "enableEvents" | "displayAlerts" | "statusBar" | "cursor" | "interactive" | "directoryState") {
+                if !matches!(name.as_str(), "calculation" | "calculateBeforeSave" | "screenUpdating" | "enableEvents" | "displayAlerts" | "statusBar" | "cursor" | "interactive" | "directoryState" | "newWorkbookFont" | "captionSuffixUtf16" | "captionWithoutWindow" | "captionWindow") {
                     return Err(JsError::new(&format!("invalid VBA options: unknown applicationState field {name}")));
+                }
+            }
+            let caption_window = js_sys::Reflect::get(&state, &JsValue::from_str("captionWindow"))
+                .map_err(|_| JsError::new("invalid VBA options: cannot read captionWindow"))?;
+            if !caption_window.is_null() && !caption_window.is_undefined() {
+                if !caption_window.is_object() || js_sys::Array::is_array(&caption_window) {
+                    return Err(JsError::new("invalid VBA options: captionWindow must be an object"));
+                }
+                for name in js_sys::Object::keys(&js_sys::Object::from(caption_window)).iter() {
+                    let name = name.as_string().unwrap_or_default();
+                    if !matches!(name.as_str(), "workbook" | "prefixUtf16") {
+                        return Err(JsError::new(&format!("invalid VBA options: unknown captionWindow field {name}")));
+                    }
                 }
             }
             let directory=js_sys::Reflect::get(&state,&JsValue::from_str("directoryState"))
@@ -45408,6 +45655,364 @@ mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
 
+
+    #[test]
+    fn caption_close_and_activation_match_raw_excel_returns() {
+        // Self-authored programs measured in fresh Excel instances. Expected
+        // captions below are the unmodified UTF16 results from those programs.
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let cohorts = vec![
+        (r####"Attribute VB_Name = "CaptionCloseMatrix"
+Option Explicit
+Public Function Probe(ByVal originalCustom As Boolean, ByVal otherMode As Long, ByVal appCustom As Boolean, ByVal originalActive As Boolean) As String
+ Dim other As Workbook
+ Dim before As String
+ Dim after As String
+ Dim win As String
+ If originalCustom Then ActiveWindow.Caption = "OriginalWin"
+ If appCustom Then Application.Caption = "CustomApp"
+ Set other = Workbooks.Add(-4167)
+ Select Case otherMode
+ Case 1
+  ActiveWindow.Caption = "OtherWin"
+ Case 2
+  ActiveWindow.Caption = "OtherWin"
+  ActiveWindow.Caption = False
+ Case 3
+  ActiveWindow.Caption = ""
+ End Select
+ If originalActive Then ThisWorkbook.Activate
+ before = Units(Application.Caption)
+ other.Close False
+ after = Units(Application.Caption)
+ win = Units(ActiveWindow.Caption)
+ Probe = before & "|" & after & "|" & win
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"CaptionCloseMatrix.Probe"####, vec![
+            (r####"original0_other0_suffix0_activeOriginal0"####, r####"owned-caption-close-matrix-1475cec4891f43159afa2e2e72644a40.xlsm"####, vec![Value::Boolean(false), Value::Integer(0), Value::Boolean(false), Value::Boolean(false)], r####"0053006800650065007400310020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0031003400370035006300650063003400380039003100660034003300310035003900610066006100320065003200650037003200360034003400610034003000200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00310034003700350063006500630034003800390031006600340033003100350039006100660061003200650032006500370032003600340034006100340030002E0078006C0073006D"####),
+            (r####"original0_other0_suffix0_activeOriginal1"####, r####"owned-caption-close-matrix-43d5993238cc4265bb9b9375d00c1bba.xlsm"####, vec![Value::Boolean(false), Value::Integer(0), Value::Boolean(false), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0034003300640035003900390033003200330038006300630034003200360035006200620039006200390033003700350064003000300063003100620062006100200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0034003300640035003900390033003200330038006300630034003200360035006200620039006200390033003700350064003000300063003100620062006100200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00340033006400350039003900330032003300380063006300340032003600350062006200390062003900330037003500640030003000630031006200620061002E0078006C0073006D"####),
+            (r####"original0_other0_suffix1_activeOriginal0"####, r####"owned-caption-close-matrix-cfb6237e979c415991fa149cec9c812a.xlsm"####, vec![Value::Boolean(false), Value::Integer(0), Value::Boolean(true), Value::Boolean(false)], r####"0053006800650065007400310020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0063006600620036003200330037006500390037003900630034003100350039003900310066006100310034003900630065006300390063003800310032006100200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00630066006200360032003300370065003900370039006300340031003500390039003100660061003100340039006300650063003900630038003100320061002E0078006C0073006D"####),
+            (r####"original0_other0_suffix1_activeOriginal1"####, r####"owned-caption-close-matrix-7ace679189f747c49441bb9b33e06c32.xlsm"####, vec![Value::Boolean(false), Value::Integer(0), Value::Boolean(true), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0037006100630065003600370039003100380039006600370034003700630034003900340034003100620062003900620033003300650030003600630033003200200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0037006100630065003600370039003100380039006600370034003700630034003900340034003100620062003900620033003300650030003600630033003200200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00370061006300650036003700390031003800390066003700340037006300340039003400340031006200620039006200330033006500300036006300330032002E0078006C0073006D"####),
+            (r####"original0_other1_suffix0_activeOriginal0"####, r####"owned-caption-close-matrix-aac0c4f02f83469b92455eb00a545e77.xlsm"####, vec![Value::Boolean(false), Value::Integer(1), Value::Boolean(false), Value::Boolean(false)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0061006100630030006300340066003000320066003800330034003600390062003900320034003500350065006200300030006100350034003500650037003700200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00610061006300300063003400660030003200660038003300340036003900620039003200340035003500650062003000300061003500340035006500370037002E0078006C0073006D"####),
+            (r####"original0_other1_suffix0_activeOriginal1"####, r####"owned-caption-close-matrix-138c3f01c3454dbbac528a4d31b400d5.xlsm"####, vec![Value::Boolean(false), Value::Integer(1), Value::Boolean(false), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0031003300380063003300660030003100630033003400350034006400620062006100630035003200380061003400640033003100620034003000300064003500200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0031003300380063003300660030003100630033003400350034006400620062006100630035003200380061003400640033003100620034003000300064003500200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00310033003800630033006600300031006300330034003500340064006200620061006300350032003800610034006400330031006200340030003000640035002E0078006C0073006D"####),
+            (r####"original0_other1_suffix1_activeOriginal0"####, r####"owned-caption-close-matrix-6294cd2e34754c98b5634e139da020fb.xlsm"####, vec![Value::Boolean(false), Value::Integer(1), Value::Boolean(true), Value::Boolean(false)], r####"004F007400680065007200570069006E0020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0036003200390034006300640032006500330034003700350034006300390038006200350036003300340065003100330039006400610030003200300066006200200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00360032003900340063006400320065003300340037003500340063003900380062003500360033003400650031003300390064006100300032003000660062002E0078006C0073006D"####),
+            (r####"original0_other1_suffix1_activeOriginal1"####, r####"owned-caption-close-matrix-c3b496448b6047628eea56d14c7899c5.xlsm"####, vec![Value::Boolean(false), Value::Integer(1), Value::Boolean(true), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0063003300620034003900360034003400380062003600300034003700360032003800650065006100350036006400310034006300370038003900390063003500200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0063003300620034003900360034003400380062003600300034003700360032003800650065006100350036006400310034006300370038003900390063003500200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00630033006200340039003600340034003800620036003000340037003600320038006500650061003500360064003100340063003700380039003900630035002E0078006C0073006D"####),
+            (r####"original0_other2_suffix0_activeOriginal0"####, r####"owned-caption-close-matrix-7043af9151a14621b16c38f7d1997c40.xlsm"####, vec![Value::Boolean(false), Value::Integer(2), Value::Boolean(false), Value::Boolean(false)], r####"0053006800650065007400310020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0037003000340033006100660039003100350031006100310034003600320031006200310036006300330038006600370064003100390039003700630034003000200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00370030003400330061006600390031003500310061003100340036003200310062003100360063003300380066003700640031003900390037006300340030002E0078006C0073006D"####),
+            (r####"original0_other2_suffix0_activeOriginal1"####, r####"owned-caption-close-matrix-57bac15dc66f40d8ba1abec27ff14ba1.xlsm"####, vec![Value::Boolean(false), Value::Integer(2), Value::Boolean(false), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0035003700620061006300310035006400630036003600660034003000640038006200610031006100620065006300320037006600660031003400620061003100200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0035003700620061006300310035006400630036003600660034003000640038006200610031006100620065006300320037006600660031003400620061003100200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00350037006200610063003100350064006300360036006600340030006400380062006100310061006200650063003200370066006600310034006200610031002E0078006C0073006D"####),
+            (r####"original0_other2_suffix1_activeOriginal0"####, r####"owned-caption-close-matrix-7efd887828e74d1e9c8034b8dcc009c2.xlsm"####, vec![Value::Boolean(false), Value::Integer(2), Value::Boolean(true), Value::Boolean(false)], r####"0053006800650065007400310020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0037006500660064003800380037003800320038006500370034006400310065003900630038003000330034006200380064006300630030003000390063003200200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00370065006600640038003800370038003200380065003700340064003100650039006300380030003300340062003800640063006300300030003900630032002E0078006C0073006D"####),
+            (r####"original0_other2_suffix1_activeOriginal1"####, r####"owned-caption-close-matrix-906cffbc7a3f464c9eff29e71dc7cb17.xlsm"####, vec![Value::Boolean(false), Value::Integer(2), Value::Boolean(true), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0039003000360063006600660062006300370061003300660034003600340063003900650066006600320039006500370031006400630037006300620031003700200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0039003000360063006600660062006300370061003300660034003600340063003900650066006600320039006500370031006400630037006300620031003700200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00390030003600630066006600620063003700610033006600340036003400630039006500660066003200390065003700310064006300370063006200310037002E0078006C0073006D"####),
+            (r####"original0_other3_suffix0_activeOriginal0"####, r####"owned-caption-close-matrix-2785345906ca4a98989ee6be2c9f2978.xlsm"####, vec![Value::Boolean(false), Value::Integer(3), Value::Boolean(false), Value::Boolean(false)], r####"0045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0032003700380035003300340035003900300036006300610034006100390038003900380039006500650036006200650032006300390066003200390037003800200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00320037003800350033003400350039003000360063006100340061003900380039003800390065006500360062006500320063003900660032003900370038002E0078006C0073006D"####),
+            (r####"original0_other3_suffix0_activeOriginal1"####, r####"owned-caption-close-matrix-2d93e7b760d048bca24506a69ec513e6.xlsm"####, vec![Value::Boolean(false), Value::Integer(3), Value::Boolean(false), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0032006400390033006500370062003700360030006400300034003800620063006100320034003500300036006100360039006500630035003100330065003600200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0032006400390033006500370062003700360030006400300034003800620063006100320034003500300036006100360039006500630035003100330065003600200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00320064003900330065003700620037003600300064003000340038006200630061003200340035003000360061003600390065006300350031003300650036002E0078006C0073006D"####),
+            (r####"original0_other3_suffix1_activeOriginal0"####, r####"owned-caption-close-matrix-c69533aa179948c8a9d3ab1f4f086985.xlsm"####, vec![Value::Boolean(false), Value::Integer(3), Value::Boolean(true), Value::Boolean(false)], r####"0043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0063003600390035003300330061006100310037003900390034003800630038006100390064003300610062003100660034006600300038003600390038003500200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00630036003900350033003300610061003100370039003900340038006300380061003900640033006100620031006600340066003000380036003900380035002E0078006C0073006D"####),
+            (r####"original0_other3_suffix1_activeOriginal1"####, r####"owned-caption-close-matrix-1a25eae67bd74ff2a79429bbeb172cc5.xlsm"####, vec![Value::Boolean(false), Value::Integer(3), Value::Boolean(true), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0031006100320035006500610065003600370062006400370034006600660032006100370039003400320039006200620065006200310037003200630063003500200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D0031006100320035006500610065003600370062006400370034006600660032006100370039003400320039006200620065006200310037003200630063003500200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D0063006C006F00730065002D006D00610074007200690078002D00310061003200350065006100650036003700620064003700340066006600320061003700390034003200390062006200650062003100370032006300630035002E0078006C0073006D"####),
+            (r####"original1_other0_suffix0_activeOriginal0"####, r####"owned-caption-close-matrix-1bf37a4176d048c29fc5e19f9d0db92d.xlsm"####, vec![Value::Boolean(true), Value::Integer(0), Value::Boolean(false), Value::Boolean(false)], r####"0053006800650065007400310020002D00200045007800630065006C|0045007800630065006C|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other0_suffix0_activeOriginal1"####, r####"owned-caption-close-matrix-2ebdcf023bf5457b9225b2f6260290a9.xlsm"####, vec![Value::Boolean(true), Value::Integer(0), Value::Boolean(false), Value::Boolean(true)], r####"0053006800650065007400310020002D00200045007800630065006C|0045007800630065006C|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other0_suffix1_activeOriginal0"####, r####"owned-caption-close-matrix-5bdc4790f74f4fd491298bb25df4d9e9.xlsm"####, vec![Value::Boolean(true), Value::Integer(0), Value::Boolean(true), Value::Boolean(false)], r####"0053006800650065007400310020002D00200043007500730074006F006D004100700070|0043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other0_suffix1_activeOriginal1"####, r####"owned-caption-close-matrix-a0ac2fe2f9724a7e99c52a8d24a4c9cf.xlsm"####, vec![Value::Boolean(true), Value::Integer(0), Value::Boolean(true), Value::Boolean(true)], r####"0053006800650065007400310020002D00200043007500730074006F006D004100700070|0043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other1_suffix0_activeOriginal0"####, r####"owned-caption-close-matrix-94852158ade3469f96dd019669a7cb93.xlsm"####, vec![Value::Boolean(true), Value::Integer(1), Value::Boolean(false), Value::Boolean(false)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|0045007800630065006C|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other1_suffix0_activeOriginal1"####, r####"owned-caption-close-matrix-76ebc23cb38f42b88c213cfe1f5a04d8.xlsm"####, vec![Value::Boolean(true), Value::Integer(1), Value::Boolean(false), Value::Boolean(true)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|0045007800630065006C|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other1_suffix1_activeOriginal0"####, r####"owned-caption-close-matrix-963a04c6f81847ac92451e6c6ea34e8e.xlsm"####, vec![Value::Boolean(true), Value::Integer(1), Value::Boolean(true), Value::Boolean(false)], r####"004F007400680065007200570069006E0020002D00200043007500730074006F006D004100700070|0043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other1_suffix1_activeOriginal1"####, r####"owned-caption-close-matrix-a104e570e60c4e51b4d0a54122a1ef87.xlsm"####, vec![Value::Boolean(true), Value::Integer(1), Value::Boolean(true), Value::Boolean(true)], r####"004F007400680065007200570069006E0020002D00200043007500730074006F006D004100700070|0043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other2_suffix0_activeOriginal0"####, r####"owned-caption-close-matrix-086b05741e3746d4a03b8d050a6aa53d.xlsm"####, vec![Value::Boolean(true), Value::Integer(2), Value::Boolean(false), Value::Boolean(false)], r####"0053006800650065007400310020002D00200045007800630065006C|0045007800630065006C|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other2_suffix0_activeOriginal1"####, r####"owned-caption-close-matrix-e698c73c0b04412d84b645e08e63918a.xlsm"####, vec![Value::Boolean(true), Value::Integer(2), Value::Boolean(false), Value::Boolean(true)], r####"0053006800650065007400310020002D00200045007800630065006C|0045007800630065006C|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other2_suffix1_activeOriginal0"####, r####"owned-caption-close-matrix-eba2043d06f14c6fa46825d7b8fae82d.xlsm"####, vec![Value::Boolean(true), Value::Integer(2), Value::Boolean(true), Value::Boolean(false)], r####"0053006800650065007400310020002D00200043007500730074006F006D004100700070|0043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other2_suffix1_activeOriginal1"####, r####"owned-caption-close-matrix-5f5f3176e1914323ae1464aadc1ed93a.xlsm"####, vec![Value::Boolean(true), Value::Integer(2), Value::Boolean(true), Value::Boolean(true)], r####"0053006800650065007400310020002D00200043007500730074006F006D004100700070|0043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other3_suffix0_activeOriginal0"####, r####"owned-caption-close-matrix-676e71e3e60d4f38b2909fdb40c39c66.xlsm"####, vec![Value::Boolean(true), Value::Integer(3), Value::Boolean(false), Value::Boolean(false)], r####"0045007800630065006C|0045007800630065006C|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other3_suffix0_activeOriginal1"####, r####"owned-caption-close-matrix-2a77a898f8d344148179e84058b37884.xlsm"####, vec![Value::Boolean(true), Value::Integer(3), Value::Boolean(false), Value::Boolean(true)], r####"0045007800630065006C|0045007800630065006C|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other3_suffix1_activeOriginal0"####, r####"owned-caption-close-matrix-7b8e7fbeeb3b4f3c855b5b66e2b84523.xlsm"####, vec![Value::Boolean(true), Value::Integer(3), Value::Boolean(true), Value::Boolean(false)], r####"0043007500730074006F006D004100700070|0043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E"####),
+            (r####"original1_other3_suffix1_activeOriginal1"####, r####"owned-caption-close-matrix-bcc31a9b63d44dc895d392038f8499e4.xlsm"####, vec![Value::Boolean(true), Value::Integer(3), Value::Boolean(true), Value::Boolean(true)], r####"0043007500730074006F006D004100700070|0043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E"####)
+        ]),
+        (r####"Attribute VB_Name = "CaptionActivationProbe"
+Option Explicit
+Public Function Probe(ByVal originalMode As Long, ByVal otherCustom As Boolean) As String
+ Dim other As Workbook
+ Dim answer As String
+ Select Case originalMode
+ Case 1
+  ActiveWindow.Caption = "OriginalWin"
+ Case 2
+  ActiveWindow.Caption = ""
+ Case 3
+  ActiveWindow.Caption = "OriginalWin"
+  ActiveWindow.Caption = False
+ End Select
+ Set other = Workbooks.Add(-4167)
+ If otherCustom Then ActiveWindow.Caption = "OtherWin"
+ ThisWorkbook.Activate
+ answer = Snapshot()
+ DoEvents
+ answer = answer & "#" & Snapshot()
+ Application.Caption = "CustomApp"
+ answer = answer & "#" & Snapshot()
+ ActiveWindow.Caption = ActiveWindow.Caption
+ answer = answer & "#" & Snapshot()
+ other.Close False
+ Probe = answer & "#" & Snapshot()
+End Function
+Private Function Snapshot() As String
+ Snapshot = Units(Application.Caption) & "|" & Units(ActiveWindow.Caption) & "|" & Units(ActiveWorkbook.Name)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"CaptionActivationProbe.Probe"####, vec![
+            (r####"originalMode1_otherCustom0"####, r####"owned-caption-activation-fe202ca47d2d46afbb4835b8b7d8b440.xlsm"####, vec![Value::Integer(1), Value::Boolean(false)], r####"0053006800650065007400310020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660065003200300032006300610034003700640032006400340036006100660062006200340038003300350062003800620037006400380062003400340030002E0078006C0073006D#0053006800650065007400310020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660065003200300032006300610034003700640032006400340036006100660062006200340038003300350062003800620037006400380062003400340030002E0078006C0073006D#0053006800650065007400310020002D00200043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660065003200300032006300610034003700640032006400340036006100660062006200340038003300350062003800620037006400380062003400340030002E0078006C0073006D#004F0072006900670069006E0061006C00570069006E0020002D00200043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660065003200300032006300610034003700640032006400340036006100660062006200340038003300350062003800620037006400380062003400340030002E0078006C0073006D#0043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660065003200300032006300610034003700640032006400340036006100660062006200340038003300350062003800620037006400380062003400340030002E0078006C0073006D"####),
+            (r####"originalMode1_otherCustom1"####, r####"owned-caption-activation-f799f595890c46c2a996751a45a77616.xlsm"####, vec![Value::Integer(1), Value::Boolean(true)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660037003900390066003500390035003800390030006300340036006300320061003900390036003700350031006100340035006100370037003600310036002E0078006C0073006D#004F007400680065007200570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660037003900390066003500390035003800390030006300340036006300320061003900390036003700350031006100340035006100370037003600310036002E0078006C0073006D#004F007400680065007200570069006E0020002D00200043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660037003900390066003500390035003800390030006300340036006300320061003900390036003700350031006100340035006100370037003600310036002E0078006C0073006D#004F0072006900670069006E0061006C00570069006E0020002D00200043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660037003900390066003500390035003800390030006300340036006300320061003900390036003700350031006100340035006100370037003600310036002E0078006C0073006D#004F0072006900670069006E0061006C00570069006E0020002D00200043007500730074006F006D004100700070|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660037003900390066003500390035003800390030006300340036006300320061003900390036003700350031006100340035006100370037003600310036002E0078006C0073006D"####),
+            (r####"originalMode2_otherCustom0"####, r####"owned-caption-activation-4230217cf1794d4983b6b794f81fc580.xlsm"####, vec![Value::Integer(2), Value::Boolean(false)], r####"0053006800650065007400310020002D00200045007800630065006C||006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00340032003300300032003100370063006600310037003900340064003400390038003300620036006200370039003400660038003100660063003500380030002E0078006C0073006D#0053006800650065007400310020002D00200045007800630065006C||006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00340032003300300032003100370063006600310037003900340064003400390038003300620036006200370039003400660038003100660063003500380030002E0078006C0073006D#0053006800650065007400310020002D00200043007500730074006F006D004100700070||006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00340032003300300032003100370063006600310037003900340064003400390038003300620036006200370039003400660038003100660063003500380030002E0078006C0073006D#0043007500730074006F006D004100700070||006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00340032003300300032003100370063006600310037003900340064003400390038003300620036006200370039003400660038003100660063003500380030002E0078006C0073006D#0043007500730074006F006D004100700070||006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00340032003300300032003100370063006600310037003900340064003400390038003300620036006200370039003400660038003100660063003500380030002E0078006C0073006D"####),
+            (r####"originalMode2_otherCustom1"####, r####"owned-caption-activation-b26603fbe97c4574a2216e488c0f1f1e.xlsm"####, vec![Value::Integer(2), Value::Boolean(true)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C||006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00620032003600360030003300660062006500390037006300340035003700340061003200320031003600650034003800380063003000660031006600310065002E0078006C0073006D#004F007400680065007200570069006E0020002D00200045007800630065006C||006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00620032003600360030003300660062006500390037006300340035003700340061003200320031003600650034003800380063003000660031006600310065002E0078006C0073006D#004F007400680065007200570069006E0020002D00200043007500730074006F006D004100700070||006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00620032003600360030003300660062006500390037006300340035003700340061003200320031003600650034003800380063003000660031006600310065002E0078006C0073006D#0043007500730074006F006D004100700070||006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00620032003600360030003300660062006500390037006300340035003700340061003200320031003600650034003800380063003000660031006600310065002E0078006C0073006D#0043007500730074006F006D004100700070||006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00620032003600360030003300660062006500390037006300340035003700340061003200320031003600650034003800380063003000660031006600310065002E0078006C0073006D"####),
+            (r####"originalMode3_otherCustom0"####, r####"owned-caption-activation-6a28d4ecb9e24a8186ba8687d2e12a46.xlsm"####, vec![Value::Integer(3), Value::Boolean(false)], r####"006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D0036006100320038006400340065006300620039006500320034006100380031003800360062006100380036003800370064003200650031003200610034003600200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00360061003200380064003400650063006200390065003200340061003800310038003600620061003800360038003700640032006500310032006100340036002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00360061003200380064003400650063006200390065003200340061003800310038003600620061003800360038003700640032006500310032006100340036002E0078006C0073006D#006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D0036006100320038006400340065006300620039006500320034006100380031003800360062006100380036003800370064003200650031003200610034003600200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00360061003200380064003400650063006200390065003200340061003800310038003600620061003800360038003700640032006500310032006100340036002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00360061003200380064003400650063006200390065003200340061003800310038003600620061003800360038003700640032006500310032006100340036002E0078006C0073006D#006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D0036006100320038006400340065006300620039006500320034006100380031003800360062006100380036003800370064003200650031003200610034003600200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00360061003200380064003400650063006200390065003200340061003800310038003600620061003800360038003700640032006500310032006100340036002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00360061003200380064003400650063006200390065003200340061003800310038003600620061003800360038003700640032006500310032006100340036002E0078006C0073006D#006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00360061003200380064003400650063006200390065003200340061003800310038003600620061003800360038003700640032006500310032006100340036002E0078006C0073006D0020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00360061003200380064003400650063006200390065003200340061003800310038003600620061003800360038003700640032006500310032006100340036002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00360061003200380064003400650063006200390065003200340061003800310038003600620061003800360038003700640032006500310032006100340036002E0078006C0073006D#0043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00360061003200380064003400650063006200390065003200340061003800310038003600620061003800360038003700640032006500310032006100340036002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00360061003200380064003400650063006200390065003200340061003800310038003600620061003800360038003700640032006500310032006100340036002E0078006C0073006D"####),
+            (r####"originalMode3_otherCustom1"####, r####"owned-caption-activation-fb03aac9c93e4d1f893e823ea661c91b.xlsm"####, vec![Value::Integer(3), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D0066006200300033006100610063003900630039003300650034006400310066003800390033006500380032003300650061003600360031006300390031006200200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D#006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D0066006200300033006100610063003900630039003300650034006400310066003800390033006500380032003300650061003600360031006300390031006200200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D#006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D0066006200300033006100610063003900630039003300650034006400310066003800390033006500380032003300650061003600360031006300390031006200200020002D002000208AAD307F53D6308A5C0275280020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D#006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D0020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D#006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D0020002D00200043007500730074006F006D004100700070|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00610063007400690076006100740069006F006E002D00660062003000330061006100630039006300390033006500340064003100660038003900330065003800320033006500610036003600310063003900310062002E0078006C0073006D"####)
+        ]),
+        (r####"Attribute VB_Name = "CaptionInactiveProbe"
+Option Explicit
+Public Function Probe(ByVal originalCustom As Boolean, ByVal otherCustom As Boolean, ByVal targetOriginal As Boolean, ByVal valueMode As Long) As String
+ Dim originalWindow As Object
+ Dim otherWindow As Object
+ Dim target As Object
+ Dim other As Workbook
+ Dim answer As String
+ Set originalWindow = ActiveWindow
+ If originalCustom Then originalWindow.Caption = "OriginalWin"
+ Set other = Workbooks.Add(-4167)
+ Set otherWindow = ActiveWindow
+ If otherCustom Then otherWindow.Caption = "OtherWin"
+ If targetOriginal Then
+  Set target = originalWindow
+ Else
+  ThisWorkbook.Activate
+  Set target = otherWindow
+ End If
+ answer = Snapshot(target)
+ Select Case valueMode
+ Case 0
+  target.Caption = "InactiveWin"
+ Case 1
+  target.Caption = False
+ Case 2
+  target.Caption = ""
+ End Select
+ Probe = answer & "#" & Snapshot(target)
+ other.Close False
+End Function
+Private Function Snapshot(ByVal target As Object) As String
+ Snapshot = Units(Application.Caption) & "|" & Units(ActiveWindow.Caption) & "|" & Units(target.Caption) & "|" & Units(ActiveWorkbook.Name)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"CaptionInactiveProbe.Probe"####, vec![
+            (r####"inactive_original0_other0_targetOriginal0_value0"####, r####"owned-caption-inactive-5168688f73a04eabb3556845863af4c3.xlsm"####, vec![Value::Boolean(false), Value::Boolean(false), Value::Boolean(false), Value::Integer(0)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0035003100360038003600380038006600370033006100300034006500610062006200330035003500360038003400350038003600330061006600340063003300200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00350031003600380036003800380066003700330061003000340065006100620062003300350035003600380034003500380036003300610066003400630033002E0078006C0073006D|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00350031003600380036003800380066003700330061003000340065006100620062003300350035003600380034003500380036003300610066003400630033002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00350031003600380036003800380066003700330061003000340065006100620062003300350035003600380034003500380036003300610066003400630033002E0078006C0073006D|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00350031003600380036003800380066003700330061003000340065006100620062003300350035003600380034003500380036003300610066003400630033002E0078006C0073006D"####),
+            (r####"inactive_original0_other0_targetOriginal0_value1"####, r####"owned-caption-inactive-4bd679317a3f41ef88b8bf35e64a53cc.xlsm"####, vec![Value::Boolean(false), Value::Boolean(false), Value::Boolean(false), Value::Integer(1)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0034006200640036003700390033003100370061003300660034003100650066003800380062003800620066003300350065003600340061003500330063006300200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340062006400360037003900330031003700610033006600340031006500660038003800620038006200660033003500650036003400610035003300630063002E0078006C0073006D|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340062006400360037003900330031003700610033006600340031006500660038003800620038006200660033003500650036003400610035003300630063002E0078006C0073006D#0053006800650065007400310020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340062006400360037003900330031003700610033006600340031006500660038003800620038006200660033003500650036003400610035003300630063002E0078006C0073006D|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340062006400360037003900330031003700610033006600340031006500660038003800620038006200660033003500650036003400610035003300630063002E0078006C0073006D"####),
+            (r####"inactive_original0_other0_targetOriginal0_value2"####, r####"owned-caption-inactive-a3f19bb2a0e040acb8acf699e04c4b5a.xlsm"####, vec![Value::Boolean(false), Value::Boolean(false), Value::Boolean(false), Value::Integer(2)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0061003300660031003900620062003200610030006500300034003000610063006200380061006300660036003900390065003000340063003400620035006100200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00610033006600310039006200620032006100300065003000340030006100630062003800610063006600360039003900650030003400630034006200350061002E0078006C0073006D|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00610033006600310039006200620032006100300065003000340030006100630062003800610063006600360039003900650030003400630034006200350061002E0078006C0073006D#0045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00610033006600310039006200620032006100300065003000340030006100630062003800610063006600360039003900650030003400630034006200350061002E0078006C0073006D||006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00610033006600310039006200620032006100300065003000340030006100630062003800610063006600360039003900650030003400630034006200350061002E0078006C0073006D"####),
+            (r####"inactive_original0_other0_targetOriginal1_value0"####, r####"owned-caption-inactive-c176c31182d44c94b59d0e793681d619.xlsm"####, vec![Value::Boolean(false), Value::Boolean(false), Value::Boolean(true), Value::Integer(0)], r####"0053006800650065007400310020002D00200045007800630065006C|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00630031003700360063003300310031003800320064003400340063003900340062003500390064003000650037003900330036003800310064003600310039002E0078006C0073006D|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|005300680065006500740031|0049006E00610063007400690076006500570069006E|005300680065006500740031"####),
+            (r####"inactive_original0_other0_targetOriginal1_value1"####, r####"owned-caption-inactive-38f3e0d1d95743ba9de01e5af79074d9.xlsm"####, vec![Value::Boolean(false), Value::Boolean(false), Value::Boolean(true), Value::Integer(1)], r####"0053006800650065007400310020002D00200045007800630065006C|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00330038006600330065003000640031006400390035003700340033006200610039006400650030003100650035006100660037003900300037003400640039002E0078006C0073006D|005300680065006500740031#006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0033003800660033006500300064003100640039003500370034003300620061003900640065003000310065003500610066003700390030003700340064003900200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00330038006600330065003000640031006400390035003700340033006200610039006400650030003100650035006100660037003900300037003400640039002E0078006C0073006D|005300680065006500740031"####),
+            (r####"inactive_original0_other0_targetOriginal1_value2"####, r####"owned-caption-inactive-6a6412803a2c4317a4be23a3de0ca027.xlsm"####, vec![Value::Boolean(false), Value::Boolean(false), Value::Boolean(true), Value::Integer(2)], r####"0053006800650065007400310020002D00200045007800630065006C|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00360061003600340031003200380030003300610032006300340033003100370061003400620065003200330061003300640065003000630061003000320037002E0078006C0073006D|005300680065006500740031#0045007800630065006C|005300680065006500740031||005300680065006500740031"####),
+            (r####"inactive_original0_other1_targetOriginal0_value0"####, r####"owned-caption-inactive-577384ee1c5e43cab53af643f35d3350.xlsm"####, vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(false), Value::Integer(0)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0035003700370033003800340065006500310063003500650034003300630061006200350033006100660036003400330066003300350064003300330035003000200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00350037003700330038003400650065003100630035006500340033006300610062003500330061006600360034003300660033003500640033003300350030002E0078006C0073006D|004F007400680065007200570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00350037003700330038003400650065003100630035006500340033006300610062003500330061006600360034003300660033003500640033003300350030002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00350037003700330038003400650065003100630035006500340033006300610062003500330061006600360034003300660033003500640033003300350030002E0078006C0073006D|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00350037003700330038003400650065003100630035006500340033006300610062003500330061006600360034003300660033003500640033003300350030002E0078006C0073006D"####),
+            (r####"inactive_original0_other1_targetOriginal0_value1"####, r####"owned-caption-inactive-49536d172c444fc3b5e0c8093e1a6f3b.xlsm"####, vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(false), Value::Integer(1)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0034003900350033003600640031003700320063003400340034006600630033006200350065003000630038003000390033006500310061003600660033006200200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340039003500330036006400310037003200630034003400340066006300330062003500650030006300380030003900330065003100610036006600330062002E0078006C0073006D|004F007400680065007200570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340039003500330036006400310037003200630034003400340066006300330062003500650030006300380030003900330065003100610036006600330062002E0078006C0073006D#0053006800650065007400310020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340039003500330036006400310037003200630034003400340066006300330062003500650030006300380030003900330065003100610036006600330062002E0078006C0073006D|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340039003500330036006400310037003200630034003400340066006300330062003500650030006300380030003900330065003100610036006600330062002E0078006C0073006D"####),
+            (r####"inactive_original0_other1_targetOriginal0_value2"####, r####"owned-caption-inactive-41e4c61c3f294ee7b87515fed14d3339.xlsm"####, vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(false), Value::Integer(2)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0034003100650034006300360031006300330066003200390034006500650037006200380037003500310035006600650064003100340064003300330033003900200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340031006500340063003600310063003300660032003900340065006500370062003800370035003100350066006500640031003400640033003300330039002E0078006C0073006D|004F007400680065007200570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340031006500340063003600310063003300660032003900340065006500370062003800370035003100350066006500640031003400640033003300330039002E0078006C0073006D#0045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340031006500340063003600310063003300660032003900340065006500370062003800370035003100350066006500640031003400640033003300330039002E0078006C0073006D||006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00340031006500340063003600310063003300660032003900340065006500370062003800370035003100350066006500640031003400640033003300330039002E0078006C0073006D"####),
+            (r####"inactive_original0_other1_targetOriginal1_value0"####, r####"owned-caption-inactive-b8c22971fef24c008e1a6575bbf4a45b.xlsm"####, vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(true), Value::Integer(0)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00620038006300320032003900370031006600650066003200340063003000300038006500310061003600350037003500620062006600340061003400350062002E0078006C0073006D|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|0049006E00610063007400690076006500570069006E|005300680065006500740031"####),
+            (r####"inactive_original0_other1_targetOriginal1_value1"####, r####"owned-caption-inactive-5c9e4c3f0e1c431ca0e2f70b7084db26.xlsm"####, vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(true), Value::Integer(1)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00350063003900650034006300330066003000650031006300340033003100630061003000650032006600370030006200370030003800340064006200320036002E0078006C0073006D|005300680065006500740031#006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0035006300390065003400630033006600300065003100630034003300310063006100300065003200660037003000620037003000380034006400620032003600200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|004F007400680065007200570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00350063003900650034006300330066003000650031006300340033003100630061003000650032006600370030006200370030003800340064006200320036002E0078006C0073006D|005300680065006500740031"####),
+            (r####"inactive_original0_other1_targetOriginal1_value2"####, r####"owned-caption-inactive-de01cb84febf44dc973070876642bfe9.xlsm"####, vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(true), Value::Integer(2)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00640065003000310063006200380034006600650062006600340034006400630039003700330030003700300038003700360036003400320062006600650039002E0078006C0073006D|005300680065006500740031#0045007800630065006C|004F007400680065007200570069006E||005300680065006500740031"####),
+            (r####"inactive_original1_other0_targetOriginal0_value0"####, r####"owned-caption-inactive-2bd1acc237a546bf9500d0bd701ac0be.xlsm"####, vec![Value::Boolean(true), Value::Boolean(false), Value::Boolean(false), Value::Integer(0)], r####"0053006800650065007400310020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00320062006400310061006300630032003300370061003500340036006200660039003500300030006400300062006400370030003100610063003000620065002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00320062006400310061006300630032003300370061003500340036006200660039003500300030006400300062006400370030003100610063003000620065002E0078006C0073006D"####),
+            (r####"inactive_original1_other0_targetOriginal0_value1"####, r####"owned-caption-inactive-7b362f3f5de34ceca56c04e7bcb8b690.xlsm"####, vec![Value::Boolean(true), Value::Boolean(false), Value::Boolean(false), Value::Integer(1)], r####"0053006800650065007400310020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00370062003300360032006600330066003500640065003300340063006500630061003500360063003000340065003700620063006200380062003600390030002E0078006C0073006D#0053006800650065007400310020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00370062003300360032006600330066003500640065003300340063006500630061003500360063003000340065003700620063006200380062003600390030002E0078006C0073006D"####),
+            (r####"inactive_original1_other0_targetOriginal0_value2"####, r####"owned-caption-inactive-3a2b29891d8f467aaee322fbcde9314d.xlsm"####, vec![Value::Boolean(true), Value::Boolean(false), Value::Boolean(false), Value::Integer(2)], r####"0053006800650065007400310020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00330061003200620032003900380039003100640038006600340036003700610061006500650033003200320066006200630064006500390033003100340064002E0078006C0073006D#0045007800630065006C|004F0072006900670069006E0061006C00570069006E||006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00330061003200620032003900380039003100640038006600340036003700610061006500650033003200320066006200630064006500390033003100340064002E0078006C0073006D"####),
+            (r####"inactive_original1_other0_targetOriginal1_value0"####, r####"owned-caption-inactive-da1c198c9a244fba90cc15fbacf5f6bc.xlsm"####, vec![Value::Boolean(true), Value::Boolean(false), Value::Boolean(true), Value::Integer(0)], r####"0053006800650065007400310020002D00200045007800630065006C|005300680065006500740031|004F0072006900670069006E0061006C00570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|005300680065006500740031|0049006E00610063007400690076006500570069006E|005300680065006500740031"####),
+            (r####"inactive_original1_other0_targetOriginal1_value1"####, r####"owned-caption-inactive-e389c68b6f6345ad9fe2685250fcd130.xlsm"####, vec![Value::Boolean(true), Value::Boolean(false), Value::Boolean(true), Value::Integer(1)], r####"0053006800650065007400310020002D00200045007800630065006C|005300680065006500740031|004F0072006900670069006E0061006C00570069006E|005300680065006500740031#006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0065003300380039006300360038006200360066003600330034003500610064003900660065003200360038003500320035003000660063006400310033003000200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00650033003800390063003600380062003600660036003300340035006100640039006600650032003600380035003200350030006600630064003100330030002E0078006C0073006D|005300680065006500740031"####),
+            (r####"inactive_original1_other0_targetOriginal1_value2"####, r####"owned-caption-inactive-228390d8a8634620bf16fd8639669fc8.xlsm"####, vec![Value::Boolean(true), Value::Boolean(false), Value::Boolean(true), Value::Integer(2)], r####"0053006800650065007400310020002D00200045007800630065006C|005300680065006500740031|004F0072006900670069006E0061006C00570069006E|005300680065006500740031#0045007800630065006C|005300680065006500740031||005300680065006500740031"####),
+            (r####"inactive_original1_other1_targetOriginal0_value0"####, r####"owned-caption-inactive-9b7bc8164a3d41698ed19679dd6f95f4.xlsm"####, vec![Value::Boolean(true), Value::Boolean(true), Value::Boolean(false), Value::Integer(0)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|004F007400680065007200570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00390062003700620063003800310036003400610033006400340031003600390038006500640031003900360037003900640064003600660039003500660034002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00390062003700620063003800310036003400610033006400340031003600390038006500640031003900360037003900640064003600660039003500660034002E0078006C0073006D"####),
+            (r####"inactive_original1_other1_targetOriginal0_value1"####, r####"owned-caption-inactive-86e70addcc7f4e7183ace1d5b06e1dc0.xlsm"####, vec![Value::Boolean(true), Value::Boolean(true), Value::Boolean(false), Value::Integer(1)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|004F007400680065007200570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00380036006500370030006100640064006300630037006600340065003700310038003300610063006500310064003500620030003600650031006400630030002E0078006C0073006D#0053006800650065007400310020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|005300680065006500740031|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00380036006500370030006100640064006300630037006600340065003700310038003300610063006500310064003500620030003600650031006400630030002E0078006C0073006D"####),
+            (r####"inactive_original1_other1_targetOriginal0_value2"####, r####"owned-caption-inactive-d29387901ee74844bdc0eeab0a5f358c.xlsm"####, vec![Value::Boolean(true), Value::Boolean(true), Value::Boolean(false), Value::Integer(2)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|004F007400680065007200570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00640032003900330038003700390030003100650065003700340038003400340062006400630030006500650061006200300061003500660033003500380063002E0078006C0073006D#0045007800630065006C|004F0072006900670069006E0061006C00570069006E||006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00640032003900330038003700390030003100650065003700340038003400340062006400630030006500650061006200300061003500660033003500380063002E0078006C0073006D"####),
+            (r####"inactive_original1_other1_targetOriginal1_value0"####, r####"owned-caption-inactive-130aeef6da964bd79e7683d4e24b1c6f.xlsm"####, vec![Value::Boolean(true), Value::Boolean(true), Value::Boolean(true), Value::Integer(0)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|004F0072006900670069006E0061006C00570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|0049006E00610063007400690076006500570069006E|005300680065006500740031"####),
+            (r####"inactive_original1_other1_targetOriginal1_value1"####, r####"owned-caption-inactive-ea24a42942c34e0db83d8e9c202e4a04.xlsm"####, vec![Value::Boolean(true), Value::Boolean(true), Value::Boolean(true), Value::Integer(1)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|004F0072006900670069006E0061006C00570069006E|005300680065006500740031#006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0065006100320034006100340032003900340032006300330034006500300064006200380033006400380065003900630032003000320065003400610030003400200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|004F007400680065007200570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D00650061003200340061003400320039003400320063003300340065003000640062003800330064003800650039006300320030003200650034006100300034002E0078006C0073006D|005300680065006500740031"####),
+            (r####"inactive_original1_other1_targetOriginal1_value2"####, r####"owned-caption-inactive-782c6ef0e0a6402eb19eaa8655877acc.xlsm"####, vec![Value::Boolean(true), Value::Boolean(true), Value::Boolean(true), Value::Integer(2)], r####"004F007400680065007200570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|004F0072006900670069006E0061006C00570069006E|005300680065006500740031#0045007800630065006C|004F007400680065007200570069006E||005300680065006500740031"####)
+        ]),
+        (r####"Attribute VB_Name = "CaptionWindowRefresh"
+Option Explicit
+Public Function Probe(ByVal originalCustom As Boolean, ByVal otherCustom As Boolean, ByVal targetOriginal As Boolean) As String
+ Dim originalWindow As Object
+ Dim otherWindow As Object
+ Dim target As Object
+ Dim other As Workbook
+ Dim answer As String
+ Set originalWindow = ActiveWindow
+ If originalCustom Then originalWindow.Caption = "OriginalWin"
+ Set other = Workbooks.Add(-4167)
+ Set otherWindow = ActiveWindow
+ If otherCustom Then otherWindow.Caption = "OtherWin"
+ If targetOriginal Then
+  Set target = originalWindow
+ Else
+  ThisWorkbook.Activate
+  Set target = otherWindow
+ End If
+ target.Caption = "InactiveWin"
+ answer = Snapshot()
+ DoEvents
+ answer = answer & "#" & Snapshot()
+ ActiveWorkbook.Activate
+ answer = answer & "#" & Snapshot()
+ ActiveWindow.Activate
+ answer = answer & "#" & Snapshot()
+ target.Activate
+ answer = answer & "#" & Snapshot()
+ target.Caption = target.Caption
+ answer = answer & "#" & Snapshot()
+ originalWindow.Activate
+ Probe = answer & "#" & Snapshot()
+ other.Close False
+End Function
+Private Function Snapshot() As String
+ Snapshot = Units(Application.Caption) & "|" & Units(ActiveWindow.Caption) & "|" & Units(ActiveWorkbook.Name)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"CaptionWindowRefresh.Probe"####, vec![
+            (r####"refresh_original0_other0_targetOriginal0"####, r####"owned-caption-window-refresh-72a5a853a544442e85ab32389e642808.xlsm"####, vec![Value::Boolean(false), Value::Boolean(false), Value::Boolean(false)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00370032006100350061003800350033006100350034003400340034003200650038003500610062003300320033003800390065003600340032003800300038002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00370032006100350061003800350033006100350034003400340034003200650038003500610062003300320033003800390065003600340032003800300038002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00370032006100350061003800350033006100350034003400340034003200650038003500610062003300320033003800390065003600340032003800300038002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00370032006100350061003800350033006100350034003400340034003200650038003500610062003300320033003800390065003600340032003800300038002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00370032006100350061003800350033006100350034003400340034003200650038003500610062003300320033003800390065003600340032003800300038002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00370032006100350061003800350033006100350034003400340034003200650038003500610062003300320033003800390065003600340032003800300038002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00370032006100350061003800350033006100350034003400340034003200650038003500610062003300320033003800390065003600340032003800300038002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00370032006100350061003800350033006100350034003400340034003200650038003500610062003300320033003800390065003600340032003800300038002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|005300680065006500740031#006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D0037003200610035006100380035003300610035003400340034003400320065003800350061006200330032003300380039006500360034003200380030003800200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00370032006100350061003800350033006100350034003400340034003200650038003500610062003300320033003800390065003600340032003800300038002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00370032006100350061003800350033006100350034003400340034003200650038003500610062003300320033003800390065003600340032003800300038002E0078006C0073006D"####),
+            (r####"refresh_original0_other0_targetOriginal1"####, r####"owned-caption-window-refresh-be1c748e01d44e34ad41cf37c9f06814.xlsm"####, vec![Value::Boolean(false), Value::Boolean(false), Value::Boolean(true)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|005300680065006500740031|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|005300680065006500740031|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|005300680065006500740031|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|005300680065006500740031|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00620065003100630037003400380065003000310064003400340065003300340061006400340031006300660033003700630039006600300036003800310034002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00620065003100630037003400380065003000310064003400340065003300340061006400340031006300660033003700630039006600300036003800310034002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00620065003100630037003400380065003000310064003400340065003300340061006400340031006300660033003700630039006600300036003800310034002E0078006C0073006D"####),
+            (r####"refresh_original0_other1_targetOriginal0"####, r####"owned-caption-window-refresh-05f42e0e4d244f56835f207cb208babc.xlsm"####, vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(false)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300035006600340032006500300065003400640032003400340066003500360038003300350066003200300037006300620032003000380062006100620063002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300035006600340032006500300065003400640032003400340066003500360038003300350066003200300037006300620032003000380062006100620063002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300035006600340032006500300065003400640032003400340066003500360038003300350066003200300037006300620032003000380062006100620063002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300035006600340032006500300065003400640032003400340066003500360038003300350066003200300037006300620032003000380062006100620063002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300035006600340032006500300065003400640032003400340066003500360038003300350066003200300037006300620032003000380062006100620063002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300035006600340032006500300065003400640032003400340066003500360038003300350066003200300037006300620032003000380062006100620063002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300035006600340032006500300065003400640032003400340066003500360038003300350066003200300037006300620032003000380062006100620063002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300035006600340032006500300065003400640032003400340066003500360038003300350066003200300037006300620032003000380062006100620063002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|005300680065006500740031#006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D0030003500660034003200650030006500340064003200340034006600350036003800330035006600320030003700630062003200300038006200610062006300200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300035006600340032006500300065003400640032003400340066003500360038003300350066003200300037006300620032003000380062006100620063002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300035006600340032006500300065003400640032003400340066003500360038003300350066003200300037006300620032003000380062006100620063002E0078006C0073006D"####),
+            (r####"refresh_original0_other1_targetOriginal1"####, r####"owned-caption-window-refresh-8e590af652164ef5b4a7b8dc1ca52ec5.xlsm"####, vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(true)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00380065003500390030006100660036003500320031003600340065006600350062003400610037006200380064006300310063006100350032006500630035002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00380065003500390030006100660036003500320031003600340065006600350062003400610037006200380064006300310063006100350032006500630035002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00380065003500390030006100660036003500320031003600340065006600350062003400610037006200380064006300310063006100350032006500630035002E0078006C0073006D"####),
+            (r####"refresh_original1_other0_targetOriginal0"####, r####"owned-caption-window-refresh-06fbfd2fcff14a459665c285f51bd5fe.xlsm"####, vec![Value::Boolean(true), Value::Boolean(false), Value::Boolean(false)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300036006600620066006400320066006300660066003100340061003400350039003600360035006300320038003500660035003100620064003500660065002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300036006600620066006400320066006300660066003100340061003400350039003600360035006300320038003500660035003100620064003500660065002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300036006600620066006400320066006300660066003100340061003400350039003600360035006300320038003500660035003100620064003500660065002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300036006600620066006400320066006300660066003100340061003400350039003600360035006300320038003500660035003100620064003500660065002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00300036006600620066006400320066006300660066003100340061003400350039003600360035006300320038003500660035003100620064003500660065002E0078006C0073006D"####),
+            (r####"refresh_original1_other0_targetOriginal1"####, r####"owned-caption-window-refresh-86ea924ce6164c5cb569d405671c188e.xlsm"####, vec![Value::Boolean(true), Value::Boolean(false), Value::Boolean(true)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|005300680065006500740031|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|005300680065006500740031|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|005300680065006500740031|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|005300680065006500740031|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00380036006500610039003200340063006500360031003600340063003500630062003500360039006400340030003500360037003100630031003800380065002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00380036006500610039003200340063006500360031003600340063003500630062003500360039006400340030003500360037003100630031003800380065002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00380036006500610039003200340063006500360031003600340063003500630062003500360039006400340030003500360037003100630031003800380065002E0078006C0073006D"####),
+            (r####"refresh_original1_other1_targetOriginal0"####, r####"owned-caption-window-refresh-9aa44a8233b1460da00a7e79b96c43f4.xlsm"####, vec![Value::Boolean(true), Value::Boolean(true), Value::Boolean(false)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00390061006100340034006100380032003300330062003100340036003000640061003000300061003700650037003900620039003600630034003300660034002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00390061006100340034006100380032003300330062003100340036003000640061003000300061003700650037003900620039003600630034003300660034002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00390061006100340034006100380032003300330062003100340036003000640061003000300061003700650037003900620039003600630034003300660034002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00390061006100340034006100380032003300330062003100340036003000640061003000300061003700650037003900620039003600630034003300660034002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F0072006900670069006E0061006C00570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00390061006100340034006100380032003300330062003100340036003000640061003000300061003700650037003900620039003600630034003300660034002E0078006C0073006D"####),
+            (r####"refresh_original1_other1_targetOriginal1"####, r####"owned-caption-window-refresh-de0ac3b1a0174713891922b4e47fb812.xlsm"####, vec![Value::Boolean(true), Value::Boolean(true), Value::Boolean(true)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00640065003000610063003300620031006100300031003700340037003100330038003900310039003200320062003400650034003700660062003800310032002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00640065003000610063003300620031006100300031003700340037003100330038003900310039003200320062003400650034003700660062003800310032002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D00770069006E0064006F0077002D0072006500660072006500730068002D00640065003000610063003300620031006100300031003700340037003100330038003900310039003200320062003400650034003700660062003800310032002E0078006C0073006D"####)
+        ]),
+        (r####"Attribute VB_Name = "CaptionInactiveClose"
+Option Explicit
+Public Function Probe(ByVal otherCustom As Boolean, ByVal activateOriginal As Boolean, ByVal resetOriginal As Boolean) As String
+ Dim originalWindow As Object
+ Dim other As Workbook
+ Dim answer As String
+ Set originalWindow = ActiveWindow
+ originalWindow.Caption = "OriginalWin"
+ Set other = Workbooks.Add(-4167)
+ If otherCustom Then ActiveWindow.Caption = "OtherWin"
+ If resetOriginal Then
+  originalWindow.Caption = False
+ Else
+  originalWindow.Caption = "InactiveWin"
+ End If
+ If activateOriginal Then originalWindow.Activate
+ answer = Snapshot()
+ other.Close False
+ Probe = answer & "#" & Snapshot()
+End Function
+Private Function Snapshot() As String
+ Snapshot = Units(Application.Caption) & "|" & Units(ActiveWindow.Caption) & "|" & Units(ActiveWorkbook.Name)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"CaptionInactiveClose.Probe"####, vec![
+            (r####"inactive_close_other0_activateOriginal0_reset0"####, r####"owned-caption-inactive-close-980d512ac000472d8501eed84b7a3d38.xlsm"####, vec![Value::Boolean(false), Value::Boolean(false), Value::Boolean(false)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|005300680065006500740031|005300680065006500740031#0045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00390038003000640035003100320061006300300030003000340037003200640038003500300031006500650064003800340062003700610033006400330038002E0078006C0073006D"####),
+            (r####"inactive_close_other0_activateOriginal0_reset1"####, r####"owned-caption-inactive-close-8a47c29d54ba4312b818c8d92db44ad6.xlsm"####, vec![Value::Boolean(false), Value::Boolean(false), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D0038006100340037006300320039006400350034006200610034003300310032006200380031003800630038006400390032006400620034003400610064003600200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|005300680065006500740031|005300680065006500740031#006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D0038006100340037006300320039006400350034006200610034003300310032006200380031003800630038006400390032006400620034003400610064003600200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00380061003400370063003200390064003500340062006100340033003100320062003800310038006300380064003900320064006200340034006100640036002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00380061003400370063003200390064003500340062006100340033003100320062003800310038006300380064003900320064006200340034006100640036002E0078006C0073006D"####),
+            (r####"inactive_close_other0_activateOriginal1_reset0"####, r####"owned-caption-inactive-close-bc48e1d731d6494ebdc73c4528a2608d.xlsm"####, vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(false)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00620063003400380065003100640037003300310064003600340039003400650062006400630037003300630034003500320038006100320036003000380064002E0078006C0073006D#0045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00620063003400380065003100640037003300310064003600340039003400650062006400630037003300630034003500320038006100320036003000380064002E0078006C0073006D"####),
+            (r####"inactive_close_other0_activateOriginal1_reset1"####, r####"owned-caption-inactive-close-54f5b656273c413f8494b97af2ce948a.xlsm"####, vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D0035003400660035006200360035003600320037003300630034003100330066003800340039003400620039003700610066003200630065003900340038006100200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00350034006600350062003600350036003200370033006300340031003300660038003400390034006200390037006100660032006300650039003400380061002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00350034006600350062003600350036003200370033006300340031003300660038003400390034006200390037006100660032006300650039003400380061002E0078006C0073006D#006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D0035003400660035006200360035003600320037003300630034003100330066003800340039003400620039003700610066003200630065003900340038006100200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00350034006600350062003600350036003200370033006300340031003300660038003400390034006200390037006100660032006300650039003400380061002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00350034006600350062003600350036003200370033006300340031003300660038003400390034006200390037006100660032006300650039003400380061002E0078006C0073006D"####),
+            (r####"inactive_close_other1_activateOriginal0_reset0"####, r####"owned-caption-inactive-close-17db151e601447c8a53d265703f0ac4d.xlsm"####, vec![Value::Boolean(true), Value::Boolean(false), Value::Boolean(false)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|004F007400680065007200570069006E|005300680065006500740031#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00310037006400620031003500310065003600300031003400340037006300380061003500330064003200360035003700300033006600300061006300340064002E0078006C0073006D"####),
+            (r####"inactive_close_other1_activateOriginal0_reset1"####, r####"owned-caption-inactive-close-4d891af844964195b478575c05739cf8.xlsm"####, vec![Value::Boolean(true), Value::Boolean(false), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D0034006400380039003100610066003800340034003900360034003100390035006200340037003800350037003500630030003500370033003900630066003800200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|004F007400680065007200570069006E|005300680065006500740031#006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D0034006400380039003100610066003800340034003900360034003100390035006200340037003800350037003500630030003500370033003900630066003800200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00340064003800390031006100660038003400340039003600340031003900350062003400370038003500370035006300300035003700330039006300660038002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00340064003800390031006100660038003400340039003600340031003900350062003400370038003500370035006300300035003700330039006300660038002E0078006C0073006D"####),
+            (r####"inactive_close_other1_activateOriginal1_reset0"####, r####"owned-caption-inactive-close-34b4a95aacd744a6bbc0ab3b627f14fa.xlsm"####, vec![Value::Boolean(true), Value::Boolean(true), Value::Boolean(false)], r####"0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00330034006200340061003900350061006100630064003700340034006100360062006200630030006100620033006200360032003700660031003400660061002E0078006C0073006D#0049006E00610063007400690076006500570069006E0020002D00200045007800630065006C|0049006E00610063007400690076006500570069006E|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00330034006200340061003900350061006100630064003700340034006100360062006200630030006100620033006200360032003700660031003400660061002E0078006C0073006D"####),
+            (r####"inactive_close_other1_activateOriginal1_reset1"####, r####"owned-caption-inactive-close-1e6ba95ef8a14857a114cc4c9392d189.xlsm"####, vec![Value::Boolean(true), Value::Boolean(true), Value::Boolean(true)], r####"006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D0031006500360062006100390035006500660038006100310034003800350037006100310031003400630063003400630039003300390032006400310038003900200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00310065003600620061003900350065006600380061003100340038003500370061003100310034006300630034006300390033003900320064003100380039002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00310065003600620061003900350065006600380061003100340038003500370061003100310034006300630034006300390033003900320064003100380039002E0078006C0073006D#006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D0031006500360062006100390035006500660038006100310034003800350037006100310031003400630063003400630039003300390032006400310038003900200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006C|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00310065003600620061003900350065006600380061003100340038003500370061003100310034006300630034006300390033003900320064003100380039002E0078006C0073006D|006F0077006E00650064002D00630061007000740069006F006E002D0069006E006100630074006900760065002D0063006C006F00730065002D00310065003600620061003900350065006600380061003100340038003500370061003100310034006300630034006300390033003900320064003100380039002E0078006C0073006D"####)
+        ])
+        ];
+        let mut failures = Vec::new();
+        let mut count = 0;
+        for (source, procedure, cases) in cohorts {
+            let package = crate::vba_project::write_project_source(seed, source, None).unwrap();
+            let source = crate::vba_project::read_project_source_with_code_page(&package, Some(932)).unwrap().unwrap();
+            for (name, file_name, args, expected) in cases {
+                let book = oxicells_core::parse_xlsx(&package).unwrap();
+                let mut context = failure_context();
+                context.project_name = "OxiNamedProject".to_string();
+                context.file_name = Some(file_name.to_string());
+                context.application_state = Some(VbaApplicationState {
+                    enable_events: false, display_alerts: false, ..VbaApplicationState::default()
+                });
+                context.file_context = Some(serde_json::from_value(serde_json::json!({
+                    "packageBytes": package, "sourceCodePage": 932, "readOnly": true, "editRevision": 0
+                })).unwrap());
+                let actual = execute_workbook_vba(book, &source, procedure, args, 0, context).unwrap();
+                let value = serde_json::to_value(&actual.result).unwrap();
+                if actual.error.is_some() || actual.workbook_changed
+                    || value != serde_json::json!({"type": "string", "value": expected}) {
+                    failures.push(format!("{}: error={:?} changed={} actual={} expected={}",
+                        name, actual.error.as_ref().map(|error| &error.message), actual.workbook_changed, value, expected));
+                }
+                count += 1;
+            }
+        }
+        assert_eq!(count, 78);
+        assert!(failures.is_empty(), "{} / {} Native mismatches:\n{}", failures.len(), count, failures.join("\n"));
+    }
+
+    #[test]
+    fn caption_native_contracts_match_raw_excel_returns() {
+        let decode = |hex: &str| -> Vec<u8> {
+            assert_eq!(hex.len() % 2, 0);
+            (0..hex.len()).step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect()
+        };
+        let mut failures = Vec::new();
+        let mut count = 0;
+        let bytes = include_bytes!("../../../tests/fixtures/vba/caption_native_contracts.zip");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut manifest = String::new();
+        std::io::Read::read_to_string(&mut archive.by_name("manifest.tsv").unwrap(), &mut manifest).unwrap();
+        let mut packets = Vec::new();
+        std::io::Read::read_to_end(&mut archive.by_name("packets.bin").unwrap(), &mut packets).unwrap();
+        for line in manifest.lines().filter(|line| !line.starts_with('#') && !line.is_empty()) {
+            let fields: Vec<_> = line.split('\t').collect();
+            assert_eq!(fields.len(), 7);
+            let offset: usize = fields[4].parse().unwrap();
+            let length: usize = fields[5].parse().unwrap();
+            let package = packets[offset..offset + length].to_vec();
+            let expected_bytes = decode(fields[6]);
+            assert_eq!(expected_bytes.len() % 2, 0);
+            let expected_units: Vec<_> = expected_bytes.as_chunks::<2>().0.iter()
+                .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]])).collect();
+            let expected = String::from_utf16(&expected_units).unwrap();
+            let source = crate::vba_project::read_project_source_with_code_page(&package, Some(932)).unwrap().unwrap();
+            let book = oxicells_core::parse_xlsx(&package).unwrap();
+            let mut context = failure_context();
+            context.project_name = "OxiNamedProject".to_string();
+            context.file_name = Some(fields[2].to_string());
+            context.environment.help_file = r"C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm".to_string();
+            context.application_state = Some(VbaApplicationState {
+                enable_events: false, display_alerts: false, ..VbaApplicationState::default()
+            });
+            context.file_context = Some(serde_json::from_value(serde_json::json!({
+                "packageBytes": package, "sourceCodePage": 932, "readOnly": fields[1] == "true", "editRevision": 0
+            })).unwrap());
+            let actual = execute_workbook_vba(book, &source, fields[3], vec![], 0, context).unwrap();
+            let value = serde_json::to_value(&actual.result).unwrap();
+            if actual.error.is_some() || actual.workbook_changed
+                || value != serde_json::json!({"type": "string", "value": expected}) {
+                failures.push(format!("{}: error={:?} changed={} actual={} expected={}",
+                    fields[0], actual.error.as_ref().map(|error| &error.message),
+                    actual.workbook_changed, value, expected));
+            }
+            count += 1;
+        }
+        assert_eq!(count, 74);
+        assert!(failures.is_empty(), "{} / {} Native mismatches:\n{}", failures.len(), count, failures.join("\n"));
+    }
 
     fn saved_state_package() -> (Vec<u8>, String, Workbook) {
         let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
