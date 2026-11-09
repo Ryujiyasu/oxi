@@ -1363,8 +1363,9 @@ impl<'a> PageLayouter<'a> {
         // the flow between the host and the box top is untouched
         // (policies__0beb595a: a 23pt box 84pt below its host, Word flows six
         // lines above it) and it never records a flow position.
-        let s1552_bands: std::collections::HashMap<usize, f32> = {
-            let mut m: std::collections::HashMap<usize, f32> = Default::default();
+        // (anchor block -> band = off + height, the tallest box's own height)
+        let s1552_bands: std::collections::HashMap<usize, (f32, f32)> = {
+            let mut m: std::collections::HashMap<usize, (f32, f32)> = Default::default();
             for tb in &page.text_boxes {
                 if !s1552_no_lane(tb) {
                     continue;
@@ -1373,8 +1374,9 @@ impl<'a> PageLayouter<'a> {
                     Some(p) if p.v_relative.as_deref() == Some("paragraph") => p.y.max(0.0),
                     _ => continue,
                 };
-                let e = m.entry(tb.anchor_block_index).or_insert(0.0_f32);
-                *e = e.max(off + tb.height);
+                let e = m.entry(tb.anchor_block_index).or_insert((0.0_f32, 0.0_f32));
+                e.0 = e.0.max(off + tb.height);
+                e.1 = e.1.max(tb.height);
             }
             m
         };
@@ -2088,12 +2090,26 @@ impl<'a> PageLayouter<'a> {
             // the next page when the box would not fit below the host (same
             // test as S1089/S1513: band > remaining, band <= content height);
             // nothing else changes — the flow around the box is S758's.
-            if let Some(&band_h) = s1552_bands.get(&block_idx)
+            if let Some(&(band_h, box_h)) = s1552_bands.get(&block_idx)
                 .filter(|_| !s1089_tb_bands.contains_key(&block_idx))
                 .filter(|_| s1497b_tb_overlaps(block_idx, &block_y_positions, &block_col_x, start_x, content_width))
             {
                 let remaining = (start_y + content_height) - cursor.cursor_y;
-                if band_h > remaining && band_h <= content_height && !elements.is_empty()
+                // OXI_S1552_PHYSICAL (2026-11-09, default ON, opt-out _DISABLE): the box is
+                // fit against the PHYSICAL page -- Word keeps it at its natural place down to
+                // the page edge (into the footer and bottom margin), lifts it to end at the
+                // page edge past that, and moves the host on only when the lifted box would
+                // rise above the host: box height > page height - host top.
+                // `_pb_square_box_footer_gen.py` (zh dev forms__00342784, 151pt box, tall
+                // footer, posOffset 43.8..163.8): host kept on p3 in all 8 arms, box bottom
+                // 727.2 .. 837.2 natural, 841.3 at the last arm. educational__0050e825 (the
+                // S1552 source, a 362.7pt box) still moves.
+                let pushes = if crate::env_flag!("OXI_S1552_PHYSICAL_DISABLE") {
+                    band_h > remaining
+                } else {
+                    box_h > page.size.height - cursor.cursor_y
+                };
+                if pushes && band_h <= content_height && !elements.is_empty()
                     && !(crate::layout::s1467_float_column_flow() && current_column + 1 < num_columns)
                 {
                     dbg_page_push(pages.len(), 0);
