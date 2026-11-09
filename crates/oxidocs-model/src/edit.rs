@@ -246,6 +246,16 @@ pub enum Edit {
     },
     /// Replace document-wide definitions.
     SetDocumentParts { parts: Box<DocumentParts> },
+    /// Delete what lies between two positions with the change tracked: the
+    /// text stays, marked deleted under `revision` (w:id, w:author,
+    /// w:date); inserted text goes outright.
+    DeleteTracked { from: Pos, to: Pos, revision: Vec<(String, String)> },
+    /// Type `text` with the change tracked: it goes in as typed, inside a
+    /// w:ins under `revision`, joining a neighbouring insertion by the same
+    /// author at the same time (typing makes one change, measured).
+    InsertTracked { at: Pos, text: String, revision: Vec<(String, String)> },
+    /// Turn Track Changes on or off (w:trackRevisions in the settings).
+    SetTrackRevisions { on: bool },
     /// Add a style, or change the one with its w:styleId. `with_effects`
     /// edits the Word 2010 copy of the styles (stylesWithEffects).
     DefineStyle {
@@ -842,6 +852,8 @@ fn localize_edit(model: &DocxModel, edit: &Edit) -> Result<Edit, EditError> {
         Edit::FormatParagraphs { from, to, patch } => Edit::FormatParagraphs { from: l(from)?, to: l(to)?, patch: patch.clone() },
         Edit::InsertInline { at, inline } => Edit::InsertInline { at: l(at)?, inline: inline.clone() },
         Edit::Wrap { from, to, wrapper, outside } => Edit::Wrap { from: l(from)?, to: l(to)?, wrapper: wrapper.clone(), outside: *outside },
+        Edit::DeleteTracked { from, to, revision } => Edit::DeleteTracked { from: l(from)?, to: l(to)?, revision: revision.clone() },
+        Edit::InsertTracked { at, text, revision } => Edit::InsertTracked { at: l(at)?, text: text.clone(), revision: revision.clone() },
         _ => edit.clone(),
     })
 }
@@ -1768,6 +1780,10 @@ fn wrap_in(v: &mut Vec<Inline>, s: usize, e: usize, mut shell: Inline, outside: 
     let inside: Vec<bool> = spans
         .iter()
         .map(|&(a, b)| {
+            // `usize::MAX`: nothing of no width goes inside.
+            if a == b && outside == usize::MAX {
+                return false;
+            }
             if a == s && b == s && left > 0 {
                 left -= 1;
                 return false;
@@ -1775,7 +1791,7 @@ fn wrap_in(v: &mut Vec<Inline>, s: usize, e: usize, mut shell: Inline, outside: 
             a >= s && b <= e
         })
         .collect();
-    if left > 0 {
+    if left > 0 && outside != usize::MAX {
         return err(format!("fewer than {outside} things of no width at the start of the range"));
     }
     let first = inside
@@ -2681,6 +2697,257 @@ pub fn field_edits(model: &DocxModel, at: &Pos, code: &str, result: &str) -> Res
     Ok((edits, Pos { offset, ..at.clone() }))
 }
 
+// ---------------------------------------------------------------------------
+// Tracked changes
+// ---------------------------------------------------------------------------
+
+/// The largest revision id (w:ins, w:del, w:moveFrom, w:moveTo) in the
+/// document's stories.
+fn max_revision_id(model: &DocxModel) -> i64 {
+    fn inlines(v: &[Inline], m: &mut i64) {
+        for i in v {
+            if let Inline::Revision(r) = i {
+                if let Some(id) = attr(&r.attrs, "w:id").and_then(|s| s.parse::<i64>().ok()) {
+                    *m = (*m).max(id);
+                }
+            }
+            if let Some(c) = children(i) {
+                inlines(c, m);
+            }
+        }
+    }
+    fn mark(p: &Paragraph, m: &mut i64) {
+        let Some(rpr) = p.props.as_ref().and_then(|pp| pp.get("w:rPr")) else { return };
+        for e in rpr.elements().filter(|e| matches!(e.name.as_str(), "w:ins" | "w:del")) {
+            if let Some(id) = e.attr("w:id").and_then(|s| s.parse::<i64>().ok()) {
+                *m = (*m).max(id);
+            }
+        }
+    }
+    let mut m = -1;
+    for story in all_stories(model) {
+        if let Ok(ps) = paragraphs(model, &story) {
+            for p in ps {
+                mark(p, &mut m);
+                inlines(&p.content, &mut m);
+            }
+        }
+    }
+    m
+}
+
+fn all_stories(model: &DocxModel) -> Vec<Story> {
+    let mut out = vec![Story::Body];
+    out.extend((0..model.headers_footers.len()).map(Story::HeaderFooter));
+    out.extend((0..model.footnotes.as_ref().map_or(0, |v| v.len())).map(Story::Footnote));
+    out.extend((0..model.endnotes.as_ref().map_or(0, |v| v.len())).map(Story::Endnote));
+    out.extend((0..model.comments.as_ref().map_or(0, |v| v.len())).map(Story::Comment));
+    out
+}
+
+fn revision_attrs(id: i64, author: &str, date: &str) -> Vec<(String, String)> {
+    vec![("w:id".into(), id.to_string()), ("w:author".into(), author.into()), ("w:date".into(), date.into())]
+}
+
+/// Text that becomes deleted text: its items turn into their deleted forms.
+fn delete_items(r: &mut Run) {
+    for c in r.content.iter_mut() {
+        let new = match std::mem::replace(c, RunItem::Tab) {
+            RunItem::Text(t) => RunItem::DeletedText(t),
+            RunItem::InstrText(t) => RunItem::DeletedInstrText(t),
+            other => other,
+        };
+        *c = new;
+    }
+}
+
+/// Mark `[s, e)` (run boundaries) of a list deleted under `attrs`: runs go
+/// into a w:del with their text as deleted text; inserted text (w:ins)
+/// goes outright (deleting an insertion leaves nothing, measured); text
+/// already deleted stays; containers are marked inside.
+fn mark_deleted(v: &mut Vec<Inline>, s: usize, e: usize, attrs: &[(String, String)], inserted: bool) {
+    let mut out: Vec<Inline> = Vec::with_capacity(v.len());
+    let mut pos = 0;
+    let mut group: Vec<Inline> = Vec::new();
+    let flush = |group: &mut Vec<Inline>, out: &mut Vec<Inline>| {
+        if !group.is_empty() {
+            out.push(Inline::Revision(crate::content::Revision {
+                name: "w:del".into(),
+                attrs: attrs.to_vec(),
+                content: std::mem::take(group),
+            }));
+        }
+    };
+    for mut it in std::mem::take(v) {
+        let l = inline_len(&it);
+        let (a, b) = (pos, pos + l);
+        pos = b;
+        if l == 0 || b <= s || a >= e {
+            flush(&mut group, &mut out);
+            out.push(it);
+            continue;
+        }
+        let whole = a >= s && b <= e;
+        match &mut it {
+            // Text inserted with changes tracked goes outright.
+            Inline::Run(_) if whole && inserted => {}
+            Inline::Run(r) if whole => {
+                delete_items(r);
+                group.push(it);
+            }
+            Inline::Revision(r) if whole && r.name == "w:ins" => {}
+            Inline::Revision(r) if whole && r.name == "w:del" => {
+                flush(&mut group, &mut out);
+                out.push(it);
+            }
+            _ => {
+                flush(&mut group, &mut out);
+                let p = count(&prefix(&it));
+                let into_insertion = inserted || matches!(&it, Inline::Revision(r) if r.name == "w:ins");
+                if let Some(inner) = children_mut(&mut it) {
+                    let clen = list_len(inner);
+                    let lo = s.max(a + p).saturating_sub(a + p).min(clen);
+                    let hi = e.min(a + p + clen).saturating_sub(a + p);
+                    if hi > lo {
+                        mark_deleted(inner, lo, hi, attrs, into_insertion);
+                    }
+                    if inner.is_empty() && matches!(it, Inline::Revision(_)) {
+                        continue;
+                    }
+                }
+                out.push(it);
+            }
+        }
+    }
+    flush(&mut group, &mut out);
+    *v = out;
+}
+
+/// Join neighbouring changes named `name` whose author and time are
+/// `attrs`'s: the change just made with the ones it touches.
+fn join_revisions(v: &mut Vec<Inline>, name: &str, attrs: &[(String, String)]) {
+    let rest = |a: &[(String, String)]| a.iter().filter(|(k, _)| k != "w:id").cloned().collect::<Vec<_>>();
+    let want = rest(attrs);
+    let mut out: Vec<Inline> = Vec::with_capacity(v.len());
+    for mut it in std::mem::take(v) {
+        if let Some(inner) = children_mut(&mut it) {
+            join_revisions(inner, name, attrs);
+        }
+        if let (Some(Inline::Revision(prev)), Inline::Revision(r)) = (out.last_mut(), &it) {
+            if prev.name == name && r.name == name && rest(&prev.attrs) == want && rest(&r.attrs) == want {
+                let Inline::Revision(r) = it else { unreachable!() };
+                prev.content.extend(r.content);
+                coalesce(&mut prev.content);
+                continue;
+            }
+        }
+        out.push(it);
+    }
+    *v = out;
+}
+
+fn insert_tracked(model: &mut DocxModel, at: &Pos, text: &str, attrs: &[(String, String)]) -> Result<(), EditError> {
+    insert_text(model, at, text)?;
+    let n = count(text);
+    let p = para_mut(model, &at.story, at.para)?;
+    fn inside_insertion(v: &[Inline], s: usize, e: usize, pos: usize) -> bool {
+        let mut p = pos;
+        for i in v {
+            let l = inline_len(i);
+            if p <= s && e <= p + l && l > 0 {
+                if matches!(i, Inline::Revision(r) if r.name == "w:ins") {
+                    return true;
+                }
+                if let Some(c) = children(i) {
+                    return inside_insertion(c, s, e, p + count(&prefix(i)));
+                }
+            }
+            p += l;
+        }
+        false
+    }
+    if !inside_insertion(&p.content, at.offset, at.offset + n, 0) {
+        split_at(&mut p.content, at.offset + n)?;
+        split_at(&mut p.content, at.offset)?;
+        let shell = Inline::Revision(crate::content::Revision { name: "w:ins".into(), attrs: attrs.to_vec(), content: Vec::new() });
+        wrap_in(&mut p.content, at.offset, at.offset + n, shell, usize::MAX)?;
+    }
+    join_revisions(&mut p.content, "w:ins", attrs);
+    Ok(())
+}
+
+fn delete_tracked(model: &mut DocxModel, from: &Pos, to: &Pos, attrs: &[(String, String)]) -> Result<(), EditError> {
+    if from.story != to.story {
+        return err("a range across stories");
+    }
+    let (from, to) = if (to.para, to.offset) < (from.para, from.offset) { (to, from) } else { (from, to) };
+    for n in from.para..=to.para {
+        let p = para_mut(model, &from.story, n)?;
+        let len = list_len(&p.content);
+        let s = if n == from.para { from.offset } else { 0 };
+        let e = if n == to.para { to.offset } else { len };
+        check_offset(p, s)?;
+        check_offset(p, e)?;
+        if e > s {
+            split_at(&mut p.content, e)?;
+            split_at(&mut p.content, s)?;
+            mark_deleted(&mut p.content, s, e, attrs, false);
+            join_revisions(&mut p.content, "w:del", attrs);
+        }
+        if n < to.para {
+            // The range takes in this paragraph's mark: it is deleted too.
+            let props = p.props.get_or_insert_with(|| Props::new("w:pPr"));
+            let mut mark = props.get("w:rPr").cloned().unwrap_or_else(|| Element::new("w:rPr"));
+            mark.children.retain(|c| !matches!(c, Node::Element(x) if x.name == "w:del"));
+            let mut del = Element::new("w:del");
+            del.attrs = attrs.to_vec();
+            mark.children.insert(0, Node::Element(del));
+            let mark = Props::read("w:pPr", &mark).map_err(|u| EditError(u.to_string()))?;
+            props.set(mark.into_element()).map_err(|u| EditError(u.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+fn set_track_revisions(model: &mut DocxModel, on: bool) {
+    let settings = model.settings.get_or_insert_with(|| Object { xml: Element::new("w:settings"), parts: Vec::new() });
+    let el = &mut settings.xml;
+    el.children.retain(|c| !matches!(c, Node::Element(x) if x.name == "w:trackRevisions"));
+    if on {
+        el.children.push(Node::Element(Element::new("w:trackRevisions")));
+        let order = crate::docparts::SETTINGS;
+        el.children.sort_by_key(|n| match n {
+            Node::Element(c) => order.iter().position(|o| *o == c.name).unwrap_or(usize::MAX),
+            Node::Text(_) => usize::MAX,
+        });
+    }
+}
+
+/// Whether the document records changes as they are made (Word's Track
+/// Changes, saved in the settings).
+pub fn tracking(model: &DocxModel) -> bool {
+    model.settings.as_ref().is_some_and(|s| s.xml.child("w:trackRevisions").is_some_and(|t| !matches!(t.attr("w:val"), Some("0") | Some("false") | Some("off"))))
+}
+
+/// The edits for typing `text` at `at` with changes tracked (measured over
+/// COM): the text goes in as typed, inside a w:ins by `author` at `date`.
+/// Returns the edits and the position after the text.
+pub fn tracked_insert_edits(model: &DocxModel, at: &Pos, text: &str, author: &str, date: &str) -> Result<(Vec<Edit>, Pos), EditError> {
+    check_text(text)?;
+    let id = max_revision_id(model) + 1;
+    let end = Pos { offset: at.offset + count(text), ..at.clone() };
+    Ok((vec![Edit::InsertTracked { at: at.clone(), text: text.into(), revision: revision_attrs(id, author, date) }], end))
+}
+
+/// The edit for deleting `[from, to)` with changes tracked (measured over
+/// COM): the text stays, marked deleted by `author` at `date`; inserted
+/// text in the range goes outright; a paragraph mark in the range is
+/// marked deleted.
+pub fn tracked_delete_edits(model: &DocxModel, from: &Pos, to: &Pos, author: &str, date: &str) -> Result<Vec<Edit>, EditError> {
+    let id = max_revision_id(model) + 1;
+    Ok(vec![Edit::DeleteTracked { from: from.clone(), to: to.clone(), revision: revision_attrs(id, author, date) }])
+}
+
 /// Join neighbouring runs with the same properties, as Word does when it
 /// saves, so cutting a run to edit it leaves no seam.
 fn coalesce(v: &mut Vec<Inline>) {
@@ -2698,6 +2965,7 @@ fn coalesce(v: &mut Vec<Inline>) {
                 for c in r.content {
                     match (prev.content.last_mut(), c) {
                         (Some(RunItem::Text(a)), RunItem::Text(b)) => a.push_str(&b),
+                        (Some(RunItem::DeletedText(a)), RunItem::DeletedText(b)) => a.push_str(&b),
                         (_, c) => prev.content.push(c),
                     }
                 }
@@ -2723,6 +2991,8 @@ fn touched(edit: &Edit) -> (Story, usize, usize) {
         Edit::FormatText { from, to, .. } => span(from, to),
         Edit::InsertInline { at, .. } => (at.story.clone(), at.para, at.para),
         Edit::Wrap { from, .. } => (from.story.clone(), from.para, from.para),
+        Edit::DeleteTracked { from, to, .. } => (from.story.clone(), from.para.min(to.para), from.para.max(to.para)),
+        Edit::InsertTracked { at, .. } => (at.story.clone(), at.para, at.para),
         _ => (Story::Body, 1, 0),
     }
 }
@@ -2773,6 +3043,12 @@ fn apply_one(model: &mut DocxModel, edit: &Edit) -> Result<(), EditError> {
         }
         Edit::SetDocumentParts { parts } => {
             set_document_parts(model, parts);
+            Ok(())
+        }
+        Edit::DeleteTracked { from, to, revision } => delete_tracked(model, from, to, revision),
+        Edit::InsertTracked { at, text, revision } => insert_tracked(model, at, text, revision),
+        Edit::SetTrackRevisions { on } => {
+            set_track_revisions(model, *on);
             Ok(())
         }
         Edit::DefineStyle { with_effects, style } => {

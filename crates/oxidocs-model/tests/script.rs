@@ -375,3 +375,33 @@ fn a_fields_runs_stay_apart_from_the_text_around_it() {
         && r.content.iter().any(|c| matches!(c, RunItem::Text(_)))));
     assert!(!mixed, "{:?}", p.content);
 }
+
+#[test]
+fn tracked_typing_and_deleting_as_words_does() {
+    // The same steps as the COM measurement, with the same result:
+    // Hello, ins[XY], del[" "], world.
+    let mut m = DocxModel { body: vec![para(vec![run("Hello world", false)])], ..Default::default() };
+    let go = |m: &mut DocxModel, edits: Vec<Edit>| apply_all(m, &edits).unwrap();
+    let (e, _) = edit::tracked_insert_edits(&m, &Pos::body(0, 5), "XY", "Oxi", "2026-11-09T22:00:00Z").unwrap();
+    go(&mut m, e);
+    let e = edit::tracked_delete_edits(&m, &Pos::body(0, 7), &Pos::body(0, 8), "Oxi", "2026-11-09T22:00:00Z").unwrap();
+    go(&mut m, e);
+    let (e, _) = edit::tracked_insert_edits(&m, &Pos::body(0, 6), "Z", "Oxi", "2026-11-09T22:00:00Z").unwrap();
+    go(&mut m, e);
+    let e = edit::tracked_delete_edits(&m, &Pos::body(0, 6), &Pos::body(0, 7), "Oxi", "2026-11-09T22:00:00Z").unwrap();
+    go(&mut m, e);
+    let Block::Paragraph(p) = &m.body[0] else { panic!() };
+    let shape: Vec<String> = p.content.iter().map(|i| match i {
+        Inline::Run(r) => r.content.iter().map(|c| match c { RunItem::Text(t) => t.clone(), _ => "?".into() }).collect(),
+        Inline::Revision(r) => format!("{}[{}]", r.name, r.content.iter().map(|x| match x {
+            Inline::Run(r) => r.content.iter().map(|c| match c { RunItem::Text(t) | RunItem::DeletedText(t) => t.clone(), _ => "?".into() }).collect::<String>(),
+            _ => "?".into(),
+        }).collect::<String>()),
+        _ => "?".into(),
+    }).collect();
+    assert_eq!(shape, vec!["Hello", "w:ins[XY]", "w:del[ ]", "world"]);
+    // Track Changes is a setting.
+    assert!(!edit::tracking(&m));
+    apply(&mut m, &Edit::SetTrackRevisions { on: true }).unwrap();
+    assert!(edit::tracking(&m));
+}

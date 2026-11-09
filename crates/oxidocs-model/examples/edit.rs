@@ -13,7 +13,8 @@
 //! `table PARA OFFSET ROWS COLS`, `link PARA FROM TO URL`,
 //! `footnote PARA OFFSET TEXT`, `comment PARA FROM TO TEXT`,
 //! `header PARA TEXT`, `footer PARA TEXT`,
-//! `field PARA OFFSET CODE RESULT`.
+//! `field PARA OFFSET CODE RESULT`, `track-insert PARA OFFSET TEXT`,
+//! `track-delete PARA FROM TO`.
 //!
 //! `edits.json` is an array of edits (see `oxidocs_model::edit::Edit`). With
 //! `--text`, prints a JSON array of the story's paragraph texts, one
@@ -39,6 +40,8 @@ fn main() {
             "link" => edit::link_edits(&model, &Pos::body(n(4), n(5)), &Pos::body(n(4), n(6)), &args[7]).map(|r| r.0),
             "footnote" => edit::footnote_edits(&model, &Pos::body(n(4), n(5)), &args[6]).map(|r| r.0),
             "field" => edit::field_edits(&model, &Pos::body(n(4), n(5)), &args[6], &args[7]).map(|r| r.0),
+            "track-insert" => edit::tracked_insert_edits(&model, &Pos::body(n(4), n(5)), &args[6], "Oxi", "2026-11-09T22:00:00Z").map(|r| r.0),
+            "track-delete" => edit::tracked_delete_edits(&model, &Pos::body(n(4), n(5)), &Pos::body(n(4), n(6)), "Oxi", "2026-11-09T22:00:00Z"),
             "header" => edit::header_footer_edits(&model, n(4), false, &args[5]),
             "footer" => edit::header_footer_edits(&model, n(4), true, &args[5]),
             "comment" => edit::comment_edits(&model, &Pos::body(n(4), n(5)), &Pos::body(n(4), n(6)), &args[7], "Oxi", "O", "2026-11-09T00:00:00Z").map(|r| r.0),
