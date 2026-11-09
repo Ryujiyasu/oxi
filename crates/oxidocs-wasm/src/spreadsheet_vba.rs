@@ -3668,6 +3668,7 @@ struct WorkbookHost<'a> {
     /// never saves one anywhere it can name, so what the page hands over is
     /// the file's own name and nothing else 窶・no folder in front of it.
     file_name: Option<String>,
+    window_caption: Option<Value>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
     /// One handle apiece for the workbook, the application and each sheet,
@@ -3954,6 +3955,7 @@ impl<'a> WorkbookHost<'a> {
             blocks: Vec::new(),
             name_handles: Vec::new(),
             file_name: None,
+            window_caption: None,
             debug_output: Vec::new(),
             messages: Vec::new(),
             automation_code_page: None,
@@ -4924,6 +4926,98 @@ impl<'a> WorkbookHost<'a> {
     /// A3:A4, which only touch. What is left is a range with as many areas as
     /// there are blocks 窶・or, where they all came to one, an ordinary range.
     /// An Application setting: what the macro set, else Excel's default.
+    fn window_caption_value(&self) -> Value {
+        self.window_caption.clone().unwrap_or_else(|| Value::String(
+            self.file_name.clone().unwrap_or_else(|| "Book1".to_string())))
+    }
+
+    fn application_caption_value(&self) -> Value {
+        let mut units = if self.app_settings.get("_caption_without_window") == Some(&Value::Boolean(true)) {
+            Vec::new()
+        } else if let Some(caption) = self.window_caption.as_ref() {
+            caption.string_units().expect("window caption text").into_owned()
+        } else {
+            let name = self.file_name.as_deref().unwrap_or("Book1");
+            let name = name.rsplit_once('.').filter(|(_, extension)| matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "xls" | "xlsx" | "xlsm" | "xlsb" | "xlt" | "xltx" | "xltm" | "xla" | "xlam"
+            )).map_or(name, |(stem, _)| stem);
+            let mut title: Vec<u16> = name.encode_utf16().collect();
+            if self.file_io.read_only {
+                let marker = if matches!(self.error_language, ErrorLanguage::Japanese) {
+                    "  -  \u{8aad}\u{307f}\u{53d6}\u{308a}\u{5c02}\u{7528}"
+                } else {
+                    "  -  Read-Only"
+                };
+                title.extend(marker.encode_utf16());
+            }
+            title
+        };
+        if !units.is_empty() {
+            units.extend(" - ".encode_utf16());
+        }
+        if let Some(suffix) = self.app_settings.get("caption") {
+            units.extend(suffix.string_units().expect("application caption text").iter().copied());
+        } else {
+            units.extend("Excel".encode_utf16());
+        }
+        Value::from_utf16(units)
+    }
+
+    fn set_caption_value(&mut self, application: bool, value: Value) -> Result<(), String> {
+        if application {
+            if matches!(value, Value::Null | Value::Nothing) {
+                return Err(host_error(13, "Type mismatch"));
+            }
+            let text = oxivba_core::runtime::coerce_automation_scalar(
+                &value, oxivba_core::runtime::AutomationScalarType::Bstr)?;
+            if text.string_units().is_some_and(|units| units.is_empty()) {
+                self.app_settings.remove("caption");
+            } else {
+                self.app_settings.insert("caption".to_string(), text);
+            }
+        } else {
+            let array_value = matches!(value, Value::Array(_));
+            let mut pending = vec![&value];
+            let mut scalars = Vec::new();
+            while let Some(scalar) = pending.pop() {
+                match scalar {
+                    Value::Array(array) => {
+                        if array.values.is_empty() {
+                            return Err(host_error(13, "Empty caption array"));
+                        }
+                        pending.extend(array.values.iter().rev());
+                    }
+                    Value::Null if array_value => return Err(host_error(13, "Null caption array element")),
+                    scalar => scalars.push(scalar),
+                }
+            }
+            let mut failure = None;
+            for scalar in scalars {
+                let caption = match scalar {
+                    Value::Nothing => {
+                        failure.get_or_insert_with(|| host_error(5, "Invalid caption object"));
+                        continue;
+                    }
+                    Value::Error(_) => {
+                        failure.get_or_insert_with(|| host_error(1004, "Invalid caption value"));
+                        continue;
+                    }
+                    Value::Boolean(false) if !array_value => None,
+                    Value::Empty | Value::Missing | Value::Null => Some(Value::String(String::new())),
+                    value if value.string_units().is_some() => Some(value.clone()),
+                    value => Some(Value::String(shown_text(value, None))),
+                };
+                self.window_caption = caption;
+                self.app_settings.remove("_caption_without_window");
+            }
+            if let Some(error) = failure {
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
     fn application_setting(&self, name: &str) -> Option<Value> {
         let lower = name.to_ascii_lowercase();
         let (_, default, _) = APPLICATION_SETTINGS.iter().find(|(held, _, _)| held.eq_ignore_ascii_case(name))?;
@@ -27070,6 +27164,9 @@ impl<'a> WorkbookApplication<'a> {
         self.pending_closed.push(owner);
         *self.hosts.get_mut(&owner).expect("registered closed workbook").user_functions.borrow_mut()=UserFunctions::default();
         if self.active==owner {
+            self.ensure_application_owner(owner);
+            self.hosts.get_mut(&owner).expect("registered closed workbook")
+                .app_settings.insert("_caption_without_window".to_string(), Value::Boolean(true));
             if let Some(next)=self.hosts.keys().rev().find(|id|!self.closed.contains(id)).copied() {
                 self.active=next;
             }
@@ -27903,6 +28000,9 @@ impl<'a> WorkbookApplication<'a> {
         if let Some(key) = key { self.workbook_names.insert(key, next_name); }
         else { self.opened_template_name = next_name; }
         self.activate(owner);
+        self.ensure_application_owner(owner);
+        self.hosts.get_mut(&owner).expect("newly activated workbook")
+            .app_settings.remove("_caption_without_window");
         Ok(book)
     }
 
@@ -29158,6 +29258,14 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn property_assignment_error(&self, receiver: Option<&ObjectRef>, name: &str, value: &Value) -> Option<i64> {
+        if name.eq_ignore_ascii_case("caption") && matches!(value, Value::Nothing) {
+            match receiver {
+                None => return Some(5),
+                Some(receiver) if self.is_window(receiver) => return Some(5),
+                Some(receiver) if self.is_application(receiver) => return Some(13),
+                _ => {}
+            }
+        }
         if let Some(receiver) = receiver {
             if self.is_application(receiver) && (application_variant_boolean_setting(name).is_some()
                 || name.eq_ignore_ascii_case("screenupdating"))
@@ -29709,6 +29817,10 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some(receiver) = receiver {
             if !args.is_empty() {
+                if name.eq_ignore_ascii_case("caption")
+                    && (self.is_application(receiver) || self.is_window(receiver)) {
+                    return Err(host_error(451, "The caption getter takes no indices"));
+                }
                 if let Some((_, number)) = self.scalar_property_dispatch_errors(receiver, name) {
                     if number == 451 {
                         // Ordinary scalar getters run before their result is
@@ -29971,8 +30083,7 @@ impl Host for WorkbookHost<'_> {
             }
             // The window's title: measured, "Book1 - Excel" on a new book.
             if self.is_application(receiver) && name.eq_ignore_ascii_case("caption") {
-                let book = self.file_name.clone().unwrap_or_else(|| "Book1".to_string());
-                return Ok(Some(Value::String(format!("{book} - Excel"))));
+                return Ok(Some(self.application_caption_value()));
             }
             if self.is_application(receiver) && name.eq_ignore_ascii_case("build") {
                 if !args.is_empty() {
@@ -32822,7 +32933,7 @@ impl Host for WorkbookHost<'_> {
             // gridlines (ColorIndex -4105, Color 0), TabRatio 0.6, the first
             // window of a book of one (Index 1, WindowNumber 1, Type 1).
             if name.eq_ignore_ascii_case("caption") {
-                return Ok(Some(Value::String(self.file_name.clone().unwrap_or_else(|| "Book1".to_string()))));
+                return Ok(Some(self.window_caption_value()));
             }
             let plain = match name.to_ascii_lowercase().as_str() {
                 "displayhorizontalscrollbar" | "displayverticalscrollbar" | "displayoutline" | "displayruler"
@@ -34549,6 +34660,10 @@ impl Host for WorkbookHost<'_> {
         }
         if self.is_application(receiver) && name.eq_ignore_ascii_case("build") {
             return Err(self.scalar_set_error("Application", "Build"));
+        }
+        if name.eq_ignore_ascii_case("caption") && (self.is_application(receiver) || self.is_window(receiver)) {
+            self.set_caption_value(self.is_application(receiver), value)?;
+            return Ok(true);
         }
         if self.is_workbook(receiver) && name.eq_ignore_ascii_case("readonlyrecommended") {
             let recommended = application_switch(&value, "Workbook.ReadOnlyRecommended")
@@ -43604,6 +43719,7 @@ struct WorkbookHostState {
     compilation_stamp: Option<String>,
     compiled_modules: BTreeSet<String>,
     file_name: Option<String>,
+    window_caption: Option<Value>,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
     singletons: BTreeMap<(u8, usize), u64>,
@@ -43693,13 +43809,13 @@ struct WorkbookHostState {
 
 impl<'a> WorkbookHost<'a> {
     fn into_parts(self) -> (WorkbookStorage<'a>,WorkbookHostState) {
-        let Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = self;
-        (workbook,WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects })
+        let Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = self;
+        (workbook,WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects })
     }
 
     fn resume_storage(workbook:WorkbookStorage<'a>, state: WorkbookHostState) -> Self {
-        let WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = state;
-        Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects }
+        let WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = state;
+        Self { workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, table_counter, next_link, linked_once, split, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects }
     }
 }
 
@@ -43941,6 +44057,8 @@ fn selection_snapshot(state: &ProjectSessionState) -> Result<WorkbookSelection, 
         cursor: host.cursor, interactive: host.interactive,
         directory_state: Some(VbaDirectoryState::capture(&host.file_io.files)),
         new_workbook_font: (host.application_font!=default_application_font()).then(||host.application_font.clone()),
+        caption_suffix_utf16: host.app_settings.get("caption").and_then(|value|value.string_units()).map(|units|units.into_owned()),
+        caption_without_window: (host.app_settings.get("_caption_without_window") == Some(&Value::Boolean(true))).then_some(true),
     };
     Ok(WorkbookSelection { package_bytes: host.file_io.package.clone(), selected, other_workbooks, application_state,
         file_system_state: host.file_io.snapshot() })
@@ -44384,12 +44502,16 @@ struct VbaApplicationState {
     directory_state: Option<VbaDirectoryState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     new_workbook_font: Option<CellStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caption_suffix_utf16: Option<Vec<u16>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caption_without_window: Option<bool>,
 }
 
 impl Default for VbaApplicationState {
     fn default() -> Self {
         Self { calculation: -4105, calculate_before_save: true, screen_updating: true, enable_events: true,
-            display_alerts: true, status_bar: None, cursor: CURSOR_DEFAULT, interactive: true, directory_state: None, new_workbook_font: None }
+            display_alerts: true, status_bar: None, cursor: CURSOR_DEFAULT, interactive: true, directory_state: None, new_workbook_font: None, caption_suffix_utf16: None, caption_without_window: None }
     }
 }
 
@@ -44420,6 +44542,16 @@ impl VbaApplicationState {
         host.cursor = self.cursor;
         host.interactive = self.interactive;
         if let Some(font)=self.new_workbook_font {host.application_font=font;}
+        if self.caption_without_window == Some(true) {
+            host.app_settings.insert("_caption_without_window".to_string(), Value::Boolean(true));
+        } else {
+            host.app_settings.remove("_caption_without_window");
+        }
+        if let Some(suffix) = self.caption_suffix_utf16.filter(|units| !units.is_empty()) {
+            host.app_settings.insert("caption".to_string(), Value::from_utf16(suffix));
+        } else {
+            host.app_settings.remove("caption");
+        }
     }
 
     fn capture(host: &WorkbookHost<'_>) -> Self {
@@ -44427,7 +44559,9 @@ impl VbaApplicationState {
             enable_events: host.enable_events, display_alerts: host.display_alerts,
             status_bar: host.status_bar.clone(), cursor: host.cursor, interactive: host.interactive,
             directory_state: Some(VbaDirectoryState::capture(&host.file_io.files)),
-            new_workbook_font: (host.application_font!=default_application_font()).then(||host.application_font.clone()) }
+            new_workbook_font: (host.application_font!=default_application_font()).then(||host.application_font.clone()),
+            caption_suffix_utf16: host.app_settings.get("caption").and_then(|value|value.string_units()).map(|units|units.into_owned()),
+        caption_without_window: (host.app_settings.get("_caption_without_window") == Some(&Value::Boolean(true))).then_some(true) }
     }
 }
 
@@ -45408,6 +45542,58 @@ mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
 
+
+    #[test]
+    fn caption_native_contracts_match_raw_excel_returns() {
+        let decode = |hex: &str| -> Vec<u8> {
+            assert_eq!(hex.len() % 2, 0);
+            (0..hex.len()).step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect()
+        };
+        let mut failures = Vec::new();
+        let mut count = 0;
+        let bytes = include_bytes!("../../../tests/fixtures/vba/caption_native_contracts.zip");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut manifest = String::new();
+        std::io::Read::read_to_string(&mut archive.by_name("manifest.tsv").unwrap(), &mut manifest).unwrap();
+        let mut packets = Vec::new();
+        std::io::Read::read_to_end(&mut archive.by_name("packets.bin").unwrap(), &mut packets).unwrap();
+        for line in manifest.lines().filter(|line| !line.starts_with('#') && !line.is_empty()) {
+            let fields: Vec<_> = line.split('\t').collect();
+            assert_eq!(fields.len(), 7);
+            let offset: usize = fields[4].parse().unwrap();
+            let length: usize = fields[5].parse().unwrap();
+            let package = packets[offset..offset + length].to_vec();
+            let expected_bytes = decode(fields[6]);
+            assert_eq!(expected_bytes.len() % 2, 0);
+            let expected_units: Vec<_> = expected_bytes.chunks_exact(2)
+                .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]])).collect();
+            let expected = String::from_utf16(&expected_units).unwrap();
+            let source = crate::vba_project::read_project_source_with_code_page(&package, Some(932)).unwrap().unwrap();
+            let book = oxicells_core::parse_xlsx(&package).unwrap();
+            let mut context = failure_context();
+            context.project_name = "OxiNamedProject".to_string();
+            context.file_name = Some(fields[2].to_string());
+            context.environment.help_file = r"C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm".to_string();
+            context.application_state = Some(VbaApplicationState {
+                enable_events: false, display_alerts: false, ..VbaApplicationState::default()
+            });
+            context.file_context = Some(serde_json::from_value(serde_json::json!({
+                "packageBytes": package, "sourceCodePage": 932, "readOnly": fields[1] == "true", "editRevision": 0
+            })).unwrap());
+            let actual = execute_workbook_vba(book, &source, fields[3], vec![], 0, context).unwrap();
+            let value = serde_json::to_value(&actual.result).unwrap();
+            if actual.error.is_some() || actual.workbook_changed
+                || value != serde_json::json!({"type": "string", "value": expected}) {
+                failures.push(format!("{}: error={:?} changed={} actual={} expected={}",
+                    fields[0], actual.error.as_ref().map(|error| &error.message),
+                    actual.workbook_changed, value, expected));
+            }
+            count += 1;
+        }
+        assert_eq!(count, 74);
+        assert!(failures.is_empty(), "{} / {} Native mismatches:\n{}", failures.len(), count, failures.join("\n"));
+    }
 
     fn saved_state_package() -> (Vec<u8>, String, Workbook) {
         let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
