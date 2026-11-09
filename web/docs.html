@@ -156,6 +156,8 @@ input[type="file"]{display:none}
   <symbol id="i-link" viewBox="0 0 16 16"><path d="M6.5 9.5l3-3M7 4.5l1.2-1.2a2.6 2.6 0 0 1 3.7 3.7L10.7 8.2M9 11.5l-1.2 1.2a2.6 2.6 0 0 1-3.7-3.7L5.3 7.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol>
   <symbol id="i-fn" viewBox="0 0 16 16"><path d="M2 4h8M2 7h8M2 10h5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M2.5 13.5h4" stroke="currentColor" stroke-width="1"/><text x="10.5" y="7" font-size="7" font-family="sans-serif" fill="currentColor">1</text></symbol>
   <symbol id="i-cm" viewBox="0 0 16 16"><path d="M2.5 3h11v7.5H7l-3 2.5v-2.5H2.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></symbol>
+  <symbol id="i-hdr" viewBox="0 0 16 16"><rect x="2.5" y="1.5" width="11" height="13" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/><path d="M4.5 4h7" stroke="currentColor" stroke-width="1.6"/><path d="M4.5 7.5h7M4.5 10h5" stroke="currentColor" stroke-width=".8" opacity=".6"/></symbol>
+  <symbol id="i-ftr" viewBox="0 0 16 16"><rect x="2.5" y="1.5" width="11" height="13" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/><path d="M4.5 4.5h7M4.5 7h5" stroke="currentColor" stroke-width=".8" opacity=".6"/><path d="M4.5 12h7" stroke="currentColor" stroke-width="1.6"/></symbol>
   <symbol id="i-img" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="5" cy="6" r="1.5" fill="currentColor"/><path d="M1.5 11l3-3 2 2 3-4 5 5z" fill="currentColor" opacity=".4"/></symbol>
   <symbol id="i-color" viewBox="0 0 16 16"><path fill="currentColor" d="M8 1L3 11h2l1-2.5h4L11 11h2L8 1zm-1.2 6L8 4l1.2 3H6.8z"/></symbol>
   <symbol id="i-ul" viewBox="0 0 16 16"><circle cx="3" cy="4" r="1.3" fill="currentColor"/><circle cx="3" cy="8" r="1.3" fill="currentColor"/><circle cx="3" cy="12" r="1.3" fill="currentColor"/><path fill="currentColor" d="M6 3h8v1.5H6V3zm0 4h8v1.5H6V7zm0 4h8v1.5H6V11z"/></symbol>
@@ -310,6 +312,8 @@ input[type="file"]{display:none}
     <button class="rb lg" id="btnLink"><svg><use href="#i-link"/></svg> <span data-i18n="link">Link</span></button>
     <button class="rb lg" id="btnFootnote"><svg><use href="#i-fn"/></svg> <span data-i18n="footnote">Footnote</span></button>
     <button class="rb lg" id="btnComment"><svg><use href="#i-cm"/></svg> <span data-i18n="comment">Comment</span></button>
+    <button class="rb lg" id="btnHeader"><svg><use href="#i-hdr"/></svg> <span data-i18n="header">Header</span></button>
+    <button class="rb lg" id="btnFooter"><svg><use href="#i-ftr"/></svg> <span data-i18n="footer">Footer</span></button>
   </div><span class="rg-l" data-i18n="insert">Insert</span></div>
 </div>
 
@@ -406,6 +410,13 @@ input[type="file"]{display:none}
     <div class="acts"><button class="bp" id="cmOk">OK</button><button class="bs" id="cmCancel" data-i18n="cancel">Cancel</button></div>
   </div>
 </div>
+<div class="ov" id="hfOv">
+  <div class="dlg"><h2 id="hfTitle">Header</h2>
+    <label style="font-size:12px;color:#555" data-i18n="hfText">Text</label>
+    <input type="text" id="hfIn" style="width:100%;padding:6px 8px;border:1px solid #C0C0C0;border-radius:4px;font:inherit;font-size:13px">
+    <div class="acts"><button class="bp" id="hfOk">OK</button><button class="bs" id="hfCancel" data-i18n="cancel">Cancel</button></div>
+  </div>
+</div>
 <div class="ov" id="infoOv">
   <div class="dlg"><h2 data-i18n="info">Info</h2>
     <div id="infoBody" style="font-size:13px;color:#444;line-height:1.9"></div>
@@ -430,7 +441,7 @@ const I18N = {
     bold: 'Bold', italic: 'Italic', underline: 'Underline', strikethrough: 'Strikethrough',
     fontColor: 'Font Color', highlight: 'Highlight',
     left: 'Left', center: 'Center', right: 'Right', justify: 'Justify', lineSpacing: 'Line Spacing',
-    format: 'Format', table: 'Table', picture: 'Picture', insertTable: 'Insert Table', link: 'Link', linkAddress: 'Address', footnote: 'Footnote', footnoteText: 'Note text', comment: 'Comment', commentAuthor: 'Author', commentText: 'Comment',
+    format: 'Format', table: 'Table', picture: 'Picture', insertTable: 'Insert Table', link: 'Link', linkAddress: 'Address', footnote: 'Footnote', footnoteText: 'Note text', comment: 'Comment', commentAuthor: 'Author', commentText: 'Comment', header: 'Header', footer: 'Footer', hfText: 'Text',
     size: 'Size', margins: 'Margins', normal: 'Normal', narrow: 'Narrow',
     openFile: 'Open File', selectDocx: 'Select a .docx file.',
     chooseFile: 'Choose File', cancel: 'Cancel',
@@ -451,7 +462,7 @@ const I18N = {
     bold: '太字', italic: '斜体', underline: '下線', strikethrough: '取り消し線',
     fontColor: 'フォントの色', highlight: '蛍光ペン',
     left: '左揃え', center: '中央揃え', right: '右揃え', justify: '両端揃え', lineSpacing: '行間',
-    format: '書式', table: '表', picture: '画像', insertTable: '表の挿入', link: 'リンク', linkAddress: 'アドレス', footnote: '脚注', footnoteText: '脚注の文', comment: 'コメント', commentAuthor: '作成者', commentText: 'コメント',
+    format: '書式', table: '表', picture: '画像', insertTable: '表の挿入', link: 'リンク', linkAddress: 'アドレス', footnote: '脚注', footnoteText: '脚注の文', comment: 'コメント', commentAuthor: '作成者', commentText: 'コメント', header: 'ヘッダー', footer: 'フッター', hfText: '文字',
     size: 'サイズ', margins: '余白', normal: '標準', narrow: '狭い',
     openFile: 'ファイルを開く', selectDocx: '.docxファイルを選択してください。',
     chooseFile: 'ファイルを選択', cancel: 'キャンセル',
@@ -472,7 +483,7 @@ const I18N = {
     bold: 'Fett', italic: 'Kursiv', underline: 'Unterstrichen', strikethrough: 'Durchgestrichen',
     fontColor: 'Schriftfarbe', highlight: 'Hervorheben',
     left: 'Links', center: 'Zentriert', right: 'Rechts', justify: 'Blocksatz', lineSpacing: 'Zeilenabstand',
-    format: 'Format', table: 'Tabelle', picture: 'Bild', insertTable: 'Tabelle einfügen', link: 'Link', linkAddress: 'Adresse', footnote: 'Fußnote', footnoteText: 'Fußnotentext', comment: 'Kommentar', commentAuthor: 'Autor', commentText: 'Kommentar',
+    format: 'Format', table: 'Tabelle', picture: 'Bild', insertTable: 'Tabelle einfügen', link: 'Link', linkAddress: 'Adresse', footnote: 'Fußnote', footnoteText: 'Fußnotentext', comment: 'Kommentar', commentAuthor: 'Autor', commentText: 'Kommentar', header: 'Kopfzeile', footer: 'Fußzeile', hfText: 'Text',
     size: 'Größe', margins: 'Seitenränder', normal: 'Normal', narrow: 'Schmal',
     openFile: 'Datei öffnen', selectDocx: 'Wählen Sie eine .docx-Datei.',
     chooseFile: 'Datei wählen', cancel: 'Abbrechen',
@@ -492,7 +503,7 @@ const I18N = {
     bold: 'Gras', italic: 'Italique', underline: 'Souligné', strikethrough: 'Barré',
     fontColor: 'Couleur de police', highlight: 'Surligneur',
     left: 'Gauche', center: 'Centré', right: 'Droite', justify: 'Justifié', lineSpacing: 'Interligne',
-    format: 'Format', table: 'Tableau', picture: 'Image', insertTable: 'Insérer un tableau', link: 'Lien', linkAddress: 'Adresse', footnote: 'Note de bas de page', footnoteText: 'Texte de la note', comment: 'Commentaire', commentAuthor: 'Auteur', commentText: 'Commentaire',
+    format: 'Format', table: 'Tableau', picture: 'Image', insertTable: 'Insérer un tableau', link: 'Lien', linkAddress: 'Adresse', footnote: 'Note de bas de page', footnoteText: 'Texte de la note', comment: 'Commentaire', commentAuthor: 'Auteur', commentText: 'Commentaire', header: 'En-tête', footer: 'Pied de page', hfText: 'Texte',
     size: 'Taille', margins: 'Marges', normal: 'Normal', narrow: 'Étroit',
     openFile: 'Ouvrir un fichier', selectDocx: 'Sélectionnez un fichier .docx.',
     chooseFile: 'Choisir', cancel: 'Annuler',
@@ -512,7 +523,7 @@ const I18N = {
     bold: 'Negrita', italic: 'Cursiva', underline: 'Subrayado', strikethrough: 'Tachado',
     fontColor: 'Color de fuente', highlight: 'Resaltar',
     left: 'Izquierda', center: 'Centro', right: 'Derecha', justify: 'Justificar', lineSpacing: 'Interlineado',
-    format: 'Formato', table: 'Tabla', picture: 'Imagen', insertTable: 'Insertar tabla', link: 'Vínculo', linkAddress: 'Dirección', footnote: 'Nota al pie', footnoteText: 'Texto de la nota', comment: 'Comentario', commentAuthor: 'Autor', commentText: 'Comentario',
+    format: 'Formato', table: 'Tabla', picture: 'Imagen', insertTable: 'Insertar tabla', link: 'Vínculo', linkAddress: 'Dirección', footnote: 'Nota al pie', footnoteText: 'Texto de la nota', comment: 'Comentario', commentAuthor: 'Autor', commentText: 'Comentario', header: 'Encabezado', footer: 'Pie de página', hfText: 'Texto',
     size: 'Tamaño', margins: 'Márgenes', normal: 'Normal', narrow: 'Estrecho',
     openFile: 'Abrir archivo', selectDocx: 'Seleccione un archivo .docx.',
     chooseFile: 'Elegir archivo', cancel: 'Cancelar',
@@ -532,7 +543,7 @@ const I18N = {
     bold: 'Grassetto', italic: 'Corsivo', underline: 'Sottolineato', strikethrough: 'Barrato',
     fontColor: 'Colore carattere', highlight: 'Evidenzia',
     left: 'Sinistra', center: 'Centro', right: 'Destra', justify: 'Giustifica', lineSpacing: 'Interlinea',
-    format: 'Formato', table: 'Tabella', picture: 'Immagine', insertTable: 'Inserisci tabella', link: 'Collegamento', linkAddress: 'Indirizzo', footnote: 'Nota a piè di pagina', footnoteText: 'Testo della nota', comment: 'Commento', commentAuthor: 'Autore', commentText: 'Commento',
+    format: 'Formato', table: 'Tabella', picture: 'Immagine', insertTable: 'Inserisci tabella', link: 'Collegamento', linkAddress: 'Indirizzo', footnote: 'Nota a piè di pagina', footnoteText: 'Testo della nota', comment: 'Commento', commentAuthor: 'Autore', commentText: 'Commento', header: 'Intestazione', footer: 'Piè di pagina', hfText: 'Testo',
     size: 'Dimensione', margins: 'Margini', normal: 'Normale', narrow: 'Stretto',
     openFile: 'Apri file', selectDocx: 'Seleziona un file .docx.',
     chooseFile: 'Scegli file', cancel: 'Annulla',
@@ -552,7 +563,7 @@ const I18N = {
     bold: 'Negrito', italic: 'Itálico', underline: 'Sublinhado', strikethrough: 'Tachado',
     fontColor: 'Cor da fonte', highlight: 'Realçar',
     left: 'Esquerda', center: 'Centro', right: 'Direita', justify: 'Justificar', lineSpacing: 'Espaçamento',
-    format: 'Formato', table: 'Tabela', picture: 'Imagem', insertTable: 'Inserir tabela', link: 'Link', linkAddress: 'Endereço', footnote: 'Nota de rodapé', footnoteText: 'Texto da nota', comment: 'Comentário', commentAuthor: 'Autor', commentText: 'Comentário',
+    format: 'Formato', table: 'Tabela', picture: 'Imagem', insertTable: 'Inserir tabela', link: 'Link', linkAddress: 'Endereço', footnote: 'Nota de rodapé', footnoteText: 'Texto da nota', comment: 'Comentário', commentAuthor: 'Autor', commentText: 'Comentário', header: 'Cabeçalho', footer: 'Rodapé', hfText: 'Texto',
     size: 'Tamanho', margins: 'Margens', normal: 'Normal', narrow: 'Estreito',
     openFile: 'Abrir arquivo', selectDocx: 'Selecione um arquivo .docx.',
     chooseFile: 'Escolher arquivo', cancel: 'Cancelar',
@@ -572,7 +583,7 @@ const I18N = {
     bold: '굵게', italic: '기울임꼴', underline: '밑줄', strikethrough: '취소선',
     fontColor: '글꼴 색', highlight: '강조',
     left: '왼쪽', center: '가운데', right: '오른쪽', justify: '양쪽 맞춤', lineSpacing: '줄 간격',
-    format: '서식', table: '표', picture: '그림', insertTable: '표 삽입', link: '링크', linkAddress: '주소', footnote: '각주', footnoteText: '각주 내용', comment: '메모', commentAuthor: '작성자', commentText: '메모',
+    format: '서식', table: '표', picture: '그림', insertTable: '표 삽입', link: '링크', linkAddress: '주소', footnote: '각주', footnoteText: '각주 내용', comment: '메모', commentAuthor: '작성자', commentText: '메모', header: '머리글', footer: '바닥글', hfText: '텍스트',
     size: '크기', margins: '여백', normal: '보통', narrow: '좁게',
     openFile: '파일 열기', selectDocx: '.docx 파일을 선택하세요.',
     chooseFile: '파일 선택', cancel: '취소',
@@ -592,7 +603,7 @@ const I18N = {
     bold: '加粗', italic: '斜体', underline: '下划线', strikethrough: '删除线',
     fontColor: '字体颜色', highlight: '突出显示',
     left: '左对齐', center: '居中', right: '右对齐', justify: '两端对齐', lineSpacing: '行距',
-    format: '格式', table: '表格', picture: '图片', insertTable: '插入表格', link: '連結', linkAddress: '位址', footnote: '註腳', footnoteText: '註腳文字', comment: '註解', commentAuthor: '作者', commentText: '註解', link: '链接', linkAddress: '地址', footnote: '脚注', footnoteText: '脚注文本', comment: '批注', commentAuthor: '作者', commentText: '批注',
+    format: '格式', table: '表格', picture: '图片', insertTable: '插入表格', link: '連結', linkAddress: '位址', footnote: '註腳', footnoteText: '註腳文字', comment: '註解', commentAuthor: '作者', commentText: '註解', header: '頁首', footer: '頁尾', hfText: '文字', link: '链接', linkAddress: '地址', footnote: '脚注', footnoteText: '脚注文本', comment: '批注', commentAuthor: '作者', commentText: '批注', header: '页眉', footer: '页脚', hfText: '文字',
     size: '大小', margins: '页边距', normal: '普通', narrow: '窄',
     openFile: '打开文件', selectDocx: '请选择 .docx 文件。',
     chooseFile: '选择文件', cancel: '取消',
@@ -2115,6 +2126,28 @@ function modelInsertComment(text, author) {
   return applyModelEdits(plan.edits, plan.end);
 }
 
+// Word's Header and Footer: the text for the cursor's section (replacing
+// what it had); the header and footer areas are not editable on the page yet.
+let hfTarget = null;
+function openHeaderFooterDialog(footer) {
+  if (!modelDoc) return;
+  const at = cursorModelPos();
+  hfTarget = { para: at ? at.para : 0, footer };
+  $('hfTitle').textContent = t(footer ? 'footer' : 'header');
+  $('hfIn').value = '';
+  $('hfOv').classList.add('show');
+  $('hfIn').focus();
+}
+
+function modelSetHeaderFooter(text) {
+  if (!modelDoc || !hfTarget) return false;
+  let edits;
+  try { edits = JSON.parse(modelDoc.header_footer_edits(hfTarget.para, hfTarget.footer, text)); }
+  catch (e) { $('statusText').textContent = String(e.message || e); return false; }
+  hfTarget = null;
+  return applyModelEdits(edits, cursorModelPos());
+}
+
 function modelFormatParagraphs(style) {
   const sel = selectionModelRange();
   const at = cursorModelPos();
@@ -2535,6 +2568,20 @@ for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
   tg.appendChild(b);
 }
 $('btnTbl2').addEventListener('click', e => { e.stopPropagation(); $('tgPop').classList.toggle('show'); });
+
+// ---- Header and footer ----
+$('btnHeader').addEventListener('click', e => { e.stopPropagation(); openHeaderFooterDialog(false); });
+$('btnFooter').addEventListener('click', e => { e.stopPropagation(); openHeaderFooterDialog(true); });
+$('hfOk').addEventListener('click', () => {
+  $('hfOv').classList.remove('show');
+  modelSetHeaderFooter($('hfIn').value);
+  hiddenInput.focus();
+});
+$('hfCancel').addEventListener('click', () => { $('hfOv').classList.remove('show'); hfTarget = null; hiddenInput.focus(); });
+$('hfIn').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); $('hfOk').click(); }
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); $('hfCancel').click(); }
+});
 
 // ---- Comment ----
 $('btnComment').addEventListener('click', e => { e.stopPropagation(); openCommentDialog(); });

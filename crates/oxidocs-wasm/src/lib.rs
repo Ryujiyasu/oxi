@@ -282,6 +282,13 @@ impl DocxDocument {
         Ok(serde_json::json!({ "edits": edits, "end": end }).to_string())
     }
 
+    /// The edits that give the section holding body paragraph `para` a
+    /// header (or, with `footer`, a footer) holding `text`, as a JSON array.
+    pub fn header_footer_edits(&self, para: usize, footer: bool, text: &str) -> Result<String, JsError> {
+        let edits = oxidocs_model::edit::header_footer_edits(&self.model, para, footer, text).map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(serde_json::to_string(&edits).unwrap())
+    }
+
     pub fn paragraph_text(&self, para: usize) -> Result<String, JsError> {
         let texts = oxidocs_model::edit::paragraph_texts(&self.model, &Default::default()).map_err(|e| JsError::new(&e.to_string()))?;
         texts.into_iter().nth(para).ok_or_else(|| JsError::new(&format!("no paragraph {para}")))

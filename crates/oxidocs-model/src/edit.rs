@@ -2539,6 +2539,110 @@ pub fn comment_edits(model: &DocxModel, from: &Pos, to: &Pos, text: &str, author
     Ok((edits, to))
 }
 
+/// The edits that give the section holding body paragraph `para` a header
+/// (`footer` false) or footer holding `text`, as Word's Header and Footer
+/// commands do (measured over COM): the part's paragraph takes the "header"
+/// or "footer" style (centre and right tabs at the middle and the end of the
+/// text width), and the section's properties name it as the default one.
+/// A section that has one already has its text replaced.
+pub fn header_footer_edits(model: &DocxModel, para: usize, footer: bool, text: &str) -> Result<Vec<Edit>, EditError> {
+    use crate::docparts::Style;
+    check_text(text)?;
+    let (kind, reference, name, preferred) =
+        if footer { ("w:ftr", "w:footerReference", "footer", "Footer") } else { ("w:hdr", "w:headerReference", "header", "Header") };
+    // The section: the first section break at or after the paragraph, or
+    // the document's last section.
+    let paras = paragraphs(model, &Story::Body)?;
+    if para >= paras.len() {
+        return err(format!("no paragraph {para}"));
+    }
+    let owner = paras.iter().enumerate().skip(para).find(|(_, p)| p.props.as_ref().is_some_and(|pp| pp.get("w:sectPr").is_some())).map(|(i, _)| i);
+    let sect: Option<Element> = match owner {
+        Some(i) => paras[i].props.as_ref().and_then(|p| p.get("w:sectPr")).cloned(),
+        None => model.section.as_ref().map(|s| s.element().clone()),
+    };
+    let existing = sect.as_ref().and_then(|s| {
+        s.elements()
+            .find(|e| e.name == reference && matches!(e.attr("w:type"), Some("default") | None))
+            .and_then(|e| e.attr("r:id"))
+            .and_then(|id| id.strip_prefix('#'))
+            .and_then(|n| n.parse::<usize>().ok())
+    });
+    let mut edits = Vec::new();
+    if let Some(n) = existing.filter(|n| *n < model.headers_footers.len()) {
+        let story = Story::HeaderFooter(n);
+        let last = paragraphs(model, &story)?.len().saturating_sub(1);
+        let end = paragraph_end(model, &story, last)?;
+        edits.push(Edit::Replace {
+            from: Pos { story: story.clone(), para: 0, offset: 0 },
+            to: Pos { story, para: last, offset: end },
+            text: text.into(),
+        });
+        return Ok(edits);
+    }
+    let normal = default_style(model, "paragraph");
+    let chars = default_style(model, "character");
+    let width = text_width(model, &Story::Body, para)?;
+    let link = format!("{preferred}Char");
+    let style = style_named(model, &mut edits, "paragraph", name, preferred, |id| {
+        let mut meta = vec![val("w:name", name)];
+        if let Some(b) = &normal {
+            meta.push(val("w:basedOn", b));
+        }
+        meta.extend([val("w:link", &link), val("w:uiPriority", "99"), Element::new("w:unhideWhenUsed")]);
+        let mut tabs = Element::new("w:tabs");
+        for (align, pos) in [("center", width / 2), ("right", width)] {
+            tabs.children.push(Node::Element(val("w:tab", align).with_attr("w:pos", pos.to_string())));
+        }
+        Style {
+            attrs: vec![("w:type".into(), "paragraph".into()), ("w:styleId".into(), id.into())],
+            meta,
+            paragraph: bag("w:style", "w:pPr", vec![tabs, val("w:snapToGrid", "0")]).ok(),
+            ..Default::default()
+        }
+    });
+    let char_name = format!("{preferred} Char");
+    style_named(model, &mut edits, "character", &char_name, &link, |id| {
+        let mut meta = vec![val("w:name", &char_name)];
+        if let Some(b) = &chars {
+            meta.push(val("w:basedOn", b));
+        }
+        meta.extend([val("w:link", &style), val("w:uiPriority", "99")]);
+        Style {
+            attrs: vec![("w:type".into(), "character".into()), ("w:customStyle".into(), "1".into()), ("w:styleId".into(), id.into())],
+            meta,
+            ..Default::default()
+        }
+    });
+    let n = model.headers_footers.len();
+    edits.push(Edit::AddStory { story: StoryKind::HeaderFooter { kind: kind.into() }, attrs: vec![] });
+    let start = Pos { story: Story::HeaderFooter(n), para: 0, offset: 0 };
+    edits.push(Edit::FormatParagraphs { from: start.clone(), to: start.clone(), patch: Patch { set: vec![val("w:pStyle", &style)], ..Default::default() } });
+    if !text.is_empty() {
+        edits.push(Edit::InsertText { at: start, text: text.into() });
+    }
+    // Name the part in the section's properties, after any references
+    // already there (they come first in a section's properties).
+    let mut sect = sect.unwrap_or_else(|| Element::new("w:sectPr"));
+    let at = sect
+        .children
+        .iter()
+        .rposition(|c| matches!(c, Node::Element(e) if e.name == "w:headerReference" || e.name == "w:footerReference"))
+        .map_or(0, |i| i + 1);
+    sect.children.insert(at, Node::Element(Element::new(reference).with_attr("w:type", "default").with_attr("r:id", format!("#{n}"))));
+    match owner {
+        Some(i) => {
+            let pos = Pos::body(i, 0);
+            edits.push(Edit::FormatParagraphs { from: pos.clone(), to: pos, patch: Patch { set: vec![sect], ..Default::default() } });
+        }
+        None => {
+            let props = Props::read("w:body", &sect).map_err(|u| EditError(u.to_string()))?;
+            edits.push(Edit::SetSection { props: Some(props), at: model.section_at });
+        }
+    }
+    Ok(edits)
+}
+
 /// Join neighbouring runs with the same properties, as Word does when it
 /// saves, so cutting a run to edit it leaves no seam.
 fn coalesce(v: &mut Vec<Inline>) {

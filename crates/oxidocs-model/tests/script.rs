@@ -320,3 +320,27 @@ fn insert_comment_as_words_does() {
     // The comment's own mark comes first, then its text.
     assert_eq!(edit::paragraph_texts(&m, &Story::Comment(1)).unwrap()[0], "\u{5}check this");
 }
+
+#[test]
+fn header_and_footer_go_to_the_section_as_words_do() {
+    let mut m = a4_doc();
+    let edits = edit::header_footer_edits(&m, 0, false, "Head").unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let edits = edit::header_footer_edits(&m, 0, true, "Foot").unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    assert_eq!(m.headers_footers.len(), 2);
+    assert_eq!(m.headers_footers[0].kind, "w:hdr");
+    let refs: Vec<(String, String)> = m.section.as_ref().unwrap().children()
+        .filter(|e| e.name.ends_with("Reference"))
+        .map(|e| (e.name.clone(), e.attr("r:id").unwrap().to_string())).collect();
+    assert_eq!(refs, vec![("w:headerReference".into(), "#0".into()), ("w:footerReference".into(), "#1".into())]);
+    // The header style's tabs sit at the middle and the end of the 8504-twip text width.
+    let style = m.styles.as_ref().unwrap().styles.iter().find(|s| s.attrs.iter().any(|(_, v)| v == "Header")).unwrap();
+    let tabs: Vec<&str> = style.paragraph.as_ref().unwrap().get("w:tabs").unwrap().elements().map(|t| t.attr("w:pos").unwrap()).collect();
+    assert_eq!(tabs, ["4252", "8504"]);
+    // A second header command replaces the text.
+    let edits = edit::header_footer_edits(&m, 0, false, "New head").unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    assert_eq!(m.headers_footers.len(), 2);
+    assert_eq!(edit::paragraph_texts(&m, &Story::HeaderFooter(0)).unwrap(), vec!["New head"]);
+}

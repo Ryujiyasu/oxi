@@ -11,7 +11,8 @@
 //!
 //! `--word` runs one of Word's commands as edits on body positions:
 //! `table PARA OFFSET ROWS COLS`, `link PARA FROM TO URL`,
-//! `footnote PARA OFFSET TEXT`, `comment PARA FROM TO TEXT`.
+//! `footnote PARA OFFSET TEXT`, `comment PARA FROM TO TEXT`,
+//! `header PARA TEXT`, `footer PARA TEXT`.
 //!
 //! `edits.json` is an array of edits (see `oxidocs_model::edit::Edit`). With
 //! `--text`, prints a JSON array of the story's paragraph texts, one
@@ -36,6 +37,8 @@ fn main() {
             "table" => edit::table_edits(&model, &Pos::body(n(4), n(5)), n(6), n(7)).map(|r| r.0),
             "link" => edit::link_edits(&model, &Pos::body(n(4), n(5)), &Pos::body(n(4), n(6)), &args[7]).map(|r| r.0),
             "footnote" => edit::footnote_edits(&model, &Pos::body(n(4), n(5)), &args[6]).map(|r| r.0),
+            "header" => edit::header_footer_edits(&model, n(4), false, &args[5]),
+            "footer" => edit::header_footer_edits(&model, n(4), true, &args[5]),
             "comment" => edit::comment_edits(&model, &Pos::body(n(4), n(5)), &Pos::body(n(4), n(6)), &args[7], "Oxi", "O", "2026-11-09T00:00:00Z").map(|r| r.0),
             other => panic!("no command {other}"),
         };
