@@ -7224,6 +7224,13 @@ fn parse_run(
     let mut in_text = false;
     // Where the open `<w:t>`'s own content starts in `text` (S848 trims only that).
     let mut t_start = 0usize;
+    // OXI_BR_IN_T (2026-11-09, default ON, opt-out _DISABLE): the text length right after
+    // a <w:br/> / <w:cr/> element met INSIDE a <w:t> (generator output such as
+    // «<w:t>合肥-黄山<w:br/></w:t>»). Word breaks the line there; the S848 trailing-newline
+    // trim at </w:t> must not eat it. `_pb_trailing_br_gen.py` (zh dev creative__06787e0b):
+    // Word 48.5 to the next paragraph with the element inside or beside the <w:t>, Oxi 28.6
+    // inside (the break dropped) and 48.67 beside.
+    let mut t_br_floor = 0usize;
     let mut preserve_text_whitespace = false;
     let mut toc_result_for_run = None;
     let mut in_instr_text = false;
@@ -7524,6 +7531,7 @@ fn parse_run(
                     // `<w:br/>` (creative__03bf8c5f: `2017<w:br/><w:t></w:t><w:br/>On`)
                     // popped the first break's \n, losing Word's blank line (−14.5pt).
                     let floor = if std::env::var_os("OXI_T_TRIM_OWN_DISABLE").is_none() { t_start } else { 0 };
+                    let floor = if std::env::var_os("OXI_BR_IN_T_DISABLE").is_none() { floor.max(t_br_floor) } else { floor };
                     if local == "t" && std::env::var("OXI_S848_DISABLE").is_err() {
                         while text.len() > floor && (text.ends_with('\n') || text.ends_with('\r')) {
                             text.pop();
@@ -7579,6 +7587,7 @@ fn parse_run(
                     // independent of font family.
                     "cr" if std::env::var("OXI_S927_DISABLE").is_err() => {
                         text.push('\n');
+                        if in_text { t_br_floor = text.len(); }
                     }
                     "br" => {
                         let mut br_type = None;
@@ -7599,6 +7608,7 @@ fn parse_run(
                             Some("column") => text.push('\x0B'), // vertical tab = column break
                             _ => text.push('\n'),                // text wrap break
                         }
+                        if in_text { t_br_floor = text.len(); }
                     }
                     "tab" => text.push('\t'),
                     // S747: <w:noBreakHyphen/> renders as a hyphen that FORBIDS

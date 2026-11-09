@@ -14046,8 +14046,13 @@ cells={} pitch={:.2} text={:?}",
         // whole page down ~14.3pt and spilling its last list item.
         // Latin scope — the JP autospacing calibration (S907) and JP page-top
         // behaviour are measured under unconditional suppression.
+        // OXI_CJK_AUTO_TOP (2026-11-09, default ON, opt-out _DISABLE): the same in CJK
+        // documents. `_pb_cjk_autospace_top_gen.py` (zh dev creative__054408b7's package,
+        // Normal (Web) title): Word puts the title baseline at 92.66 (zh-CN 宋体) / 92.30
+        // (ja-JP ＭＳ 明朝) with or without beforeAutospacing; Oxi added the 14.0 on page 1
+        // only (106.63; page 2 already 92.63).
         let s1072_auto_top = para.style.before_autospacing
-            && !self.doc_body_has_real_cjk
+            && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_CJK_AUTO_TOP_DISABLE"))
             && !crate::env_flag!("OXI_S1072_DISABLE");
         let is_page_2_plus =
             !pages.is_empty() || !current_elements.is_empty() || s816_section_2_plus;
