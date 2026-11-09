@@ -2142,15 +2142,26 @@ impl<'a> LineBreaker<'a> {
                     // (`line right up to 𝑓(𝑥) = 4 cos(3𝑥)`, adv 23.30 = two
                     // lines) — it is an atom in the normal wrap, not an
                     // overflow.
+                    // OXI_OBJ_TAB_FIT (2026-11-09, default ON, opt-out _DISABLE): a line
+                    // WITH tabs wraps the object too when it does not fit after the
+                    // tab's own pull -- the right tab's jump and the centered
+                    // segment's half shift (s958_center_slack, taken with the object
+                    // in the segment), the same allowance a text word gets. blind-J
+                    // en/policies__00d4d26d's footer «Date Published … ⇥ … Review Date:
+                    // 8th July 2026» + a 509pt skyline picture: Word puts the picture on
+                    // line 2 at the left margin (x 72, y 753.5); the tab exclusion kept
+                    // it at the text's end (x 521.8, off the page). hmrc's strips still
+                    // fit: stop + w/2 <= column.
+                    let obj_tab_fit = !crate::env_flag!("OXI_OBJ_TAB_FIT_DISABLE");
+                    let has_tab = current_line.fragments.iter().any(|f| f.tab_alignment.is_some());
+                    let tab_pull_tw = right_tab_slack_tw
+                        .saturating_add(s958_center_slack(center_tab_stop_tw, current_width_tw + ow_tw));
                     if !crate::env_flag!("OXI_S1040_DISABLE")
                         && (style.inline_object_image.is_some()
                             || style.inline_math.is_some())
                         && !current_line.fragments.is_empty()
-                        && current_line
-                            .fragments
-                            .iter()
-                            .all(|f| f.tab_alignment.is_none())
-                        && current_width_tw + ow_tw > available_tw
+                        && (!has_tab || obj_tab_fit)
+                        && current_width_tw + ow_tw > available_tw.saturating_add(if has_tab { tab_pull_tw } else { 0 })
                     {
                         lines.push(std::mem::take(&mut current_line));
                         current_width = 0.0;
