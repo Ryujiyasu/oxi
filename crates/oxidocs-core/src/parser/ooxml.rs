@@ -5233,6 +5233,17 @@ fn parse_paragraph_with_inline_images_impl(
     let listnum_para = num_pr_ref.as_ref()
         .filter(|n| !n.num_id.is_empty() && n.num_id != "0" && ctx.numbering.num_map.contains_key(&n.num_id))
         .map(|n| (n.num_id.clone(), n.ilvl));
+    // OXI_SECT_MARK_UNNUMBERED (2026-11-10, default ON, opt-out _DISABLE): an EMPTY
+    // paragraph whose mark only carries a section break takes no number and does not
+    // advance the list. Word probe (a numbered heading style, «AAA» / X / «BBB»): X empty
+    // with sectPr -> 1. AAA | 2. BBB; X empty without -> 1, 2., 3. BBB; X «XXX» with
+    // sectPr -> 1, 2. XXX, 3. BBB. zh dev technical__006f0290: the TOC section closes on
+    // an empty 方案一级标题 paragraph, and every chapter heading after it was one higher
+    // («2. 系统流程», Word «1. 系统流程»).
+    let sect_mark_only = para_sect_pr.is_some()
+        && runs.iter().all(|r| r.text.is_empty() && r.style.inline_object_image.is_none())
+        && std::env::var_os("OXI_SECT_MARK_UNNUMBERED_DISABLE").is_none();
+    let num_pr_ref = if sect_mark_only { None } else { num_pr_ref };
     // Resolve list marker from numbering definitions
     if let Some(npr) = num_pr_ref {
         if !npr.num_id.is_empty() && npr.num_id != "0" {
