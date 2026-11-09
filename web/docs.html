@@ -626,7 +626,7 @@ function applyI18n() {
 }
 
 // ---- WASM ----
-import init, { layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout, docx_to_pdf, get_font_glyph_outline } from './oxidocs_wasm.js';
+import init, { DocxDocument, layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout, docx_to_pdf, get_font_glyph_outline } from './oxidocs_wasm.js';
 await init();
 let fontRenderEpoch = 0;
 
@@ -695,6 +695,12 @@ const $ = id => document.getElementById(id);
 const canvasArea = $('canvasArea');
 const emptyState = $('emptyState');
 let currentDocx = null;
+// The open document in oxidocs-model, which edits by position and keeps
+// every run's formatting; null when the model refused the file (the old
+// run-text editor is used then).
+let modelDoc = null;
+// The model position to put the cursor at after the next layout.
+let pendingModelCursor = null;
 let fileName = '';
 let layoutResult = null;   // latest layout_document() result
 let cursorPos = null;       // { pageIndex, elemIndex, charOffset }
@@ -1186,6 +1192,7 @@ function selectedText() {
 
 // Delete the selected text (v1: within one paragraph; runs are trimmed via set_run_text)
 function deleteSelection() {
+  if (modelDoc) return selectionRange() ? modelDelete(-1) : false;
   const rng = selectionRange();
   if (!rng || !currentDocx) return false;
   const els = layoutResult.pages[rng.page].elements;
@@ -1434,6 +1441,10 @@ function scheduleRender() {
     $('pgInfo').textContent = `${result.pages.length} ${t('pages')}`;
     $('statusText').textContent = `Layout ${layoutMs}ms`;
 
+    if (pendingModelCursor && modelDoc) {
+      restoreModelCursor(pendingModelCursor);
+      pendingModelCursor = null;
+    }
     if (pendingCursorRestore) {
       const { paraIndex, runIndex, charOff } = pendingCursorRestore;
       restoreCursor(paraIndex, runIndex, charOff);
@@ -1444,6 +1455,7 @@ function scheduleRender() {
 
 async function insertText(text) {
   if (!cursorPos || !layoutResult) return;
+  if (modelDoc) { modelInsert(text); return; }
   clearSelection(); // v1: typing does not replace the selection, it just clears it
   const page = layoutResult.pages[cursorPos.pageIndex];
   const el = page.elements[cursorPos.elemIndex];
@@ -1606,6 +1618,7 @@ function getParaBlock(paraIndex) {
 }
 
 function splitParagraphAtCursor() {
+  if (modelDoc) { modelSplit(); return; }
   const el = cursorEl();
   if (!el || el.run_index == null || !currentDocx) return;
   const p = el.paragraph_index, r = el.run_index;
@@ -1690,6 +1703,7 @@ function moveCursor(dir) {
 
 async function deleteChar(dir) {
   if (!cursorPos || !layoutResult || !currentDocx) return;
+  if (modelDoc) { modelDelete(dir); return; }
   const page = layoutResult.pages[cursorPos.pageIndex];
   const el = page.elements[cursorPos.elemIndex];
   if (!el || el.paragraph_index == null || el.run_index == null) return;
@@ -1737,6 +1751,197 @@ async function deleteChar(dir) {
   }
 }
 
+// ---- Editing through the document model ----
+// Positions are {para, offset}: a body paragraph in document order and a
+// Word character position in it (UTF-16 units, like JS string indexes).
+
+function openModel(bytes) {
+  try { modelDoc = new DocxDocument(bytes); }
+  catch (e) { modelDoc = null; console.warn('Model editing unavailable:', e); }
+}
+
+// The cell path of a layout element, as DocxDocument.locate() takes it.
+function elCells(el) {
+  if (el.cell_row_index == null) return [];
+  return [...(el.cell_ancestor_path || []), [el.cell_row_index, el.cell_col_index, el.cell_paragraph_index || 0]];
+}
+
+// The model position of character `charInEl` of layout element `el`.
+function modelPosAt(el, charInEl) {
+  if (!modelDoc || !el || el.paragraph_index == null) return null;
+  const q = {
+    section: el.source_container_index || 0, block: el.paragraph_index, cells: elCells(el),
+    run: el.run_index || 0, char_offset: (el.char_offset || 0) + charInEl,
+  };
+  try { const r = modelDoc.locate(JSON.stringify(q)); return r ? JSON.parse(r) : null; }
+  catch (e) { console.warn('locate failed', e); return null; }
+}
+
+function cursorModelPos() {
+  if (!cursorPos || !layoutResult) return null;
+  const el = layoutResult.pages[cursorPos.pageIndex]?.elements[cursorPos.elemIndex];
+  return modelPosAt(el, cursorPos.charOffset);
+}
+
+// The selection as a model range {from, to}, or null.
+function selectionModelRange() {
+  const rng = selectionRange();
+  if (!rng) return null;
+  const els = layoutResult.pages[rng.page].elements;
+  const from = modelPosAt(els[rng.a.elemIndex], rng.a.charOffset);
+  const to = modelPosAt(els[rng.b.elemIndex], rng.b.charOffset);
+  return from && to ? { from, to } : null;
+}
+
+// Apply edits to the model, save it as the current file, re-lay it out and
+// put the cursor at `cursorAfter`. False when the model refused the edits.
+function applyModelEdits(edits, cursorAfter) {
+  try { modelDoc.apply(JSON.stringify(edits)); }
+  catch (e) { console.warn('Edit refused:', e); $('statusText').textContent = String(e.message || e); return false; }
+  currentDocx = new Uint8Array(modelDoc.save());
+  pendingEdit = null;
+  pendingCursorRestore = null;
+  pendingModelCursor = cursorAfter || null;
+  clearSelection();
+  scheduleRender();
+  return true;
+}
+
+function sameCells(a, b) {
+  return a.length === b.length && a.every((s, i) => s[0] === b[i][0] && s[1] === b[i][1] && s[2] === b[i][2]);
+}
+
+// Put the cursor at a model position on the freshly laid-out pages.
+function restoreModelCursor(pos) {
+  let p;
+  try { const r = modelDoc.place(JSON.stringify(pos)); if (!r) return false; p = JSON.parse(r); }
+  catch (e) { return false; }
+  for (let pi = 0; pi < layoutResult.pages.length; pi++) {
+    const els = layoutResult.pages[pi].elements;
+    for (let ei = 0; ei < els.length; ei++) {
+      const el = els[ei];
+      if (el.kind !== 'text' || el.paragraph_index !== p.block || (el.source_container_index || 0) !== p.section) continue;
+      if ((el.run_index || 0) !== p.run || !sameCells(elCells(el), p.cells || [])) continue;
+      const start = el.char_offset || 0, end = start + (el.text || '').length;
+      if (p.char_offset >= start && p.char_offset <= end) {
+        cursorPos = { pageIndex: pi, elemIndex: ei, charOffset: p.char_offset - start };
+        startCursorBlink();
+        hiddenInput.focus();
+        syncRibbonFromCursor();
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// One step left (-1) or right (+1) from `offset` in a paragraph's text,
+// not stopping inside a surrogate pair.
+function stepOffset(text, offset, dir) {
+  let o = offset + dir;
+  const code = text.charCodeAt(o);
+  if (dir < 0 && o > 0 && code >= 0xDC00 && code <= 0xDFFF) o -= 1;
+  if (dir > 0 && o < text.length && code >= 0xDC00 && code <= 0xDFFF) o += 1;
+  return o;
+}
+
+// Where a paragraph's own text ends (before any content-control end).
+function paragraphEnd(text) {
+  let n = text.length;
+  while (n > 0 && text[n - 1] === '\u001d') n--;
+  return n;
+}
+
+function modelInsert(text) {
+  const sel = selectionModelRange();
+  if (sel) {
+    return applyModelEdits([{ op: 'replace', from: sel.from, to: sel.to, text }],
+      { para: sel.from.para, offset: sel.from.offset + text.length });
+  }
+  const at = cursorModelPos();
+  if (!at) return false;
+  return applyModelEdits([{ op: 'insert_text', at, text }], { para: at.para, offset: at.offset + text.length });
+}
+
+function modelDelete(dir) {
+  const sel = selectionModelRange();
+  if (sel) return applyModelEdits([{ op: 'delete', from: sel.from, to: sel.to }], sel.from);
+  const at = cursorModelPos();
+  if (!at) return false;
+  const text = modelDoc.paragraph_text(at.para);
+  if (dir < 0) {
+    if (at.offset === 0) {
+      if (at.para === 0) return true;
+      const prevLen = paragraphEnd(modelDoc.paragraph_text(at.para - 1));
+      return applyModelEdits([{ op: 'join_paragraphs', para: at.para - 1 }], { para: at.para - 1, offset: prevLen });
+    }
+    const from = { para: at.para, offset: stepOffset(text, at.offset, -1) };
+    return applyModelEdits([{ op: 'delete', from, to: at }], from);
+  }
+  if (at.offset >= paragraphEnd(text)) {
+    return applyModelEdits([{ op: 'join_paragraphs', para: at.para }], at);
+  }
+  return applyModelEdits([{ op: 'delete', from: at, to: { para: at.para, offset: stepOffset(text, at.offset, 1) } }], at);
+}
+
+function modelSplit() {
+  const sel = selectionModelRange();
+  const edits = [];
+  let at = cursorModelPos();
+  if (sel) { edits.push({ op: 'delete', from: sel.from, to: sel.to }); at = sel.from; }
+  if (!at) return false;
+  edits.push({ op: 'split_paragraph', at });
+  return applyModelEdits(edits, { para: at.para + 1, offset: 0 });
+}
+
+// The editor's run style patch ({bold, italic, underline, color, highlight,
+// font_family, font_size}) as model run properties.
+function runPatch(style) {
+  const set = [], remove = [];
+  const toggle = (name, on) => set.push(on ? { name } : { name, attrs: [['w:val', '0']] });
+  if (style.bold != null) toggle('w:b', style.bold);
+  if (style.italic != null) toggle('w:i', style.italic);
+  if (style.underline != null) set.push({ name: 'w:u', attrs: [['w:val', style.underline ? 'single' : 'none']] });
+  if (style.color) set.push({ name: 'w:color', attrs: [['w:val', String(style.color).replace('#', '')]] });
+  if (style.highlight) {
+    if (style.highlight === 'none') remove.push('w:highlight');
+    else set.push({ name: 'w:highlight', attrs: [['w:val', style.highlight]] });
+  }
+  if (style.font_family) {
+    const f = style.font_family;
+    set.push({ name: 'w:rFonts', attrs: [['w:ascii', f], ['w:hAnsi', f], ['w:eastAsia', f], ['w:cs', f]] });
+  }
+  if (style.font_size) {
+    const hp = String(Math.round(style.font_size * 2));
+    set.push({ name: 'w:sz', attrs: [['w:val', hp]] }, { name: 'w:szCs', attrs: [['w:val', hp]] });
+  }
+  return { set, remove };
+}
+
+// The editor's paragraph patch ({alignment, line_spacing, style_id}) as
+// model paragraph properties.
+function paraPatch(style) {
+  const set = [], merge = [];
+  if (style.alignment) set.push({ name: 'w:jc', attrs: [['w:val', style.alignment]] });
+  if (style.line_spacing) merge.push({ name: 'w:spacing', attrs: [['w:line', String(Math.round(style.line_spacing * 240))], ['w:lineRule', 'auto']] });
+  if (style.style_id) set.push({ name: 'w:pStyle', attrs: [['w:val', style.style_id]] });
+  return { set, merge };
+}
+
+function modelFormatRuns(style) {
+  const sel = selectionModelRange();
+  if (!sel) return false;  // no selection: nothing to format yet (no pending typing style)
+  return applyModelEdits([{ op: 'format_text', from: sel.from, to: sel.to, patch: runPatch(style) }], sel.to);
+}
+
+function modelFormatParagraphs(style) {
+  const sel = selectionModelRange();
+  const at = cursorModelPos();
+  const from = sel ? sel.from : at, to = sel ? sel.to : at;
+  if (!from) return false;
+  return applyModelEdits([{ op: 'format_paragraphs', from, to, patch: paraPatch(style) }], at || from);
+}
+
 // ---- File handling ----
 async function openFile(file) {
   fileName = file.name.replace(/\.docx$/, '');
@@ -1744,6 +1949,7 @@ async function openFile(file) {
   $('docName').removeAttribute('data-i18n');
   const ab = await file.arrayBuffer();
   currentDocx = new Uint8Array(ab);
+  openModel(currentDocx);
   await renderDocument(currentDocx);
 }
 
@@ -1761,6 +1967,7 @@ $('fileIn').addEventListener('change', async e => {
 function doNew() {
   fontRenderEpoch++;
   currentDocx = null;
+  modelDoc = null;
   layoutResult = null;
   stopCursorBlink();
   cursorPos = null;
@@ -1901,6 +2108,10 @@ function selectionEls() {
 
 function applyRunFormat(patch) {
   if (!currentDocx) return;
+  if (modelDoc) {
+    if (!modelFormatRuns(patch)) $('statusText').textContent = t('noCursor');
+    return;
+  }
   const sel = selectionEls();
   if (sel) {
     // Apply to every run the selection touches (whole runs; run splitting comes later)
@@ -1932,6 +2143,7 @@ function applyRunFormat(patch) {
 
 function applyParaFormat(patch) {
   if (!currentDocx) return;
+  if (modelDoc) { modelFormatParagraphs(patch); return; }
   const sel = selectionEls();
   if (sel) {
     const seen = new Set();

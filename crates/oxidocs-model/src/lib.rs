@@ -17,6 +17,7 @@
 pub mod canon;
 pub mod content;
 pub mod docparts;
+pub mod edit;
 pub mod package;
 pub mod props;
 pub mod schema;

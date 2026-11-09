@@ -1,4 +1,5 @@
 mod font_program;
+mod model_map;
 mod runtime_fonts;
 mod font_catalog_api;
 pub use font_catalog_api::{font_catalog_missing, font_catalog_register};
@@ -140,6 +141,116 @@ pub fn docx_from_model(model_json: &str, template: Option<Vec<u8>>) -> Result<Ve
         None => None,
     };
     model.write(template.as_ref()).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// A document held in the model for editing by position.
+///
+/// Positions are `{story?, para, offset}`: a paragraph numbered in document
+/// order (through tables) within a story (`"body"` by default, or
+/// `{"header_footer": i}`, `{"footnote": i}`, `{"endnote": i}`,
+/// `{"comment": i}`), and an offset counted in Word character positions.
+/// `paragraphs()` lists each paragraph's characters in that count.
+#[wasm_bindgen]
+pub struct DocxDocument {
+    model: oxidocs_model::DocxModel,
+    /// How the renderer's reading of the saved document maps onto the
+    /// model; built when first asked for, dropped by every edit.
+    map: RefCell<Option<model_map::DocMap>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct JsModelPos {
+    para: usize,
+    offset: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+struct JsCorePos {
+    section: usize,
+    block: usize,
+    #[serde(default)]
+    cells: Vec<(usize, usize, usize)>,
+    run: usize,
+    char_offset: usize,
+}
+
+#[wasm_bindgen]
+impl DocxDocument {
+    /// Read a .docx. A feature the model cannot express is an error naming it.
+    #[wasm_bindgen(constructor)]
+    pub fn new(data: &[u8]) -> Result<DocxDocument, JsError> {
+        let model = oxidocs_model::DocxModel::read(data).map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(DocxDocument { model, map: RefCell::new(None) })
+    }
+
+    /// Apply edits given as a JSON array (`insert_text`, `delete`, `replace`,
+    /// `split_paragraph`, `join_paragraphs`, `format_text`,
+    /// `format_paragraphs`). All apply or, on an error, none.
+    pub fn apply(&mut self, edits_json: &str) -> Result<(), JsError> {
+        let edits: Vec<oxidocs_model::edit::Edit> =
+            serde_json::from_str(edits_json).map_err(|e| JsError::new(&e.to_string()))?;
+        oxidocs_model::edit::apply_all(&mut self.model, &edits).map_err(|e| JsError::new(&e.to_string()))?;
+        *self.map.borrow_mut() = None;
+        Ok(())
+    }
+
+    fn with_map<T>(&self, f: impl FnOnce(&model_map::DocMap) -> T) -> Result<T, JsError> {
+        if self.map.borrow().is_none() {
+            let bytes = self.save()?;
+            let core = oxidocs_core::parse_docx(&bytes).map_err(|e| JsError::new(&e.to_string()))?;
+            *self.map.borrow_mut() = Some(model_map::DocMap::new(&core, &self.model));
+        }
+        Ok(f(self.map.borrow().as_ref().unwrap()))
+    }
+
+    /// The model position (`{para, offset}`) of a place on a laid-out page,
+    /// given as `{section, block, cells?, run, char_offset}`: a layout
+    /// element's `source_container_index`, `paragraph_index`, cell path, `run_index`
+    /// and `char_offset` (plus the character within the element). Null when the
+    /// paragraph has no counterpart in the model.
+    pub fn locate(&self, core_pos_json: &str) -> Result<Option<String>, JsError> {
+        let p: JsCorePos = serde_json::from_str(core_pos_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let key = model_map::CoreKey { section: p.section, block: p.block, cells: p.cells };
+        let found = self.with_map(|m| m.to_model(&key, p.run, p.char_offset))?;
+        Ok(found.map(|(para, offset)| serde_json::to_string(&JsModelPos { para, offset }).unwrap()))
+    }
+
+    /// Where on the laid-out document a model position falls, as
+    /// `{section, block, cells, run, char_offset}`; null when unknown.
+    pub fn place(&self, model_pos_json: &str) -> Result<Option<String>, JsError> {
+        let p: JsModelPos = serde_json::from_str(model_pos_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let found = self.with_map(|m| m.to_core(p.para, p.offset))?;
+        Ok(found.map(|(key, run, char_offset)| {
+            serde_json::to_string(&JsCorePos { section: key.section, block: key.block, cells: key.cells, run, char_offset }).unwrap()
+        }))
+    }
+
+    /// A story's paragraphs as a JSON array of strings, one character per
+    /// position. `story_json` is omitted for the body.
+    pub fn paragraphs(&self, story_json: Option<String>) -> Result<String, JsError> {
+        let story: oxidocs_model::edit::Story = match story_json {
+            Some(s) => serde_json::from_str(&s).map_err(|e| JsError::new(&e.to_string()))?,
+            None => Default::default(),
+        };
+        let texts = oxidocs_model::edit::paragraph_texts(&self.model, &story).map_err(|e| JsError::new(&e.to_string()))?;
+        serde_json::to_string(&texts).map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// One body paragraph's characters, one per position (see `paragraphs`).
+    pub fn paragraph_text(&self, para: usize) -> Result<String, JsError> {
+        let texts = oxidocs_model::edit::paragraph_texts(&self.model, &Default::default()).map_err(|e| JsError::new(&e.to_string()))?;
+        texts.into_iter().nth(para).ok_or_else(|| JsError::new(&format!("no paragraph {para}")))
+    }
+
+    /// The whole model as JSON (the shape `docx_to_model` returns).
+    pub fn model_json(&self) -> Result<String, JsError> {
+        serde_json::to_string(&self.model).map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Write the document as .docx bytes.
+    pub fn save(&self) -> Result<Vec<u8>, JsError> {
+        self.model.write(None).map_err(|e| JsError::new(&e.to_string()))
+    }
 }
 
 #[wasm_bindgen]
@@ -1487,6 +1598,13 @@ struct LayoutElementJs {
     run_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     char_offset: Option<usize>,
+    /// The section the element's paragraph is in (with paragraph_index, the
+    /// block in that section).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_container_index: Option<usize>,
+    /// (row, cell, block) per enclosing nested table, outermost first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    cell_ancestor_path: Vec<(usize, usize, usize)>,
 }
 
 #[derive(Serialize)]
@@ -1578,7 +1696,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             color: color.map(|c| if c.starts_with('#') { c } else { format!("#{}", c) }), highlight: None,
                             character_spacing: None, is_vertical: None, corner_radius: None, image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
                         },
                         oxidocs_core::layout::LayoutContent::Text {
                             text, font_size, font_family, bold, italic, underline, underline_style, strikethrough, color, highlight, character_spacing, is_vertical, ..
@@ -1603,7 +1721,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None,
                             paragraph_index: elem.paragraph_index, run_index: elem.run_index, char_offset: elem.char_offset,
-                            cell_paragraph_index: elem.cell_paragraph_index, cell_row_index: elem.cell_row_index, cell_col_index: elem.cell_col_index,
+                            cell_paragraph_index: elem.cell_paragraph_index, cell_row_index: elem.cell_row_index, cell_col_index: elem.cell_col_index, source_container_index: elem.source_container_index, cell_ancestor_path: elem.cell_ancestor_path.clone(),
                         },
                         oxidocs_core::layout::LayoutContent::Image { data, content_type, .. } => {
                             let b64 = if !data.is_empty() { Some(base64_encode(&data)) } else { None };
@@ -1618,7 +1736,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                                 image_data: b64,
                                 content_type,
                                 x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
                             }
                         },
                         oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width, .. } => LayoutElementJs {
@@ -1631,7 +1749,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             character_spacing: None, is_vertical: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: Some(x1), y1: Some(y1), x2: Some(x2), y2: Some(y2), paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
                         },
                         oxidocs_core::layout::LayoutContent::CellShading { color } => LayoutElementJs {
                             baseline_offset,
@@ -1643,7 +1761,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             character_spacing: None, is_vertical: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
                         },
                         oxidocs_core::layout::LayoutContent::BoxRect { fill, stroke_color, corner_radius, .. } => LayoutElementJs {
                             baseline_offset,
@@ -1657,7 +1775,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             character_spacing: None, is_vertical: None, corner_radius: if corner_radius > 0.0 { Some(corner_radius) } else { None },
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
                         },
                         oxidocs_core::layout::LayoutContent::ClipStart => LayoutElementJs {
                             baseline_offset,
@@ -1669,7 +1787,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             color: None, highlight: None, character_spacing: None, is_vertical: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
                         },
                         oxidocs_core::layout::LayoutContent::ClipEnd => LayoutElementJs {
                             baseline_offset,
@@ -1681,7 +1799,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             color: None, highlight: None, character_spacing: None, is_vertical: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
                         },
                         oxidocs_core::layout::LayoutContent::PresetShape { .. } => LayoutElementJs {
                             baseline_offset,
@@ -1693,7 +1811,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             color: None, highlight: None, character_spacing: None, is_vertical: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
                         },
                         // R-05a: balloon variants surfaced as `kind` strings;
                         // payload (comment_id, body, replies) not yet
@@ -1709,7 +1827,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             color: None, highlight: None, character_spacing: None, is_vertical: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
                         },
                         oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => LayoutElementJs {
                             baseline_offset,
@@ -1721,7 +1839,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             color: None, highlight: None, character_spacing: None, is_vertical: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
                         },
                         // S1120 custGeom paths: stub kind string like the
                         // balloon variants — segment payload not serialised to
@@ -1736,7 +1854,7 @@ pub fn layout_document(data: &[u8]) -> Result<JsValue, JsError> {
                             color: fill, highlight: None, character_spacing: None, is_vertical: None, corner_radius: None,
                             image_data: None, content_type: None,
                             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
                         },
                     }
                 }).collect(),
@@ -1807,7 +1925,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             color: color.map(|c| if c.starts_with('#') { c } else { format!("#{}", c) }), highlight: None,
             character_spacing: None, is_vertical: None, corner_radius: None, image_data: None, content_type: None,
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
         },
         oxidocs_core::layout::LayoutContent::Text {
             text, font_size, font_family, bold, italic, underline, underline_style, strikethrough, color, highlight, character_spacing, is_vertical, ..
@@ -1826,7 +1944,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             corner_radius: None, image_data: None, content_type: None,
             x1: None, y1: None, x2: None, y2: None,
             paragraph_index: elem.paragraph_index, run_index: elem.run_index, char_offset: elem.char_offset,
-                            cell_paragraph_index: elem.cell_paragraph_index, cell_row_index: elem.cell_row_index, cell_col_index: elem.cell_col_index,
+                            cell_paragraph_index: elem.cell_paragraph_index, cell_row_index: elem.cell_row_index, cell_col_index: elem.cell_col_index, source_container_index: elem.source_container_index, cell_ancestor_path: elem.cell_ancestor_path.clone(),
         },
         oxidocs_core::layout::LayoutContent::Image { data, content_type, .. } => {
             let b64 = if !data.is_empty() { Some(base64_encode(&data)) } else { None };
@@ -1840,7 +1958,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
                 character_spacing: None, is_vertical: None, corner_radius: None, image_data: b64, content_type,
                 x1: None, y1: None, x2: None, y2: None,
                 paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
             }
         },
         oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width, .. } => LayoutElementJs {
@@ -1852,7 +1970,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             character_spacing: None, is_vertical: None, corner_radius: None, image_data: None, content_type: None,
             x1: Some(x1), y1: Some(y1), x2: Some(x2), y2: Some(y2),
             paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
         },
         oxidocs_core::layout::LayoutContent::CellShading { color } => LayoutElementJs {
             baseline_offset,
@@ -1862,7 +1980,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             underline: None, underline_style: None, strikethrough: None, color: Some(color), highlight: None,
             character_spacing: None, is_vertical: None, corner_radius: None, image_data: None, content_type: None,
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
         },
         oxidocs_core::layout::LayoutContent::BoxRect { fill, stroke_color, corner_radius, .. } => LayoutElementJs {
             baseline_offset,
@@ -1874,7 +1992,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             character_spacing: None, is_vertical: None, corner_radius: if corner_radius > 0.0 { Some(corner_radius) } else { None },
             image_data: None, content_type: None,
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
         },
         oxidocs_core::layout::LayoutContent::ClipStart => LayoutElementJs {
             baseline_offset,
@@ -1884,7 +2002,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
             character_spacing: None, is_vertical: None, corner_radius: None, image_data: None, content_type: None,
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
         },
         oxidocs_core::layout::LayoutContent::ClipEnd => LayoutElementJs {
             baseline_offset,
@@ -1894,7 +2012,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
             character_spacing: None, is_vertical: None, corner_radius: None, image_data: None, content_type: None,
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
         },
         oxidocs_core::layout::LayoutContent::PresetShape { .. } => LayoutElementJs {
             baseline_offset,
@@ -1904,7 +2022,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
             character_spacing: None, is_vertical: None, corner_radius: None, image_data: None, content_type: None,
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
         },
         // R-05a: stub kind strings for the balloon variants — payload not
         // serialised yet (deferred to R-05g once JS consumers actually use
@@ -1917,7 +2035,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
             character_spacing: None, is_vertical: None, corner_radius: None, image_data: None, content_type: None,
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
         },
         oxidocs_core::layout::LayoutContent::BalloonConnector { .. } => LayoutElementJs {
             baseline_offset,
@@ -1927,7 +2045,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             underline: None, underline_style: None, strikethrough: None, color: None, highlight: None,
             character_spacing: None, is_vertical: None, corner_radius: None, image_data: None, content_type: None,
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
         },
         // S1120 custGeom paths: stub kind string (segments not serialised yet)
         oxidocs_core::layout::LayoutContent::VectorPath { fill, .. } => LayoutElementJs {
@@ -1938,7 +2056,7 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
             underline: None, underline_style: None, strikethrough: None, color: fill, highlight: None,
             character_spacing: None, is_vertical: None, corner_radius: None, image_data: None, content_type: None,
             x1: None, y1: None, x2: None, y2: None, paragraph_index: None, run_index: None, char_offset: None,
-                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None,
+                            cell_paragraph_index: None, cell_row_index: None, cell_col_index: None, source_container_index: None, cell_ancestor_path: Vec::new(),
         },
     }
 }
