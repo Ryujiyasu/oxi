@@ -62,6 +62,7 @@ The published benchmarks compare Oxi with Microsoft Office's own output on fixed
 |----------------------|-------------------------------|-----------------------------|-------------|
 | **Word — English, 50 documents** | **0.924** | **46 / 50** | 2026-11-03, blind-J50 |
 | **Word — Japanese, 50 documents** | **0.892** | **45 / 50** | 2026-11-03, jaBlindJ50 |
+| **Word — Chinese (Simplified), 50 documents** | **0.874** | **48 / 50** | 2026-11-09, zhBlindA50 |
 | **PowerPoint — 48 usable decks from 50 sampled files** | **0.953** | **48 / 48** | 2026-08-20 |
 
 SSIM measures visual similarity on these corpora. Formula and VBA behavior are checked separately against Excel. Coverage is limited to the measured documents and behaviors.
@@ -132,6 +133,22 @@ Frozen 2026-11-03 by the same rule, **before** any measurement. The Japanese `te
 **Rankings do not transfer between languages.** ONLYOFFICE is second in English and eighth in Japanese; ibisOffice is eighth in English and second in Japanese. That is the whole reason for keeping a blind set per language, and for keeping both numbers on this page rather than the flattering one.
 
 Every engine was measured against the same Word ground truth (Microsoft 365 16.0.20527.20088, 150 DPI). Versions are recorded in `_engine_versions_blindJ50.json` beside each result. Measurement notes, each written down before any number was compared: (1) GenOffice's window timed out on one Japanese document (`reference__704212ae`), counted as not rendered. (2) OfficeCLI's low page-count match is its own pagination: the harness takes the page count from OfficeCLI's own view and captures every page it reports. (3) Polaris Office has no command line, so its export is driven through its own window; it had updated itself to 11.115.233 before the run and was measured at that version. (4) Oxi was measured from a clean build of commit `58eb49d1`, declared in the freeze file before its first render.
+
+### Chinese (Simplified) blind set — zhBlindA50, 50 never-seen documents
+
+Frozen 2026-11-09 (`pipeline_data/FROZEN_BLIND_ZH_A.md`) **before** any fetch or measurement, by the same rule on the `lang=zh` manifest: 10 types × the next 5 Simplified-Chinese documents in SHA-256-ascending order that nothing had touched. Script is decided mechanically (ideographs encodable in GB2312 but not Big5 vs the reverse); 26 Traditional-Chinese and 2 over-size documents were skipped on the way, no top-up was needed. This is the first Chinese set: the 50-document Chinese development pool drawn the same day had already been used to find and fix two defects, so it is not quoted here.
+
+Documents keep the fonts they ask for. The measurement PC carries the Windows Chinese supplemental fonts; documents naming commercial faces it lacks (方正 / 华文, common in government documents) stay in, and Word's own substitution is the truth. Word exported every document twice and the second export is the truth — an Office cloud font downloading during the first export leaves a substitute face in that PDF.
+
+| Engine | mean SSIM (common pages) | penalized | page count matches Word | documents scored |
+|--------|--------------------------|-----------|-------------------------|------------------|
+| **Oxi (commit `c513bd40`)** | **0.874** | **0.869** | **48 / 50** | 50 |
+| WPS Office 中国版 12.1.0.29161 | 0.836 | 0.804 | 44 / 50 | 50 |
+| LibreOffice 26.8.2.2 | 0.789 | 0.725 | 36 / 50 | 50 |
+
+**Oxi is first in Chinese, 0.038 ahead of WPS Office** — the Office suite most Chinese users open .docx files in — and places page breaks best (48 / 50). Document by document WPS is the stronger opponent than its mean suggests: Oxi is nearer to Word on 31 of the 50 documents and WPS on 18; against LibreOffice Oxi is nearer on 47. The worst Oxi document is at 0.436, a document Oxi fits onto one page fewer than Word.
+
+Measured against the same Word ground truth as the other sets (Microsoft 365 16.0.20527, 150 DPI). WPS Office was driven through its own COM automation (`Kwps.Application`, `ExportAsFixedFormat`), LibreOffice with `soffice --convert-to pdf`. Oxi was measured from a clean build of commit `c513bd40`, whose hash was written into the freeze file before its first render. The other engines in the English and Japanese tables were not run on this set.
 
 ### How much does one blind set decide?
 
