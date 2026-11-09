@@ -96,6 +96,7 @@ const sheetBox = { scrollLeft: 0, scrollTop: 0, clientWidth: 800, clientHeight: 
 const scrolledTo = (x, y) => { sheetBox.scrollLeft = x; sheetBox.scrollTop = y; };
 const sheet = { rows: [], col_widths: [], merge_cells: [] };
 let book = { default_style: { font_size: 11 } };
+let fileName = 'grid.xlsx';
 // A workbook of a given size, for asking what the page thinks it would cost to
 // work out. Only the shape matters to that question.
 const shapeBook = (cells, formulas) => {
