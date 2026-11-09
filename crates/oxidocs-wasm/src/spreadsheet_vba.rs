@@ -56753,6 +56753,154 @@ End Function
     }
 
     #[test]
+    fn intrinsic_late_dispatch_execution_matches_native() {
+        // Native Run dispatches missing members before compiling a valid class body.
+        const ENTRY_BEGIN: &str = r####"Attribute VB_Name = "LateDeclarationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim c As "####;
+        const ENTRY_MIDDLE: &str = r####" On Error GoTo Failed
+ Set c = New UnusedDeclarationClass
+"####;
+        const ENTRY_END: &str = r####" Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "UnusedDeclarationClass"
+Option Explicit
+Public Function ValidControl() As String
+ ValidControl = "DECLARED"
+End Function
+"####;
+        let cases: &[(&str, &str, &str, &str, &str, &str, &str)] = &[
+            (r####"late_object_cstr"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & c.CStr()
+"####, r####"Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-083f54477e614e839f48f754efd99b96.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_variant_cstr"####, r####"Variant"####, r####" Probe = "OK|" & TypeName(c) & "|" & c.CStr()
+"####, r####"Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-6e1c673377e84d4ea66a48b67ff29d8a.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_object_callbyname_method"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & CallByName(c, "CStr", vbMethod)
+"####, r####"Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-3a443a42b71f4536b2f97648796edff1.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_object_callbyname_get"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & CallByName(c, "CStr", vbGet)
+"####, r####"Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-2e64288231e74f598dc10c0686be74d7.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_valid_member_in_broken_class"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & c.ValidControl()
+"####, r####"Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-d46b89cd99a14ce8bc10ea108d3e09a1.xlsm"####, r####"compile"####, r####"構文エラー"####),
+            (r####"late_ordinary_name_positive"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & c.OwnNameOther()
+"####, r####"Public Function OwnNameOther() As String
+ OwnNameOther = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-ca26761ac35e40eea50dac59c7080324.xlsm"####, r####"value"####, r####"OK|UnusedDeclarationClass|UNUSED"####),
+            (r####"late_callbyname_combined"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & CallByName(c, "CStr", 3)
+"####, r####"Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-f1530e036825446da33b72366b0dac4b.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_callbyname_let"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & CallByName(c, "CStr", vbLet, 1)
+"####, r####"Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-c8473f6a8d6b4cec8c0e76274b4744a0.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_callbyname_set"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & CallByName(c, "CStr", vbSet, Nothing)
+"####, r####"Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-2e129d9526484662a320d4acbb137588.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_cdec_method"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & c.CDec()
+"####, r####"Public Function CDec() As String
+ CDec = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-2fade1bb520a4d56bfd3c9c7d70ae0d7.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_property_get_intrinsic"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & c.CStr()
+"####, r####"Public Property Get CStr() As String
+ CStr = "UNUSED"
+End Property
+"####, r####"owned-type-visibility-be9f782340c14b28a07276bfebc7f92d.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_property_get_ordinary_control"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & c.OwnNameOther()
+"####, r####"Public Property Get OwnNameOther() As String
+ OwnNameOther = "UNUSED"
+End Property
+"####, r####"owned-type-visibility-16bb4108bcb44925b87fd460bf80de3f.xlsm"####, r####"value"####, r####"OK|UnusedDeclarationClass|UNUSED"####),
+            (r####"late_property_let_intrinsic"####, r####"Object"####, r####" c.CStr = "assigned"
+ Probe = "OK|" & TypeName(c) & "|ASSIGNED"
+"####, r####"Public Property Let CStr(ByVal value As String)
+End Property
+"####, r####"owned-type-visibility-67f76b2972954f048ab6fb497127238c.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_property_let_ordinary_control"####, r####"Object"####, r####" c.OwnNameOther = "assigned"
+ Probe = "OK|" & TypeName(c) & "|ASSIGNED"
+"####, r####"Public Property Let OwnNameOther(ByVal value As String)
+End Property
+"####, r####"owned-type-visibility-7864c3bc24ec4a8387706c9bf8b6f2d2.xlsm"####, r####"value"####, r####"OK|UnusedDeclarationClass|ASSIGNED"####),
+            (r####"late_named_intrinsic"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & c.CStr(value:=1)
+"####, r####"Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-fe136dd742b44fccb4aef52ac84d7691.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_named_missing_control"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & c.AbsentMember(value:=1)
+"####, r####"Public Function CStr() As String
+ CStr = "UNUSED"
+End Function
+"####, r####"owned-type-visibility-9f2b35afc1c043c980625734fc64be46.xlsm"####, r####"value"####, r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438"####),
+            (r####"late_named_ordinary_control"####, r####"Object"####, r####" Probe = "OK|" & TypeName(c) & "|" & c.OwnNameOther(value:=1)
+"####, r####"Public Function OwnNameOther(ByVal value As Long) As String
+ OwnNameOther = CStr(value)
+End Function
+"####, r####"owned-type-visibility-56e0b5ec883f4dd6aeaacd56e6851812.xlsm"####, r####"value"####, r####"OK|UnusedDeclarationClass|1"####),
+        ];
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let mut differences = Vec::new();
+        for &(label, receiver, body, member, file_name, expected_kind, expected) in cases {
+            let source = format!("{ENTRY_BEGIN}{receiver}\n{ENTRY_MIDDLE}{body}{ENTRY_END}{member}");
+            let procedure = "LateDeclarationProbe.Probe";
+            println!("NATIVE_LATE_DISPATCH_INPUT={}", serde_json::to_string(&(label, &source, procedure, file_name, expected_kind, expected)).unwrap());
+            let bytes = crate::vba_project::write_project_source(seed, &source, None).unwrap();
+            let source = crate::vba_project::read_project_source_with_code_page(&bytes, None).unwrap().unwrap();
+            let mut book = oxicells_core::parse_xlsx(&bytes).unwrap();
+            book.calculation.dbcs_language = Some(true);
+            let mut context = failure_context();
+            context.project_name = "OxiNamedProject".into();
+            context.file_name = Some(file_name.into());
+            context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+            context.environment.help_file = r"C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm".into();
+            context.application_state = Some(serde_json::from_value(serde_json::json!({
+                "enableEvents":false, "displayAlerts":false, "calculation":-4105
+            })).unwrap());
+            context.file_context = Some(serde_json::from_value(serde_json::json!({
+                "packageBytes":bytes, "readOnly":true, "editRevision":0
+            })).unwrap());
+            let requested = format!("'{}'!{procedure}", file_name.replace('\'', "''"));
+            let outcome = execute_workbook_action_in_session(book, &source, Some(&requested),
+                Vec::new(), 0, context, &mut None).unwrap();
+            let actual = serde_json::to_value(&outcome.result).unwrap();
+            let matched = if expected_kind == "value" {
+                outcome.error.is_none() && actual == serde_json::json!({"type":"string", "value":expected})
+            } else {
+                outcome.error.as_ref().is_some_and(|error|
+                    error.kind == expected_kind && error.message.ends_with(expected))
+            };
+            if !matched || outcome.workbook_changed {
+                differences.push(format!("{label}: error={:?} result={actual} changed={} expected={expected_kind}:{expected}",
+                    outcome.error.as_ref().map(|error| (error.kind, error.message.as_str())), outcome.workbook_changed));
+            }
+        }
+        assert_eq!(cases.len(), 17);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
     fn intrinsic_declaration_execution_matches_native() {
         // Run compiles on demand; these are not explicit Compile Project expectations.
         let cases: &[(&str, &str, &str, &str, &str, &str)] = &[
