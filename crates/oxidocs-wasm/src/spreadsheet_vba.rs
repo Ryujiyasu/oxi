@@ -29135,7 +29135,8 @@ impl Host for WorkbookHost<'_> {
 
     fn property_assignment_error(&self, receiver: Option<&ObjectRef>, name: &str, value: &Value) -> Option<i64> {
         if let Some(receiver) = receiver {
-            if self.is_application(receiver) && application_variant_boolean_setting(name).is_some()
+            if self.is_application(receiver) && (application_variant_boolean_setting(name).is_some()
+                || name.eq_ignore_ascii_case("screenupdating"))
                 && matches!(value, Value::Nothing) { return Some(5); }
             if self.is_workbook(receiver) && name.eq_ignore_ascii_case("saved") {
                 return Self::legacy_assignment_number(value).err();
@@ -29178,7 +29179,9 @@ impl Host for WorkbookHost<'_> {
         } else { None };
         let sheet_error = name.eq_ignore_ascii_case("standardwidth").then_some(5);
         match receiver {
-            None => range_error.or(sheet_error),
+            None => range_error.or(sheet_error).or_else(||
+                (application_variant_boolean_setting(name).is_some()
+                    || name.eq_ignore_ascii_case("screenupdating")).then_some(5)),
             Some(receiver) if self.range(receiver).is_some() => range_error,
             Some(receiver) if self.worksheet(receiver).is_some() => sheet_error,
             _ => None,
@@ -34944,7 +34947,11 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("screenupdating") {
                 // The vtable converts text to Boolean before this setter. Excel's
                 // dispatch setter accepts only the unspaced Boolean words.
-                let flag = if let Value::String(text) = &value {
+                let flag = if matches!(value, Value::Null) {
+                    false
+                } else if matches!(value, Value::Error(_)) {
+                    return Err(self.scalar_set_error("Application", "ScreenUpdating"));
+                } else if let Value::String(text) = &value {
                     match text.to_ascii_lowercase().as_str() {
                         "true" => true,
                         "false" => false,
@@ -55921,6 +55928,1607 @@ End Property
                 }
             }
         }
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
+    fn source_record_invalid_conversions_stop_before_execution_matches_native() {
+        let cases: &[(&str, &str, &str, &str)] = &[
+            ("vba_record_type_visibility_native_v2.json:private_qualified_foreign", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.HiddenRecord
+ r.Value = 22
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"ユーザ定義型は定義されていません。"####),
+            ("vba_record_type_visibility_native_v2.json:private_bare_foreign", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As HiddenRecord
+ r.Value = 22
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"ユーザ定義型は定義されていません。"####),
+            ("vba_record_type_visibility_native_v2.json:unknown_module", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As MissingTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"ユーザ定義型は定義されていません。"####),
+            ("vba_record_type_visibility_native_v2.json:wrong_project", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As WrongProject.ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"ユーザ定義型は定義されていません。"####),
+            ("vba_record_type_visibility_native_v2.json:duplicate_bare_foreign", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"名前が適切ではありません: SharedRecord"####),
+            ("vba_record_variant_boundary_native_v1.json:record_typename", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r)
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_variant_boundary_native_v1.json:record_to_variant", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ Dim v As Variant
+ r.Value = 11
+ v = r
+ Probe = TypeName(v)
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_variant_boundary_native_v1.json:record_array_typename", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ r(0).Value = 11
+ Probe = TypeName(r)
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_variant_arguments_native_v1.json:source_byval_variant", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = Describe(r)
+End Function
+Private Function Describe(ByVal value As Variant) As String
+ Describe = CStr(value)
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_variant_arguments_native_v1.json:source_byref_variant", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = Describe(r)
+End Function
+Private Function Describe(ByRef value As Variant) As String
+ Describe = CStr(value)
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_variant_arguments_native_v1.json:array_source_variant", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ r(0).Value = 11
+ Probe = Describe(r)
+End Function
+Private Function Describe(ByRef value As Variant) As String
+ Describe = CStr(value)
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_variant_arguments_native_v1.json:array_variant_assignment", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ Dim v As Variant
+ r(0).Value = 11
+ v = r
+ Probe = TypeName(v)
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_variant_arguments_native_v1.json:vartype_record", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(VarType(r))
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_variant_arguments_native_v1.json:cvar_record", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(CVar(r))
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_variant_arguments_native_v1.json:cstr_record", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(CStr(r))
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_variant_arguments_native_v1.json:forced_typed_record_argument", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = ReadRecord((r))
+End Function
+Private Function ReadRecord(ByRef value As ScopeTypes.SharedRecord) As String
+ ReadRecord = TypeName(value.Value) & ":" & CStr(value.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"変数が必要です。"####),
+            ("vba_record_variant_arguments_native_v1.json:record_to_long_assignment", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ Dim n As Long
+ r.Value = 11
+ n = r
+ Probe = CStr(n)
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_variant_arguments_native_v1.json:record_to_byval_long", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = Describe(r)
+End Function
+Private Function Describe(ByVal value As Long) As String
+ Describe = CStr(value)
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:nested_wrong_typed_argument", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.Nested
+ r.Item.Value = 11
+ Probe = ReadRecord(r.Item)
+End Function
+Private Function ReadRecord(ByRef value As ScopeOther.SharedRecord) As String
+ ReadRecord = TypeName(value.Value) & ":" & CStr(value.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"ByRef 引数の型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:different_record_assignment", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ Dim other As ScopeOther.SharedRecord
+ r.Value = 11
+ other = r
+ Probe = TypeName(other.Value) & ":" & CStr(other.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:nested_record_variant", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.Nested
+ Dim v As Variant
+ r.Item.Value = 11
+ v = r.Item
+ Probe = TypeName(v)
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_nested_and_cast_native_v1.json:nested_record_typename", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.Nested
+ r.Item.Value = 11
+ Probe = TypeName(r.Item)
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_nested_and_cast_native_v1.json:implicit_variant_assignment", r####"Attribute VB_Name = "ScopeTypes"
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ v = r
+ Probe = TypeName(v)
+End Function
+"####, "ScopeProbe.Probe", r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####),
+            ("vba_record_nested_and_cast_native_v1.json:cast_cbool", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(cbool(r))
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:cast_cbyte", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(cbyte(r))
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:cast_cint", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(cint(r))
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:cast_clng", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(clng(r))
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:cast_cdbl", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(cdbl(r))
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:cast_ccur", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(ccur(r))
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:cast_cdate", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(cdate(r))
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:cast_csng", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(csng(r))
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:cast_clnglng", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(clnglng(r))
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+            ("vba_record_nested_and_cast_native_v1.json:cast_clngptr", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(clngptr(r))
+End Function
+"####, "ScopeProbe.Probe", r####"型が一致しません。"####),
+        ];
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let mut differences = Vec::new();
+        for &(label, probe, procedure, expected) in cases {
+            let bytes = crate::vba_project::write_project_source(seed, probe, None).unwrap();
+            let source = crate::vba_project::read_project_source_with_code_page(&bytes, None).unwrap().unwrap();
+            let mut book = oxicells_core::parse_xlsx(&bytes).unwrap();
+            book.calculation.dbcs_language = Some(true);
+            let mut context = failure_context();
+            context.project_name = "OxiNamedProject".into();
+            context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+            context.file_context = Some(serde_json::from_value(serde_json::json!({
+                "packageBytes": bytes, "readOnly": true, "editRevision": 0
+            })).unwrap());
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(book, &source, Some(procedure),
+                Vec::new(), 0, context, &mut session).unwrap();
+            if outcome.error.as_ref().is_none_or(|error|
+                error.kind != "compile" || !error.message.contains(expected))
+                || outcome.workbook_changed
+            {
+                differences.push(format!("{label}: kind={:?} error={:?} changed={} expected {expected}",
+                    outcome.error.as_ref().map(|error| error.kind),
+                    outcome.error.as_ref().map(|error| error.message.as_str()), outcome.workbook_changed));
+            }
+        }
+        assert_eq!(cases.len(), 33);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
+    fn source_record_valid_argument_controls_match_native_results() {
+        let cases: &[(&str, &str, &str, &str)] = &[
+            ("vba_record_type_visibility_native_v2.json:public_qualified_foreign", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"Long:11"####),
+            ("vba_record_type_visibility_native_v2.json:private_qualified_owner", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Public Function Probe() As String
+ Dim r As ScopeTypes.HiddenRecord
+ r.Value = 22
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+"####, "ScopeTypes.Probe", r####"Long:22"####),
+            ("vba_record_type_visibility_native_v2.json:actual_project", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As OxiNamedProject.ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"Long:11"####),
+            ("vba_record_type_visibility_native_v2.json:local_bare_preferred", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Public Function Probe() As String
+ Dim r As SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+"####, "ScopeTypes.Probe", r####"Long:11"####),
+            ("vba_record_type_visibility_native_v2.json:public_second_qualified", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeOther.SharedRecord
+ r.Value = "second"
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"String:second"####),
+            ("vba_record_type_visibility_native_v2.json:actual_project_casefold", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As oxinamedproject.scopetypes.sharedrecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"Long:11"####),
+            ("vba_record_variant_boundary_native_v1.json:record_typed_parameter", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = ReadRecord(r)
+End Function
+Private Function ReadRecord(ByRef value As ScopeTypes.SharedRecord) As String
+ ReadRecord = TypeName(value.Value) & ":" & CStr(value.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"Long:11"####),
+            ("vba_record_variant_boundary_native_v1.json:record_field_typename_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"Long:11"####),
+            ("vba_record_variant_boundary_native_v1.json:record_array_field_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ r(0).Value = 11
+ Probe = TypeName(r(0).Value) & ":" & CStr(r(0).Value)
+End Function
+"####, "ScopeProbe.Probe", r####"Long:11"####),
+            ("vba_record_variant_arguments_native_v1.json:len_record_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(Len(r))
+End Function
+"####, "ScopeProbe.Probe", r####"4"####),
+            ("vba_record_variant_arguments_native_v1.json:lenb_record_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(LenB(r))
+End Function
+"####, "ScopeProbe.Probe", r####"4"####),
+            ("vba_record_variant_arguments_native_v1.json:same_record_assignment_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ Dim s As ScopeTypes.SharedRecord
+ r.Value = 11
+ s = r
+ Probe = TypeName(s.Value) & ":" & CStr(s.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"Long:11"####),
+            ("vba_record_nested_and_cast_native_v1.json:nested_long_typed_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.Nested
+ r.Item.Value = 11
+ Probe = ReadRecord(r.Item)
+End Function
+Private Function ReadRecord(ByRef value As ScopeTypes.SharedRecord) As String
+ ReadRecord = TypeName(value.Value) & ":" & CStr(value.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"Long:11"####),
+            ("vba_record_nested_and_cast_native_v1.json:nested_text_typed_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeOther.Nested
+ r.Item.Value = "second"
+ Probe = ReadRecord(r.Item)
+End Function
+Private Function ReadRecord(ByRef value As ScopeOther.SharedRecord) As String
+ ReadRecord = TypeName(value.Value) & ":" & CStr(value.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"String:second"####),
+            ("vba_record_nested_and_cast_native_v1.json:nested_field_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.Nested
+ r.Item.Value = 11
+ Probe = TypeName(r.Item.Value) & ":" & CStr(r.Item.Value)
+End Function
+"####, "ScopeProbe.Probe", r####"Long:11"####),
+        ];
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let mut differences = Vec::new();
+        for &(label, probe, procedure, expected) in cases {
+            let bytes = crate::vba_project::write_project_source(seed, probe, None).unwrap();
+            let source = crate::vba_project::read_project_source_with_code_page(&bytes, None).unwrap().unwrap();
+            let mut book = oxicells_core::parse_xlsx(&bytes).unwrap();
+            book.calculation.dbcs_language = Some(true);
+            let mut context = failure_context();
+            context.project_name = "OxiNamedProject".into();
+            context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+            context.file_context = Some(serde_json::from_value(serde_json::json!({
+                "packageBytes": bytes, "readOnly": true, "editRevision": 0
+            })).unwrap());
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(book, &source, Some(procedure),
+                Vec::new(), 0, context, &mut session).unwrap();
+            let actual = serde_json::to_value(&outcome.result).unwrap();
+            if outcome.error.is_some() || actual["value"] != expected {
+                differences.push(format!("{label}: error={:?} result={actual} expected {expected}",
+                    outcome.error.as_ref().map(|error| error.message.as_str())));
+            }
+        }
+        assert_eq!(cases.len(), 15);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
+    fn module_qualified_record_fields_preserve_scope_and_with_evaluation() {
+        let probe = r####"Attribute VB_Name = "RecordTypes"
+Option Explicit
+Public Type Application
+ Version As Long
+ Visible As Long
+ Client As Excel.Application
+ LateClient As Object
+End Type
+Public Type Container
+ Item As Application
+End Type
+Public Enum Range
+ Address = 19
+End Enum
+Attribute VB_Name = "RecordOther"
+Option Explicit
+Public Type Application
+ Code As String
+End Type
+Public Type Container
+ Item As Application
+End Type
+Private Type LocalRecord
+ Value As Long
+End Type
+Public Function OwnPrivate() As String
+ Dim own As RecordOther.LocalRecord
+ own.Value = 29
+ OwnPrivate = TypeName(own.Value) & ":" & CStr(own.Value)
+End Function
+Attribute VB_Name = "RecordScopeProbe"
+Option Explicit
+Private Trace As String
+Private Function NextIndex() As Long
+ Trace = Trace & "I"
+ NextIndex = 1
+End Function
+Private Function Payload(ByVal kind As Long) As Variant
+ Trace = Trace & "V"
+ Select Case kind
+ Case 0: Payload = False
+ Case 1: Payload = Null
+ Case 2: Set Payload = Nothing
+ Case 3: Payload = "bad"
+ Case 4: Payload = CVErr(2042)
+ Case 5: Payload = "#TRUE#"
+ End Select
+End Function
+Private Function Seventeen() As Long
+ Trace = Trace & "V"
+ Seventeen = 17
+End Function
+Public Function Probe(ByVal route As Long, ByVal kind As Long) As String
+ Dim own As RecordTypes.Application
+ Dim rows(0 To 1) As RecordTypes.Application
+ Dim nested As RecordTypes.Container
+ Dim first As Long, second As Long, failure As String
+ Dim other As RecordOther.Container
+ Trace = ""
+ On Error GoTo Failed
+ Application.ScreenUpdating = True
+ Select Case route
+ Case 0
+  own.Version = Seventeen()
+  own.Visible = 23
+  first = own.Version: second = own.Visible
+ Case 1
+  rows(NextIndex()).Version = Seventeen()
+  rows(NextIndex()).Visible = 23
+  first = rows(1).Version: second = rows(1).Visible
+ Case 2
+  nested.Item.Version = Seventeen()
+  nested.Item.Visible = 23
+  first = nested.Item.Version: second = nested.Item.Visible
+ Case 3
+  With own
+   .Version = Seventeen()
+   .Visible = 23
+  End With
+  first = own.Version: second = own.Visible
+ Case 4
+  With rows(NextIndex())
+   .Version = Seventeen()
+   .Visible = 23
+  End With
+  first = rows(1).Version: second = rows(1).Visible
+ Case 5
+  With nested.Item
+   .Version = Seventeen()
+   .Visible = 23
+  End With
+  first = nested.Item.Version: second = nested.Item.Visible
+ Case 6
+  Probe = "CONTROL|" & TypeName(Application.Version) & "|" & CStr(Application.Version) & "|" & TypeName(Range.Address) & "|" & CStr(Range.Address)
+  Exit Function
+ Case 7
+  Set own.Client = Application
+  own.Client.ScreenUpdating = Payload(kind)
+ Case 8
+  Set own.LateClient = Application
+  own.LateClient.ScreenUpdating = Payload(kind)
+ Case 9
+  Set rows(1).Client = Application
+  rows(NextIndex()).Client.ScreenUpdating = Payload(kind)
+ Case 10
+  Set own.Client = Application
+  With own.Client
+   .ScreenUpdating = Payload(kind)
+  End With
+ Case 11
+  Set rows(1).Client = Application
+  With rows(NextIndex()).Client
+   .ScreenUpdating = Payload(kind)
+  End With
+ Case 12
+  Set own.LateClient = Application
+  With own.LateClient
+   .ScreenUpdating = Payload(kind)
+  End With
+ Case 13
+  Set rows(1).LateClient = Application
+  With rows(NextIndex()).LateClient
+   .ScreenUpdating = Payload(kind)
+  End With
+ Case 14
+  Set nested.Item.Client = Application
+  nested.Item.Client.ScreenUpdating = Payload(kind)
+ Case 15
+  Set nested.Item.Client = Application
+  With nested.Item.Client
+   .ScreenUpdating = Payload(kind)
+  End With
+ Case 16
+  Set rows(1).Client = Application
+  With rows(NextIndex())
+   .Client.ScreenUpdating = Payload(kind)
+  End With
+ Case 17
+  Set rows(1).LateClient = Application
+  With rows(NextIndex())
+   .LateClient.ScreenUpdating = Payload(kind)
+  End With
+ Case 18
+  Set own.Client = Application
+  With own
+   With .Client
+    .ScreenUpdating = Payload(kind)
+   End With
+  End With
+ Case 19
+  other.Item.Code = "second"
+  nested.Item.Version = 17
+  Probe = "SCOPES|" & TypeName(other.Item.Code) & ":" & other.Item.Code & "|" & TypeName(nested.Item.Version) & ":" & CStr(nested.Item.Version)
+  Exit Function
+ Case 20
+  Probe = "PRIVATE|" & RecordOther.OwnPrivate()
+  Exit Function
+ End Select
+ Probe = "OK|" & TypeName(first) & ":" & CStr(first) & "|" & TypeName(second) & ":" & CStr(second) & "|trace=" & Trace & "|screen=" & CStr(Application.ScreenUpdating) & "|saved=" & CStr(ThisWorkbook.Saved)
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = "ERR|" & failure & "|trace=" & Trace & "|screen=" & CStr(Application.ScreenUpdating) & "|saved=" & CStr(ThisWorkbook.Saved)
+End Function
+"####;
+        let cases: &[([i64; 2], [&str; 2])] = &[
+            ([0, 0], [r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####]),
+            ([1, 0], [r####"OK|Long:17|Long:23|trace=VII|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=VII|screen=True|saved=False"####]),
+            ([2, 0], [r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####]),
+            ([3, 0], [r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####]),
+            ([4, 0], [r####"OK|Long:17|Long:23|trace=IV|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=IV|screen=True|saved=False"####]),
+            ([5, 0], [r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####]),
+            ([6, 0], [r####"CONTROL|String|16.0|Long|19"####, r####"CONTROL|String|16.0|Long|19"####]),
+            ([7, 0], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([7, 1], [r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####, r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####]),
+            ([7, 2], [r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####]),
+            ([7, 3], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([7, 4], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([7, 5], [r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####]),
+            ([8, 0], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([8, 1], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([8, 2], [r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|trace=V|screen=True|saved=False"####, r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|trace=V|screen=True|saved=False"####]),
+            ([8, 3], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####]),
+            ([8, 4], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####]),
+            ([8, 5], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####]),
+            ([9, 0], [r####"OK|Long:0|Long:0|trace=VI|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=VI|screen=False|saved=False"####]),
+            ([9, 1], [r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####, r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####]),
+            ([9, 2], [r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####]),
+            ([9, 3], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([9, 4], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([9, 5], [r####"OK|Long:0|Long:0|trace=VI|screen=True|saved=False"####, r####"OK|Long:0|Long:0|trace=VI|screen=True|saved=False"####]),
+            ([10, 0], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([10, 1], [r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####, r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####]),
+            ([10, 2], [r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####]),
+            ([10, 3], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([10, 4], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([10, 5], [r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####]),
+            ([11, 0], [r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####]),
+            ([11, 1], [r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=IV|screen=True|saved=False"####, r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=IV|screen=True|saved=False"####]),
+            ([11, 2], [r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=IV|screen=True|saved=False"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=IV|screen=True|saved=False"####]),
+            ([11, 3], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=IV|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=IV|screen=True|saved=False"####]),
+            ([11, 4], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=IV|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=IV|screen=True|saved=False"####]),
+            ([11, 5], [r####"OK|Long:0|Long:0|trace=IV|screen=True|saved=False"####, r####"OK|Long:0|Long:0|trace=IV|screen=True|saved=False"####]),
+            ([12, 0], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([12, 1], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([12, 2], [r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|trace=V|screen=True|saved=False"####, r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|trace=V|screen=True|saved=False"####]),
+            ([12, 3], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####]),
+            ([12, 4], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####]),
+            ([12, 5], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####]),
+            ([13, 0], [r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####]),
+            ([13, 1], [r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####]),
+            ([13, 2], [r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|trace=IV|screen=True|saved=False"####, r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|trace=IV|screen=True|saved=False"####]),
+            ([13, 3], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####]),
+            ([13, 4], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####]),
+            ([13, 5], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####]),
+            ([14, 0], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([14, 1], [r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####, r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####]),
+            ([14, 2], [r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####]),
+            ([14, 3], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([14, 4], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([14, 5], [r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####]),
+            ([15, 0], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([15, 1], [r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####, r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####]),
+            ([15, 2], [r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####]),
+            ([15, 3], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([15, 4], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([15, 5], [r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####]),
+            ([16, 0], [r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####]),
+            ([16, 1], [r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=IV|screen=True|saved=False"####, r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=IV|screen=True|saved=False"####]),
+            ([16, 2], [r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=IV|screen=True|saved=False"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=IV|screen=True|saved=False"####]),
+            ([16, 3], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=IV|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=IV|screen=True|saved=False"####]),
+            ([16, 4], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=IV|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=IV|screen=True|saved=False"####]),
+            ([16, 5], [r####"OK|Long:0|Long:0|trace=IV|screen=True|saved=False"####, r####"OK|Long:0|Long:0|trace=IV|screen=True|saved=False"####]),
+            ([17, 0], [r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####]),
+            ([17, 1], [r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=IV|screen=False|saved=False"####]),
+            ([17, 2], [r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|trace=IV|screen=True|saved=False"####, r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|trace=IV|screen=True|saved=False"####]),
+            ([17, 3], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####]),
+            ([17, 4], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####]),
+            ([17, 5], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=IV|screen=True|saved=False"####]),
+            ([18, 0], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([18, 1], [r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####, r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####]),
+            ([18, 2], [r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####]),
+            ([18, 3], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([18, 4], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([18, 5], [r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####]),
+            ([19, 0], [r####"SCOPES|String:second|Long:17"####, r####"SCOPES|String:second|Long:17"####]),
+            ([20, 0], [r####"PRIVATE|Long:29"####, r####"PRIVATE|Long:29"####]),
+        ];
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let bytes = crate::vba_project::write_project_source(seed, probe, None).unwrap();
+        let source = crate::vba_project::read_project_source_with_code_page(&bytes, None).unwrap().unwrap();
+        let mut base = oxicells_core::parse_xlsx(&bytes).unwrap();
+        base.calculation.dbcs_language = Some(true);
+        let mut differences = Vec::new();
+        for &(args, expected) in cases {
+            let mut current = base.clone();
+            let mut session = None;
+            for (index, phase) in ["cold", "warm"].into_iter().enumerate() {
+                let mut context = failure_context();
+                context.project_name = "OxiNamedProject".into();
+                context.file_name = Some("RecordReceiverScope.xlsm".into());
+                context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+                context.environment.help_file = r"C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm".into();
+                if index == 0 {
+                    context.application_state = Some(serde_json::from_str(r####"{"calculation":-4105,"calculateBeforeSave":true,"screenUpdating":true,"enableEvents":false,"displayAlerts":false,"statusBar":null,"cursor":-4143,"interactive":true}"####).unwrap());
+                }
+                // Native's explicit automatic-calculation setup dirties the book.
+                // Keep that observed initial state; do not rewrite expected Saved.
+                context.file_context = Some(serde_json::from_value(serde_json::json!({
+                    "packageBytes": bytes, "readOnly": true, "editRevision": 1
+                })).unwrap());
+                let outcome = execute_workbook_action_in_session(current, &source, Some("RecordScopeProbe.Probe"),
+                    args.into_iter().map(Value::Integer).collect(), 0, context, &mut session).unwrap();
+                let actual = serde_json::to_value(&outcome.result).unwrap();
+                if outcome.error.is_some() || actual["value"] != expected[index] {
+                    differences.push(format!("args={args:?} phase={phase}: error={:?} result={actual} expected {}", outcome.error.as_ref().map(|error| error.message.as_str()), expected[index]));
+                }
+                current = outcome.workbook;
+            }
+        }
+        assert_eq!(cases.len(), 81);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
+    fn module_qualified_record_receivers_match_native_scope_and_order() {
+        let probe = r####"Attribute VB_Name = "RecordTypes"
+Option Explicit
+Public Type Application
+ Version As Long
+ Visible As Long
+ Client As Excel.Application
+ LateClient As Object
+End Type
+Public Type Container
+ Item As Application
+End Type
+Public Enum Range
+ Address = 19
+End Enum
+Attribute VB_Name = "RecordScopeProbe"
+Option Explicit
+Private Trace As String
+Private Function NextIndex() As Long
+ Trace = Trace & "I"
+ NextIndex = 1
+End Function
+Private Function Payload(ByVal kind As Long) As Variant
+ Trace = Trace & "V"
+ Select Case kind
+ Case 0: Payload = False
+ Case 1: Payload = Null
+ Case 2: Set Payload = Nothing
+ Case 3: Payload = "bad"
+ Case 4: Payload = CVErr(2042)
+ Case 5: Payload = "#TRUE#"
+ End Select
+End Function
+Private Function Seventeen() As Long
+ Trace = Trace & "V"
+ Seventeen = 17
+End Function
+Public Function Probe(ByVal route As Long, ByVal kind As Long) As String
+ Dim own As RecordTypes.Application
+ Dim rows(0 To 1) As RecordTypes.Application
+ Dim nested As RecordTypes.Container
+ Dim first As Long, second As Long, failure As String
+ Trace = ""
+ On Error GoTo Failed
+ Application.ScreenUpdating = True
+ Select Case route
+ Case 0
+  own.Version = Seventeen()
+  own.Visible = 23
+  first = own.Version: second = own.Visible
+ Case 1
+  rows(NextIndex()).Version = Seventeen()
+  rows(NextIndex()).Visible = 23
+  first = rows(1).Version: second = rows(1).Visible
+ Case 2
+  nested.Item.Version = Seventeen()
+  nested.Item.Visible = 23
+  first = nested.Item.Version: second = nested.Item.Visible
+ Case 3
+  With own
+   .Version = Seventeen()
+   .Visible = 23
+  End With
+  first = own.Version: second = own.Visible
+ Case 4
+  With rows(NextIndex())
+   .Version = Seventeen()
+   .Visible = 23
+  End With
+  first = rows(1).Version: second = rows(1).Visible
+ Case 5
+  With nested.Item
+   .Version = Seventeen()
+   .Visible = 23
+  End With
+  first = nested.Item.Version: second = nested.Item.Visible
+ Case 6
+  Probe = "CONTROL|" & TypeName(Application.Version) & "|" & CStr(Application.Version) & "|" & TypeName(Range.Address) & "|" & CStr(Range.Address)
+  Exit Function
+ Case 7
+  Set own.Client = Application
+  own.Client.ScreenUpdating = Payload(kind)
+ Case 8
+  Set own.LateClient = Application
+  own.LateClient.ScreenUpdating = Payload(kind)
+ Case 9
+  Set rows(1).Client = Application
+  rows(NextIndex()).Client.ScreenUpdating = Payload(kind)
+ Case 10
+  Set own.Client = Application
+  With own.Client
+   .ScreenUpdating = Payload(kind)
+  End With
+ End Select
+ Probe = "OK|" & TypeName(first) & ":" & CStr(first) & "|" & TypeName(second) & ":" & CStr(second) & "|trace=" & Trace & "|screen=" & CStr(Application.ScreenUpdating) & "|saved=" & CStr(ThisWorkbook.Saved)
+ Exit Function
+Failed:
+ failure = CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+ Probe = "ERR|" & failure & "|trace=" & Trace & "|screen=" & CStr(Application.ScreenUpdating) & "|saved=" & CStr(ThisWorkbook.Saved)
+End Function
+"####;
+        let cases: &[([i64; 2], [&str; 2])] = &[
+            ([0, 0], [r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####]),
+            ([1, 0], [r####"OK|Long:17|Long:23|trace=VII|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=VII|screen=True|saved=False"####]),
+            ([2, 0], [r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####]),
+            ([3, 0], [r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####]),
+            ([4, 0], [r####"OK|Long:17|Long:23|trace=IV|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=IV|screen=True|saved=False"####]),
+            ([5, 0], [r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####, r####"OK|Long:17|Long:23|trace=V|screen=True|saved=False"####]),
+            ([6, 0], [r####"CONTROL|String|16.0|Long|19"####, r####"CONTROL|String|16.0|Long|19"####]),
+            ([7, 0], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([7, 1], [r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####, r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####]),
+            ([7, 2], [r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####]),
+            ([7, 3], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([7, 4], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([7, 5], [r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####]),
+            ([8, 0], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([8, 1], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([8, 2], [r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|trace=V|screen=True|saved=False"####, r####"ERR|5|OxiNamedProject|プロシージャの呼び出し、または引数が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000005|trace=V|screen=True|saved=False"####]),
+            ([8, 3], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####]),
+            ([8, 4], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####]),
+            ([8, 5], [r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####, r####"ERR|1004|Microsoft Excel|Application クラスの ScreenUpdating プロパティを設定できません。|xlmain11.chm|1001004|trace=V|screen=True|saved=False"####]),
+            ([9, 0], [r####"OK|Long:0|Long:0|trace=VI|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=VI|screen=False|saved=False"####]),
+            ([9, 1], [r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####, r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####]),
+            ([9, 2], [r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####]),
+            ([9, 3], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([9, 4], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([9, 5], [r####"OK|Long:0|Long:0|trace=VI|screen=True|saved=False"####, r####"OK|Long:0|Long:0|trace=VI|screen=True|saved=False"####]),
+            ([10, 0], [r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=False|saved=False"####]),
+            ([10, 1], [r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####, r####"ERR|94|OxiNamedProject|Null の使い方が不正です。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000094|trace=V|screen=True|saved=False"####]),
+            ([10, 2], [r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091|trace=V|screen=True|saved=False"####]),
+            ([10, 3], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([10, 4], [r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|trace=V|screen=True|saved=False"####]),
+            ([10, 5], [r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####, r####"OK|Long:0|Long:0|trace=V|screen=True|saved=False"####]),
+        ];
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let bytes = crate::vba_project::write_project_source(seed, probe, None).unwrap();
+        let source = crate::vba_project::read_project_source_with_code_page(&bytes, None).unwrap().unwrap();
+        let mut base = oxicells_core::parse_xlsx(&bytes).unwrap();
+        base.calculation.dbcs_language = Some(true);
+        let mut differences = Vec::new();
+        for &(args, expected) in cases {
+            let mut current = base.clone();
+            let mut session = None;
+            for (index, phase) in ["cold", "warm"].into_iter().enumerate() {
+                let mut context = failure_context();
+                context.project_name = "OxiNamedProject".into();
+                context.file_name = Some("RecordReceiverScope.xlsm".into());
+                context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+                context.environment.help_file = r"C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm".into();
+                if index == 0 {
+                    context.application_state = Some(serde_json::from_str(r####"{"calculation":-4105,"calculateBeforeSave":true,"screenUpdating":true,"enableEvents":false,"displayAlerts":false,"statusBar":null,"cursor":-4143,"interactive":true}"####).unwrap());
+                }
+                // Native's explicit automatic-calculation setup dirties the book.
+                // Keep that observed initial state; do not rewrite expected Saved.
+                context.file_context = Some(serde_json::from_value(serde_json::json!({
+                    "packageBytes": bytes, "readOnly": true, "editRevision": 1
+                })).unwrap());
+                let outcome = execute_workbook_action_in_session(current, &source, Some("RecordScopeProbe.Probe"),
+                    args.into_iter().map(Value::Integer).collect(), 0, context, &mut session).unwrap();
+                let actual = serde_json::to_value(&outcome.result).unwrap();
+                if outcome.error.is_some() || actual["value"] != expected[index] {
+                    differences.push(format!("args={args:?} phase={phase}: error={:?} result={actual} expected {}", outcome.error.as_ref().map(|error| error.message.as_str()), expected[index]));
+                }
+                current = outcome.workbook;
+            }
+        }
+        assert_eq!(cases.len(), 31);
         assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
     }
 

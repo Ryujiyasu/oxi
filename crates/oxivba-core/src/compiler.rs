@@ -50,6 +50,8 @@ pub enum CompileErrorKind {
     DivisionByZero,
     InvalidNull,
     UserDefinedTypeNotDefined,
+    UserDefinedTypeToVariant,
+    ByRefArgumentTypeMismatch,
     CircularModuleReference,
     WrongNumberOfArguments,
     NamedArgumentNotFound,
@@ -262,6 +264,10 @@ impl CompileError {
             (CompileErrorKind::NamedArgumentsNotAllowed, ErrorLanguage::Japanese) => "\u{540d}\u{524d}\u{4ed8}\u{304d}\u{5f15}\u{6570}\u{306f}\u{4f7f}\u{3048}\u{307e}\u{305b}\u{3093}\u{3002}",
             (CompileErrorKind::NamedArgumentNotFound, ErrorLanguage::English) => "Named argument not found",
             (CompileErrorKind::NamedArgumentNotFound, ErrorLanguage::Japanese) => "名前付き引数が見つかりません。",
+            (CompileErrorKind::ByRefArgumentTypeMismatch, ErrorLanguage::English) => "ByRef argument type mismatch",
+            (CompileErrorKind::ByRefArgumentTypeMismatch, ErrorLanguage::Japanese) => "ByRef 引数の型が一致しません。",
+            (CompileErrorKind::UserDefinedTypeToVariant, ErrorLanguage::English) => "Only user-defined types defined in public object modules can be coerced to or from a variant or passed to late-bound functions",
+            (CompileErrorKind::UserDefinedTypeToVariant, ErrorLanguage::Japanese) => "パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。",
             (CompileErrorKind::UserDefinedTypeNotDefined, ErrorLanguage::English) => "User-defined type not defined",
             (CompileErrorKind::UserDefinedTypeNotDefined, ErrorLanguage::Japanese) => "ユーザ定義型は定義されていません。",
             (CompileErrorKind::CircularModuleReference, ErrorLanguage::English) => "Circular dependencies between modules",
@@ -579,6 +585,16 @@ enum Type {
     Unknown,
 }
 
+impl Type {
+    fn contains_record(&self) -> bool {
+        match self {
+            Self::Record(_) => true,
+            Self::Array(element) => element.contains_record(),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ConstantBinding<'a> {
     expression: Expr,
@@ -618,6 +634,7 @@ struct Checker<'a> {
     constants: BTreeSet<String>,
     constant_expressions: BTreeMap<String, ConstantBinding<'a>>,
     records: BTreeMap<String, &'a TypeDef>,
+    ambiguous_records: BTreeSet<String>,
     enums: BTreeSet<String>,
     later_locals: BTreeSet<String>,
     with_types: Vec<Type>,
@@ -671,6 +688,7 @@ impl<'a> Checker<'a> {
             constants: BTreeSet::new(),
             constant_expressions: BTreeMap::new(),
             records: BTreeMap::new(),
+            ambiguous_records: BTreeSet::new(),
             enums: BTreeSet::new(),
             later_locals: BTreeSet::new(),
             with_types: Vec::new(),
@@ -733,11 +751,37 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        // Qualified record names belong to their defining standard module.
+        // Private definitions are visible through that name only in their owner.
+        for (owner, source) in &globals.standard_modules {
+            for item in &source.items {
+                if let ModuleItem::Type(record) = item {
+                    let local = module.items.iter().any(|item| matches!(item,
+                        ModuleItem::Type(found) if found.span.start == record.span.start
+                            && found.name.eq_ignore_ascii_case(&record.name)));
+                    if record.visibility != Visibility::Private || local {
+                        checker.records.insert(key(&format!("{owner}.{}", record.name)), record);
+                    }
+                    if record.visibility != Visibility::Private {
+                        let name = key(&record.name);
+                        if checker.records.insert(name.clone(), record).is_some() {
+                            checker.ambiguous_records.insert(name);
+                        }
+                    }
+                }
+            }
+        }
         for source in [globals, module] {
             for item in &source.items {
                 match item {
-                    ModuleItem::Type(record) => {
-                        checker.records.insert(key(&record.name), record);
+                    ModuleItem::Type(record)
+                        if globals.standard_modules.is_empty() || std::ptr::eq(source, module) =>
+                    {
+                        // Local declarations win over equally named public
+                        // records elsewhere; foreign Private types stay hidden.
+                        let name = key(&record.name);
+                        checker.records.insert(name.clone(), record);
+                        checker.ambiguous_records.remove(&name);
                     }
                     ModuleItem::Enum(enumeration) => {
                         checker.enums.insert(key(&enumeration.name));
@@ -937,7 +981,22 @@ impl<'a> Checker<'a> {
     }
 
     fn source_type_key(&self, name: &str) -> String {
-        self.source_class_key(name).unwrap_or_else(|| key(name))
+        let lowered = key(name);
+        let local = lowered.split_once('.').filter(|(project, _)|
+            project.eq_ignore_ascii_case(self.project_name)).map_or(lowered.as_str(), |(_, name)| name);
+        if self.ambiguous_records.contains(local) { return local.to_owned(); }
+        if let Some(record) = self.records.get(local) {
+            for (owner, module) in &self.globals.standard_modules {
+                if module.items.iter().any(|item| matches!(item,
+                    ModuleItem::Type(found) if found.span.start == record.span.start
+                        && found.name.eq_ignore_ascii_case(&record.name))) {
+                    let qualified = key(&format!("{owner}.{}", record.name));
+                    if self.records.contains_key(&qualified) { return qualified; }
+                }
+            }
+            return local.to_owned();
+        }
+        self.source_class_key(name).unwrap_or(lowered)
     }
 
     fn standard_module_key(&self, name: &str) -> Option<String> {
@@ -972,6 +1031,11 @@ impl<'a> Checker<'a> {
             return Ok(());
         }
         let name = self.source_type_key(&kind.name);
+        if self.ambiguous_records.contains(&name) {
+            let mut failure = self.failure(CompileErrorKind::AmbiguousName, span);
+            failure.symbol = Some(kind.name.clone());
+            return Err(failure);
+        }
         if name == "decimal" {
             return Err(self.failure(CompileErrorKind::SyntaxError, span));
         }
@@ -1889,13 +1953,25 @@ impl<'a> Checker<'a> {
                 .records
                 .get(&record)
                 .and_then(|record| {
-                    record
-                        .fields
-                        .iter()
-                        .find(|field| field.name.eq_ignore_ascii_case(name))
+                    record.fields.iter().find(|field| field.name.eq_ignore_ascii_case(name))
+                        .map(|field| (record, field))
                 })
-                .map(|field| {
-                    let kind = self.declared(&field.type_name);
+                .map(|(record, field)| {
+                    // An unqualified field type is relative to the record's
+                    // defining module, even when the caller has other aliases.
+                    let mut declared = field.type_name.clone();
+                    if !declared.name.contains('.') {
+                        if let Some((owner, _)) = self.globals.standard_modules.iter().find(|(_, module)|
+                            module.items.iter().any(|item| matches!(item,
+                                ModuleItem::Type(found) if found.span.start == record.span.start
+                                    && found.name.eq_ignore_ascii_case(&record.name)))
+                            && module.items.iter().any(|item| matches!(item,
+                                ModuleItem::Type(found) if found.name.eq_ignore_ascii_case(&declared.name))))
+                        {
+                            declared.name = format!("{owner}.{}", declared.name);
+                        }
+                    }
+                    let kind = self.declared(&declared);
                     if field.array_bounds.is_some() {
                         Type::Array(Box::new(kind))
                     } else {
@@ -2795,6 +2871,20 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    fn record_conversion_error(&self, value: &Expr, target: &Type) -> Option<CompileErrorKind> {
+        let source = self.infer(value);
+        if !source.contains_record() { return None; }
+        if matches!(target, Type::Variant) {
+            return Some(CompileErrorKind::UserDefinedTypeToVariant);
+        }
+        if matches!(source, Type::Record(_)) && (matches!(target, Type::Scalar | Type::Text)
+            || matches!(target, Type::Record(_)) && source != *target)
+        {
+            return Some(CompileErrorKind::TypeMismatch);
+        }
+        None
+    }
+
     fn expression(&self, expr: &Expr) -> Result<(), CompileError> {
         self.check_expression(expr, false)
     }
@@ -3316,6 +3406,24 @@ impl<'a> Checker<'a> {
                         })
                         .or_else(|| parameters.get(index));
                     if let (Some(parameter), Some(value)) = (parameter, argument.value.as_ref()) {
+                        let declared = self.declared(&parameter.type_name);
+                        let actual = self.infer(value);
+                        if matches!(declared, Type::Record(_)) && matches!(actual, Type::Record(_)) {
+                            if forced || argument.force_by_value || matches!(value, Expr::Group { .. }) {
+                                failure = Some(self.failure(CompileErrorKind::VariableRequired, value.span()));
+                                return;
+                            }
+                            if parameter.mode == ParamMode::ByRef && actual != declared {
+                                failure = Some(self.failure(CompileErrorKind::ByRefArgumentTypeMismatch, value.span()));
+                                return;
+                            }
+                        }
+                        if !parameter.is_array || parameter.mode == ParamMode::ParamArray {
+                            if let Some(kind) = self.record_conversion_error(value, &declared) {
+                                failure = Some(self.failure(kind, value.span()));
+                                return;
+                            }
+                        }
                         if direct_nothing(value)
                             && matches!(
                                 self.declared(&parameter.type_name),
@@ -3361,6 +3469,23 @@ impl<'a> Checker<'a> {
             {
                 failure = Some(self.failure(CompileErrorKind::SyntaxError, *span));
                 return;
+            }
+            if let Some(name) = bare_name(target).filter(|name|
+                !self.variables.contains_key(&key(name)) && !self.functions.contains_key(&key(name)))
+            {
+                let destination = match key(name).as_str() {
+                    "typename" | "vartype" | "cvar" => Some(Type::Variant),
+                    "cstr" => Some(Type::Text),
+                    "cbool" | "cbyte" | "cint" | "clng" | "cdbl" | "ccur" | "cdate"
+                        | "csng" | "clnglng" | "clngptr" => Some(Type::Scalar),
+                    _ => None,
+                };
+                if let (Some(destination), [Argument { value: Some(value), .. }]) = (destination, args.as_slice()) {
+                    if let Some(kind) = self.record_conversion_error(value, &destination) {
+                        failure = Some(self.failure(kind, value.span()));
+                        return;
+                    }
+                }
             }
             if bare_name(target).is_some_and(|name| {
                 matches!(key(name).as_str(), "len" | "lenb")
@@ -3466,6 +3591,13 @@ impl<'a> Checker<'a> {
                     return Err(self.failure(CompileErrorKind::ReadOnlyProperty, target.span()));
                 }
                 if matches!(statement, Statement::Assign { .. }) {
+                    let assigned = match self.infer(target) {
+                        Type::Unknown if !self.explicit && bare_name(target).is_some() => Type::Variant,
+                        kind => kind,
+                    };
+                    if let Some(kind) = self.record_conversion_error(value, &assigned) {
+                        return Err(self.failure(kind, value.span()));
+                    }
                     if matches!(value, Expr::Literal(Literal::Nothing, _))
                         && !matches!(
                             self.infer(target),
@@ -4183,5 +4315,1188 @@ fn collect_locals(body: &[Statement], names: &mut BTreeSet<String>) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod qualified_record_scope_tests {
+    use super::*;
+
+    #[test]
+    fn qualified_record_visibility_matches_native_compiler() {
+        // Exact source and compiler diagnostics measured with Excel; successful
+        // executions are covered separately by host runtime comparisons.
+        let cases: &[(&str, &str, Option<&str>)] = &[
+            ("public_qualified_foreign", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, None),
+            ("private_qualified_owner", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Public Function Probe() As String
+ Dim r As ScopeTypes.HiddenRecord
+ r.Value = 22
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+"####, None),
+            ("private_qualified_foreign", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.HiddenRecord
+ r.Value = 22
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, Some(r####"ユーザ定義型は定義されていません。"####)),
+            ("private_bare_foreign", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As HiddenRecord
+ r.Value = 22
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, Some(r####"ユーザ定義型は定義されていません。"####)),
+            ("unknown_module", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As MissingTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, Some(r####"ユーザ定義型は定義されていません。"####)),
+            ("wrong_project", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As WrongProject.ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, Some(r####"ユーザ定義型は定義されていません。"####)),
+            ("actual_project", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As OxiNamedProject.ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, None),
+            ("duplicate_bare_foreign", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, Some(r####"名前が適切ではありません: SharedRecord"####)),
+            ("local_bare_preferred", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Public Function Probe() As String
+ Dim r As SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+"####, None),
+            ("public_second_qualified", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeOther.SharedRecord
+ r.Value = "second"
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, None),
+            ("actual_project_casefold", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As oxinamedproject.scopetypes.sharedrecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, None),
+        ];
+        let references = CompileReferences {
+            project_name: Some("OxiNamedProject".into()),
+            ..CompileReferences::default()
+        };
+        let mut differences = Vec::new();
+        for &(name, source, expected) in cases {
+            let actual = compile_project_with_references(source, &references)
+                .err().map(|found| found.error.message(ErrorLanguage::Japanese));
+            if actual.as_deref() != expected {
+                differences.push(format!("{name}: actual={actual:?} expected={expected:?}"));
+            }
+        }
+        assert_eq!(cases.len(), 11);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod record_variant_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn record_variant_boundaries_match_native_compiler() {
+        let cases: &[(&str, &str, Option<&str>)] = &[
+            ("record_typename", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r)
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("record_to_variant", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ Dim v As Variant
+ r.Value = 11
+ v = r
+ Probe = TypeName(v)
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("record_typed_parameter", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = ReadRecord(r)
+End Function
+Private Function ReadRecord(ByRef value As ScopeTypes.SharedRecord) As String
+ ReadRecord = TypeName(value.Value) & ":" & CStr(value.Value)
+End Function
+"####, None),
+            ("record_field_typename_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = TypeName(r.Value) & ":" & CStr(r.Value)
+End Function
+"####, None),
+            ("record_array_typename", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ r(0).Value = 11
+ Probe = TypeName(r)
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("record_array_field_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ r(0).Value = 11
+ Probe = TypeName(r(0).Value) & ":" & CStr(r(0).Value)
+End Function
+"####, None),
+        ];
+        let references = CompileReferences {
+            project_name: Some("OxiNamedProject".into()),
+            ..CompileReferences::default()
+        };
+        let mut differences = Vec::new();
+        for &(name, source, expected) in cases {
+            let actual = compile_project_with_references(source, &references)
+                .err().map(|found| found.error.message(ErrorLanguage::Japanese));
+            if actual.as_deref() != expected {
+                differences.push(format!("{name}: actual={actual:?} expected={expected:?}"));
+            }
+        }
+        assert_eq!(cases.len(), 6);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod record_variant_argument_tests {
+    use super::*;
+
+    #[test]
+    fn record_variant_arguments_match_native_compiler() {
+        let cases: &[(&str, &str, Option<&str>)] = &[
+            ("source_byval_variant", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = Describe(r)
+End Function
+Private Function Describe(ByVal value As Variant) As String
+ Describe = CStr(value)
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("source_byref_variant", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = Describe(r)
+End Function
+Private Function Describe(ByRef value As Variant) As String
+ Describe = CStr(value)
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("array_source_variant", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ r(0).Value = 11
+ Probe = Describe(r)
+End Function
+Private Function Describe(ByRef value As Variant) As String
+ Describe = CStr(value)
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("array_variant_assignment", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ Dim v As Variant
+ r(0).Value = 11
+ v = r
+ Probe = TypeName(v)
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("vartype_record", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(VarType(r))
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("cvar_record", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(CVar(r))
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("cstr_record", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(CStr(r))
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("len_record_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(Len(r))
+End Function
+"####, None),
+            ("lenb_record_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(LenB(r))
+End Function
+"####, None),
+            ("same_record_assignment_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ Dim s As ScopeTypes.SharedRecord
+ r.Value = 11
+ s = r
+ Probe = TypeName(s.Value) & ":" & CStr(s.Value)
+End Function
+"####, None),
+            ("forced_typed_record_argument", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = ReadRecord((r))
+End Function
+Private Function ReadRecord(ByRef value As ScopeTypes.SharedRecord) As String
+ ReadRecord = TypeName(value.Value) & ":" & CStr(value.Value)
+End Function
+"####, Some(r####"変数が必要です。"####)),
+            ("record_to_long_assignment", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ Dim n As Long
+ r.Value = 11
+ n = r
+ Probe = CStr(n)
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("record_to_byval_long", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = Describe(r)
+End Function
+Private Function Describe(ByVal value As Long) As String
+ Describe = CStr(value)
+End Function
+"####, Some(r####"型が一致しません。"####)),
+        ];
+        let references = CompileReferences {
+            project_name: Some("OxiNamedProject".into()),
+            ..CompileReferences::default()
+        };
+        let mut differences = Vec::new();
+        for &(name, source, expected) in cases {
+            let actual = compile_project_with_references(source, &references)
+                .err().map(|found| found.error.message(ErrorLanguage::Japanese));
+            if actual.as_deref() != expected {
+                differences.push(format!("{name}: actual={actual:?} expected={expected:?}"));
+            }
+        }
+        assert_eq!(cases.len(), 13);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod record_nested_and_cast_tests {
+    use super::*;
+
+    #[test]
+    fn record_nested_and_cast_match_native_compiler() {
+        let cases: &[(&str, &str, Option<&str>)] = &[
+            ("nested_long_typed_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.Nested
+ r.Item.Value = 11
+ Probe = ReadRecord(r.Item)
+End Function
+Private Function ReadRecord(ByRef value As ScopeTypes.SharedRecord) As String
+ ReadRecord = TypeName(value.Value) & ":" & CStr(value.Value)
+End Function
+"####, None),
+            ("nested_text_typed_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeOther.Nested
+ r.Item.Value = "second"
+ Probe = ReadRecord(r.Item)
+End Function
+Private Function ReadRecord(ByRef value As ScopeOther.SharedRecord) As String
+ ReadRecord = TypeName(value.Value) & ":" & CStr(value.Value)
+End Function
+"####, None),
+            ("nested_wrong_typed_argument", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.Nested
+ r.Item.Value = 11
+ Probe = ReadRecord(r.Item)
+End Function
+Private Function ReadRecord(ByRef value As ScopeOther.SharedRecord) As String
+ ReadRecord = TypeName(value.Value) & ":" & CStr(value.Value)
+End Function
+"####, Some(r####"ByRef 引数の型が一致しません。"####)),
+            ("different_record_assignment", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ Dim other As ScopeOther.SharedRecord
+ r.Value = 11
+ other = r
+ Probe = TypeName(other.Value) & ":" & CStr(other.Value)
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("nested_record_variant", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.Nested
+ Dim v As Variant
+ r.Item.Value = 11
+ v = r.Item
+ Probe = TypeName(v)
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("nested_record_typename", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.Nested
+ r.Item.Value = 11
+ Probe = TypeName(r.Item)
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("nested_field_control", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Public Type Nested
+ Item As SharedRecord
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.Nested
+ r.Item.Value = 11
+ Probe = TypeName(r.Item.Value) & ":" & CStr(r.Item.Value)
+End Function
+"####, None),
+            ("implicit_variant_assignment", r####"Attribute VB_Name = "ScopeTypes"
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ v = r
+ Probe = TypeName(v)
+End Function
+"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####)),
+            ("cast_cbool", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(cbool(r))
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("cast_cbyte", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(cbyte(r))
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("cast_cint", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(cint(r))
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("cast_clng", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(clng(r))
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("cast_cdbl", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(cdbl(r))
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("cast_ccur", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(ccur(r))
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("cast_cdate", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(cdate(r))
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("cast_csng", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(csng(r))
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("cast_clnglng", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(clnglng(r))
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            ("cast_clngptr", r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ r.Value = 11
+ Probe = CStr(clngptr(r))
+End Function
+"####, Some(r####"型が一致しません。"####)),
+        ];
+        let references = CompileReferences {
+            project_name: Some("OxiNamedProject".into()),
+            ..CompileReferences::default()
+        };
+        let mut differences = Vec::new();
+        for &(name, source, expected) in cases {
+            let actual = compile_project_with_references(source, &references)
+                .err().map(|found| found.error.message(ErrorLanguage::Japanese));
+            if actual.as_deref() != expected {
+                differences.push(format!("{name}: actual={actual:?} expected={expected:?}"));
+            }
+        }
+        assert_eq!(cases.len(), 18);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
     }
 }

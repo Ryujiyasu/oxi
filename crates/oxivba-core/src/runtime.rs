@@ -5242,6 +5242,28 @@ impl<'a> Runtime<'a> {
                     }
                     return Ok(Flow::Continue);
                 }
+                // A declared host property's scalar argument is bound before
+                // evaluating its receiver, including indices in record fields.
+                let typed_host_scalar = match target {
+                    Expr::Member { object, name, .. }
+                        if self.source_class_name(object, frame).is_none()
+                            && self.source_expression_type(object, frame)
+                                .is_none_or(|kind| self.find_type(&kind.name).is_none()) =>
+                        self.assignment_receiver_type(object, frame).and_then(|owner| {
+                            let host = self.host.as_deref()?;
+                            if host.property_assignment_value(None, name, &value, false).is_some() {
+                                return None;
+                            }
+                            host.assignment_call_result(Some(&owner), name)
+                        }),
+                    _ => None,
+                }.filter(|kind| matches!(self.parameter_scalar_name(kind).as_str(),
+                    "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double"
+                        | "currency" | "date" | "boolean" | "string"));
+                let value = if let Some(kind) = typed_host_scalar {
+                    let value = self.scalar_operand(value, frame, span.line)?;
+                    self.coerce_runtime(value, &kind, span.line, self.this_year())?
+                } else { value };
                 let variant_member = match target {
                     Expr::Member { object, name, span: at, .. }
                         if self.source_expression_type(object, frame)
@@ -5280,6 +5302,13 @@ impl<'a> Runtime<'a> {
                                     Some(WithSubject::Object { assignment_type: None, .. })),
                                 _ => true,
                             };
+                            if automation && matches!(value, Value::Nothing) {
+                                if let Some(number) = self.host.as_deref().and_then(|host|
+                                    host.property_assignment_error(Some(&receiver), name, &value)) {
+                                    return Err(language_error(number,
+                                        format!("invalid value for property {name}"), span.line));
+                                }
+                            }
                             if let Some(prepared) = self.prepare_source_dispatch_value(
                                 &receiver, name, value.clone(), 0, true, automation, frame, span.line,
                             )? {
@@ -5491,11 +5520,22 @@ impl<'a> Runtime<'a> {
             Statement::With { subject, body, .. } => {
                 let line = subject.span().line;
                 self.ensure_expression_module(subject, frame)?;
-                // A record first, because `eval_object` cannot make one into an
-                // object and would refuse the whole block.
+                // Capture a record-rooted slot once, including any array index.
+                // Its value can itself be an object field rather than a record.
                 let held = if self.record_rooted(frame, subject) {
-                    self.record_slot(subject, frame, line)?
-                        .map(|root| WithSubject::Record { root })
+                    let class = self.source_class_name(subject, frame);
+                    let early_application = self.early_application_expression(subject, frame);
+                    let assignment_type = self.assignment_receiver_type(subject, frame);
+                    self.record_slot(subject, frame, line)?.map(|root| {
+                        let value = root.snapshot();
+                        match value {
+                            Value::Record(_) => WithSubject::Record { root },
+                            Value::Object(receiver) => WithSubject::Object {
+                                receiver, class, early_application, assignment_type,
+                            },
+                            value => WithSubject::Value(value),
+                        }
+                    })
                 } else {
                     None
                 };
@@ -7057,15 +7097,46 @@ impl<'a> Runtime<'a> {
     /// The module's `Type` declarations, by name. Returned owned because the
     /// caller goes on to use `&mut self` while building the fields.
     fn find_type(&self, name: &str) -> Option<TypeDef> {
-        self.module.items.iter().find_map(|item| match item {
+        let local = name.split_once('.').filter(|(project, _)|
+            project.eq_ignore_ascii_case(&self.project_name)).map_or(name, |(_, name)| name);
+        if let Some((owner, name)) = local.split_once('.') {
+            let (_, module) = self.main_module.standard_modules.iter()
+                .find(|(found, _)| found.eq_ignore_ascii_case(owner))?;
+            let definition = module.items.iter().find_map(|item| match item {
+                ModuleItem::Type(definition) if definition.name.eq_ignore_ascii_case(name) => Some(definition),
+                _ => None,
+            })?;
+            return Some(self.scoped_record_definition(owner, module, definition));
+        }
+        let definition = self.module.items.iter().find_map(|item| match item {
             ModuleItem::Type(definition) if definition.name.eq_ignore_ascii_case(name) => {
-                Some(definition.clone())
+                Some(definition)
             }
             _ => None,
         }).or_else(|| self.main_module.items.iter().find_map(|item| match item {
-            ModuleItem::Type(definition) if definition.name.eq_ignore_ascii_case(name) && definition.visibility != Visibility::Private => Some(definition.clone()),
+            ModuleItem::Type(definition) if definition.name.eq_ignore_ascii_case(name) && definition.visibility != Visibility::Private => Some(definition),
             _ => None,
-        }))
+        }))?;
+        for (owner, module) in &self.main_module.standard_modules {
+            if module.items.iter().any(|item| matches!(item,
+                ModuleItem::Type(found) if found.span.start == definition.span.start
+                    && found.name.eq_ignore_ascii_case(&definition.name))) {
+                return Some(self.scoped_record_definition(owner, module, definition));
+            }
+        }
+        Some(definition.clone())
+    }
+
+    fn scoped_record_definition(&self, owner: &str, module: &Module, definition: &TypeDef) -> TypeDef {
+        let mut scoped = definition.clone();
+        scoped.name = format!("{owner}.{}", definition.name);
+        for field in &mut scoped.fields {
+            if !field.type_name.name.contains('.') && module.items.iter().any(|item| matches!(item,
+                ModuleItem::Type(found) if found.name.eq_ignore_ascii_case(&field.type_name.name))) {
+                field.type_name.name = format!("{owner}.{}", field.type_name.name);
+            }
+        }
+        scoped
     }
 
     fn redim(
@@ -18989,9 +19060,9 @@ fn value_type_name(value: &Value) -> String {
             Value::Empty | Value::Missing | Value::Null | Value::Array(_) => "Variant()".to_string(),
             element => format!("{}()", value_type_name(element)),
         },
-        // Excel cannot be asked: passing a record to `TypeName` is a COMPILE
-        // error there, so no measurement exists. It names itself.
-        Value::Record(record) => record.type_name.clone(),
+        // Source record-to-Variant conversions are rejected by the compiler.
+        // Keep the local type name when formatting an internal record value.
+        Value::Record(record) => record.type_name.rsplit('.').next().unwrap_or(&record.type_name).to_string(),
         Value::Object(object) => object.kind.clone(),
     }
 }
