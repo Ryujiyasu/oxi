@@ -2381,6 +2381,164 @@ pub fn footnote_edits(model: &DocxModel, at: &Pos, text: &str) -> Result<(Vec<Ed
     Ok((edits, Pos { offset: at.offset + 1, ..at.clone() }))
 }
 
+/// The run property `name` text at a place resolves to: the run's own
+/// properties, then its character style chain, then the paragraph style
+/// chain (the default paragraph style when none is named), then the
+/// document defaults.
+fn resolved_run_prop(model: &DocxModel, run: Option<&Props>, para: Option<&Props>, name: &str) -> Option<Element> {
+    if let Some(e) = run.and_then(|r| r.get(name)) {
+        return Some(e.clone());
+    }
+    let styles = model.styles.as_ref()?;
+    let by_id = |id: &str| styles.styles.iter().find(|s| attr(&s.attrs, "w:styleId") == Some(id));
+    let chain = |start: Option<String>| -> Option<Element> {
+        let mut id = start;
+        let mut seen = 0;
+        while let Some(i) = id {
+            let s = by_id(&i)?;
+            if let Some(e) = s.run.as_ref().and_then(|r| r.get(name)) {
+                return Some(e.clone());
+            }
+            id = s.meta.iter().find(|m| m.name == "w:basedOn").and_then(|m| m.attr("w:val")).map(str::to_string);
+            seen += 1;
+            if seen > 32 {
+                return None;
+            }
+        }
+        None
+    };
+    let rstyle = run.and_then(|r| r.get("w:rStyle")).and_then(|e| e.attr("w:val")).map(str::to_string);
+    if let Some(e) = chain(rstyle) {
+        return Some(e);
+    }
+    let pstyle = para.and_then(|p| p.get("w:pStyle")).and_then(|e| e.attr("w:val")).map(str::to_string).or_else(|| default_style(model, "paragraph"));
+    if let Some(e) = chain(pstyle) {
+        return Some(e);
+    }
+    styles.default_run.as_ref().and_then(|r| r.get(name)).cloned()
+}
+
+/// The word around a collapsed position, as Word's New Comment takes it
+/// (measured: a caret inside "Hello" comments on "Hello"): the run of
+/// letters and digits the position touches. None when it touches none.
+fn word_at(model: &DocxModel, at: &Pos) -> Result<Option<(usize, usize)>, EditError> {
+    let text = &paragraph_texts(model, &at.story)?[at.para];
+    let shown = shown_positions(text);
+    let wordy = |c: char| c.is_alphanumeric() || c == '_';
+    let Some(k) = shown.iter().position(|&(c, o)| wordy(c) && (o == at.offset || o + c.len_utf16() == at.offset || (o < at.offset && at.offset < o + c.len_utf16())))
+        .or_else(|| shown.iter().position(|&(c, o)| wordy(c) && o + c.len_utf16() == at.offset)) else {
+        return Ok(None);
+    };
+    let mut a = k;
+    while a > 0 && wordy(shown[a - 1].0) && shown[a - 1].1 + shown[a - 1].0.len_utf16() == shown[a].1 {
+        a -= 1;
+    }
+    let mut b = k;
+    while b + 1 < shown.len() && wordy(shown[b + 1].0) && shown[b].1 + shown[b].0.len_utf16() == shown[b + 1].1 {
+        b += 1;
+    }
+    Ok(Some((shown[a].1, shown[b].1 + shown[b].0.len_utf16())))
+}
+
+/// The edits Word's New Comment makes over `[from, to)` (measured over
+/// COM): the range is marked by comment range start and end, a reference
+/// mark follows the end in the "annotation reference" style keeping the
+/// text's direct formatting and its resolved size, and the comment holds an
+/// "annotation text" paragraph that starts with its own mark. A collapsed
+/// range takes the word around it. `date` is an ISO 8601 time
+/// (`2026-11-09T20:47:00Z`). Returns the edits and the position just after
+/// the commented text.
+pub fn comment_edits(model: &DocxModel, from: &Pos, to: &Pos, text: &str, author: &str, initials: &str, date: &str) -> Result<(Vec<Edit>, Pos), EditError> {
+    use crate::docparts::Style;
+    check_text(text)?;
+    let (from, to) = if (to.para, to.offset) < (from.para, from.offset) { (to.clone(), from.clone()) } else { (from.clone(), to.clone()) };
+    if from.story != Story::Body || to.story != Story::Body {
+        return err("a comment goes on body text");
+    }
+    let (from, to) = if from == to {
+        match word_at(model, &from)? {
+            Some((a, b)) => (Pos { offset: a, ..from.clone() }, Pos { offset: b, ..from }),
+            None => (from.clone(), from),
+        }
+    } else {
+        (from, to)
+    };
+    let mut edits = Vec::new();
+    let chars = default_style(model, "character");
+    let normal = default_style(model, "paragraph");
+    let ref_style = style_named(model, &mut edits, "character", "annotation reference", "CommentReference", |id| {
+        let mut meta = vec![val("w:name", "annotation reference")];
+        if let Some(b) = &chars {
+            meta.push(val("w:basedOn", b));
+        }
+        meta.extend([val("w:uiPriority", "99"), Element::new("w:semiHidden"), Element::new("w:unhideWhenUsed")]);
+        Style {
+            attrs: vec![("w:type".into(), "character".into()), ("w:styleId".into(), id.into())],
+            meta,
+            run: bag("w:style", "w:rPr", vec![val("w:sz", "18"), val("w:szCs", "18")]).ok(),
+            ..Default::default()
+        }
+    });
+    let text_style = style_named(model, &mut edits, "paragraph", "annotation text", "CommentText", |id| {
+        let mut meta = vec![val("w:name", "annotation text")];
+        if let Some(b) = &normal {
+            meta.push(val("w:basedOn", b));
+        }
+        meta.extend([val("w:uiPriority", "99"), Element::new("w:semiHidden"), Element::new("w:unhideWhenUsed")]);
+        Style { attrs: vec![("w:type".into(), "paragraph".into()), ("w:styleId".into(), id.into())], meta, ..Default::default() }
+    });
+    let id = model
+        .comments
+        .iter()
+        .flatten()
+        .filter_map(|n| attr(&n.attrs, "w:id")?.parse::<i64>().ok())
+        .max()
+        .map_or(0, |m| m + 1)
+        .to_string();
+    // The mark: the commented text's own formatting, with the reference
+    // style, at the text's resolved size (Word writes it out so the mark is
+    // not drawn at the style's 9pt).
+    let typed = typed_props(model, &to)?;
+    let para = paragraphs(model, &to.story)?[to.para].props.clone();
+    let mut props = typed.clone().unwrap_or_else(|| Props::new("w:rPr"));
+    props.remove("w:rStyle");
+    props.set(val("w:rStyle", &ref_style)).map_err(|u| EditError(u.to_string()))?;
+    for size in ["w:sz", "w:szCs"] {
+        if let Some(e) = resolved_run_prop(model, typed.as_ref(), para.as_ref(), size) {
+            props.set(e).map_err(|u| EditError(u.to_string()))?;
+        }
+    }
+    let marker = |name: &str| Inline::Marker(crate::content::Marker { name: name.into(), attrs: vec![("w:id".into(), id.clone())] });
+    edits.push(Edit::InsertInline { at: to.clone(), inline: marker("w:commentRangeEnd") });
+    edits.push(Edit::InsertInline {
+        at: to.clone(),
+        inline: Inline::Run(Run { props: Some(props), content: vec![RunItem::Mark { name: "w:commentReference".into(), attrs: vec![("w:id".into(), id.clone())] }] }),
+    });
+    edits.push(Edit::InsertInline { at: from.clone(), inline: marker("w:commentRangeStart") });
+    let index = model.comments.as_ref().map_or(0, |c| c.len());
+    edits.push(Edit::AddStory {
+        story: StoryKind::Comment,
+        attrs: vec![
+            ("w:id".into(), id.clone()),
+            ("w:author".into(), author.into()),
+            ("w:date".into(), date.into()),
+            ("w:initials".into(), initials.into()),
+        ],
+    });
+    let start = Pos { story: Story::Comment(index), para: 0, offset: 0 };
+    edits.push(Edit::FormatParagraphs { from: start.clone(), to: start.clone(), patch: Patch { set: vec![val("w:pStyle", &text_style)], ..Default::default() } });
+    let mark = mark_run(Some(&ref_style), "w:annotationRef", vec![])?;
+    let after_mark = inline_len(&mark);
+    edits.push(Edit::InsertInline { at: start.clone(), inline: mark });
+    if !text.is_empty() {
+        edits.push(Edit::InsertInline {
+            at: Pos { offset: after_mark, ..start },
+            inline: Inline::Run(Run { props: None, content: vec![RunItem::Text(text.into())] }),
+        });
+    }
+    Ok((edits, to))
+}
+
 /// Join neighbouring runs with the same properties, as Word does when it
 /// saves, so cutting a run to edit it leaves no seam.
 fn coalesce(v: &mut Vec<Inline>) {

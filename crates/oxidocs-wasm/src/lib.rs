@@ -271,6 +271,17 @@ impl DocxDocument {
         Ok(serde_json::json!({ "edits": edits, "end": end }).to_string())
     }
 
+    /// The edits Word's New Comment makes over a model range (`{para,
+    /// offset}` each; equal for the word at a caret), by `author` at `date`
+    /// (ISO 8601), as JSON `{"edits": [...], "end": {para, offset}}`.
+    pub fn comment_edits(&self, from_json: &str, to_json: &str, text: &str, author: &str, initials: &str, date: &str) -> Result<String, JsError> {
+        let from: oxidocs_model::edit::Pos = serde_json::from_str(from_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let to: oxidocs_model::edit::Pos = serde_json::from_str(to_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let (edits, end) = oxidocs_model::edit::comment_edits(&self.model, &from, &to, text, author, initials, date)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(serde_json::json!({ "edits": edits, "end": end }).to_string())
+    }
+
     pub fn paragraph_text(&self, para: usize) -> Result<String, JsError> {
         let texts = oxidocs_model::edit::paragraph_texts(&self.model, &Default::default()).map_err(|e| JsError::new(&e.to_string()))?;
         texts.into_iter().nth(para).ok_or_else(|| JsError::new(&format!("no paragraph {para}")))

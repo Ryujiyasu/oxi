@@ -292,3 +292,31 @@ fn a_footnote_mark_keeps_the_formatting_around_it_and_typing_beside_it_is_plain(
         ("!world".to_string(), true, None),
     ]);
 }
+
+#[test]
+fn insert_comment_as_words_does() {
+    let mut m = DocxModel { body: vec![para(vec![run("Hello world", false)])], ..Default::default() };
+    // A caret inside "Hello" comments on the word (measured).
+    let (edits, _) = edit::comment_edits(&m, &Pos::body(0, 2), &Pos::body(0, 2), "point", "Oxi", "O", "2026-11-09T00:00:00Z").unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let (edits, _) = edit::comment_edits(&m, &Pos::body(0, 6), &Pos::body(0, 11), "check this", "Oxi", "O", "2026-11-09T00:00:00Z").unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let Block::Paragraph(p) = &m.body[0] else { panic!() };
+    let names: Vec<String> = p.content.iter().map(|i| match i {
+        Inline::Marker(mk) => format!("{}#{}", mk.name, mk.attrs[0].1),
+        Inline::Run(r) => r.content.iter().map(|c| match c {
+            RunItem::Text(t) => t.clone(),
+            RunItem::Mark { name, attrs } => format!("{name}#{}", attrs[0].1),
+            _ => String::new(),
+        }).collect(),
+        _ => String::new(),
+    }).collect();
+    assert_eq!(names, vec![
+        "w:commentRangeStart#0", "Hello", "w:commentRangeEnd#0", "w:commentReference#0", " ",
+        "w:commentRangeStart#1", "world", "w:commentRangeEnd#1", "w:commentReference#1",
+    ]);
+    let comments = m.comments.as_ref().unwrap();
+    assert_eq!(comments.len(), 2);
+    // The comment's own mark comes first, then its text.
+    assert_eq!(edit::paragraph_texts(&m, &Story::Comment(1)).unwrap()[0], "\u{5}check this");
+}
