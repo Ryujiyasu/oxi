@@ -4551,7 +4551,16 @@ impl<'a> LineBreaker<'a> {
                                 && self.compat_mode >= 15
                                 && !crate::env_flag!("OXI_S1401_DISABLE")
                                 && matches!(tab_align, TabStopAlignment::Right | TabStopAlignment::Center)
-                                && next_relative > s1401_target - 0.01;
+                                && next_relative > s1401_target - 0.01
+                                // OXI_S1401_BEYOND_LINE (2026-11-10, default ON, opt-out _DISABLE):
+                                // only a stop at or past the line's own end is clamped -- every
+                                // `_pb_tabbeyond_gen.py` arm had its stop past the margin. A stop
+                                // inside the margin but past (avail - ind_left) stays where it is:
+                                // zh dev technical__006f0290's toc 2 entries (ind left 210, right dot
+                                // stop 9730 on a 9740 measure): Word sets the dotted leader and ends
+                                // the page number with level 1 at 543.5; Oxi clamped to 530, no dots.
+                                && (crate::env_flag!("OXI_S1401_BEYOND_LINE_DISABLE")
+                                    || next_relative > available_tw as f32 / 20.0 - 0.01);
                             let tab_align = if cjk_aligned_tab_boundary {
                                 TabStopAlignment::Right
                             } else {
