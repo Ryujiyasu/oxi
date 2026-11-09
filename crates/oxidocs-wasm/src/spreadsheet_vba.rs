@@ -55932,6 +55932,639 @@ End Property
     }
 
     #[test]
+    fn record_scalar_array_boundaries_match_native() {
+        let cases: &[(&str, &str, &str, Option<&str>, Option<&str>)] = &[
+            (r####"record_cdec"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(CDec(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####), None),
+            (r####"record_array_cstr"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & CStr(r)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"型が一致しません。"####), None),
+            (r####"record_function_to_byref"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & ReadRecord(MakeRecord())
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function ReadRecord(ByRef value As ScopeTypes.SharedRecord) As String
+ ReadRecord = CStr(value.Value)
+End Function
+Private Function MakeRecord() As ScopeTypes.SharedRecord
+ Dim own As ScopeTypes.SharedRecord
+ own.Value = 11
+ MakeRecord = own
+End Function
+"####, r####"ScopeProbe.Probe"####, None, Some(r####"OK|11"####)),
+            (r####"record_byref_control"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & ReadRecord(r)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function ReadRecord(ByRef value As ScopeTypes.SharedRecord) As String
+ ReadRecord = CStr(value.Value)
+End Function
+"####, r####"ScopeProbe.Probe"####, None, Some(r####"OK|11"####)),
+            (r####"record_array_clng"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & CStr(CLng(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"型が一致しません。"####), None),
+            (r####"record_array_cdec"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & CStr(CDec(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####), None),
+            (r####"record_array_long_assignment"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ Dim n As Long
+ On Error GoTo Failed
+ r(0).Value = 11
+ n = r
+ Probe = "OK|" & CStr(n)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"型が一致しません。"####), None),
+            (r####"record_field_cdec_control"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & TypeName(CDec(r(0).Value)) & ":" & CStr(CDec(r(0).Value))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, None, Some(r####"OK|Decimal:11"####)),
+            (r####"record_array_field_cstr_control"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & CStr(r(0).Value)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, None, Some(r####"OK|11"####)),
+            (r####"record_array_field_clng_control"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & CStr(CLng(r(0).Value))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, None, Some(r####"OK|11"####)),
+            (r####"record_array_byref_control"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & ReadRecordArray(r)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function ReadRecordArray(ByRef value() As ScopeTypes.SharedRecord) As String
+ ReadRecordArray = CStr(value(0).Value)
+End Function
+"####, r####"ScopeProbe.Probe"####, None, Some(r####"OK|11"####)),
+            (r####"vba_record_cdec"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(VBA.CDec(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####), None),
+            (r####"vba_conversion_record_cdec"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(VBA.Conversion.CDec(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####), None),
+            (r####"conversion_record_cdec"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Conversion.CDec(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####), None),
+            (r####"vba_record_array_cstr"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & VBA.CStr(r)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####), None),
+            (r####"vba_field_cdec_control"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & TypeName(VBA.Conversion.CDec(r(0).Value)) & ":" & CStr(VBA.Conversion.CDec(r(0).Value))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, None, Some(r####"OK|Decimal:11"####)),
+            (r####"vba_conversion_record_cstr"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(VBA.Conversion.CStr(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####), None),
+            (r####"vba_record_clng"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(VBA.CLng(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####), None),
+            (r####"conversion_array_clng"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & CStr(Conversion.CLng(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####), None),
+            (r####"vba_conversion_array_clng"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & CStr(VBA.Conversion.CLng(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####), None),
+            (r####"vba_array_field_cstr_control"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r(0 To 0) As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r(0).Value = 11
+ Probe = "OK|" & VBA.CStr(r(0).Value)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, None, Some(r####"OK|11"####)),
+            (r####"vba_information_record_typename"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(VBA.Information.TypeName(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, r####"ScopeProbe.Probe"####, Some(r####"パブリック オブジェクト モジュールで定義されたユーザー定義型に限り、変数に割り当てることができ、実行時バインディングの関数に渡すことができます。"####), None),
+            (r####"information_module_typename_shadow_control"####, r####"Attribute VB_Name = "ScopeTypes"
+Option Explicit
+Public Type SharedRecord
+ Value As Long
+End Type
+Private Type HiddenRecord
+ Value As Long
+End Type
+Attribute VB_Name = "ScopeOther"
+Option Explicit
+Public Type SharedRecord
+ Value As String
+End Type
+Attribute VB_Name = "ScopeProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As ScopeTypes.SharedRecord
+ On Error GoTo Failed
+ r.Value = 11
+ Probe = "OK|" & CStr(Information.TypeName(r))
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Attribute VB_Name = "Information"
+Option Explicit
+Public Function TypeName(ByRef value As ScopeTypes.SharedRecord) As String
+ TypeName = CStr(value.Value)
+End Function
+"####, r####"ScopeProbe.Probe"####, None, Some(r####"OK|11"####)),
+        ];
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let mut differences = Vec::new();
+        for &(label, probe, procedure, diagnostic, expected_result) in cases {
+            let bytes = crate::vba_project::write_project_source(seed, probe, None).unwrap();
+            let source = crate::vba_project::read_project_source_with_code_page(&bytes, None).unwrap().unwrap();
+            let mut book = oxicells_core::parse_xlsx(&bytes).unwrap();
+            book.calculation.dbcs_language = Some(true);
+            let mut context = failure_context();
+            context.project_name = "OxiNamedProject".into();
+            context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+            context.file_context = Some(serde_json::from_value(serde_json::json!({
+                "packageBytes": bytes, "readOnly": true, "editRevision": 0
+            })).unwrap());
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(book, &source, Some(procedure),
+                Vec::new(), 0, context, &mut session).unwrap();
+            let actual = serde_json::to_value(&outcome.result).unwrap();
+            let matched = if let Some(expected) = diagnostic {
+                outcome.error.as_ref().is_some_and(|error|
+                    error.kind == "compile" && error.message.contains(expected))
+                    && !outcome.workbook_changed
+            } else {
+                outcome.error.is_none() && actual["value"].as_str() == expected_result
+            };
+            if !matched {
+                differences.push(format!("{label}: error={:?} result={actual} changed={} diagnostic={diagnostic:?} expected={expected_result:?}",
+                    outcome.error.as_ref().map(|error| (error.kind, error.message.as_str())), outcome.workbook_changed));
+            }
+        }
+        assert_eq!(cases.len(), 23);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
     fn source_record_invalid_conversions_stop_before_execution_matches_native() {
         let cases: &[(&str, &str, &str, &str)] = &[
             ("vba_record_type_visibility_native_v2.json:private_qualified_foreign", r####"Attribute VB_Name = "ScopeTypes"
