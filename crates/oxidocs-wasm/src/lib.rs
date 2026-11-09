@@ -289,6 +289,15 @@ impl DocxDocument {
         Ok(serde_json::to_string(&edits).unwrap())
     }
 
+    /// The edits Word's Insert Field makes for `code` at a model position
+    /// (`{para, offset}`), showing `result`, as JSON
+    /// `{"edits": [...], "end": {para, offset}}`.
+    pub fn field_edits(&self, at_json: &str, code: &str, result: &str) -> Result<String, JsError> {
+        let at: oxidocs_model::edit::Pos = serde_json::from_str(at_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let (edits, end) = oxidocs_model::edit::field_edits(&self.model, &at, code, result).map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(serde_json::json!({ "edits": edits, "end": end }).to_string())
+    }
+
     pub fn paragraph_text(&self, para: usize) -> Result<String, JsError> {
         let texts = oxidocs_model::edit::paragraph_texts(&self.model, &Default::default()).map_err(|e| JsError::new(&e.to_string()))?;
         texts.into_iter().nth(para).ok_or_else(|| JsError::new(&format!("no paragraph {para}")))

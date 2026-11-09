@@ -344,3 +344,34 @@ fn header_and_footer_go_to_the_section_as_words_do() {
     assert_eq!(m.headers_footers.len(), 2);
     assert_eq!(edit::paragraph_texts(&m, &Story::HeaderFooter(0)).unwrap(), vec!["New head"]);
 }
+
+#[test]
+fn insert_field_as_words_does() {
+    let mut m = DocxModel { body: vec![para(vec![run("Page  of", true)])], ..Default::default() };
+    let (edits, end) = edit::field_edits(&m, &Pos::body(0, 5), "PAGE", "1").unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let text = &edit::paragraph_texts(&m, &Story::Body).unwrap()[0];
+    assert_eq!(text, "Page \u{13} PAGE \\* MERGEFORMAT \u{14}1\u{15} of");
+    assert_eq!(end.offset, text.find(" of").unwrap());
+    let shown: String = edit::shown_positions(text).into_iter().map(|(c, _)| c).collect();
+    assert_eq!(shown, "Page 1 of");
+    // Every run keeps the bold around it; the result is not proofread.
+    let Block::Paragraph(p) = &m.body[0] else { panic!() };
+    for i in &p.content {
+        let Inline::Run(r) = i else { panic!() };
+        assert!(r.props.as_ref().unwrap().get("w:b").is_some());
+    }
+}
+
+#[test]
+fn a_fields_runs_stay_apart_from_the_text_around_it() {
+    // Word writes each field character and the code in runs of their own.
+    let mut m = DocxModel { body: vec![para(vec![run("Hello world", false)])], ..Default::default() };
+    let (edits, _) = edit::field_edits(&m, &Pos::body(0, 6), "PAGE", "1").unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let Block::Paragraph(p) = &m.body[0] else { panic!() };
+    let mixed = p.content.iter().any(|i| matches!(i, Inline::Run(r)
+        if r.content.iter().any(|c| matches!(c, RunItem::FieldChar { .. } | RunItem::InstrText(_)))
+        && r.content.iter().any(|c| matches!(c, RunItem::Text(_)))));
+    assert!(!mixed, "{:?}", p.content);
+}

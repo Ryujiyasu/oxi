@@ -2643,6 +2643,44 @@ pub fn header_footer_edits(model: &DocxModel, para: usize, footer: bool, text: &
     Ok(edits)
 }
 
+/// The edits Word's Insert Field makes for `code` at `at` with "preserve
+/// formatting" on, its result shown as `result` (measured over COM): five
+/// runs (begin, the code with ` \* MERGEFORMAT`, separator, result, end),
+/// each with the formatting text typed there would take, the result also
+/// marked not to be proofread. Returns the edits and the position just
+/// after the field.
+pub fn field_edits(model: &DocxModel, at: &Pos, code: &str, result: &str) -> Result<(Vec<Edit>, Pos), EditError> {
+    check_text(code)?;
+    check_text(result)?;
+    let code = code.trim();
+    if code.is_empty() {
+        return err("a field needs a code");
+    }
+    let props = typed_props(model, at)?;
+    let run = |props: Option<Props>, item: RunItem| Inline::Run(Run { props, content: vec![item] });
+    let fld = |kind: &str| RunItem::FieldChar { attrs: vec![("w:fldCharType".into(), kind.into())], data: None };
+    let instr = format!(" {code} \\* MERGEFORMAT ");
+    let mut result_props = props.clone().unwrap_or_else(|| Props::new("w:rPr"));
+    result_props.set(Element::new("w:noProof")).map_err(|u| EditError(u.to_string()))?;
+    let mut parts = vec![
+        run(props.clone(), fld("begin")),
+        run(props.clone(), RunItem::InstrText(instr)),
+        run(props.clone(), fld("separate")),
+    ];
+    if !result.is_empty() {
+        parts.push(run(Some(result_props), RunItem::Text(result.into())));
+    }
+    parts.push(run(props, fld("end")));
+    let mut edits = Vec::new();
+    let mut offset = at.offset;
+    for p in parts {
+        let width = inline_len(&p);
+        edits.push(Edit::InsertInline { at: Pos { offset, ..at.clone() }, inline: p });
+        offset += width;
+    }
+    Ok((edits, Pos { offset, ..at.clone() }))
+}
+
 /// Join neighbouring runs with the same properties, as Word does when it
 /// saves, so cutting a run to edit it leaves no seam.
 fn coalesce(v: &mut Vec<Inline>) {
@@ -2651,8 +2689,11 @@ fn coalesce(v: &mut Vec<Inline>) {
         if let Some(inner) = children_mut(&mut it) {
             coalesce(inner);
         }
+        // Word gives a field's characters and code runs of their own; so
+        // does tidying (readers that split fields by run expect it).
+        let field = |r: &Run| r.content.iter().any(|c| matches!(c, RunItem::FieldChar { .. } | RunItem::InstrText(_) | RunItem::DeletedInstrText(_)));
         if let (Some(Inline::Run(prev)), Inline::Run(r)) = (out.last_mut(), &it) {
-            if prev.props == r.props && !r.content.iter().any(|c| matches!(c, RunItem::Props(_))) {
+            if prev.props == r.props && !r.content.iter().any(|c| matches!(c, RunItem::Props(_))) && !field(prev) && !field(r) {
                 let Inline::Run(r) = it else { unreachable!() };
                 for c in r.content {
                     match (prev.content.last_mut(), c) {
