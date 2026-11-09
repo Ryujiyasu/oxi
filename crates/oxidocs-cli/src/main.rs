@@ -1420,6 +1420,78 @@ fn resolve_font(family: Option<&str>, bold: bool) -> String {
     resolve_font_styled(family, bold, false)
 }
 
+/// a:srcRect crop (percent insets top, right, bottom, left; a negative inset adds
+/// transparent margin) and a quarter / half turn of the pixels when the element box is
+/// already the turned one -- the DirectWrite renderer's render_image rules.
+fn pdf_image_crop_turn(
+    img: image::DynamicImage,
+    crop: Option<(f32, f32, f32, f32)>,
+    rotation: f32,
+    w_pt: f32,
+    h_pt: f32,
+) -> image::DynamicImage {
+    let img = match crop {
+        Some((t, r, b, l)) if t > 0.0 || r > 0.0 || b > 0.0 || l > 0.0 => {
+            let (pw, ph) = (img.width(), img.height());
+            let x0 = (pw as f32 * l / 100.0).round().max(0.0) as u32;
+            let y0 = (ph as f32 * t / 100.0).round().max(0.0) as u32;
+            let cw = (pw as f32 * (100.0 - l - r) / 100.0).round().max(1.0) as u32;
+            let ch = (ph as f32 * (100.0 - t - b) / 100.0).round().max(1.0) as u32;
+            if x0.saturating_add(cw) <= pw && y0.saturating_add(ch) <= ph
+                && t >= 0.0 && r >= 0.0 && b >= 0.0 && l >= 0.0
+            {
+                img.crop_imm(x0, y0, cw, ch)
+            } else {
+                let (fw, fh) = (pw as f32, ph as f32);
+                let (sx, sy) = (fw * l / 100.0, fh * t / 100.0);
+                let (sw, sh) = (fw * (100.0 - l - r) / 100.0, fh * (100.0 - t - b) / 100.0);
+                let (ix0, iy0) = (sx.max(0.0), sy.max(0.0));
+                let (ix1, iy1) = ((sx + sw).min(fw), (sy + sh).min(fh));
+                if sw >= 1.0 && sh >= 1.0 && ix1 - ix0 >= 1.0 && iy1 - iy0 >= 1.0 {
+                    let mut canvas = image::RgbaImage::new(sw.round() as u32, sh.round() as u32);
+                    let part = img.crop_imm(ix0.round() as u32, iy0.round() as u32,
+                        (ix1 - ix0).round() as u32, (iy1 - iy0).round() as u32).to_rgba8();
+                    image::imageops::overlay(&mut canvas, &part,
+                        (ix0 - sx).round() as i64, (iy0 - sy).round() as i64);
+                    image::DynamicImage::ImageRgba8(canvas)
+                } else {
+                    img
+                }
+            }
+        }
+        _ => img,
+    };
+    let turn_deg = rotation.rem_euclid(360.0).round() as i32;
+    let box_unturned = (turn_deg == 90 || turn_deg == 270) && {
+        let (iw, ih) = (img.width() as f32, img.height() as f32);
+        let ba = w_pt / h_pt.max(1e-3);
+        (ba - iw / ih.max(1.0)).abs() < (ba - ih / iw.max(1.0)).abs()
+    };
+    match turn_deg {
+        90 if !box_unturned => img.rotate90(),
+        180 => img.rotate180(),
+        270 if !box_unturned => img.rotate270(),
+        _ => img,
+    }
+}
+
+/// `font::runtime::face_file`, remembered for the process. The lookup reads every
+/// font file on the machine when the face is absent, and the text arm asks once per
+/// bold East Asian element: blind-J ja/educational__28102e23 spent 9 of its 10 minutes
+/// there (layout 6s). Same answers, asked once per (family, bold, italic).
+fn face_file_cached(family: &str, bold: bool, italic: bool) -> Option<(std::path::PathBuf, u32)> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<(String, bool, bool), Option<(std::path::PathBuf, u32)>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (family.to_string(), bold, italic);
+    if let Some(hit) = cache.lock().unwrap().get(&key) {
+        return hit.clone();
+    }
+    let found = oxidocs_core::font::runtime::face_file(family, bold, italic);
+    cache.lock().unwrap().insert(key, found.clone());
+    found
+}
+
 fn cjk_bold_face_enabled() -> bool {
     std::env::var_os("OXI_PDF_CJK_BOLD_FACE_DISABLE").is_none()
 }
@@ -1434,7 +1506,7 @@ fn resolve_font_styled(family: Option<&str>, bold: bool, italic: bool) -> String
             // Bold, BIZ UD…) is drawn with it, embedded as «<name>-Bold»; only a family
             // without one goes to the shared stand-in. blind-J ja/creative__99e3d9f9: bold
             // メイリオ «2024 年 10 月 24 日» came out in ＭＳ ゴシック (Word: Meiryo-Bold).
-            if cjk_bold_face_enabled() && oxidocs_core::font::runtime::face_file(base, true, false).is_some() {
+            if cjk_bold_face_enabled() && face_file_cached(base, true, false).is_some() {
                 return format!("{}-Bold", resolve_font_styled(Some(base), false, italic));
             }
             return "OxiCJK-Bold".to_string();
@@ -1720,7 +1792,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     let fake_bold = *bold
                         && std::env::var_os("OXI_PDF_FAKE_BOLD_DISABLE").is_none()
                         && font_family.as_deref().is_some_and(|f| is_cjk_family(f)
-                            && oxidocs_core::font::runtime::face_file(f, true, false).is_none());
+                            && face_file_cached(f, true, false).is_none());
                     // Resolve font name for PDF (map to Type1 base fonts or CJK)
                     let font_name = resolve_font_styled(font_family.as_deref(), *bold && !fake_bold, *italic);
                     let font_name = if *bold && !fake_bold && font_family.as_deref().is_some_and(is_cjk_family)
@@ -1831,7 +1903,16 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     } else {
                         (fill_color, 0.0, None)
                     };
+                    // OXI_PDF_BLANK_SEGMENT (2026-11-09, default ON, opt-out _DISABLE): a
+                    // segment of only tabs or breaks draws no glyph -- blank as in Word; the
+                    // face has none for it and the PDF showed .notdef boxes (blind-J ja/
+                    // creative__9aa11078: a tab element drew a «?» box at the top left of
+                    // page 1). Its width still carries the underline.
+                    let blank_skip = std::env::var_os("OXI_PDF_BLANK_SEGMENT_DISABLE").is_none();
                     for (seg_text, seg_font, sx, _sw) in segments {
+                        if blank_skip && seg_text.chars().all(|c| c.is_control()) {
+                            continue;
+                        }
                         if fx_on && effects.shadow {
                             contents.push(ContentElement::Text(TextSpan {
                                 x: sx + 1.0, y: text_y + 1.0,
@@ -1990,10 +2071,21 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     }
                 }
 
-                oxidocs_core::layout::LayoutContent::Image { ref data, ref content_type, .. } => {
+                oxidocs_core::layout::LayoutContent::Image { ref data, ref content_type, crop, rotation, .. } => {
                     // Decode image (PNG/JPEG/etc.) to raw RGB pixels
                     if !data.is_empty() {
                         if let Ok(img) = image::load_from_memory(data) {
+                            // OXI_PDF_IMAGE_CROP (2026-11-09, default ON, opt-out _DISABLE):
+                            // a:srcRect crops the source and quarter turns turn the pixels,
+                            // as the DirectWrite renderer does (S775 / OXI_CROP_NEGATIVE /
+                            // OXI_PICTURE_ROTATION). The PDF drew the whole picture squeezed
+                            // into the box: blind-J en/policies__00d4d26d's footer skyline
+                            // (srcRect t 57.611 r -0.496) on every page.
+                            let img = if std::env::var_os("OXI_PDF_IMAGE_CROP_DISABLE").is_none() {
+                                pdf_image_crop_turn(img, *crop, *rotation, elem.width, elem.height)
+                            } else {
+                                img
+                            };
                             // OXI_PDF_IMAGE_ALPHA (2026-11-08, default ON, opt-out _DISABLE):
                             // an image with transparent pixels keeps them as a soft mask;
                             // to_rgb8 alone turned them black (blind-J ja/reports__77526bdb's
@@ -3668,7 +3760,7 @@ fn build_embedded_fonts(
             if fonts.contains_key(&key) || !key.ends_with("-Bold") || key == "OxiCJK-Bold" {
                 continue;
             }
-            if let Some((path, face)) = oxidocs_core::font::runtime::face_file(name, true, false) {
+            if let Some((path, face)) = face_file_cached(name, true, false) {
                 if let Ok(result) = subset_font_native_face(&path.to_string_lossy(), face, &used_chars) {
                     eprintln!("Embedding CJK bold font '{}' ({}) from {} face {} ({} bytes)", key, name, path.display(), face, result.data.len());
                     fonts.insert(key, result);
@@ -3704,7 +3796,7 @@ fn build_embedded_fonts(
         // 77526bdb's proportional body ran full-width past its cells in the PDF while
         // the layout (and the renderer) set it at the proportional advances.
         if std::env::var_os("OXI_PDF_FACE_INDEX_DISABLE").is_none() {
-            if let Some((path, face)) = oxidocs_core::font::runtime::face_file(name, false, false) {
+            if let Some((path, face)) = face_file_cached(name, false, false) {
                 let label = resolved.replace(['-', ' '], "_");
                 if let Ok(result) = subset_font_native_face(&path.to_string_lossy(), face, &used_chars) {
                     eprintln!("Embedding CJK font '{}' ({}) from {} face {} ({} bytes)", resolved, name, path.display(), face, result.data.len());
