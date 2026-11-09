@@ -28976,6 +28976,17 @@ impl Host for WorkbookHost<'_> {
     fn prepare_late_bound_call(&self, receiver: &ObjectRef, name: &str,
         args: &[Value], argument_names: &[Option<String>])
         -> Result<Option<(String, Vec<Value>)>, String> {
+        let library = &builtin_compilation_references().library;
+        if argument_names.iter().any(Option::is_some)
+            && library.member_invocation_flags(&receiver.kind, name).is_some_and(|flags| flags & 3 == 2)
+            && library.member_parameter_names(&receiver.kind, name, 2).is_some_and(|parameters| parameters.is_empty())
+            && library.member_result_is_object(&receiver.kind, name) == Some(false)
+        {
+            // An object result can bind names through its default member.
+            // Name binding fails before the scalar/Variant getter is evaluated, including
+            // a getter whose value would itself overflow.
+            return Err(host_error(1004, "the property getter has no named parameters"));
+        }
         let borders = self.border_index_member(receiver, name);
         let item = name.eq_ignore_ascii_case("item")
             && (borders || matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::Areas(_))));
@@ -55928,6 +55939,816 @@ End Property
                 }
             }
         }
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    struct NativeCountInvocationCase {
+        label: &'static str,
+        source: &'static str,
+        compile_error: Option<&'static str>,
+        result: Option<&'static str>,
+    }
+
+    fn native_count_invocation_cases() -> &'static [NativeCountInvocationCase] {
+        &[
+            NativeCountInvocationCase { label: r####"count_typed_bare"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Count
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|Long|3|4|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_typed_empty"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Count()
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|Long|3|4|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_typed_argument"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Count(1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: Some(r####"引数の数が一致していません。または不正なプロパティを指定しています。"####), result: None },
+            NativeCountInvocationCase { label: r####"count_late_argument"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Count(1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_callbyname_get"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = CallByName(r, "Count", VbGet)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|Long|3|4|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_callbyname_argument"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = CallByName(r, "Count", VbGet, 1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_typed_bare"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.CountLarge
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|LongLong|20|4|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_typed_empty"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.CountLarge()
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|LongLong|20|4|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_typed_argument"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.CountLarge(1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_late_argument"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.CountLarge(1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_callbyname_get"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = CallByName(r, "CountLarge", VbGet)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|LongLong|20|4|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_callbyname_argument"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = CallByName(r, "CountLarge", VbGet, 1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_typed_two"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Count(1, 2)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: Some(r####"引数の数が一致していません。または不正なプロパティを指定しています。"####), result: None },
+            NativeCountInvocationCase { label: r####"count_late_two"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Count(1, 2)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_typed_named"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Count(Index:=1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: Some(r####"引数の数が一致していません。または不正なプロパティを指定しています。"####), result: None },
+            NativeCountInvocationCase { label: r####"count_late_named"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Count(Index:=1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_callbyname_two"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = CallByName(r, "Count", VbGet, 1, 2)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_callbyname_method"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = CallByName(r, "Count", VbMethod)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_typed_two"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.CountLarge(1, 2)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_late_two"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.CountLarge(1, 2)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_typed_named"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.CountLarge(Index:=1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: Some(r####"名前付き引数は使えません。"####), result: None },
+            NativeCountInvocationCase { label: r####"countlarge_late_named"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.CountLarge(Index:=1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_callbyname_two"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = CallByName(r, "CountLarge", VbGet, 1, 2)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|451|OxiNamedProject|Property Let プロシージャが定義されておらず、Property Get プロシージャからオブジェクトが返されませんでした。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000451|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_callbyname_method"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = CallByName(r, "CountLarge", VbMethod)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_late_empty"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Count()
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|Long|3|4|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_late_empty"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.CountLarge()
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|LongLong|20|4|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_typed_argument_whole_sheet"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Cells
+ n = r.Count(1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: Some(r####"引数の数が一致していません。または不正なプロパティを指定しています。"####), result: None },
+            NativeCountInvocationCase { label: r####"count_late_argument_whole_sheet"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Cells
+ n = r.Count(1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|6|OxiNamedProject|オーバーフローしました。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000006|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_callbyname_argument_whole_sheet"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Cells
+ n = CallByName(r, "Count", VbGet, 1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|6|OxiNamedProject|オーバーフローしました。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000006|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_late_named_whole_sheet"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Cells
+ n = r.Count(Index:=1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|1004|OxiNamedProject|アプリケーション定義またはオブジェクト定義のエラーです。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000095|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_typed_call_empty"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ Call r.Count()
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: Some(r####"プロパティの使い方が不正です。"####), result: None },
+            NativeCountInvocationCase { label: r####"count_typed_statement_bare"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ r.Count
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: Some(r####"プロパティの使い方が不正です。"####), result: None },
+            NativeCountInvocationCase { label: r####"count_late_call_empty"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ Call r.Count()
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"count_late_statement_bare"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Object
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ r.Count
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|438|OxiNamedProject|オブジェクトは、このプロパティまたはメソッドをサポートしていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000438|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"row_empty"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Row()
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|Long|3|1|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"row_argument"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Row(1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: Some(r####"引数の数が一致していません。または不正なプロパティを指定しています。"####), result: None },
+            NativeCountInvocationCase { label: r####"row_named"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Row(Index:=1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: Some(r####"引数の数が一致していません。または不正なプロパティを指定しています。"####), result: None },
+            NativeCountInvocationCase { label: r####"value2_empty"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Value2()
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"value2_array_indices"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Value2(1, 1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|Empty|0||STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"value2_named"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Value2(Index:=1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: Some(r####"名前付き引数は使えません。"####), result: None },
+            NativeCountInvocationCase { label: r####"sheet_name_empty"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Worksheet
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = ActiveSheet
+ n = r.Name()
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|String|8|Sheet1|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"sheet_name_argument"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Worksheet
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = ActiveSheet
+ n = r.Name(1)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: Some(r####"引数の数が一致していません。または不正なプロパティを指定しています。"####), result: None },
+            NativeCountInvocationCase { label: r####"countlarge_null_index"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.CountLarge(Null)
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"countlarge_error_index"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.CountLarge(CVErr(2042))
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"borders_named_index"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Borders(Index:=xlEdgeBottom).LineStyle
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|Long|3|-4142|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+            NativeCountInvocationCase { label: r####"borders_positional_index"####, source: r####"Attribute VB_Name = "CountInvocationProbe"
+Option Explicit
+Public Function Probe() As String
+ Dim r As Excel.Range
+ Dim n As Variant
+ On Error GoTo Failed
+ Set r = Range("A1:B2")
+ n = r.Borders(xlEdgeBottom).LineStyle
+ Probe = "OK|" & TypeName(n) & "|" & CStr(VarType(n)) & "|" & CStr(n)
+ GoTo Done
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+Done:
+ Probe = Probe & "|STATE|Saved:" & TypeName(ThisWorkbook.Saved) & ":" & CStr(VarType(ThisWorkbook.Saved)) & ":" & CStr(ThisWorkbook.Saved) & "|ReadOnly:" & CStr(ThisWorkbook.ReadOnly) & "|A1:" & TypeName(Range("A1").Value) & ":" & CStr(VarType(Range("A1").Value)) & ":" & CStr(Range("A1").Value) & "|Height:" & CStr(Range("A1").RowHeight) & "|Width:" & CStr(Range("A1").ColumnWidth)
+End Function
+"####, compile_error: None, result: Some(r####"OK|Long|3|-4142|STATE|Saved:Boolean:11:True|ReadOnly:True|A1:Empty:0:|Height:15|Width:8.43"####) },
+        ]
+    }
+
+    #[test]
+    fn range_count_invocation_compilation_matches_native() {
+        let mut references = builtin_compilation_references().clone();
+        references.project_name = Some("OxiNamedProject".into());
+        let mut differences = Vec::new();
+        for case in native_count_invocation_cases() {
+            let actual = compilation_outcome(case.source, ErrorLanguage::Japanese, &references);
+            let matched = if let Some(expected) = case.compile_error {
+                !actual.compiled && actual.error.as_ref().is_some_and(|error|
+                    error.kind == "compile" && error.message.ends_with(expected))
+            } else {
+                actual.compiled && actual.error.is_none()
+            };
+            if !matched {
+                differences.push(format!("{}: compiled={} actual={:?} expected={:?}", case.label,
+                    actual.compiled, actual.error.as_ref().map(|error| error.message.as_str()), case.compile_error));
+            }
+        }
+        assert_eq!(native_count_invocation_cases().len(), 46);
+        assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+
+    #[test]
+    fn range_count_invocation_execution_matches_native() {
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let mut differences = Vec::new();
+        for case in native_count_invocation_cases() {
+            let bytes = crate::vba_project::write_project_source(seed, case.source, None).unwrap();
+            let source = crate::vba_project::read_project_source_with_code_page(&bytes, None).unwrap().unwrap();
+            let mut book = oxicells_core::parse_xlsx(&bytes).unwrap();
+            book.calculation.dbcs_language = Some(true);
+            let mut context = failure_context();
+            context.project_name = "OxiNamedProject".into();
+            context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
+            context.environment.help_file = r"C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm".into();
+            context.application_state = Some(serde_json::from_value(serde_json::json!({
+                "enableEvents": false, "displayAlerts": false, "calculation": -4105
+            })).unwrap());
+            context.file_context = Some(serde_json::from_value(serde_json::json!({
+                "packageBytes": bytes, "readOnly": true, "editRevision": 0
+            })).unwrap());
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(book, &source,
+                Some("CountInvocationProbe.Probe"), Vec::new(), 0, context, &mut session).unwrap();
+            let value = serde_json::to_value(&outcome.result).unwrap();
+            let matched = if let Some(expected) = case.compile_error {
+                outcome.error.as_ref().is_some_and(|error|
+                    error.kind == "compile" && error.message.ends_with(expected))
+            } else {
+                outcome.error.is_none() && value["type"] == "string"
+                    && value["value"].as_str() == case.result
+            };
+            if !matched || outcome.workbook_changed {
+                differences.push(format!("{}: error={:?} result={value} changed={} expected={:?} compile={:?}",
+                    case.label, outcome.error.as_ref().map(|error| (error.kind, error.message.as_str())),
+                    outcome.workbook_changed, case.result, case.compile_error));
+            }
+        }
+        assert_eq!(native_count_invocation_cases().len(), 46);
         assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
     }
 

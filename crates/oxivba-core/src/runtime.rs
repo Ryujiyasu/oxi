@@ -5611,7 +5611,7 @@ impl<'a> Runtime<'a> {
                 Ok(Flow::Continue)
             }
             Statement::Call { target, span, .. } => {
-                self.eval_call(target, frame)?;
+                self.eval_call(target, frame, false)?;
                 // What the call answered is thrown away here, and so is
                 // anything only that answer held: measured, `Make "Z"` runs
                 // Z's Class_Terminate on that line, and `col.Remove 1` the
@@ -8656,7 +8656,7 @@ impl<'a> Runtime<'a> {
                             let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
                             self.call_named(name, values, &names, Some(line), frame)?
                         }
-                    } else { self.eval_call(full_target, frame)? };
+                    } else { self.eval_call(full_target, frame, false)? };
                     return self.assign_returned_object(destination, value, frame, line);
                 }
                 let potential = matches!(
@@ -9128,7 +9128,7 @@ impl<'a> Runtime<'a> {
                 let value = self.lookup_slot(frame, name).unwrap();
                 VariableSlot::project(&value, RecordStep::Index(indices), span.line).map(|slot| slot.snapshot())
             }
-            Expr::Index { .. } => self.eval_call(expr, frame),
+            Expr::Index { .. } => self.eval_call(expr, frame, true),
             Expr::Member {
                 object, name, span, ..
             } => {
@@ -9191,7 +9191,35 @@ impl<'a> Runtime<'a> {
         }
     }
 
-    fn eval_call(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+    fn eval_host_getter_call(&mut self, member: (&ObjectRef, &str, u32), values: &[Value],
+        late: bool, frame: &mut Frame) -> Result<Option<Value>, RuntimeError> {
+        let (receiver, name, line) = member;
+        let getter = self.document_references.as_ref().is_some_and(|references| {
+            let library = &references.library;
+            library.member_invocation_flags(&receiver.kind, name).is_some_and(|flags| flags & 3 == 2)
+                && library.member_parameter_names(&receiver.kind, name, 2).is_some_and(|parameters| parameters.is_empty())
+                && (values.is_empty() || (!late
+                    && library.member_result_type(&receiver.kind, name).is_some_and(|kind| kind.eq_ignore_ascii_case("variant"))))
+        });
+        if !getter { return Ok(None); }
+        let Some(value) = self.with_callback_error_context(frame, |runtime, _|
+            runtime.host_get(receiver, name, line))? else { return Ok(None); };
+        if values.is_empty() { return Ok(Some(value)); }
+        match value {
+            Value::Array(array) => {
+                let indices = values.iter().map(|value| index_from(value, line))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Some(array.values[array_offset(&array, &indices, line)?].clone()))
+            }
+            Value::Object(object) => self.host_call(Some(&object), "Item", values, line)?
+                .map(Some).ok_or_else(|| no_such_member(
+                    format!("default member is not available: {}.Item", object.kind), Some(line))),
+            _ => Err(error(RuntimeErrorKind::TypeMismatch,
+                "subscripts on a property result that is not an array", Some(line))),
+        }
+    }
+
+    fn eval_call(&mut self, expr: &Expr, frame: &mut Frame, value_context: bool) -> Result<Value, RuntimeError> {
         if let Some((module, name)) = self.qualified_standard_member(expr, frame) {
             let qualifier = self.main_module.standard_modules.iter().find(|(_, found)| std::ptr::eq(found, module)).map(|(name, _)| name).expect("standard module");
             return self.call_user_procedure(&format!("{qualifier}.{name}"), &[], false, frame, Some(expr.span().line));
@@ -9446,6 +9474,19 @@ impl<'a> Runtime<'a> {
                                 runtime.host_call_named(Some(receiver), &member, &arguments, &argument_names, span.line)
                             })?.ok_or_else(|| no_such_member(
                                 format!("host method is not available: {}.{member}", receiver.kind), Some(span.line)));
+                        }
+                    }
+                }
+                if value_context {
+                    if let Some(receiver) = receiver.as_ref() {
+                        let name = match target.as_ref() {
+                            Expr::Member { name, .. } | Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => name,
+                            _ => unreachable!("host property receiver"),
+                        };
+                        if let Some(value) = self.eval_host_getter_call((receiver, name, span.line),
+                            &values, late_host_call, frame)?
+                        {
+                            return Ok(value);
                         }
                     }
                 }
