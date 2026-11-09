@@ -2440,11 +2440,11 @@ impl<'a> Runtime<'a> {
     }
 
     fn prepare_source_dispatch_value(
-        &mut self, receiver: &ObjectRef, name: &str, value: Value, property_index_count: usize, allow_scalar_members: bool, frame: &mut Frame, line: u32,
+        &mut self, receiver: &ObjectRef, name: &str, value: Value, property_index_count: usize, allow_scalar_members: bool, automation: bool, frame: &mut Frame, line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
         if let Some(project) = self.foreign_project(receiver) {
             return self.in_application_project(project, |runtime|
-                runtime.prepare_source_dispatch_value(receiver, name, value, property_index_count, allow_scalar_members, frame, line));
+                runtime.prepare_source_dispatch_value(receiver, name, value, property_index_count, allow_scalar_members, automation, frame, line));
         }
         let scalar_parameter = |kind: TypeName| {
             let scalar = self.parameter_scalar_name(&kind.name);
@@ -2458,7 +2458,7 @@ impl<'a> Runtime<'a> {
         };
         let host_parameter = |owner: &str| self.host.as_deref()
             .filter(|host| host.automation_invocation_allowed(receiver, name, 4)
-                && !host.property_assignment_uses_variant(receiver, name)
+                && (!automation || !host.property_assignment_uses_variant(receiver, name))
                 && host.property_assignment_value(Some(receiver), name, &value, false).is_none())
             .and_then(|host| host.assignment_call_result(Some(owner), name))
             .and_then(|name| scalar_parameter(TypeName { name, ..TypeName::implicit() }));
@@ -2505,13 +2505,15 @@ impl<'a> Runtime<'a> {
                 | "currency" | "date" | "boolean" | "string")
         {
             // Automation converts a failed default-value read to type mismatch.
-            // Keep the later declared-type conversion separate from this read.
+            // Statically bound writes retain the original language error.
             self.scalar_operand(value, frame, line)
-                .map_err(|_| language_error(13, "Automation property value type mismatch", line))?
+                .map_err(|failure| if automation {
+                    language_error(13, "Automation property value type mismatch", line)
+                } else { failure })?
         } else { value };
         self.coerce_runtime(value, &parameter.type_name.name, line, self.this_year())
             .map(Some)
-            .map_err(|failure| if matches!(runtime_error_number(&failure), 424 | 94) {
+            .map_err(|failure| if automation && matches!(runtime_error_number(&failure), 424 | 94) {
                 language_error(13, "Automation property value type mismatch", line)
             } else { failure })
     }
@@ -2621,6 +2623,8 @@ impl<'a> Runtime<'a> {
 
     fn source_object_factory(&self, target: &Expr, frame: &Frame) -> bool {
         self.source_factory_procedure(target, frame).is_some()
+            || matches!(target, Expr::Index { target: callee, .. }
+                if self.source_factory_procedure(callee, frame).is_some())
     }
 
 
@@ -5051,7 +5055,7 @@ impl<'a> Runtime<'a> {
                             }
                         }
                         if let Some(prepared) = self.prepare_source_dispatch_value(
-                            &receiver, name, value.clone(), source_arguments.len(), source_arguments.is_empty(), frame, span.line,
+                            &receiver, name, value.clone(), source_arguments.len(), source_arguments.is_empty(), true, frame, span.line,
                         )? {
                             drop(value);
                             return self.assign_prepared_dispatch_value(&receiver, name,
@@ -5063,7 +5067,11 @@ impl<'a> Runtime<'a> {
                             if let Some(prepared) = self.host.as_deref().and_then(|host|
                                 host.property_assignment_value(Some(&receiver), name, &value, false))
                             {
-                                if self.host_set(&receiver, name, prepared, span.line)? { return Ok(()); }
+                                return if self.host_set(&receiver, name, prepared, span.line)? {
+                                    Ok(())
+                                } else {
+                                    Err(no_such_member(format!("{}.{} has no setter", receiver.kind, name), Some(span.line)))
+                                };
                             }
                             if matches!(value, Value::Nothing) {
                                 if let Some(number) = self.host.as_deref().and_then(|host|
@@ -5129,8 +5137,14 @@ impl<'a> Runtime<'a> {
                             return Err(host_failure(message, span.line));
                         }
                     }
+                    if !matches!(target, Expr::Index { .. }) && matches!(value, Value::Nothing) {
+                        if let Some(number) = self.host.as_deref().and_then(|host|
+                            host.property_assignment_error(Some(&receiver), &name, &value)) {
+                            return Err(language_error(number, format!("invalid value for property {name}"), span.line));
+                        }
+                    }
                     if let Some(prepared) = self.prepare_source_dispatch_value(
-                        &receiver, &name, value.clone(), match target { Expr::Index { args, .. } => args.len(), _ => 0 }, !matches!(target, Expr::Index { .. }), frame, span.line,
+                        &receiver, &name, value.clone(), match target { Expr::Index { args, .. } => args.len(), _ => 0 }, !matches!(target, Expr::Index { .. }), true, frame, span.line,
                     )? {
                         drop(value);
                         let answer = if matches!(target, Expr::Index { .. }) {
@@ -5165,7 +5179,7 @@ impl<'a> Runtime<'a> {
                 } else { None };
                 if let Some(receiver) = late_storage {
                     if let Some(prepared) = self.prepare_source_dispatch_value(
-                        &receiver, "_default", value.clone(), 0, false, frame, span.line,
+                        &receiver, "_default", value.clone(), 0, false, true, frame, span.line,
                     )? {
                         drop(value);
                         let answer = self.automation_default_member(
@@ -5230,8 +5244,15 @@ impl<'a> Runtime<'a> {
                 }
                 let variant_member = match target {
                     Expr::Member { object, name, span: at, .. }
-                        if self.source_class_name(object, frame).is_none()
-                            && self.host.as_deref().is_some_and(|host| host.property_assignment_value(None, name, &value, false).is_some()) =>
+                        if self.source_expression_type(object, frame)
+                            .is_none_or(|kind| self.find_type(&kind.name).is_none())
+                            && self.source_class_name(object, frame).is_none()
+                            && (self.host.as_deref().is_some_and(|host| host.property_assignment_value(None, name, &value, false).is_some())
+                                || self.assignment_receiver_type(object, frame)
+                                    .and_then(|owner| self.host.as_deref()?.assignment_call_result(Some(&owner), name))
+                                    .is_some_and(|kind| matches!(self.parameter_scalar_name(&kind).as_str(),
+                                        "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double"
+                                            | "currency" | "date" | "boolean" | "string"))) =>
                     {
                         Some((self.eval_object(object, frame, at.line)?, name))
                     }
@@ -5249,13 +5270,18 @@ impl<'a> Runtime<'a> {
                             }
                             return Err(no_such_member(format!("{}.{} has no setter", receiver.kind, name), Some(span.line)));
                         }
-                        if self.host.as_deref().is_some_and(|host|
-                            host.property_assignment_value(None, name, &value, false).is_some()) {
-                            // The name probe already resolved this receiver. A different
-                            // host type may still have a scalar setter with that name.
-                            // Keep the same receiver through its ordinary conversion.
+                        {
+                            // Resolve the receiver once and convert a declared scalar
+                            // before committing the host write. Typed and Automation
+                            // bindings expose different errors for invalid values.
+                            let automation = match target {
+                                Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
+                                Expr::WithMember(..) => matches!(frame.with_objects.last(),
+                                    Some(WithSubject::Object { assignment_type: None, .. })),
+                                _ => true,
+                            };
                             if let Some(prepared) = self.prepare_source_dispatch_value(
-                                &receiver, name, value.clone(), 0, true, frame, span.line,
+                                &receiver, name, value.clone(), 0, true, automation, frame, span.line,
                             )? {
                                 drop(value);
                                 let answer = self.assign_prepared_dispatch_value(&receiver, name,
@@ -10382,6 +10408,13 @@ impl<'a> Runtime<'a> {
                                 return Ok(self.host.as_deref().map_or(Value::Empty, |host|
                                     host.automation_assignment_result(receiver, &member, &value)));
                             }
+                        }
+                    }
+                    if indices.is_empty() {
+                        if let Some(prepared) = self.prepare_source_dispatch_value(
+                            receiver, &member, value.clone(), 0, true, true, frame, at,
+                        )? {
+                            value = prepared;
                         }
                     }
                     value = self.let_value(value, frame, at)?;
@@ -19161,8 +19194,8 @@ fn truthy(value: &Value) -> Result<bool, String> {
         Value::String(value) if value.trim().is_empty() => {
             Err("type mismatch converting String to Boolean".to_string())
         }
-        Value::String(value) if value.eq_ignore_ascii_case("true") => Ok(true),
-        Value::String(value) if value.eq_ignore_ascii_case("false") => Ok(false),
+        Value::String(value) if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("#true#") => Ok(true),
+        Value::String(value) if value.eq_ignore_ascii_case("false") || value.eq_ignore_ascii_case("#false#") => Ok(false),
         // Measured: CBool("&H0") is False.
         Value::String(value) if radix_text(value.trim()).is_some() => Ok(radix_text(value.trim()) != Some(0)),
         // Read the way the numeric conversions read text: measured,
