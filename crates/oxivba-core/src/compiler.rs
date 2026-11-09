@@ -2342,6 +2342,11 @@ impl<'a> Checker<'a> {
         }
         let signature = self.reference_signature(target)?;
         if signature.invocation == 2 && signature.parameters.is_empty() && !args.is_empty() {
+            // Positional subscripts belong to a Variant/array result rather
+            // than to the parameterless getter itself.
+            if matches!(self.reference_result(signature), Type::Variant | Type::Array(_)) {
+                return None;
+            }
             if let Type::Reference(owner, _) = self.reference_result(signature) {
                 if let Some(default) = self.reference_library?.default_member(&owner) {
                     return Some(default);
@@ -2673,6 +2678,22 @@ impl<'a> Checker<'a> {
             return Ok(signature);
         }
         self.source_signature(target, write)
+    }
+
+    fn reference_getter_index_error(&self, target: &Expr, args: &[Argument]) -> Option<CompileErrorKind> {
+        if args.is_empty() || self.source_signature(target, false).ok().flatten().is_some() {
+            return None;
+        }
+        let signature = self.reference_signature(target)?;
+        if signature.invocation != 2 || !signature.parameters.is_empty() {
+            return None;
+        }
+        match self.reference_result(signature) {
+            Type::Scalar | Type::Text => Some(CompileErrorKind::WrongNumberOfArguments),
+            Type::Variant | Type::Array(_) if args.iter().any(|argument| argument.name.is_some()) =>
+                Some(CompileErrorKind::NamedArgumentsNotAllowed),
+            _ => None,
+        }
     }
 
     fn named_index_argument_error(&self, target: &Expr, args: &[Argument]) -> Option<CompileErrorKind> {
@@ -3220,7 +3241,8 @@ impl<'a> Checker<'a> {
                 return;
             }
             if let Expr::Index { target, args, .. } = part {
-                if let Some(kind) = self.named_index_argument_error(target, args) {
+                if let Some(kind) = self.reference_getter_index_error(target, args)
+                    .or_else(|| self.named_index_argument_error(target, args)) {
                     failure = Some(self.failure(kind, part.span()));
                     return;
                 }
@@ -3699,6 +3721,18 @@ impl<'a> Checker<'a> {
                     self.resolve_expression_name(target, true)?;
                 }
                 self.check_expression(target, !explicit_call)?;
+                let member = match target {
+                    Expr::Index { target, args, .. } if args.is_empty() => Some(target.as_ref()),
+                    Expr::Index { .. } => None,
+                    other => Some(other),
+                };
+                if member.filter(|member| self.source_signature(member, false).ok().flatten().is_none())
+                    .and_then(|member| self.reference_signature(member)).is_some_and(|signature|
+                        signature.invocation == 2 && signature.parameters.is_empty()
+                            && matches!(self.reference_result(signature), Type::Scalar | Type::Text))
+                {
+                    return Err(self.failure(CompileErrorKind::InvalidPropertyUse, target.span()));
+                }
             }
             Statement::Dim(declaration) => {
                 for variable in &declaration.items {

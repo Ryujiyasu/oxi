@@ -66,6 +66,12 @@ impl CompileReferenceLibrary {
         self.member(&owner, name).map(|signature| signature.result.clone())
     }
 
+    /// Whether a member returns an object whose default member can bind indices.
+    pub fn member_result_is_object(&self, owner: &str, name: &str) -> Option<bool> {
+        let result = self.member_result_type(owner, name)?;
+        Some(result.eq_ignore_ascii_case("object") || self.resolve_type(&result).is_some())
+    }
+
     pub fn from_tsv(source: &str) -> Result<Self, String> {
         fn signature(
             result: &str,
