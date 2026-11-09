@@ -1894,7 +1894,7 @@ impl<'a> Runtime<'a> {
     }
 
     fn public_instance_procedure(&self, module: &Module, name: &str, kinds: &[ProcKind]) -> bool {
-        module.items.iter().any(|item|matches!(item,ModuleItem::Procedure(procedure) if procedure.name.eq_ignore_ascii_case(name) && kinds.contains(&procedure.kind) && !matches!(procedure.visibility,Visibility::Private|Visibility::Friend)))
+        module.items.iter().any(|item|matches!(item,ModuleItem::Procedure(procedure) if procedure.name.eq_ignore_ascii_case(name) && kinds.contains(&procedure.kind) && crate::compiler::procedure_header_valid(procedure) && !matches!(procedure.visibility,Visibility::Private|Visibility::Friend)))
     }
 
     fn public_instance_field(&self, module: &Module, name: &str) -> bool {
@@ -1943,18 +1943,14 @@ impl<'a> Runtime<'a> {
             Some(InternalObject::Instance(instance)) => instance.class.to_ascii_lowercase(),
             _ => String::new(),
         };
-        let params: Vec<String> = self
-            .classes
-            .get(&class)
-            .and_then(|module| {
-                module.items.iter().find_map(|item| match item {
-                    ModuleItem::Procedure(p) if p.name.eq_ignore_ascii_case(name) => {
-                        Some(p.params.iter().map(|param| param.name.clone()).collect())
-                    }
-                    _ => None,
-                })
-            })
-            .unwrap_or_default();
+        let params: Vec<String> = match self.source_class_procedure_view(
+            &class, name, &[ProcKind::Function, ProcKind::Sub, ProcKind::PropertyGet],
+            receiver.dispatch_view.as_deref(),
+        ) {
+            Some((_, procedure)) => procedure.params.iter().map(|param| param.name.clone()).collect(),
+            None if self.classes.get(&class).is_some_and(|module| self.public_instance_field(module, name)) => Vec::new(),
+            None => return Err(no_such_member(format!("the class has no member {name}"), Some(line))),
+        };
         let mut placed: Vec<Value> = Vec::new();
         let mut next = 0;
         for (value, named) in args.iter().zip(argument_names) {
@@ -2071,7 +2067,8 @@ impl<'a> Runtime<'a> {
             module.items.iter().find_map(|item| match item {
                 ModuleItem::Procedure(procedure)
                     if procedure.name.eq_ignore_ascii_case(name)
-                        && kinds.contains(&procedure.kind) =>
+                        && kinds.contains(&procedure.kind)
+                        && crate::compiler::procedure_header_valid(procedure) =>
                 {
                     (implementation
                         || (procedure.visibility != Visibility::Private
