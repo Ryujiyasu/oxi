@@ -583,6 +583,9 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
     if child.kern.is_none() {
         child.kern = parent.kern;
     }
+    if child.position.is_none() && !crate::env_flag!("OXI_STYLE_POSITION_DISABLE") {
+        child.position = parent.position;
+    }
     if child.text_scale.is_none() {
         child.text_scale = parent.text_scale;
     }
@@ -1074,6 +1077,18 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                 if local_name(attr.key.as_ref()) == "val" {
                     let val = String::from_utf8_lossy(&attr.value);
                     rs.kern = val.parse::<f32>().ok().map(|v| v / 2.0);
+                }
+            }
+        }
+        // OXI_STYLE_POSITION (2026-11-09, default ON, opt-out _DISABLE): a style's
+        // w:position (half-points, + raises) is read like the run's own. blind-J
+        // en/correspondence__00e3eac2: Normal carries «w:position -2» and Word draws every
+        // body line 1.00pt lower than Oxi did (LucidaSansUnicode 11, 25 lines, all -1.00).
+        "position" if !crate::env_flag!("OXI_STYLE_POSITION_DISABLE") => {
+            for attr in e.attributes().flatten() {
+                if local_name(attr.key.as_ref()) == "val" {
+                    let val = String::from_utf8_lossy(&attr.value);
+                    rs.position = val.parse::<f32>().ok().map(|v| v / 2.0);
                 }
             }
         }
@@ -1806,6 +1821,15 @@ fn parse_style_definition(
                                 if local_name(attr.key.as_ref()) == "val" {
                                     let val = String::from_utf8_lossy(&attr.value);
                                     run_style.kern = val.parse::<f32>().ok().map(|v| v / 2.0);
+                                    has_run_style = true;
+                                }
+                            }
+                        }
+                        "position" if !crate::env_flag!("OXI_STYLE_POSITION_DISABLE") => {
+                            for attr in e.attributes().flatten() {
+                                if local_name(attr.key.as_ref()) == "val" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    run_style.position = val.parse::<f32>().ok().map(|v| v / 2.0);
                                     has_run_style = true;
                                 }
                             }
