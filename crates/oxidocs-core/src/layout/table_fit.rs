@@ -9398,6 +9398,27 @@ impl<'a> TableFitLayouter<'a> {
                                         };
                                         let cell_text_y_off =
                                             cell_text_y_off + cell_glyph_dy + s664_dy - s698_reduce;
+                                        // OXI_CELL_S1047 (2026-11-09, default ON, opt-out _DISABLE): a Latin
+                                        // (no CJK 83/64 fragment) auto-spaced cell line sits on the body's
+                                        // S1047 baseline -- box top + the taller metric set's ascent, i.e.
+                                        // text_y_off 1.0 against the renderer's -1.0 origin, whatever the
+                                        // multiplier. `_pb_cell_top_border_gen.py` (00c94b4f's styles,
+                                        // TableGrid, top border nil/4/8/12/24): Word's first-row baseline sits
+                                        // 10.44 below the cell's line top, the same as the body paragraph's;
+                                        // the S453 +1.5 / S698 -0.76 pair (old-machine PNG centroids) left
+                                        // Latin cells at 0.74 (blind-J EN page-1 census: Arial 11 -0.27,
+                                        // Calibri-Bold 11 -0.28, Calibri-Light 11 -0.32) and the centring
+                                        // term's 0.5 steps moved 10pt lines the other way (Calibri 10 +0.12).
+                                        let cell_text_y_off = if s698_reduce > 0.0
+                                            && !crate::env_flag!("OXI_CELL_S1047_DISABLE")
+                                            && s664_dy == 0.0
+                                            && matches!(effective_line_rule, None | Some("auto"))
+                                            && !(row_line_pitch.map_or(false, |p| p > 0.0) && para.style.snap_to_grid)
+                                        {
+                                            1.0
+                                        } else {
+                                            cell_text_y_off
+                                        };
                                         // S1625 (2026-10-01, default ON, opt-out OXI_S1625_DISABLE):
                                         // a RUBY line on a typed grid centres the ruby-plus-base BLOCK
                                         // in its grid cells, not the base em box. The block runs from
