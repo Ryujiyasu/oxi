@@ -636,6 +636,9 @@ def verdict(evidence):
         return "不一致"
     if evidence.get("unsupported") and evidence.get("reproduction"):
         return "未対応"
+    contract = evidence.get("coverage_contract")
+    if not isinstance(contract, dict) or contract.get("complete_member_contract") is not True:
+        return "未検証"
     for gate in GATES:
         item = gates.get(gate, {})
         if item.get("status") == "pass" and item.get("receipt"):
