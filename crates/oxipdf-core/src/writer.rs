@@ -569,7 +569,11 @@ fn build_content_stream_with_images(
                     write!(buf, "{:.3} Tc\n", tc).unwrap();
                 }
                 let pdf_y = page.height - span.y;
-                write!(buf, "{} {} Td\n", span.x, pdf_y).unwrap();
+                if span.skew.abs() > 1e-6 {
+                    write!(buf, "1 0 {:.4} 1 {} {} Tm\n", span.skew, span.x, pdf_y).unwrap();
+                } else {
+                    write!(buf, "{} {} Td\n", span.x, pdf_y).unwrap();
+                }
                 if cid_fonts.contains_key(&font_key) {
                     write!(
                         buf,
@@ -871,7 +875,7 @@ mod tests {
                     font_name: "F1".into(),
                     font_size: 12.0,
                     fill_color: Color::Gray(0.0),
-                    character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
+                    character_spacing: 0.0, stroke_width: 0.0, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
                 })],
                 rotation: 0,
             }],
@@ -1078,7 +1082,7 @@ mod tests {
                     font_name: "MSGothic".into(),
                     font_size: 12.0,
                     fill_color: Color::Gray(0.0),
-                    character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
+                    character_spacing: 0.0, stroke_width: 0.0, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
                 })],
                 rotation: 0,
             }],
@@ -1154,7 +1158,7 @@ mod tests {
                         font_name: "Helvetica".into(),
                         font_size: 12.0,
                         fill_color: Color::Gray(0.0),
-                        character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
+                        character_spacing: 0.0, stroke_width: 0.0, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
                     }),
                     ContentElement::Text(TextSpan {
                         x: 72.0,
@@ -1163,7 +1167,7 @@ mod tests {
                         font_name: "MSGothic".into(),
                         font_size: 12.0,
                         fill_color: Color::Gray(0.0),
-                        character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
+                        character_spacing: 0.0, stroke_width: 0.0, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
                     }),
                 ],
                 rotation: 0,
@@ -1222,7 +1226,7 @@ mod tests {
                 font_name: font.into(),
                 font_size: 12.0,
                 fill_color: Color::Gray(0.0),
-                character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
+                character_spacing: 0.0, stroke_width: 0.0, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
             })
         };
         let doc = PdfDocument {
@@ -1311,7 +1315,7 @@ mod tests {
                     font_name: "FArial".into(),
                     font_size: 12.0,
                     fill_color: Color::Gray(0.0),
-                    character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
+                    character_spacing: 0.0, stroke_width: 0.0, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
                 })],
                 rotation: 0,
             }],

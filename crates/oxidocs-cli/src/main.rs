@@ -688,7 +688,7 @@ impl PdfBuilder {
     /// Add text at (x, y) where y is in top-down coordinates.
     fn add_text(&mut self, x: f64, y: f64, text: String, font_name: String, font_size: f64, color: Color) {
         self.current_contents.push(ContentElement::Text(TextSpan {
-            x, y, text, font_name, font_size, fill_color: color, character_spacing: 0.0, stroke_width: 0.0, horizontal_scale: 100.0, stroke_color: None,
+            x, y, text, font_name, font_size, fill_color: color, character_spacing: 0.0, stroke_width: 0.0, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
         }));
     }
 
@@ -1883,7 +1883,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                                 x: cx, y: text_y + k as f64 * adv,
                                 text: ch.to_string(), font_name: key,
                                 font_size: fs, fill_color,
-                                character_spacing: 0.0, stroke_width: if fake_bold { fs / 35.0 } else { 0.0 }, horizontal_scale: 100.0, stroke_color: None,
+                                character_spacing: 0.0, stroke_width: if fake_bold { fs / 35.0 } else { 0.0 }, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
                             };
                             contents.push(match vg {
                                 Some(g) => ContentElement::GlyphRun(GlyphRun { span, glyph_indices: vec![g] }),
@@ -1908,6 +1908,14 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     // face has none for it and the PDF showed .notdef boxes (blind-J ja/
                     // creative__9aa11078: a tab element drew a «?» box at the top left of
                     // page 1). Its width still carries the underline.
+                    // OXI_PDF_SYNTH_ITALIC (2026-11-09, default ON, opt-out _DISABLE): italic
+                    // text in an East Asian family (drawn with its regular face) is sheared
+                    // as Word draws it -- Tm «1 0 0.3333 1» in Word's PDF. zh dev
+                    // legal__00849104's bold-italic 宋体 headings «监管协议» came out upright.
+                    let synth_skew = if *italic
+                        && std::env::var_os("OXI_PDF_SYNTH_ITALIC_DISABLE").is_none()
+                        && font_family.as_deref().is_some_and(is_cjk_family)
+                    { 0.3333 } else { 0.0 };
                     let blank_skip = std::env::var_os("OXI_PDF_BLANK_SEGMENT_DISABLE").is_none();
                     for (seg_text, seg_font, sx, _sw) in segments {
                         if blank_skip && seg_text.chars().all(|c| c.is_control()) {
@@ -1918,14 +1926,14 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                                 x: sx + 1.0, y: text_y + 1.0,
                                 text: seg_text.clone(), font_name: seg_font.clone(),
                                 font_size: fs, fill_color: Color::Gray(0.5),
-                                character_spacing: *character_spacing as f64, stroke_width: 0.0, horizontal_scale: hscale, stroke_color: None,
+                                character_spacing: *character_spacing as f64, stroke_width: 0.0, skew: synth_skew, horizontal_scale: hscale, stroke_color: None,
                             }));
                         }
                         contents.push(ContentElement::Text(TextSpan {
                             x: sx, y: text_y,
                             text: seg_text, font_name: seg_font,
                             font_size: fs, fill_color: main_fill,
-                            character_spacing: *character_spacing as f64, stroke_width: main_w, horizontal_scale: hscale, stroke_color: main_stroke,
+                            character_spacing: *character_spacing as f64, stroke_width: main_w, skew: synth_skew, horizontal_scale: hscale, stroke_color: main_stroke,
                         }));
                     }
 

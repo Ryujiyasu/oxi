@@ -169,6 +169,10 @@ pub struct TextSpan {
     /// plain fill.
     #[serde(default)]
     pub stroke_width: f64,
+    /// Horizontal shear of the glyphs (PDF Tm c): a synthetic italic is 0.3333, as
+    /// Word draws a face that has no italic member; 0.0 = upright.
+    #[serde(default)]
+    pub skew: f64,
     /// Horizontal glyph scale in percent (PDF Tz); 100.0 = unscaled.
     #[serde(default = "default_horizontal_scale")]
     pub horizontal_scale: f64,
