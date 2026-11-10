@@ -8047,6 +8047,56 @@ impl<'a> TableFitLayouter<'a> {
                                         // vs Oxi to locate the drift source.
                                         let (pprrpr_fs, empty_lh) = self.cell_mark_line_height(
                                             para, effective_line_spacing, effective_line_rule, row_line_pitch);
+                                        // OXI_CELL_MARKER_ASCENT: an empty list paragraph keeps its
+                                        // marker -- the line grows to it and the marker is drawn.
+                                        let empty_marker_lh = self.cell_empty_marker_line(
+                                            para, empty_lh, effective_line_spacing, effective_line_rule);
+                                        if empty_marker_lh > empty_lh
+                                            || (list_marker_info.is_some()
+                                                && self.cell_marker_face_ascent(para, 1.0).is_some())
+                                        {
+                                            if let Some((ref mk_text, mk_fs, mk_w)) = list_marker_info {
+                                                let marker_style = s1037_marker_style(para)
+                                                    .cloned()
+                                                    .unwrap_or_default();
+                                                let asc = self
+                                                    .cell_marker_face_ascent(para, mk_fs)
+                                                    .unwrap_or(mk_fs * 0.8);
+                                                let mut marker_el = LayoutElement::new(
+                                                    cell_x + pad_l + p_indent_left + p_first_line_indent_raw,
+                                                    content_h,
+                                                    mk_w,
+                                                    empty_marker_lh,
+                                                    LayoutContent::Text {
+                                                        text: mk_text.clone(),
+                                                        font_size: mk_fs,
+                                                        font_family: marker_style.font_family.clone(),
+                                                        bold: self.resolve_bold(&marker_style, &para.style),
+                                                        italic: marker_style.italic,
+                                                        underline: false,
+                                                        underline_style: None,
+                                                        strikethrough: false,
+                                                        double_strikethrough: false,
+                                                        color: self
+                                                            .resolve_color(&marker_style, &para.style)
+                                                            .map(|s| s.to_string()),
+                                                        highlight: None,
+                                                        character_spacing: 0.0,
+                                                        field_type: None,
+                                                        text_scale: 100.0,
+                                                        is_vertical: false,
+                                                        effects: TextEffects::default(),
+                                                    },
+                                                );
+                                                marker_el.baseline_offset = Some(asc);
+                                                marker_el.paragraph_index = block_idx;
+                                                marker_el.cell_paragraph_index = Some(cell_para_counter);
+                                                marker_el.cell_row_index = Some(row_idx);
+                                                marker_el.cell_col_index = Some(cell_idx);
+                                                cell_elements.push(marker_el);
+                                            }
+                                        }
+                                        let empty_lh = empty_marker_lh;
                                         if crate::env_flag!("OXI_DBG_EMPTYLH") {
                                             eprintln!("[EMPTYLH] row={} cell={} lh={:.2} pprrpr_fs={:?} default_fs={} ls={:?} rule={:?} snap={}",
                                     row_idx, cell_idx, empty_lh, pprrpr_fs, self.default_font_size,
@@ -8616,7 +8666,9 @@ impl<'a> TableFitLayouter<'a> {
                                             && (list_marker_info
                                                 .as_ref()
                                                 .map_or(false, |(m, _, _)| m.contains('\u{F0B7}'))
-                                                || self.s1614_aum_marker_asc(para).is_some())
+                                                || self.s1614_aum_marker_asc(para).is_some()
+                                                || (list_marker_info.is_some()
+                                                    && self.cell_marker_face_ascent(para, 1.0).is_some()))
                                             && !crate::env_flag!("OXI_S1125_DISABLE")
                                         {
                                             let mut s1125_asc: f32 = 0.0;
@@ -8651,7 +8703,13 @@ impl<'a> TableFitLayouter<'a> {
                                                     .map(|(_, f, _)| *f)
                                                     .unwrap_or(0.0);
                                                 // S1614: an AUM numbering marker uses its own ascent.
+                                                let is_symbol = list_marker_info
+                                                    .as_ref()
+                                                    .map_or(false, |(m, _, _)| m.contains('\u{F0B7}'));
                                                 let marker_asc = self.s1614_aum_marker_asc(para)
+                                                    .or_else(|| if is_symbol { None } else {
+                                                        self.cell_marker_face_ascent(para, mfs)
+                                                    })
                                                     .unwrap_or(2059.0 / 2048.0 * mfs);
                                                 content_h += LayoutEngine::minimum_marker_entry_overflow(
                                                     (marker_asc - s1125_asc - s1125_ext).max(0.0),

@@ -5902,6 +5902,46 @@ impl LayoutEngine {
     /// S1614: the ascent (pt) of a numbering marker set in Arial Unicode MS in a
     /// Latin document -- AUM's own 1.332em box, not S1564's Arial (see the body
     /// S1037 site). None for any other marker.
+    /// OXI_CELL_MARKER_ASCENT (2026-11-10, default ON, opt-out _DISABLE): a cell
+    /// line's list marker in any explicit face raises the line by its winAscent the
+    /// way S1125's Symbol bullet does. `pb_cellmarker.py` (bullet «o» Courier New
+    /// 18 / 26pt beside Arial 11, line 276): Word lines 19.2 / 25.92, the S1125 form
+    /// gives 19.23 / 25.89; Oxi kept 14.54. `fs` scales the face's ascent (pass 1.0
+    /// to ask only whether the marker has its own face).
+    fn cell_marker_face_ascent(&self, para: &Paragraph, fs: f32) -> Option<f32> {
+        if crate::env_flag!("OXI_CELL_MARKER_ASCENT_DISABLE") {
+            return None;
+        }
+        para.style.list_marker.as_ref()?;
+        let family = s1037_marker_style(para)?.font_family.as_deref()?;
+        Some(self.registry.get(family).win_ascent * fs)
+    }
+
+    /// OXI_CELL_MARKER_ASCENT: an EMPTY list paragraph in a cell still sets its
+    /// marker, and the line is (max(marker winAscent, mark ascent) + mark descent)
+    /// x the auto factor (`pb_cellmarker.py` empty arms, Courier New 18 / 26pt,
+    /// Arial 11 mark, line 276: Word 19.92 / 27.6, this gives 19.92 / 27.58).
+    fn cell_empty_marker_line(&self, para: &Paragraph, empty_lh: f32,
+        line_spacing: Option<f32>, line_rule: Option<&str>) -> f32 {
+        if matches!(line_rule, Some("exact")) {
+            return empty_lh;
+        }
+        let Some((_, mfs)) = para.style.list_marker.as_ref().map(|m| {
+            let ms = s1037_marker_style(para);
+            (m, ms.map(|s| self.resolve_font_size(s, &para.style)).unwrap_or(0.0))
+        }) else { return empty_lh };
+        let Some(marker_asc) = self.cell_marker_face_ascent(para, mfs) else { return empty_lh };
+        let rpr = para.style.ppr_rpr.as_ref().cloned().unwrap_or_default();
+        let fs = self.resolve_font_size(&rpr, &para.style);
+        let mark = self.metrics_for_para_mark_g(&rpr, &para.style, true);
+        let factor = match line_rule {
+            Some("atLeast") => 1.0,
+            _ => line_spacing.unwrap_or(1.0),
+        };
+        let line = (marker_asc.max(mark.win_ascent * fs) + mark.win_descent * fs) * factor;
+        empty_lh.max(line)
+    }
+
     fn s1614_aum_marker_asc(&self, para: &Paragraph) -> Option<f32> {
         if crate::env_flag!("OXI_S1614_DISABLE") || self.doc_body_has_real_cjk {
             return None;
@@ -24296,6 +24336,11 @@ cells={} pitch={:.2} text={:?}",
             };
             let h_added = if cell_mark_only {
                 self.cell_mark_line_height(para, eff_ls, eff_lr, grid_pitch).1
+            } else { h_added };
+            // OXI_CELL_MARKER_ASCENT: the empty list line grows to its marker (render twin
+            // in table_fit's empty branch).
+            let h_added = if in_cell {
+                self.cell_empty_marker_line(para, h_added, eff_ls, eff_lr)
             } else { h_added };
             if crate::env_flag!("OXI_DBG_CELLEMPTY") {
                 eprintln!("[CELLEMPTY] fam={} fs={:.2} cjk={} snap_in_cell={} use_render_lh={} grid={:?} ls={:?} lr={:?} h_added={:.3}",
