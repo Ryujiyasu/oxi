@@ -9,6 +9,27 @@ pub(crate) enum AnsiCodePage {
 }
 
 impl AnsiCodePage {
+    pub(crate) fn character_codec(self, locale: Option<i64>) -> Option<oxivba_core::AnsiCodec> {
+        let system_page = match self { Self::Japanese => 932, Self::Western => 1252 };
+        oxivba_core::AnsiCodec::for_locale(locale, system_page, 1252)
+    }
+
+    fn encoded_unit(self, unit: u16) -> Option<u16> {
+        if unit<128 {return Some(unit);}
+        let table: &[u8]=match self {
+            Self::Japanese=>include_bytes!("data/vba_automation_cp932.bin"),
+            Self::Western=>include_bytes!("data/vba_automation_cp1252.bin"),
+        };
+        let mut low=0;let mut high=table.len()/4;
+        while low<high {
+            let middle=(low+high)/2;
+            let code=u16::from_le_bytes([table[middle*4],table[middle*4+1]]);
+            if code<unit {low=middle+1;} else {high=middle;}
+        }
+        let entry=table.get(low*4..low*4+4)?;
+        (u16::from_le_bytes([entry[0],entry[1]])==unit).then(||u16::from_le_bytes([entry[2],entry[3]]))
+    }
+
     pub(crate) fn from_id(id: u16) -> Result<Self, String> {
         match id {
             932 => Ok(Self::Japanese),
@@ -28,30 +49,11 @@ impl AnsiCodePage {
     }
 
     fn encode(self, text: &str) -> Option<Vec<u8>> {
-        let table: &[u8] = match self {
-            Self::Japanese => include_bytes!("data/vba_automation_cp932.bin"),
-            Self::Western => include_bytes!("data/vba_automation_cp1252.bin"),
-        };
         let mut result = Vec::with_capacity(text.len());
         for unit in text.encode_utf16() {
-            if unit < 128 {
-                result.push(unit as u8);
-                continue;
-            }
-            let mut low = 0;
-            let mut high = table.len() / 4;
-            while low < high {
-                let middle = (low + high) / 2;
-                let code = u16::from_le_bytes([table[middle * 4], table[middle * 4 + 1]]);
-                if code < unit { low = middle + 1; } else { high = middle; }
-            }
-            let entry = table.get(low * 4..low * 4 + 4)?;
-            if u16::from_le_bytes([entry[0], entry[1]]) != unit {
-                // A replacement '?' cannot name a declared VBA member. Avoid
-                // giving distinct unmappable source identifiers the same key.
-                return None;
-            }
-            let encoded = u16::from_le_bytes([entry[2], entry[3]]);
+            // Names cannot use the replacement fallback: distinct unmappable
+            // source identifiers must not acquire the same lookup key.
+            let encoded = self.encoded_unit(unit)?;
             if encoded > 255 { result.push((encoded >> 8) as u8); }
             result.push(encoded as u8);
         }
