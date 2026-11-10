@@ -1662,16 +1662,27 @@ impl FontMetricsRegistry {
 
     fn simsun_metrics(&self) -> Option<std::sync::Arc<FontMetrics>> {
         static CELL: std::sync::OnceLock<Option<std::sync::Arc<FontMetrics>>> = std::sync::OnceLock::new();
-        CELL.get_or_init(|| {
-            let mut m = self.fonts.get("MS Mincho")?.clone();
+        CELL.get_or_init(|| self.gb_face_metrics("MS Mincho")).clone()
+    }
+
+    /// OXI_SIMHEI_ALIAS: SimHei is SimSun's sans twin -- the same 220/36 upm-256
+    /// box and the same 140 advances that differ from the MS table (measured from
+    /// simhei.ttf / msgothic.ttc) -- so it takes MS Gothic with the same overrides.
+    fn simhei_metrics(&self) -> Option<std::sync::Arc<FontMetrics>> {
+        static CELL: std::sync::OnceLock<Option<std::sync::Arc<FontMetrics>>> = std::sync::OnceLock::new();
+        CELL.get_or_init(|| self.gb_face_metrics("MS Gothic")).clone()
+    }
+
+    fn gb_face_metrics(&self, base: &str) -> Option<std::sync::Arc<FontMetrics>> {
+        {
+            let mut m = self.fonts.get(base)?.clone();
             for &(cp, w) in SIMSUN_WIDTH_OVERRIDES {
                 if let Some(c) = char::from_u32(cp) {
                     m.char_widths.insert(c, w);
                 }
             }
             Some(std::sync::Arc::new(m))
-        })
-        .clone()
+        }
     }
 
     fn get_regular_with_synthetic_bold(&self, family: &str, bold: bool) -> FontMetricsRef<'_> {
@@ -1689,6 +1700,11 @@ impl FontMetricsRegistry {
 
     pub fn get_with_style(&self, family: &str, bold: bool, italic: bool) -> FontMetricsRef<'_> {
         if let Some(metrics) = runtime::resolve_registered(family, bold, italic) { return metrics; }
+        // OXI_SIMHEI_ALIAS: the GB faces keep their aliased MS table for every
+        // style (a styled lookup must not fall through to the installed file).
+        if matches!(family, "黑体" | "SimHei") && !crate::env_flag!("OXI_SIMHEI_ALIAS_DISABLE") {
+            return self.get_with_bold(family, bold);
+        }
         if crate::env_flag!("OXI_YU_MINCHO_STYLE_FACE")
             && normalize_family_name(family) == "Yu Mincho Regular"
         {
@@ -1828,6 +1844,19 @@ impl FontMetricsRegistry {
             && !crate::env_flag!("OXI_SIMSUN_WIDTHS_DISABLE")
         {
             if let Some(m) = self.simsun_metrics() {
+                return m.into();
+            }
+        }
+        // OXI_SIMHEI_ALIAS (2026-11-10, default ON, opt-out _DISABLE): 黑体 / SimHei
+        // had no table entry and was read from simhei.ttf, whose hhea lineGap (36/256)
+        // put the baseline 1.68pt (12pt) to 3.06pt (22pt) below Word's in a
+        // grid-snapped line. zh dev creative__076f98c0's title, `_pb_simhei_grid_gen.py`
+        // (12..22pt, line 240/360/480): Word centres the 83/64 box exactly as for
+        // SimSun.
+        if matches!(family, "黑体" | "SimHei")
+            && !crate::env_flag!("OXI_SIMHEI_ALIAS_DISABLE")
+        {
+            if let Some(m) = self.simhei_metrics() {
                 return m.into();
             }
         }
@@ -2871,6 +2900,8 @@ pub(crate) fn normalize_family_name(name: &str) -> String {
         // Corpus scan: SimSun = 3 EN docs, ZERO frozen/JP docs → byte-identical
         // by construction. render_family_name draws real SimSun glyphs.
         "宋体" | "新宋体" | "SimSun" | "NSimSun" => "MS Mincho".to_string(),
+        // OXI_SIMHEI_ALIAS: see FontRegistry::get.
+        "黑体" | "SimHei" if !crate::env_flag!("OXI_SIMHEI_ALIAS_DISABLE") => "MS Gothic".to_string(),
         // S796 (2026-07-12): Humnst777 Lt BT (Humanist 777 Light, a commercial
         // Bitstream font, not installed) — Word's PANOSE substitution renders it
         // as CALIBRI (uk_framework PDF span fonts: body Calibri 11.04, bold notes
