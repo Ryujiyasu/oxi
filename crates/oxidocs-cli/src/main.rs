@@ -14,6 +14,7 @@ use oxipdf_core::ir::*;
 
 mod fontidx;
 mod vba;
+mod emf;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -2096,7 +2097,20 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                 oxidocs_core::layout::LayoutContent::Image { ref data, ref content_type, crop, rotation, .. } => {
                     // Decode image (PNG/JPEG/etc.) to raw RGB pixels
                     if !data.is_empty() {
-                        if let Ok(img) = image::load_from_memory(data) {
+                        // OXI_PDF_EMF: a metafile is played as vectors (emf.rs).
+                        if emf::is_emf(data) {
+                            let key = |face: &str, bold: bool, italic: bool, c: char| {
+                                pdf_face_for(c, &resolve_font_styled(Some(face), bold, italic), bold, &embedded_fonts)
+                            };
+                            let metrics = |face: &str, _bold: bool| {
+                                let m = registry.get(face);
+                                (m.win_ascent as f64, m.win_descent as f64)
+                            };
+                            let faces = emf::TextFaces { key: &key, metrics: &metrics };
+                            if let Some(els) = emf::render(data, elem.x as f64, elem.y as f64, elem.width as f64, elem.height as f64, Some(&faces), *crop) {
+                                contents.extend(els);
+                            }
+                        } else if let Ok(img) = image::load_from_memory(data) {
                             // OXI_PDF_IMAGE_CROP (2026-11-09, default ON, opt-out _DISABLE):
                             // a:srcRect crops the source and quarter turns turn the pixels,
                             // as the DirectWrite renderer does (S775 / OXI_CROP_NEGATIVE /
@@ -3567,6 +3581,15 @@ fn embed_document_faces(
                 let set = wanted.entry((family, *bold, *italic)).or_default();
                 for ch in text.chars() {
                     set.insert(ch);
+                }
+            }
+            // OXI_PDF_EMF: the faces a metafile sets its text in.
+            if let oxidocs_core::layout::LayoutContent::Image { data, .. } = &elem.content {
+                for (face, bold, italic, text) in emf::text_runs(data) {
+                    if is_cjk_family(&face) {
+                        continue;
+                    }
+                    wanted.entry((face, bold, italic)).or_default().extend(text.chars());
                 }
             }
         }
