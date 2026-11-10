@@ -393,6 +393,9 @@ fn merge_para_style(child: &mut ParagraphStyle, parent: &ParagraphStyle) {
     if child.indent_first_line.is_none() && !s800_numpr_layer {
         child.indent_first_line = parent.indent_first_line;
     }
+    if child.indent_first_line_chars.is_none() && !s800_numpr_layer && style_ind_chars_on() {
+        child.indent_first_line_chars = parent.indent_first_line_chars;
+    }
     if child.num_id.is_none() {
         child.num_id = parent.num_id.clone();
         // S1035 (2026-07-29, default ON, opt-out OXI_S1035_DISABLE): numPr
@@ -1150,6 +1153,10 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
 }
 
 /// Apply a single empty paragraph property element to ParagraphStyle
+pub(crate) fn style_ind_chars_on() -> bool {
+    std::env::var_os("OXI_STYLE_IND_CHARS_DISABLE").is_none()
+}
+
 fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut ParagraphStyle) {
     let local = local_name(e.name().as_ref());
     match local.as_str() {
@@ -1238,6 +1245,11 @@ fn apply_para_property_empty(e: &quick_xml::events::BytesStart, style: &mut Para
                         // Hanging indent: negative first-line indent
                         style.indent_first_line =
                             val.parse::<f32>().ok().map(|v| -(v / 20.0));
+                    }
+                    // OXI_STYLE_IND_CHARS: a style's character first-line indent
+                    // (hangingChars stays with the twips: see ooxml.rs)
+                    "firstLineChars" if style_ind_chars_on() => {
+                        style.indent_first_line_chars = val.parse::<f32>().ok();
                     }
                     _ => {}
                 }
@@ -1980,6 +1992,13 @@ fn parse_style_definition(
                                         // Hanging indent: negative first-line indent
                                         style.indent_first_line =
                                             val.parse::<f32>().ok().map(|v| -(v / 20.0));
+                                    }
+                                    // OXI_STYLE_IND_CHARS: a style's character first-line indent
+                                    // (hangingChars stays with the twips: see ooxml.rs)
+                                    "firstLineChars" if style_ind_chars_on() => {
+                                        if style.indent_first_line_chars.map_or(true, |c| c >= 0.0) {
+                                            style.indent_first_line_chars = val.parse::<f32>().ok();
+                                        }
                                     }
                                     _ => {}
                                 }

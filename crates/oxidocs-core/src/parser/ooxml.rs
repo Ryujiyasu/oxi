@@ -4763,6 +4763,22 @@ fn parse_paragraph_with_inline_images_impl(
         && (style.indent_left.is_some() || style.indent_left_chars.is_some());
     let ppr_explicit_first_line =
         style.indent_first_line.is_some() || style.indent_first_line_chars.is_some();
+    // OXI_STYLE_IND_CHARS (2026-11-10, default ON, opt-out _DISABLE): the first-line
+    // indent has two channels, twips (w:firstLine / w:hanging) and characters
+    // (w:firstLineChars / w:hangingChars), each inherited on its own through
+    // style -> numbering level (twips only) -> paragraph, and a non-zero chars value
+    // wins at the end; zero chars means "no chars", so the twips show. Word probe on
+    // zh dev creative__0f11c107 (Normal style firstLineChars=200 firstLine=200 at
+    // 12pt; `_pb_ind_chars_channels_gen.py`, 24 arms): no ind -> 24 (Oxi drew the
+    // style's 10pt twips, never reading a style's chars); direct firstLine=0 -> 24;
+    // direct firstLineChars=0 -> 10 (the style's twips); a bullet list (level left
+    // 480 hanging 480) with direct firstLineChars=0 -> the marker at the margin (Oxi
+    // kept it at 480); no ind -> the marker 24 in from 480. Real documents
+    // (1245d99e, 004a8b7e, 1e9dd0a8, 02477995): moving or deleting the cached
+    // firstLine twips does not move the line -- Word draws the chars.
+    let style_ind_chars = super::styles::style_ind_chars_on();
+    let ppr_fl_twips = style.indent_first_line.is_some();
+    let ppr_fl_chars = style.indent_first_line_chars.is_some();
     // OXI_NUM_FL_STOP: the direct pPr's <w:tab w:val="clear"/> positions, read
     // before the S977 merge drops them -- a clear at the level's num tab removes
     // that stop (3a4f p974: level tab 2316 cleared, num tab 426 added).
@@ -4940,7 +4956,15 @@ fn parse_paragraph_with_inline_images_impl(
                 style.indent_right = ds.indent_right;
                 style.indent_right_chars = ds.indent_right_chars;
             }
-            if style.indent_first_line.is_none() && style.indent_first_line_chars.is_none() {
+            if style_ind_chars {
+                // OXI_STYLE_IND_CHARS: the twips and the chars inherit apart
+                if style.indent_first_line.is_none() {
+                    style.indent_first_line = ds.indent_first_line;
+                }
+                if style.indent_first_line_chars.is_none() {
+                    style.indent_first_line_chars = ds.indent_first_line_chars;
+                }
+            } else if style.indent_first_line.is_none() && style.indent_first_line_chars.is_none() {
                 style.indent_first_line = ds.indent_first_line;
                 style.indent_first_line_chars = ds.indent_first_line_chars;
             }
@@ -5411,10 +5435,13 @@ fn parse_paragraph_with_inline_images_impl(
             let s771_apply_num_hang =
                 !s771_on || num_pr_is_direct || style.indent_first_line.is_none()
                     || (s_nd && dd_first);
-            if !ppr_explicit_first_line && s771_apply_num_hang {
+            let num_hang_ok = if style_ind_chars { !ppr_fl_twips } else { !ppr_explicit_first_line };
+            if num_hang_ok && s771_apply_num_hang {
                 if let Some(hanging) = ctx.numbering.get_level_hanging(&npr.num_id, npr.ilvl) {
                     style.indent_first_line = Some(-hanging);
-                    style.indent_first_line_chars = None;
+                    if !style_ind_chars {
+                        style.indent_first_line_chars = None;
+                    }
                 } else if let Some(fl) = ctx.numbering.get_level_first_line(&npr.num_id, npr.ilvl) {
                     // S781 (2026-07-11): the level may carry a POSITIVE w:firstLine
                     // instead of w:hanging (mutually exclusive; hanging wins).
@@ -5426,7 +5453,9 @@ fn parse_paragraph_with_inline_images_impl(
                     // firstLine exists ONLY in 5 real_en English docs, 0 JP docs.
                     if std::env::var("OXI_S781_DISABLE").is_err() {
                         style.indent_first_line = Some(fl);
-                        style.indent_first_line_chars = None;
+                        if !style_ind_chars {
+                            style.indent_first_line_chars = None;
+                        }
                     }
                 }
             }
@@ -5512,6 +5541,58 @@ fn parse_paragraph_with_inline_images_impl(
                 || r.text.chars().any(|c| c != '\u{FFFE}' && c != '\u{FFFF}')
         })
         .map(|(_, r)| r.style.clone());
+    // OXI_STYLE_IND_CHARS: settle the two first-line channels (see above). Word
+    // draws non-zero chars; the twips beside them are its cache, used only while
+    // they sit within a quarter character of chars x the unit run's size (the
+    // cache carries Word's exact unit -- 059c1f2a/07203f44/0041d394 draw cache
+    // 84.35/90.35 where chars x size gives 84/90). A cache further off is not
+    // Word's: 0f11c107's `firstLineChars="200" firstLine="200"` draws 24, not 10.
+    // The unit is the run's size scaled by w:w plus twice its tracking (9aa11078:
+    // 16pt at w=66 spacing -0.9 -> 8.76, cache 8.9, drawn 8.9); a fitText run's
+    // spacing is its fit cache, not tracking (09422f63's centred title: cache 15).
+    // Twips from another level are no cache of these chars: the chars win
+    // (kyotei36spec: direct hangingChars=100 under the style's hanging=134).
+    if style_ind_chars {
+        match (style.indent_first_line_chars, style.indent_first_line) {
+            (Some(c), Some(_)) if c != 0.0 && ppr_fl_chars != ppr_fl_twips => {
+                style.indent_first_line = None;
+            }
+            (Some(c), Some(t)) if c != 0.0 => {
+                let ur = style.chars_unit_run_style.as_ref();
+                let size = ur
+                    .and_then(|r| r.font_size)
+                    .or_else(|| style.default_run_style.as_ref().and_then(|r| r.font_size))
+                    .unwrap_or(10.5);
+                let unit = size * ur.and_then(|r| r.text_scale).unwrap_or(100.0) / 100.0
+                    + 2.0 * ur.filter(|r| r.fit_text.is_none()).and_then(|r| r.character_spacing).unwrap_or(0.0);
+                // (+5% of the chars width for a character grid's pitch: order_06-1
+                // firstLineChars=2000 at 10.5pt stores 4320 = 216, drawn 216)
+                if (t - c / 100.0 * unit).abs() <= 0.25 * unit + 0.05 * (c / 100.0 * unit).abs() {
+                    style.indent_first_line_chars = None;
+                } else {
+                    style.indent_first_line = None;
+                }
+            }
+            (Some(c), Some(t)) if c == 0.0 => {
+                style.indent_first_line_chars = None;
+                // A hanging the paragraph did not write itself, under a left
+                // indent given in characters, does not pull the first line
+                // out: Word keeps that line at leftChars and moves the
+                // continuation instead (`_pb_ind_chars_channels_gen.py` lc_flc0:
+                // style left=960 hangingChars=200 hanging=300, direct leftChars=100
+                // firstLineChars=0 -> first line 12, continuation 27; golden
+                // parttime_000856314 matches the first line at leftChars; the
+                // continuation shift is not modelled).
+                if t < 0.0
+                    && !ppr_fl_twips
+                    && style.indent_left_chars.map_or(false, |lc| lc != 0.0)
+                {
+                    style.indent_first_line = Some(0.0);
+                }
+            }
+            _ => {}
+        }
+    }
     let lead_is_break = runs
         .first()
         .map_or(false, |first_run| first_run.text.trim() == "\x0C" || first_run.text == "\x0C");
@@ -6700,7 +6781,11 @@ fn parse_paragraph_properties(
                                 && style.indent_first_line.map_or(false, |v| v.abs() < 1584.0);
                             if first_line_chars.map_or(false, |v| v != 0.0) {
                                 if s1634 {
-                                    first_line_chars = None;
+                                    // OXI_STYLE_IND_CHARS keeps both channels and lets
+                                    // the settle step judge the cache
+                                    if !super::styles::style_ind_chars_on() {
+                                        first_line_chars = None;
+                                    }
                                 } else {
                                     style.indent_first_line = None;
                                 }
@@ -6716,7 +6801,11 @@ fn parse_paragraph_properties(
                             style.indent_right_chars = Some(rc);
                         }
                         // hangingChars overrides firstLineChars (negative = hanging)
-                        if let Some(hc) = hanging_chars {
+                        // OXI_STYLE_IND_CHARS: hangingChars="0" is "no chars" (the
+                        // level's hanging and left stay -- bullet arm n_hc0)
+                        if hanging_chars == Some(0.0) && super::styles::style_ind_chars_on() {
+                            style.indent_first_line_chars = Some(0.0);
+                        } else if let Some(hc) = hanging_chars {
                             // S1349 (2026-09-07, default ON, opt-out OXI_S1349_DISABLE):
                             // with hangingChars the FIRST line sits at leftChars (0 when
                             // absent) and the continuation at leftChars + hangingChars
