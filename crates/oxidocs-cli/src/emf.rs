@@ -51,6 +51,8 @@ enum Obj {
     Pen { color: Option<Color>, width: f64 },
     Brush(Option<Color>),
     Font(LogFont),
+    /// a WMF object this player does not use (palette, region, pattern)
+    Other,
 }
 
 #[derive(Clone)]
@@ -363,7 +365,7 @@ impl<'a> Player<'a> {
             Some(Obj::Pen { color, width }) => { self.dc.pen_color = color; self.dc.pen_width = width }
             Some(Obj::Brush(c)) => self.dc.brush = c,
             Some(Obj::Font(f)) => self.dc.font = Some(f),
-            None => {}
+            Some(Obj::Other) | None => {}
         }
     }
     fn decode_dib(rec: &[u8], off_bmi: usize, off_bits: usize) -> Option<(usize, usize, Vec<u8>)> {
@@ -620,12 +622,16 @@ impl<'a> Player<'a> {
         }
     }
     fn text(&mut self, rec: &[u8]) {
+        if let Some((text, rx, ry, dx)) = ext_text(rec) {
+            self.draw_text(text, rx, ry, dx);
+        }
+    }
+    fn draw_text(&mut self, text: String, rx: i32, ry: i32, dx: Vec<i32>) {
         let (Some(faces), Some(f)) = (self.faces, self.dc.font.clone()) else { return };
         // rotated text is not set yet: drawn level it would cross the picture
         if f.escapement % 3600 != 0 {
             return;
         }
-        let Some((text, rx, ry, dx)) = ext_text(rec) else { return };
         let t = self.total();
         let yscale = (t.m21 * t.m21 + t.m22 * t.m22).sqrt();
         let (asc, desc) = (faces.metrics)(&f.face, f.bold);
@@ -667,7 +673,8 @@ impl<'a> Player<'a> {
                     stroke_color: None,
                 }));
             }
-            ax += dx.get(i).copied().unwrap_or(0) as f64;
+            // no dx (WMF TEXTOUT): a full em for an ideograph, about half for the rest
+            ax += dx.get(i).map(|&d| d as f64).unwrap_or(if (c as u32) >= 0x2E80 { em } else { em * 0.55 });
         }
     }
     fn poly(&mut self, kind: u32, pts: Vec<(f64, f64)>) {
@@ -784,6 +791,385 @@ pub fn render(data: &[u8], x: f64, y: f64, w: f64, h: f64, faces: Option<&TextFa
         let rec = &data[off..off + size];
         p.record(kind, rec);
         off += size;
+    }
+    if p.out.len() == start_len {
+        return None;
+    }
+    p.out.push(ContentElement::RestoreState);
+    Some(p.out)
+}
+
+// ---------------------------------------------------------------------------
+// Windows Metafile (WMF)
+//
+// OXI_PDF_WMF (2026-11-11, default ON, opt-out _DISABLE): the same GDI drawing in
+// the 16-bit record format (en 38, ja 8 corpus documents carry one). Each record is
+// translated onto the EMF player above; logical coordinates map straight onto the
+// box through the placeable header's bounding box (else the window rectangle).
+// ---------------------------------------------------------------------------
+
+fn rd_u16(b: &[u8], o: usize) -> Option<u16> {
+    b.get(o..o + 2).map(|s| u16::from_le_bytes([s[0], s[1]]))
+}
+
+const WMF_PLACEABLE: u32 = 0x9AC6_CDD7;
+
+/// Is `data` a WMF (placeable or bare)?
+pub fn is_wmf(data: &[u8]) -> bool {
+    rd_u32(data, 0) == Some(WMF_PLACEABLE)
+        || (matches!(rd_u16(data, 0), Some(1) | Some(2))
+            && rd_u16(data, 2) == Some(9)
+            && matches!(rd_u16(data, 4), Some(0x0100) | Some(0x0300)))
+}
+
+fn wmf_encoding(charset: u8) -> &'static encoding_rs::Encoding {
+    match charset {
+        128 => encoding_rs::SHIFT_JIS,
+        134 => encoding_rs::GBK,
+        136 => encoding_rs::BIG5,
+        129 => encoding_rs::EUC_KR,
+        161 => encoding_rs::WINDOWS_1253,
+        162 => encoding_rs::WINDOWS_1254,
+        204 => encoding_rs::WINDOWS_1251,
+        238 => encoding_rs::WINDOWS_1250,
+        _ => encoding_rs::WINDOWS_1252,
+    }
+}
+
+/// LOGFONT16 at `o`; returns the font and its charset.
+fn wmf_logfont(rec: &[u8], o: usize) -> Option<(LogFont, u8)> {
+    let height = rd_i16(rec, o)? as i32;
+    let escapement = rd_i16(rec, o + 4)? as i32;
+    let weight = rd_i16(rec, o + 8)? as i32;
+    let italic = *rec.get(o + 10)? != 0;
+    let charset = *rec.get(o + 13)?;
+    let raw: Vec<u8> = rec.get(o + 18..)?.iter().take(32).copied().take_while(|&b| b != 0).collect();
+    let (face, _, _) = wmf_encoding(charset).decode(&raw);
+    Some((LogFont { height, escapement, face: face.into_owned(), bold: weight >= 600, italic }, charset))
+}
+
+/// Records after the headers: (function, record bytes).
+fn wmf_records(data: &[u8]) -> Vec<(u16, &[u8])> {
+    let mut out = Vec::new();
+    let mut off = if rd_u32(data, 0) == Some(WMF_PLACEABLE) { 22 } else { 0 };
+    let Some(hwords) = rd_u16(data, off + 2) else { return out };
+    off += hwords as usize * 2;
+    while off + 6 <= data.len() {
+        let (Some(words), Some(func)) = (rd_u32(data, off), rd_u16(data, off + 4)) else { break };
+        let size = words as usize * 2;
+        if func == 0 || size < 6 || off + size > data.len() {
+            break;
+        }
+        out.push((func, &data[off..off + size]));
+        off += size;
+    }
+    out
+}
+
+/// EXTTEXTOUT (0x0A32) / TEXTOUT (0x0521): (bytes, x, y, dx per byte)
+fn wmf_text(func: u16, rec: &[u8]) -> Option<(Vec<u8>, i32, i32, Vec<i32>)> {
+    if func == 0x0A32 {
+        let y = rd_i16(rec, 6)? as i32;
+        let x = rd_i16(rec, 8)? as i32;
+        let n = rd_u16(rec, 10)? as usize;
+        let opts = rd_u16(rec, 12)?;
+        let mut at = 14 + if opts & 0x0006 != 0 { 8 } else { 0 };
+        let bytes = rec.get(at..at + n)?.to_vec();
+        at += n + (n & 1);
+        let dx: Vec<i32> = (0..n).map_while(|i| rd_i16(rec, at + i * 2).map(|v| v as i32)).collect();
+        let dx = if dx.len() == n { dx } else { Vec::new() };
+        Some((bytes, x, y, dx))
+    } else {
+        let n = rd_u16(rec, 6)? as usize;
+        let bytes = rec.get(8..8 + n)?.to_vec();
+        let at = 8 + n + (n & 1);
+        Some((bytes, rd_i16(rec, at + 2)? as i32, rd_i16(rec, at)? as i32, Vec::new()))
+    }
+}
+
+fn wmf_is_create(func: u16) -> bool {
+    matches!(func, 0x02FA | 0x02FC | 0x02FB | 0x00F7 | 0x01F9 | 0x0142 | 0x06FF)
+}
+
+/// Every (face, bold, italic, text) the metafile sets, for the font subsetter.
+pub fn wmf_text_runs(data: &[u8]) -> Vec<(String, bool, bool, String)> {
+    let mut out = Vec::new();
+    if !is_wmf(data) {
+        return out;
+    }
+    let mut slots: Vec<Option<Option<(LogFont, u8)>>> = Vec::new();
+    let mut cur: Option<(LogFont, u8)> = None;
+    for (func, rec) in wmf_records(data) {
+        if wmf_is_create(func) {
+            let obj = if func == 0x02FB { wmf_logfont(rec, 6) } else { None };
+            match slots.iter().position(|s| s.is_none()) {
+                Some(i) => slots[i] = Some(obj),
+                None => slots.push(Some(obj)),
+            }
+            continue;
+        }
+        match func {
+            0x01F0 => {
+                if let Some(s) = rd_u16(rec, 6).and_then(|i| slots.get_mut(i as usize)) {
+                    *s = None;
+                }
+            }
+            0x012D => {
+                if let Some(Some(Some(f))) = rd_u16(rec, 6).and_then(|i| slots.get(i as usize)) {
+                    cur = Some(f.clone());
+                }
+            }
+            0x0A32 | 0x0521 => {
+                if let (Some((f, cs)), Some((bytes, ..))) = (cur.as_ref(), wmf_text(func, rec)) {
+                    let (t, _, _) = wmf_encoding(*cs).decode(&bytes);
+                    out.push((f.face.clone(), f.bold, f.italic, t.into_owned()));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Play a WMF into the box (x, y, w, h); see `render` for the EMF twin.
+pub fn render_wmf(data: &[u8], x: f64, y: f64, w: f64, h: f64, faces: Option<&TextFaces>,
+    crop: Option<(f32, f32, f32, f32)>) -> Option<Vec<ContentElement>> {
+    if !is_wmf(data) || std::env::var_os("OXI_PDF_WMF_DISABLE").is_some() {
+        return None;
+    }
+    let records = wmf_records(data);
+    // the logical rectangle that fills the box
+    let (l, t, r, b) = if rd_u32(data, 0) == Some(WMF_PLACEABLE) {
+        (rd_i16(data, 6)? as f64, rd_i16(data, 8)? as f64, rd_i16(data, 10)? as f64, rd_i16(data, 12)? as f64)
+    } else {
+        let org = records
+            .iter()
+            .find(|(f, _)| *f == 0x020B)
+            .and_then(|(_, r)| Some((rd_i16(r, 8)? as f64, rd_i16(r, 6)? as f64)))
+            .unwrap_or((0.0, 0.0));
+        let ext = records
+            .iter()
+            .find(|(f, _)| *f == 0x020C)
+            .and_then(|(_, r)| Some((rd_i16(r, 8)? as f64, rd_i16(r, 6)? as f64)))?;
+        (org.0, org.1, org.0 + ext.0, org.1 + ext.1)
+    };
+    let (l, t, r, b) = match crop {
+        Some((ct, cr, cb, cl)) => {
+            let (fw, fh) = (r - l, b - t);
+            (l + fw * cl as f64 / 100.0, t + fh * ct as f64 / 100.0, r - fw * cr as f64 / 100.0, b - fh * cb as f64 / 100.0)
+        }
+        None => (l, t, r, b),
+    };
+    if (r - l).abs() < 1e-6 || (b - t).abs() < 1e-6 {
+        return None;
+    }
+    let (sx, sy) = (w / (r - l), h / (b - t));
+    let dev = Xform { m11: sx, m12: 0.0, m21: 0.0, m22: sy, dx: x - l * sx, dy: y - t * sy };
+    let mut p = Player {
+        out: vec![ContentElement::SaveState, ContentElement::ClipPath(ClipPathData {
+            operations: vec![
+                PathOp::MoveTo(x, y), PathOp::LineTo(x + w, y), PathOp::LineTo(x + w, y + h),
+                PathOp::LineTo(x, y + h), PathOp::ClosePath,
+            ],
+            even_odd: false,
+        })],
+        dc: Dc {
+            world: Xform::ID,
+            win_org: (0.0, 0.0),
+            win_ext: (1.0, 1.0),
+            vp_org: (0.0, 0.0),
+            vp_ext: (1.0, 1.0),
+            map_mode: 1,
+            pen_color: Some(Color::Gray(0.0)),
+            pen_width: 0.0,
+            brush: Some(Color::Gray(1.0)),
+            alternate: true,
+            cur: (0.0, 0.0),
+            font: None,
+            text_color: Color::Gray(0.0),
+            text_align: 0,
+        },
+        stack: Vec::new(),
+        objs: std::collections::HashMap::new(),
+        path: Vec::new(),
+        in_path: false,
+        dev,
+        // a cosmetic (width 0) pen: one device pixel at 96 dpi
+        dev_scale: 0.75,
+        data,
+        faces,
+        mask: None,
+    };
+    let start_len = p.out.len();
+    let mut slots: Vec<bool> = Vec::new();
+    let mut charsets: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
+    let mut charset = 0u8;
+    let i16at = |rec: &[u8], o: usize| rd_i16(rec, o).unwrap_or(0) as f64;
+    for (func, rec) in records {
+        if wmf_is_create(func) {
+            // object creation takes the lowest free slot
+            let slot = match slots.iter().position(|u| !*u) {
+                Some(i) => {
+                    slots[i] = true;
+                    i
+                }
+                None => {
+                    slots.push(true);
+                    slots.len() - 1
+                }
+            } as u32;
+            let obj = match func {
+                0x02FA => {
+                    let style = rd_u16(rec, 6).unwrap_or(0);
+                    let width = rd_i16(rec, 8).unwrap_or(0) as f64;
+                    let color = rd_u32(rec, 12).map(colorref).unwrap_or(Color::Gray(0.0));
+                    Obj::Pen { color: if style & 0xF == 5 { None } else { Some(color) }, width }
+                }
+                0x02FC => {
+                    let style = rd_u16(rec, 6).unwrap_or(0);
+                    let color = rd_u32(rec, 8).map(colorref).unwrap_or(Color::Gray(1.0));
+                    Obj::Brush(if style == 1 { None } else { Some(color) })
+                }
+                0x02FB => match wmf_logfont(rec, 6) {
+                    Some((f, cs)) => {
+                        charsets.insert(slot, cs);
+                        Obj::Font(f)
+                    }
+                    None => Obj::Other,
+                },
+                _ => Obj::Other,
+            };
+            p.objs.insert(slot, obj);
+            continue;
+        }
+        match func {
+            0x01F0 => {
+                if let Some(i) = rd_u16(rec, 6) {
+                    if let Some(u) = slots.get_mut(i as usize) {
+                        *u = false;
+                    }
+                    p.objs.remove(&(i as u32));
+                }
+            }
+            0x012D => {
+                if let Some(i) = rd_u16(rec, 6) {
+                    if let Some(cs) = charsets.get(&(i as u32)) {
+                        charset = *cs;
+                    }
+                    p.select(i as u32);
+                }
+            }
+            0x0106 => if let Some(m) = rd_u16(rec, 6) { p.dc.alternate = m == 1 },
+            0x0209 => if let Some(c) = rd_u32(rec, 6) { p.dc.text_color = colorref(c) },
+            0x012E => if let Some(a) = rd_u16(rec, 6) { p.dc.text_align = a as u32 },
+            0x001E => p.stack.push(p.dc.clone()),
+            0x0127 => {
+                let n = rd_i16(rec, 6).unwrap_or(-1) as i32;
+                for _ in 0..(if n < 0 { -n } else { 1 }) {
+                    if let Some(d) = p.stack.pop() {
+                        p.dc = d;
+                    }
+                }
+            }
+            0x0214 => p.dc.cur = p.pt(i16at(rec, 8), i16at(rec, 6)),
+            0x0213 => {
+                let q = p.pt(i16at(rec, 8), i16at(rec, 6));
+                let c = p.dc.cur;
+                p.emit(vec![PathOp::MoveTo(c.0, c.1), PathOp::LineTo(q.0, q.1)], false, true);
+                p.dc.cur = q;
+            }
+            0x0324 | 0x0325 => {
+                let n = rd_u16(rec, 6).unwrap_or(0) as usize;
+                let pts = p.points16(rec, 8, n);
+                p.poly(if func == 0x0324 { 3 } else { 4 }, pts);
+            }
+            0x0538 => {
+                let np = rd_u16(rec, 6).unwrap_or(0) as usize;
+                let counts: Vec<usize> = (0..np).filter_map(|i| rd_u16(rec, 8 + i * 2).map(|v| v as usize)).collect();
+                let total: usize = counts.iter().sum();
+                let all = p.points16(rec, 8 + np * 2, total);
+                let mut ops = Vec::new();
+                let mut at = 0;
+                for c in counts {
+                    if let Some(seg) = all.get(at..at + c) {
+                        ops.extend(Player::poly_ops(seg, true));
+                    }
+                    at += c;
+                }
+                p.add(ops, true);
+            }
+            // RECTANGLE / ELLIPSE (bottom, right, top, left) and ROUNDRECT (h, w, b, r, t, l)
+            0x041B | 0x0418 | 0x061C => {
+                let o = if func == 0x061C { 10 } else { 6 };
+                let (bt, rt, tp, lf) = (rd_i16(rec, o).unwrap_or(0), rd_i16(rec, o + 2).unwrap_or(0),
+                    rd_i16(rec, o + 4).unwrap_or(0), rd_i16(rec, o + 6).unwrap_or(0));
+                let mut e = vec![0u8; 8];
+                for v in [lf as i32, tp as i32, rt as i32, bt as i32] {
+                    e.extend_from_slice(&v.to_le_bytes());
+                }
+                p.record(if func == 0x0418 { 42 } else { 43 }, &e);
+            }
+            // PATBLT
+            0x061D => {
+                let rop = rd_u32(rec, 6).unwrap_or(0);
+                let (hh, ww, yy, xx) = (i16at(rec, 10), i16at(rec, 12), i16at(rec, 14), i16at(rec, 16));
+                let fill = match rop {
+                    0x00F0_0021 => p.dc.brush,
+                    0x00FF_0062 => Some(Color::Gray(1.0)),
+                    0x0000_0042 => Some(Color::Gray(0.0)),
+                    _ => None,
+                };
+                if let Some(c) = fill {
+                    let q = [p.pt(xx, yy), p.pt(xx + ww, yy), p.pt(xx + ww, yy + hh), p.pt(xx, yy + hh)];
+                    p.out.push(ContentElement::Path(PathData {
+                        operations: Player::poly_ops(&q, true),
+                        stroke: None,
+                        fill: Some(c),
+                    }));
+                }
+            }
+            // STRETCHDIB / DIBSTRETCHBLT / DIBBITBLT: the packed DIB follows the parameters
+            0x0F43 | 0x0B41 | 0x0940 => {
+                let rop = rd_u32(rec, 6).unwrap_or(0);
+                let (dib_at, dh, dw, dy0, dx0) = match func {
+                    0x0F43 => (28, i16at(rec, 20), i16at(rec, 22), i16at(rec, 24), i16at(rec, 26)),
+                    0x0B41 => (26, i16at(rec, 18), i16at(rec, 20), i16at(rec, 22), i16at(rec, 24)),
+                    _ => (22, i16at(rec, 14), i16at(rec, 16), i16at(rec, 18), i16at(rec, 20)),
+                };
+                if rec.len() > dib_at + 40 {
+                    let hsz = rd_u32(rec, dib_at).unwrap_or(40) as usize;
+                    let bpp = rd_u16(rec, dib_at + 14).unwrap_or(24);
+                    let used = rd_u32(rec, dib_at + 32).unwrap_or(0) as usize;
+                    let ncol = if bpp <= 8 { if used > 0 { used } else { 1usize << bpp } } else { 0 };
+                    let a = p.pt(dx0, dy0);
+                    let z = p.pt(dx0 + dw, dy0 + dh);
+                    p.dib(rec, dib_at, dib_at + hsz + ncol * 4, [a, z], rop);
+                }
+            }
+            0x0A32 | 0x0521 => {
+                if let Some((bytes, tx, ty, dx)) = wmf_text(func, rec) {
+                    let enc = wmf_encoding(charset);
+                    let (t, _, _) = enc.decode(&bytes);
+                    let t = t.into_owned();
+                    // dx is per byte: one advance per character from the bytes it took
+                    let dx = if dx.is_empty() {
+                        dx
+                    } else {
+                        let mut out = Vec::new();
+                        let mut i = 0usize;
+                        for ch in t.chars() {
+                            let one = ch.to_string();
+                            let k = enc.encode(&one).0.len().max(1);
+                            out.push(dx.get(i..(i + k).min(dx.len())).map_or(0, |s| s.iter().sum()));
+                            i += k;
+                        }
+                        out
+                    };
+                    p.draw_text(t, tx, ty, dx);
+                }
+            }
+            _ => {}
+        }
     }
     if p.out.len() == start_len {
         return None;

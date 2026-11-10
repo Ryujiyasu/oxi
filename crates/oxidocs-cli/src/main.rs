@@ -2098,7 +2098,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     // Decode image (PNG/JPEG/etc.) to raw RGB pixels
                     if !data.is_empty() {
                         // OXI_PDF_EMF: a metafile is played as vectors (emf.rs).
-                        if emf::is_emf(data) {
+                        if emf::is_emf(data) || emf::is_wmf(data) {
                             let key = |face: &str, bold: bool, italic: bool, c: char| {
                                 pdf_face_for(c, &resolve_font_styled(Some(face), bold, italic), bold, &embedded_fonts)
                             };
@@ -2107,7 +2107,13 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                                 (m.win_ascent as f64, m.win_descent as f64)
                             };
                             let faces = emf::TextFaces { key: &key, metrics: &metrics };
-                            if let Some(els) = emf::render(data, elem.x as f64, elem.y as f64, elem.width as f64, elem.height as f64, Some(&faces), *crop) {
+                            let (ex, ey, ew2, eh2) = (elem.x as f64, elem.y as f64, elem.width as f64, elem.height as f64);
+                            let played = if emf::is_emf(data) {
+                                emf::render(data, ex, ey, ew2, eh2, Some(&faces), *crop)
+                            } else {
+                                emf::render_wmf(data, ex, ey, ew2, eh2, Some(&faces), *crop)
+                            };
+                            if let Some(els) = played {
                                 contents.extend(els);
                             }
                         } else if let Ok(img) = image::load_from_memory(data) {
@@ -3585,7 +3591,7 @@ fn embed_document_faces(
             }
             // OXI_PDF_EMF: the faces a metafile sets its text in.
             if let oxidocs_core::layout::LayoutContent::Image { data, .. } = &elem.content {
-                for (face, bold, italic, text) in emf::text_runs(data) {
+                for (face, bold, italic, text) in emf::text_runs(data).into_iter().chain(emf::wmf_text_runs(data)) {
                     if is_cjk_family(&face) {
                         continue;
                     }

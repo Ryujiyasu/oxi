@@ -495,6 +495,7 @@ dependencies = [
 name = "oxidocs-cli"
 version = "0.9.0"
 dependencies = [
+ "encoding_rs",
  "image",
  "ovba",
  "oxidocs-common",
