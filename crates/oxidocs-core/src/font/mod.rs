@@ -214,6 +214,37 @@ pub fn sym_range_index(c: char) -> Option<usize> {
     None
 }
 
+/// OXI_SIMSUN_WIDTHS: SimSun advances (em) that differ from the MS Mincho table it
+/// is aliased to (S858) or that MS Mincho lacks -- read from simsun.ttc hmtx (upm 256),
+/// non-CJK-block code points only (ideographs are full width either way).
+pub(crate) const SIMSUN_WIDTH_OVERRIDES: &[(u32, f32)] = &[
+    (0x00A4, 1.0), (0x00B4, 0.5), (0x00B6, 0.5), (0x00B7, 1.0),
+    (0x01CE, 0.5), (0x01D0, 0.5), (0x01D2, 0.5), (0x01D4, 0.5), (0x01D6, 0.5), (0x01D8, 0.5),
+    (0x01DA, 0.5), (0x01DC, 0.5), (0x02C7, 1.0), (0x02C9, 1.0), (0x02CA, 1.0), (0x02CB, 1.0),
+    (0x02D9, 1.0), (0x2013, 1.0), (0x2014, 1.0), (0x2020, 0.5), (0x2021, 0.5), (0x2035, 1.0),
+    (0x20AC, 1.0), (0x2105, 1.0), (0x2109, 1.0), (0x2196, 1.0), (0x2197, 1.0), (0x2198, 1.0),
+    (0x2199, 1.0), (0x220F, 1.0), (0x2215, 1.0), (0x2223, 1.0), (0x2236, 1.0), (0x2237, 1.0),
+    (0x2248, 1.0), (0x224C, 1.0), (0x2264, 1.0), (0x2265, 1.0), (0x226E, 1.0), (0x226F, 1.0),
+    (0x2295, 1.0), (0x2299, 1.0), (0x2504, 1.0), (0x2505, 1.0), (0x2506, 1.0), (0x2507, 1.0),
+    (0x2508, 1.0), (0x2509, 1.0), (0x250A, 1.0), (0x250B, 1.0), (0x250D, 1.0), (0x250E, 1.0),
+    (0x2511, 1.0), (0x2512, 1.0), (0x2515, 1.0), (0x2516, 1.0), (0x2519, 1.0), (0x251A, 1.0),
+    (0x251E, 1.0), (0x251F, 1.0), (0x2521, 1.0), (0x2522, 1.0), (0x2526, 1.0), (0x2527, 1.0),
+    (0x2529, 1.0), (0x252A, 1.0), (0x252D, 1.0), (0x252E, 1.0), (0x2531, 1.0), (0x2532, 1.0),
+    (0x2535, 1.0), (0x2536, 1.0), (0x2539, 1.0), (0x253A, 1.0), (0x253D, 1.0), (0x253E, 1.0),
+    (0x2540, 1.0), (0x2541, 1.0), (0x2543, 1.0), (0x2544, 1.0), (0x2545, 1.0), (0x2546, 1.0),
+    (0x2547, 1.0), (0x2548, 1.0), (0x2549, 1.0), (0x254A, 1.0), (0x2550, 1.0), (0x2551, 1.0),
+    (0x2552, 1.0), (0x2553, 1.0), (0x2554, 1.0), (0x2555, 1.0), (0x2556, 1.0), (0x2557, 1.0),
+    (0x2558, 1.0), (0x2559, 1.0), (0x255A, 1.0), (0x255B, 1.0), (0x255C, 1.0), (0x255D, 1.0),
+    (0x255E, 1.0), (0x255F, 1.0), (0x2560, 1.0), (0x2561, 1.0), (0x2562, 1.0), (0x2563, 1.0),
+    (0x2564, 1.0), (0x2565, 1.0), (0x2566, 1.0), (0x2567, 1.0), (0x2568, 1.0), (0x2569, 1.0),
+    (0x256A, 1.0), (0x256B, 1.0), (0x256C, 1.0), (0x256D, 1.0), (0x256E, 1.0), (0x256F, 1.0),
+    (0x2570, 1.0), (0x2571, 1.0), (0x2572, 1.0), (0x2573, 1.0), (0x2581, 1.0), (0x2582, 1.0),
+    (0x2583, 1.0), (0x2584, 1.0), (0x2585, 1.0), (0x2586, 1.0), (0x2587, 1.0), (0x2588, 1.0),
+    (0x2589, 1.0), (0x258A, 1.0), (0x258B, 1.0), (0x258C, 1.0), (0x258D, 1.0), (0x258E, 1.0),
+    (0x258F, 1.0), (0x2593, 1.0), (0x2594, 1.0), (0x2595, 1.0), (0x25E2, 1.0), (0x25E3, 1.0),
+    (0x25E4, 1.0), (0x25E5, 1.0),
+];
+
 /// Per-character font metrics normalized to 1em.
 /// All widths are expressed as a fraction of the em-square.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1629,6 +1660,20 @@ impl FontMetricsRegistry {
             || catalog::synthetic_bold_eligible(&regular.family)
     }
 
+    fn simsun_metrics(&self) -> Option<std::sync::Arc<FontMetrics>> {
+        static CELL: std::sync::OnceLock<Option<std::sync::Arc<FontMetrics>>> = std::sync::OnceLock::new();
+        CELL.get_or_init(|| {
+            let mut m = self.fonts.get("MS Mincho")?.clone();
+            for &(cp, w) in SIMSUN_WIDTH_OVERRIDES {
+                if let Some(c) = char::from_u32(cp) {
+                    m.char_widths.insert(c, w);
+                }
+            }
+            Some(std::sync::Arc::new(m))
+        })
+        .clone()
+    }
+
     fn get_regular_with_synthetic_bold(&self, family: &str, bold: bool) -> FontMetricsRef<'_> {
         let regular = self.get(family);
         if bold {
@@ -1773,6 +1818,19 @@ impl FontMetricsRegistry {
 
     pub fn get(&self, family: &str) -> FontMetricsRef<'_> {
         if let Some(metrics) = runtime::resolve_registered(family, false, false) { return metrics; }
+        // OXI_SIMSUN_WIDTHS (2026-11-10, default ON, opt-out _DISABLE): SimSun keeps
+        // the MS Mincho table it is aliased to (S858) but with its own advances where
+        // the two faces differ. zh dev reports__0075950e «1—7月份» (ascii and eastAsia
+        // 宋体 12pt): Word draws the em dash 12.0 wide (simsun.ttc: 256/256), Oxi drew
+        // MS Mincho's missing-glyph 0.5em and fitted a character more on every line
+        // that carried one (`_pb_simsun_dash_gen.py`).
+        if matches!(family, "宋体" | "新宋体" | "SimSun" | "NSimSun")
+            && !crate::env_flag!("OXI_SIMSUN_WIDTHS_DISABLE")
+        {
+            if let Some(m) = self.simsun_metrics() {
+                return m.into();
+            }
+        }
         // S1272: a CJK table entry with no CJK advances answers the wrong
         // question -- read the installed face instead of returning it.
         if self.cjk_table_lacks_cjk_widths(family) {
