@@ -11643,10 +11643,28 @@ cells={} pitch={:.2} text={:?}",
                 && row_line_pitch.map_or(false, |p| p > 0.1)
             {
                 let p = row_line_pitch.unwrap_or(0.0);
+                let nat = empty_metrics.natural_line_height_hhea(empty_fs);
+                // OXI_CELL_EMPTY_GRID_MULTIPLE (2026-11-10, default ON, opt-out
+                // _DISABLE): an auto multiple counts in grid lines, as for the
+                // text line (pitch x max(the cells the face needs, factor)),
+                // not the multiplied natural rounded up. zh dev
+                // technical__014c47f0: empty TNR 12 marks, line=360, pitch 15.6
+                // -- Word's rows step 23.76 like their text neighbours, Oxi
+                // made each 31.2 (20.7 -> two cells).
+                let auto_factor = match (effective_line_rule, effective_line_spacing) {
+                    (None | Some("auto"), Some(f)) if (f - 1.0).abs() > 0.001 => Some(f),
+                    _ => None,
+                };
+                if let Some(f) = auto_factor.filter(|_| {
+                    !crate::env_flag!("OXI_CELL_EMPTY_GRID_MULTIPLE_DISABLE")
+                }) {
+                    ((nat / p - 0.001).ceil().max(1.0)).max(f) * p
+                } else {
                 let h = Self::empty_mark_spacing_height(
-                    empty_metrics.natural_line_height_hhea(empty_fs),
+                    nat,
                     effective_line_spacing, effective_line_rule);
                 ((h / p - 0.001).ceil().max(1.0)) * p
+                }
             } else {
             self.line_height_inner(
                 empty_fs,
