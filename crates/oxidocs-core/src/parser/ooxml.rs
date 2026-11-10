@@ -5540,7 +5540,24 @@ fn parse_paragraph_with_inline_images_impl(
             Some(*i) == s1351_img_run
                 || r.text.chars().any(|c| c != '\u{FFFE}' && c != '\u{FFFF}')
         })
-        .map(|(_, r)| r.style.clone());
+        .map(|(_, r)| {
+            // OXI_CHARS_UNIT_SKIP_LINK (2026-11-10, default ON, opt-out _DISABLE): a
+            // paragraph that opens with a hyperlink measures its chars on the
+            // paragraph style, not on the link's run (zh dev creative__076f98c0,
+            // firstLineChars=200 at 12pt opening with a 12pt link: Word 21.0 = 2 x
+            // the 10.5 default; link run at 16pt -> 21.0; link unwrapped -> 24.1;
+            // a plain run before the link -> 24.0; `_pb_chars_unit_link_gen.py`).
+            if r.url.is_some() && std::env::var_os("OXI_CHARS_UNIT_SKIP_LINK_DISABLE").is_none() {
+                RunStyle {
+                    font_size: None,
+                    character_spacing: None,
+                    text_scale: None,
+                    ..r.style.clone()
+                }
+            } else {
+                r.style.clone()
+            }
+        });
     // OXI_STYLE_IND_CHARS: settle the two first-line channels (see above). Word
     // draws non-zero chars; the twips beside them are its cache, used only while
     // they sit within a quarter character of chars x the unit run's size (the
@@ -5563,11 +5580,16 @@ fn parse_paragraph_with_inline_images_impl(
                     .and_then(|r| r.font_size)
                     .or_else(|| style.default_run_style.as_ref().and_then(|r| r.font_size))
                     .unwrap_or(10.5);
-                let unit = size * ur.and_then(|r| r.text_scale).unwrap_or(100.0) / 100.0
-                    + 2.0 * ur.filter(|r| r.fit_text.is_none()).and_then(|r| r.character_spacing).unwrap_or(0.0);
-                // (+5% of the chars width for a character grid's pitch: order_06-1
-                // firstLineChars=2000 at 10.5pt stores 4320 = 216, drawn 216)
-                if (t - c / 100.0 * unit).abs() <= 0.25 * unit + 0.05 * (c / 100.0 * unit).abs() {
+                // Tracking falls back to the paragraph style's (order_06-1: Normal
+                // spacing 3tw, firstLineChars=2000 at 10.5pt -> 20 x 10.8 = 216 = the
+                // stored 4320 and the drawn indent).
+                let track = ur
+                    .filter(|r| r.fit_text.is_none())
+                    .and_then(|r| r.character_spacing)
+                    .or_else(|| style.default_run_style.as_ref().and_then(|r| r.character_spacing))
+                    .unwrap_or(0.0);
+                let unit = size * ur.and_then(|r| r.text_scale).unwrap_or(100.0) / 100.0 + 2.0 * track;
+                if (t - c / 100.0 * unit).abs() <= 0.25 * unit {
                     style.indent_first_line_chars = None;
                 } else {
                     style.indent_first_line = None;
