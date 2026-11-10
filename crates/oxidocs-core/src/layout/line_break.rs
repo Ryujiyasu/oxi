@@ -1003,6 +1003,29 @@ impl<'a> LineBreaker<'a> {
                             .flat_map(|f| gap_view(&f.text, &f.style)).chain(word.chars()).collect();
                         pt_to_tw(legacy_gap_floor(&line_chars, fs))
                     } else { 0 });
+                    // OXI_LEGACY_LATIN_WORD_SQUEEZE (2026-11-11, default ON, opt-out _DISABLE):
+                    // an overflowing LATIN word is kept while the line can give half of
+                    // every compressible fullwidth punctuation plus half of every
+                    // auto-space gap. `pb_latsq.py` (zh dev reports__0075950e slice,
+                    // compat 14, 宋体 12pt, «…产量6.54亿台，同比增长10.6%；…产量1.86»): Word keeps
+                    // «1.86» up to 17.9pt over and breaks at 18.2 = 2 x 6 (，；) + 4 x 1.5;
+                    // without the punctuation the budget is the gaps alone and the word
+                    // goes (g4p0). Its PDF pays the punctuation first (，； 6.6 at 10.7 over,
+                    // 6.0 + gaps 1.5 at 17.9) -- the render-side order already in place.
+                    let s1346_credit_tw = s1346_credit_tw.max(if legacy_gap_on
+                        && IN_TABLE_LAYOUT.with(|c| c.get()) == 0
+                        && word.chars().any(|c| c.is_ascii_alphanumeric())
+                        && !crate::env_flag!("OXI_LEGACY_LATIN_WORD_SQUEEZE_DISABLE")
+                    {
+                        let fs = $style.font_size.unwrap_or(self.default_font_size);
+                        let line_chars: Vec<char> = current_line.fragments.iter()
+                            .flat_map(|f| gap_view(&f.text, &f.style)).chain(word.chars()).collect();
+                        let punct = current_line.fragments.iter()
+                            .flat_map(|f| f.text.chars())
+                            .filter(|&c| kinsoku::is_cjk_compressible(c))
+                            .count() as f32 * fs / 2.0;
+                        pt_to_tw(legacy_gap_floor(&line_chars, fs) + punct)
+                    } else { 0 });
                     if dbg_flush {
                         eprintln!("[DBGFLUSH] word={:?} w_tw={} cur_tw={} curw_f={:.4} ww_f={:.4} avail={} spcred={} tabslack={} line_n={} just={} s799={} s1346+1585={} s1585_on={}",
                             word, pt_to_tw(word_width), current_width_tw, current_width, word_width, available_tw,
