@@ -52,6 +52,7 @@ pub mod precompile;
 pub mod project_edit;
 pub mod runtime;
 mod string_value;
+pub use string_value::{AnsiCodec, StringTextError};
 pub mod safety;
 
 pub use errors::{ErrorEnvironment, ErrorLanguage};

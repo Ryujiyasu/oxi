@@ -604,7 +604,7 @@ enum Type {
     Object,
     Class(String),
     Reference(String, bool),
-    Array(Box<Type>),
+    Array { element: Box<Type>, byte_elements: bool },
     Record(String),
     Unknown,
 }
@@ -613,7 +613,7 @@ impl Type {
     fn contains_record(&self) -> bool {
         match self {
             Self::Record(_) => true,
-            Self::Array(element) => element.contains_record(),
+            Self::Array { element, .. } => element.contains_record(),
             _ => false,
         }
     }
@@ -931,7 +931,7 @@ impl<'a> Checker<'a> {
             checker.own_symbols.insert(key(&param.name));
             let mut kind = checker.declared(&param.type_name);
             if param.is_array || param.mode == ParamMode::ParamArray {
-                kind = Type::Array(Box::new(kind));
+                kind = checker.declared_array(kind, &param.type_name);
             }
             checker.fixed_arrays.remove(&key(&param.name));
             checker.variables.insert(key(&param.name), kind);
@@ -1388,8 +1388,14 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    fn declared_array(&self, element: Type, name: &TypeName) -> Type {
+        let key = self.source_type_key(name.name.strip_suffix("()").unwrap_or(&name.name));
+        let byte_elements = element == Type::Scalar && matches!(key.as_str(), "byte" | "vba.byte");
+        Type::Array { element: Box::new(element), byte_elements }
+    }
+
     fn declared(&self, name: &TypeName) -> Type {
-        let name_key = self.source_type_key(&name.name);
+        let name_key = self.source_type_key(name.name.strip_suffix("()").unwrap_or(&name.name));
         let kind = if self.records.contains_key(&name_key) {
             Type::Record(name_key)
         } else if self.classes.contains_key(&name_key)
@@ -1430,8 +1436,8 @@ impl<'a> Checker<'a> {
         } else {
             Type::Object
         };
-        if name.is_array {
-            Type::Array(Box::new(kind))
+        if name.is_array || name.name.ends_with("()") {
+            self.declared_array(kind, name)
         } else {
             kind
         }
@@ -1450,7 +1456,7 @@ impl<'a> Checker<'a> {
                 }
             }
             if variable.array_bounds.is_some() {
-                kind = Type::Array(Box::new(kind));
+                kind = self.declared_array(kind, &variable.type_name);
             }
             self.fixed_arrays.remove(&key(&variable.name));
             if variable
@@ -1951,7 +1957,7 @@ impl<'a> Checker<'a> {
                                 .map(|field| {
                                     let kind = self.declared(&field.type_name);
                                     if field.array_bounds.is_some() {
-                                        Type::Array(Box::new(kind))
+                                        self.declared_array(kind, &field.type_name)
                                     } else {
                                         kind
                                     }
@@ -2005,7 +2011,7 @@ impl<'a> Checker<'a> {
                     }
                     let kind = self.declared(&declared);
                     if field.array_bounds.is_some() {
-                        Type::Array(Box::new(kind))
+                        self.declared_array(kind, &declared)
                     } else {
                         kind
                     }
@@ -2237,6 +2243,10 @@ impl<'a> Checker<'a> {
                 if let Some(signature) = self.reference_index_signature(target, args) {
                     return self.reference_result(signature);
                 }
+                if args.is_empty() {
+                    let kind = self.infer(target);
+                    if matches!(kind, Type::Array { .. }) { return kind; }
+                }
                 if let Some(result) = self.source_indexed_result(target, args) {
                     return result;
                 }
@@ -2247,11 +2257,11 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(name) = bare_name(target) {
                     if let Some(kind) = self.variables.get(&key(name)) {
-                        if args.is_empty() && matches!(kind, Type::Array(_)) {
+                        if args.is_empty() && matches!(kind, Type::Array { .. }) {
                             return kind.clone();
                         }
                         return match kind {
-                            Type::Array(element) => *element.clone(),
+                            Type::Array { element, .. } => *element.clone(),
                             _ => Type::Unknown,
                         };
                     }
@@ -2263,7 +2273,7 @@ impl<'a> Checker<'a> {
                 match target.as_ref() {
                     Expr::Member { object, .. } if matches!(self.infer(object), Type::Class(_)) => {
                         match self.infer(target) {
-                            Type::Array(element) => *element,
+                            Type::Array { element, .. } => *element,
                             kind => kind,
                         }
                     }
@@ -2271,12 +2281,12 @@ impl<'a> Checker<'a> {
                         if matches!(self.with_types.last(), Some(Type::Class(_))) =>
                     {
                         match self.infer(target) {
-                            Type::Array(element) => *element,
+                            Type::Array { element, .. } => *element,
                             kind => kind,
                         }
                     }
                     _ => match self.infer(target) {
-                        Type::Array(element) => *element,
+                        Type::Array { element, .. } => *element,
                         _ => Type::Unknown,
                     },
                 }
@@ -2377,7 +2387,7 @@ impl<'a> Checker<'a> {
         if signature.invocation == 2 && signature.parameters.is_empty() && !args.is_empty() {
             // Positional subscripts belong to a Variant/array result rather
             // than to the parameterless getter itself.
-            if matches!(self.reference_result(signature), Type::Variant | Type::Array(_)) {
+            if matches!(self.reference_result(signature), Type::Variant | Type::Array { .. }) {
                 return None;
             }
             if let Type::Reference(owner, _) = self.reference_result(signature) {
@@ -2625,7 +2635,10 @@ impl<'a> Checker<'a> {
                 procedure
                     .return_type
                     .as_ref()
-                    .map(|t| key(&t.name))
+                    .map(|t| {
+                        let name = key(&t.name);
+                        if t.is_array { format!("{name}()") } else { name }
+                    })
                     .unwrap_or_else(|| "variant".into())
             },
             parameters: parameters
@@ -2655,7 +2668,7 @@ impl<'a> Checker<'a> {
                         | Type::Reference(..)
                         | Type::Object
                         | Type::Variant
-                        | Type::Array(_)
+                        | Type::Array { .. }
                 ) {
                     return Some(kind);
                 }
@@ -2688,7 +2701,7 @@ impl<'a> Checker<'a> {
     fn source_indexed_result(&self, target: &Expr, args: &[Argument]) -> Option<Type> {
         let owner = self.source_indexed_owner(target, args)?;
         Some(match owner {
-            Type::Array(element) => *element,
+            Type::Array { element, .. } => *element,
             _ => self
                 .source_default_signature(&owner, false)
                 .map(|signature| self.reference_result(&signature))
@@ -2724,7 +2737,7 @@ impl<'a> Checker<'a> {
         }
         match self.reference_result(signature) {
             Type::Scalar | Type::Text => Some(CompileErrorKind::WrongNumberOfArguments),
-            Type::Variant | Type::Array(_) if args.iter().any(|argument| argument.name.is_some()) =>
+            Type::Variant | Type::Array { .. } if args.iter().any(|argument| argument.name.is_some()) =>
                 Some(CompileErrorKind::NamedArgumentsNotAllowed),
             _ => None,
         }
@@ -2752,7 +2765,7 @@ impl<'a> Checker<'a> {
                         .map(|variable| {
                             let kind = self.declared(&variable.type_name);
                             if variable.array_bounds.is_some() {
-                                Type::Array(Box::new(kind))
+                                self.declared_array(kind, &variable.type_name)
                             } else {
                                 kind
                             }
@@ -2768,7 +2781,7 @@ impl<'a> Checker<'a> {
         // default members and explicit Item calls keep their own signatures.
         match indexed_kind {
             Type::Object => Some(CompileErrorKind::NamedArgumentNotFound),
-            Type::Variant | Type::Array(_) => Some(CompileErrorKind::NamedArgumentsNotAllowed),
+            Type::Variant | Type::Array { .. } => Some(CompileErrorKind::NamedArgumentsNotAllowed),
             kind @ (Type::Class(_) | Type::Reference(..)) => {
                 match self.source_default_signature(&kind, false) {
                     Some(signature) => Self::reference_argument_error(&signature, args),
@@ -2840,7 +2853,7 @@ impl<'a> Checker<'a> {
                             && crate::runtime::builtin_constant(name).is_none()))
             }
             Expr::Index { target, .. } => {
-                matches!(self.infer(target), Type::Array(_))
+                matches!(self.infer(target), Type::Array { .. })
                     && !matches!(target.as_ref(),Expr::Member{object,..} if matches!(self.infer(object),Type::Class(_)))
             }
             Expr::Member { object, .. } | Expr::Bang { object, .. } => {
@@ -3584,7 +3597,7 @@ impl<'a> Checker<'a> {
                         && parameter.is_some_and(|parameter| parameter.is_array)
                     {
                         if let Some(value) = &argument.value {
-                            if matches!(self.infer(value), Type::Array(_)) {
+                            if matches!(self.infer(value), Type::Array { .. }) {
                                 failure = Some(self.failure(
                                     CompileErrorKind::ArrayOrUserDefinedTypeExpected,
                                     value.span(),
@@ -3660,7 +3673,7 @@ impl<'a> Checker<'a> {
                     Some(CompileErrorKind::VariableNotDefined)
                 } else if matches!(
                     self.infer(object),
-                    Type::Scalar | Type::Text | Type::Array(_) | Type::Record(_)
+                    Type::Scalar | Type::Text | Type::Array { .. } | Type::Record(_)
                 ) {
                     Some(CompileErrorKind::TypeMismatch)
                 } else {
@@ -3734,6 +3747,11 @@ impl<'a> Checker<'a> {
                     };
                     if let Some(kind) = self.record_conversion_error(value, &assigned) {
                         return Err(self.failure(kind, value.span()));
+                    }
+                    if matches!(assigned, Type::Scalar | Type::Text)
+                        && matches!(self.infer(value), Type::Array { byte_elements: false, .. })
+                    {
+                        return Err(self.failure(CompileErrorKind::TypeMismatch, value.span()));
                     }
                     if matches!(value, Expr::Literal(Literal::Nothing, _))
                         && !matches!(

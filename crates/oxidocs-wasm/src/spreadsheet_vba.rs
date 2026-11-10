@@ -4987,6 +4987,9 @@ impl<'a> WorkbookHost<'a> {
             }
             let text = oxivba_core::runtime::coerce_automation_scalar(
                 &value, oxivba_core::runtime::AutomationScalarType::Bstr)?;
+            let text = if matches!(text, Value::ByteString(_)) {
+                Value::from_utf16(text.string_units().expect("BSTR units").into_owned())
+            } else { text };
             if text.string_units().is_some_and(|units| units.is_empty()) {
                 self.app_settings.remove("caption");
             } else {
@@ -5021,6 +5024,7 @@ impl<'a> WorkbookHost<'a> {
                     }
                     Value::Boolean(false) if !array_value => None,
                     Value::Empty | Value::Missing | Value::Null => Some(Value::String(String::new())),
+                    value @ Value::ByteString(_) => Some(Value::from_utf16(value.padded_string_units().expect("BSTR units").into_owned())),
                     value if value.string_units().is_some() => Some(value.clone()),
                     value => Some(Value::String(shown_text(value, None))),
                 };
@@ -19171,7 +19175,7 @@ impl<'a> WorkbookHost<'a> {
             before.into_iter().rev().chain(from.into_iter().rev()).map(|(_, address)| address).collect()
         };
         let needle = find_value_text(what);
-        let needle_units: Vec<u16> = what.string_units().map(|units| units.to_vec())
+        let needle_units: Vec<u16> = what.padded_string_units().map(|units| units.to_vec())
             .unwrap_or_else(|| needle.encode_utf16().collect());
         // Excel treats a lone trailing wildcard escape as an empty match at
         // the supplied After cell. Unlike What:="", it does not scan for a
@@ -28504,6 +28508,13 @@ impl<'a> ApplicationHost<'a> {
 }
 
 impl Host for ApplicationHost<'_> {
+    fn encode_ansi(&self, units: &[u16], locale: Option<i64>) -> Option<Vec<u8>> {
+        self.read(None, "", false, |host, _| host.encode_ansi(units, locale))
+    }
+    fn decode_ansi(&self, bytes: &[u8], locale: Option<i64>) -> Option<Vec<u16>> {
+        self.read(None, "", false, |host, _| host.decode_ansi(bytes, locale))
+    }
+
     fn project_modules_compiled(&mut self, project: u64, modules: &BTreeSet<String>) {
         if let Some(host) = self.application.borrow_mut().hosts.get_mut(&project) {
             host.compiled_modules.extend(modules.iter().cloned());
@@ -29055,6 +29066,15 @@ impl Host for ApplicationHost<'_> {
 }
 
 impl Host for WorkbookHost<'_> {
+    fn encode_ansi(&self, units: &[u16], locale: Option<i64>) -> Option<Vec<u8>> {
+        let page=self.automation_code_page.unwrap_or(AnsiCodePage::Western).character_codec(locale)?;
+        Some(page.encode(units))
+    }
+    fn decode_ansi(&self, bytes: &[u8], locale: Option<i64>) -> Option<Vec<u16>> {
+        let page=self.automation_code_page.unwrap_or(AnsiCodePage::Western).character_codec(locale)?;
+        Some(page.decode(bytes))
+    }
+
     fn project_modules_compiled(&mut self, _project: u64, modules: &BTreeSet<String>) {
         self.compiled_modules.extend(modules.iter().cloned());
     }
@@ -36329,6 +36349,7 @@ fn format_debug_value(value: &Value) -> String {
         Value::String(value) => value.clone(),
         Value::NullString=>String::new(),
         Value::Utf16(units)=>units.iter().map(|u|format!("\\u{u:04X}")).collect::<String>(),
+        Value::ByteString(bytes)=>bytes.iter().map(|b|format!("\\x{b:02X}")).collect::<String>(),
         Value::Array(_) => "<Array>".to_string(),
         Value::Record(record) => format!("<{}>", record.type_name),
         Value::Object(value) => format!("<{}>", value.kind),
@@ -38746,6 +38767,7 @@ fn find_value_text(value: &Value) -> String {
         Value::String(value) => value.clone(),
         Value::NullString=>String::new(),
         Value::Utf16(units)=>units.iter().map(|u|format!("\\u{u:04X}")).collect::<String>(),
+        value @ Value::ByteString(_)=>find_value_text(&Value::from_utf16(value.padded_string_units().expect("BSTR units").into_owned())),
         Value::Null => "Null".to_string(),
         Value::Missing => String::new(),
         Value::Nothing => "Nothing".to_string(),
@@ -41714,6 +41736,7 @@ const MONEY_FORMAT: &str = "$#,##0.00_);($#,##0.00)";
 fn to_cell_value(value: Value) -> Result<CellValue, String> {
     match value {
         Value::NullString=>to_cell_value(Value::String(String::new())),
+        value @ Value::ByteString(_)=>to_cell_value(Value::from_utf16(value.padded_string_units().expect("BSTR units").into_owned())),
         Value::Utf16(mut units)=>{
             if let Some(end)=units.iter().position(|u|*u==0){units.truncate(end);}
             match String::from_utf16(&units){
@@ -42878,6 +42901,13 @@ fn decode_typed_scalar(input: &serde_json::Value) -> Result<oxivba_core::Value, 
             .map_err(|_| "Error code is out of range".into()),
         "string" => payload.as_str().map(|v| Value::String(v.into()))
             .ok_or_else(|| "expected a string".into()),
+        "bstr" => {
+            let bytes = payload.as_array().ok_or("expected BSTR bytes")?.iter()
+                .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok())
+                    .ok_or_else(|| "invalid BSTR byte".to_string()))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Value::from_bstr_bytes(bytes))
+        }
         "utf16" => {
             let units = payload.as_array().ok_or("expected UTF-16 units")?.iter()
                 .map(|v| v.as_u64().and_then(|n| u16::try_from(n).ok())
@@ -42939,6 +42969,15 @@ fn decode_vba_input_scalar_descriptor(value: &JsValue, tag: &str) -> Result<Valu
             }
             "long_long" | "currency" | "decimal" => serde_json::Value::String(payload.as_string()
                 .ok_or_else(|| invalid("expected an exact decimal string"))?),
+            "bstr" => {
+                if !js_sys::Array::is_array(&payload) { return Err(invalid("expected BSTR bytes")); }
+                let bytes = js_sys::Array::from(&payload).iter().map(|byte|
+                    byte.as_f64().filter(|v| v.is_finite() && v.fract() == 0.0 && *v >= 0.0 && *v <= 255.0)
+                        .map(|v| serde_json::Value::from(v as u8))
+                        .ok_or_else(|| invalid("invalid BSTR byte"))
+                ).collect::<Result<Vec<_>, _>>()?;
+                serde_json::Value::Array(bytes)
+            }
             "utf16" => {
                 if !js_sys::Array::is_array(&payload) { return Err(invalid("expected UTF-16 units")); }
                 let units = js_sys::Array::from(&payload).iter().map(|unit|
@@ -43021,7 +43060,7 @@ fn finish_vba_input_array(schema: VbaInputArraySchema, values: Vec<Value>) -> Re
     for (index, value) in values.iter().enumerate() {
         let matched = match &schema.element_default {
             Value::Empty => true,
-            Value::NullString => matches!(value, Value::String(_) | Value::Utf16(_) | Value::NullString),
+            Value::NullString => matches!(value, Value::String(_) | Value::Utf16(_) | Value::ByteString(_) | Value::NullString),
             Value::Nothing => matches!(value, Value::Object(_) | Value::Nothing),
             Value::Integer(_) => matches!(value, Value::Integer(value) if i32::try_from(*value).is_ok()),
             Value::Error(_) => matches!(value, Value::Error(value) if i32::try_from(*value).is_ok()),
@@ -43221,6 +43260,7 @@ enum OutputValue {
     Error(i64),
     String(String),
     Utf16(Vec<u16>),
+    Bstr(Vec<u8>),
     Array {
         lower_bound: i64,
         dimensions: Vec<OutputArrayDimension>,
@@ -43295,6 +43335,7 @@ impl From<Value> for OutputValue {
             Value::String(value) => Self::String(value),
             Value::NullString=>Self::String(String::new()),
             Value::Utf16(units)=>Self::Utf16(units),
+            Value::ByteString(bytes)=>Self::Bstr(bytes),
             Value::Array(value) => Self::Array {
                 lower_bound: value.lower_bound(1).unwrap_or(0),
                 dimensions: value
@@ -43488,6 +43529,7 @@ fn engine_value(value: &Value) -> oxicells_calc::Value {
         value if any_number(value).is_some() => Sheet::Number(any_number(value).unwrap_or_default()),
         Value::String(text) => Sheet::Text(text.clone()),
         Value::Utf16(units) => Sheet::Utf16(units.clone()),
+        value @ Value::ByteString(_) => engine_value(&Value::from_utf16(value.padded_string_units().expect("BSTR units").into_owned())),
         Value::NullString => Sheet::Text(String::new()),
         Value::Boolean(state) => Sheet::Logical(*state),
         Value::Error(number) => Sheet::Error(match spreadsheet_error_text(*number) {
@@ -45655,6 +45697,1369 @@ mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
 
+
+    #[test]
+    fn byte_string_host_boundaries_match_excel() {
+        let seed = include_bytes!("../../../tests/fixtures/vba/uniform_core_operations.xlsm");
+        let cases = [
+            (r####"fixed_byte_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data(0 To 3) As Byte
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = data
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"ArrayStringBoundary.Probe"####, r####"owned-array-string-boundary-63657af3ca7b48c59883458422177ade.xlsm"####, r####"OK|2|00410042"####, false),
+            (r####"dynamic_byte_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data() As Byte
+ReDim data(0 To 3)
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = data
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"ArrayStringBoundary.Probe"####, r####"owned-array-string-boundary-03191bd20f074093973c24a209050ce6.xlsm"####, r####"OK|2|00410042"####, false),
+            (r####"dynamic_byte_variant"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data() As Byte
+ReDim data(0 To 3)
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+Dim boxed As Variant
+boxed = data
+text = TypeName(boxed)
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"ArrayStringBoundary.Probe"####, r####"owned-array-string-boundary-781144b5608145a4a5d7f4299dae4baf.xlsm"####, r####"OK|6|004200790074006500280029"####, false),
+            (r####"fixed_byte_variant"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data(0 To 3) As Byte
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+Dim boxed As Variant
+boxed = data
+text = TypeName(boxed)
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"ArrayStringBoundary.Probe"####, r####"owned-array-string-boundary-f43f43847c804b48a83638774e34d8d5.xlsm"####, r####"OK|6|004200790074006500280029"####, false),
+            (r####"boxed_variant_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data As Variant
+data = Array(65, 0, 66, 0)
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = data
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"ArrayStringBoundary.Probe"####, r####"owned-array-string-boundary-b19c6fa2ec2a4394856bb1ab239e9ef5.xlsm"####, r####"ERR|13|OxiNamedProject|型が一致しません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000013"####, false),
+            (r####"fixed_byte_grouped_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data(0 To 3) As Byte
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = (data)
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"ArrayStringBoundary.Probe"####, r####"owned-array-string-boundary-15aaaf55498f48f0be0840352fb5214a.xlsm"####, r####"OK|2|00410042"####, false),
+            (r####"dynamic_byte_whole_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data() As Byte
+ReDim data(0 To 3)
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = data()
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, r####"ArrayStringBoundary.Probe"####, r####"owned-array-string-boundary-79fb678942014e90887c85d186c92350.xlsm"####, r####"OK|2|00410042"####, false),
+            (r####"byte_function_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data(0 To 3) As Byte
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = ReturnBytes()
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+Private Function ReturnBytes() As Byte()
+Dim value() As Byte
+ReDim value(0 To 3)
+value(0) = 65
+value(2) = 66
+ReturnBytes = value
+End Function
+"####, r####"ArrayStringBoundary.Probe"####, r####"owned-array-string-boundary-43cf7592a88a40f486cf72b03a019fd5.xlsm"####, r####"OK|2|00410042"####, false),
+            (r####"byte8_to_string"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As String
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|String|" & CStr(Len(target)) & "|" & Units(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, r####"ArrayNumericBoundary.Probe"####, r####"owned-array-numeric-boundary-861ac4a2dcc24196bba03c8ede2073ef.xlsm"####, r####"OK|String|4|0000000000003FF0"####, false),
+            (r####"byte8_to_object"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As Object
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|" & TypeName(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, r####"ArrayNumericBoundary.Probe"####, r####"owned-array-numeric-boundary-64b7c332fdaf498aad81c9eba455e079.xlsm"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091"####, false),
+            (r####"variant_array_to_object"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 0) As Variant
+Dim target As Object
+data(0) = 1
+target = data
+Probe = "OK|" & TypeName(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, r####"ArrayNumericBoundary.Probe"####, r####"owned-array-numeric-boundary-f5219af85a054d319a1ef2df1f033b7e.xlsm"####, r####"ERR|91|OxiNamedProject|オブジェクト変数または With ブロック変数が設定されていません。|C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm|1000091"####, false),
+            (r####"record_byte_array_to_text"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Private Type Holder
+items(0 To 7) As Byte
+End Type
+Public Function Probe() As String
+On Error GoTo Failed
+Dim value As Holder
+Dim target As String
+value.items(6) = 240
+value.items(7) = 63
+target = value.items
+Probe = "OK|String|" & CStr(Len(target)) & "|" & Units(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, r####"ArrayNumericBoundary.Probe"####, r####"owned-array-numeric-boundary-1c51e587749d4aac9c1e18cd5785cf04.xlsm"####, r####"OK|String|4|0000000000003FF0"####, false),
+            (r####"odd_string_host_boundaries24"####, r####"Attribute VB_Name = "OddStringHost"
+Option Explicit
+Public Function Probe() As String
+Dim data() As Byte
+Dim value As String
+Dim sample As Long
+Dim operation As Long
+For sample = 0 To 3
+If sample = 0 Then
+ReDim data(0 To 0)
+data(0) = 65
+ElseIf sample = 3 Then
+Erase data
+Else
+ReDim data(0 To 2)
+If sample = 1 Then
+data(0) = 65
+data(1) = 0
+data(2) = 66
+Else
+data(0) = 0
+data(1) = 216
+data(2) = 65
+End If
+End If
+value = data
+For operation = 1 To 6
+Probe = Probe & CStr(sample) & "." & CStr(operation) & ":" & Action(value, operation) & ";"
+Next operation
+Next sample
+Range("A1").ClearContents
+End Function
+Private Function Action(ByVal value As String, ByVal operation As Long) As String
+On Error GoTo Failed
+Dim result As String
+Dim kind As String
+Select Case operation
+Case 1
+Range("A1").Value = value
+kind = TypeName(Range("A1").Value)
+result = CStr(Range("A1").Value)
+Case 2
+Range("A1").Value2 = value
+kind = TypeName(Range("A1").Value2)
+result = CStr(Range("A1").Value2)
+Case 3
+Application.Caption = value
+kind = TypeName(Application.Caption)
+result = Application.Caption
+Case 4
+ActiveWindow.Caption = value
+kind = TypeName(ActiveWindow.Caption)
+result = ActiveWindow.Caption
+Case 5
+kind = TypeName(value)
+result = CStr(VarType(value))
+Case 6
+kind = TypeName(value)
+result = CStr(StrPtr(value) = 0)
+End Select
+Action = kind & "|L" & CStr(Len(result)) & "B" & CStr(LenB(result)) & "U" & Units(result) & "R" & RawBytes(result)
+Exit Function
+Failed:
+Action = "ERR" & CStr(Err.Number)
+End Function
+Private Function Units(ByVal value As String) As String
+Dim i As Long
+For i = 1 To Len(value)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(value, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+Private Function RawBytes(ByVal value As String) As String
+Dim i As Long
+For i = 1 To LenB(value)
+RawBytes = RawBytes & Right$("00" & Hex$(AscB(MidB$(value, i, 1))), 2)
+Next i
+End Function
+"####, r####"OddStringHost.Probe"####, r####"owned-odd-string-host-a270f3ea41904b95b195423e7e7edbf0.xlsm"####, r####"0.1:String|L1B2U0041R4100;0.2:String|L1B2U0041R4100;0.3:String|L73B146U006F0077006E00650064002D006F00640064002D0073007400720069006E0067002D0068006F00730074002D0061003200370030006600330065006100340031003900300034006200390035006200310039003500340032003300650037006500370065006400620066003000200020002D002000208AAD307F53D6308A5C0275280020002D00200045007800630065006CR6F0077006E00650064002D006F00640064002D0073007400720069006E0067002D0068006F00730074002D0061003200370030006600330065006100340031003900300034006200390035006200310039003500340032003300650037006500370065006400620066003000200020002D0020002000AD8A7F30D6538A30025C287520002D00200045007800630065006C00;0.4:String|L1B2U0041R4100;0.5:String|L1B2U0038R3800;0.6:String|L5B10U00460061006C00730065R460061006C0073006500;1.1:String|L2B4U00410042R41004200;1.2:String|L2B4U00410042R41004200;1.3:String|L5B10U00410020002D00200041R410020002D0020004100;1.4:String|L2B4U00410042R41004200;1.5:String|L1B2U0038R3800;1.6:String|L5B10U00460061006C00730065R460061006C0073006500;2.1:String|L2B4UD8000041R00D84100;2.2:String|L2B4UD8000041R00D84100;2.3:String|L6B12U004100420020002D0020D800R4100420020002D00200000D8;2.4:String|L2B4UD8000041R00D84100;2.5:String|L1B2U0038R3800;2.6:String|L5B10U00460061006C00730065R460061006C0073006500;3.1:Empty|L0B0UR;3.2:Empty|L0B0UR;3.3:String|L10B20UD80000410020002D00200045007800630065006CR00D8410020002D00200045007800630065006C00;3.4:String|L0B0UR;3.5:String|L1B2U0038R3800;3.6:String|L4B8U0054007200750065R5400720075006500;"####, true),
+            (r####"odd_string_find4"####, r####"Attribute VB_Name = "OddStringFind"
+Option Explicit
+Public Function Probe() As String
+Range("A1").Value2 = "A"
+Range("A2").Value2 = "AB"
+Range("A3").Value2 = ChrW(&HD800) & "A"
+Range("A4").Value2 = ChrW(&HD800)
+Dim data() As Byte
+Dim value As String
+Dim sample As Long
+For sample = 0 To 3
+If sample = 0 Then
+ReDim data(0 To 0)
+data(0) = 65
+ElseIf sample = 3 Then
+Erase data
+Else
+ReDim data(0 To 2)
+If sample = 1 Then
+data(0) = 65
+data(1) = 0
+data(2) = 66
+Else
+data(0) = 0
+data(1) = 216
+data(2) = 65
+End If
+End If
+value = data
+Probe = Probe & CStr(sample) & ":" & Locate(value) & ";"
+Next sample
+Range("A1:A4").ClearContents
+End Function
+Private Function Locate(ByVal value As String) As String
+On Error GoTo Failed
+Dim found As Range
+Set found = Range("A1:A4").Find(What:=value, After:=Range("A4"), LookIn:=xlValues, LookAt:=xlWhole, SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=True, MatchByte:=False)
+If found Is Nothing Then
+Locate = "NONE"
+Else
+Locate = found.Address
+End If
+Exit Function
+Failed:
+Locate = "ERR" & CStr(Err.Number)
+End Function
+"####, r####"OddStringFind.Probe"####, r####"owned-odd-string-find-0890ea30d7ab406785aed26da39692e9.xlsm"####, r####"0:$A$1;1:$A$2;2:$A$3;3:NONE;"####, true)
+        ];
+        let mut failures = Vec::new();
+        for (name, source, procedure, file_name, expected, changed) in cases {
+            let package = crate::vba_project::write_project_source(seed, source, None).unwrap();
+            let source = crate::vba_project::read_project_source_with_code_page(&package, Some(932)).unwrap().unwrap();
+            let book = oxicells_core::parse_xlsx(&package).unwrap();
+            let mut context = failure_context();
+            context.environment.help_file = r"C:\Program Files\Common Files\Microsoft Shared\VBA\VBA7.1\1041\VbLR6.chm".to_owned();
+            context.project_name = "OxiNamedProject".to_owned();
+            context.file_name = Some(file_name.to_owned());
+            context.application_state = Some(VbaApplicationState {enable_events:false,display_alerts:false,..VbaApplicationState::default()});
+            context.file_context = Some(serde_json::from_value(serde_json::json!({"packageBytes":package,"sourceCodePage":932,"readOnly":true,"editRevision":0})).unwrap());
+            let actual = execute_workbook_vba(book, &source, procedure, vec![], 0, context).unwrap();
+            let value = serde_json::to_value(&actual.result).unwrap();
+            if actual.error.is_some() || actual.workbook_changed != changed || value != serde_json::json!({"type":"string","value":expected}) {
+                failures.push(format!("{name}: error={:?} changed={} expected_changed={changed} actual={value} expected={expected}",actual.error.as_ref().map(|e|&e.message),actual.workbook_changed));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn byte_string_typed_transport_keeps_odd_bytes() {
+        let odd = decode_typed_scalar(&serde_json::json!({"type":"bstr","value":[65]})).unwrap();
+        assert_eq!(odd.string_bytes().unwrap().as_ref(), &[65]);
+        assert_eq!(serde_json::to_value(OutputValue::from(odd)).unwrap(), serde_json::json!({"type":"bstr","value":[65]}));
+        assert_eq!(decode_typed_scalar(&serde_json::json!({"type":"bstr","value":[65,0]})).unwrap(), Value::String("A".into()));
+        for input in [
+            serde_json::json!({"type":"bstr","value":[-1]}),
+            serde_json::json!({"type":"bstr","value":[256]}),
+            serde_json::json!({"type":"bstr","value":[1.5]}),
+            serde_json::json!({"type":"bstr","value":[null]}),
+            serde_json::json!({"type":"bstr","value":"A"}),
+            serde_json::json!({"type":"bstr","value":[65],"unknown":true}),
+        ] { assert!(decode_typed_scalar(&input).is_err(), "{input}"); }
+    }
+
+    #[test]
+    fn typed_array_assignment_compilation_contract() {
+        // Exact self-authored sources measured in Excel. This test checks the
+        // compile boundary only; font setter runtime behavior is separate.
+        let cases: &[(&str, &str, Option<&str>)] = &[
+            (r####"scalar_fixed"####, r####"Attribute VB_Name = "TypedArrayProbe"
+Option Explicit
+Public Function Probe() As String
+Dim early As Excel.Application
+Dim late As Object
+Dim grid(0 To 1) As Variant
+On Error GoTo Failed
+Set early = Application
+Set late = Application
+grid(0)=12
+grid(1)=13
+Dim answer As String
+answer = grid
+Probe="OK"
+Exit Function
+Failed:
+Probe="ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            (r####"scalar_grouped"####, r####"Attribute VB_Name = "TypedArrayProbe"
+Option Explicit
+Public Function Probe() As String
+Dim early As Excel.Application
+Dim late As Object
+Dim grid(0 To 1) As Variant
+On Error GoTo Failed
+Set early = Application
+Set late = Application
+grid(0)=12
+grid(1)=13
+Dim answer As String
+answer = (grid)
+Probe="OK"
+Exit Function
+Failed:
+Probe="ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            (r####"early_font_fixed"####, r####"Attribute VB_Name = "TypedArrayProbe"
+Option Explicit
+Public Function Probe() As String
+Dim early As Excel.Application
+Dim late As Object
+Dim grid(0 To 1) As Variant
+On Error GoTo Failed
+Set early = Application
+Set late = Application
+grid(0)=12
+grid(1)=13
+early.StandardFont = grid
+Probe="OK"
+Exit Function
+Failed:
+Probe="ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            (r####"early_size_fixed"####, r####"Attribute VB_Name = "TypedArrayProbe"
+Option Explicit
+Public Function Probe() As String
+Dim early As Excel.Application
+Dim late As Object
+Dim grid(0 To 1) As Variant
+On Error GoTo Failed
+Set early = Application
+Set late = Application
+grid(0)=12
+grid(1)=13
+early.StandardFontSize = grid
+Probe="OK"
+Exit Function
+Failed:
+Probe="ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, Some(r####"型が一致しません。"####)),
+            (r####"late_font_fixed"####, r####"Attribute VB_Name = "TypedArrayProbe"
+Option Explicit
+Public Function Probe() As String
+Dim early As Excel.Application
+Dim late As Object
+Dim grid(0 To 1) As Variant
+On Error GoTo Failed
+Set early = Application
+Set late = Application
+grid(0)=12
+grid(1)=13
+late.StandardFont = grid
+Probe="OK"
+Exit Function
+Failed:
+Probe="ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, None),
+            (r####"late_size_fixed"####, r####"Attribute VB_Name = "TypedArrayProbe"
+Option Explicit
+Public Function Probe() As String
+Dim early As Excel.Application
+Dim late As Object
+Dim grid(0 To 1) As Variant
+On Error GoTo Failed
+Set early = Application
+Set late = Application
+grid(0)=12
+grid(1)=13
+late.StandardFontSize = grid
+Probe="OK"
+Exit Function
+Failed:
+Probe="ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, None),
+            (r####"early_font_variant"####, r####"Attribute VB_Name = "TypedArrayProbe"
+Option Explicit
+Public Function Probe() As String
+Dim early As Excel.Application
+Dim late As Object
+Dim grid As Variant
+On Error GoTo Failed
+Set early = Application
+Set late = Application
+grid=Array(12,13)
+early.StandardFont = grid
+Probe="OK"
+Exit Function
+Failed:
+Probe="ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, None),
+            (r####"early_font_grouped"####, r####"Attribute VB_Name = "TypedArrayProbe"
+Option Explicit
+Public Function Probe() As String
+Dim early As Excel.Application
+Dim late As Object
+Dim grid(0 To 1) As Variant
+On Error GoTo Failed
+Set early = Application
+Set late = Application
+grid(0)=12
+grid(1)=13
+early.StandardFont = (grid)
+Probe="OK"
+Exit Function
+Failed:
+Probe="ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+"####, Some(r####"型が一致しません。"####)),
+        ];
+        let mut failures = Vec::new();
+        for (name, source, expected) in cases {
+            let outcome = execute_workbook_action_in_session(workbook(), source,
+                Some("TypedArrayProbe.Probe"), vec![], 0, failure_context(), &mut None).unwrap();
+            let actual = outcome.error.as_ref().filter(|error|
+                error.kind == "compile");
+            let matched = match (actual, expected) {
+                (Some(error), Some(expected)) => error.message.ends_with(expected),
+                (None, None) => true,
+                _ => false,
+            };
+            if !matched { failures.push(format!("{name}: {:?}, expected {expected:?}",
+                actual.map(|error| &error.message))); }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn array_string_compile_boundaries_match_native() {
+        // Compile the exact self-authored Native programs without executing
+        // them. Numeric Byte-array runtime values are not asserted here.
+        let cases = [
+            (r####"fixed_variant_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data(0 To 3) As Variant
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = data
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, false),
+            (r####"fixed_byte_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data(0 To 3) As Byte
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = data
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, true),
+            (r####"dynamic_byte_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data() As Byte
+ReDim data(0 To 3)
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = data
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, true),
+            (r####"dynamic_variant_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data() As Variant
+ReDim data(0 To 3)
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = data
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, false),
+            (r####"fixed_integer_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data(0 To 3) As Integer
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = data
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, false),
+            (r####"fixed_byte_numeric"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data(0 To 3) As Byte
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+Dim number As Double
+number = data
+text = CStr(number)
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, true),
+            (r####"dynamic_byte_variant"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data() As Byte
+ReDim data(0 To 3)
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+Dim boxed As Variant
+boxed = data
+text = TypeName(boxed)
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, true),
+            (r####"fixed_byte_variant"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data(0 To 3) As Byte
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+Dim boxed As Variant
+boxed = data
+text = TypeName(boxed)
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, true),
+            (r####"boxed_variant_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data As Variant
+data = Array(65, 0, 66, 0)
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = data
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, true),
+            (r####"fixed_byte_grouped_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data(0 To 3) As Byte
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = (data)
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, true),
+            (r####"dynamic_byte_whole_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data() As Byte
+ReDim data(0 To 3)
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = data()
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+"####, true),
+            (r####"byte_function_text"####, r####"Attribute VB_Name = "ArrayStringBoundary"
+Option Explicit
+Public Function Probe() As String
+ On Error GoTo Failed
+ Dim text As String
+Dim data(0 To 3) As Byte
+ data(0) = 65
+ data(1) = 0
+ data(2) = 66
+ data(3) = 0
+text = ReturnBytes()
+ Probe = "OK|" & CStr(Len(text)) & "|" & Units(text)
+ Exit Function
+Failed:
+ Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+Private Function ReturnBytes() As Byte()
+Dim value() As Byte
+ReDim value(0 To 3)
+value(0) = 65
+value(2) = 66
+ReturnBytes = value
+End Function
+"####, true),
+            (r####"byte8_to_double"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As Double
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"byte8_to_single"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As Single
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"byte8_to_long"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As Long
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"byte8_to_integer"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As Integer
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"byte8_to_boolean"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As Boolean
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"byte8_to_currency"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As Currency
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"byte8_to_date"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As Date
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|Date|" & CStr(CDbl(target))
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"byte8_to_longlong"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As LongLong
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"byte8_to_string"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As String
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|String|" & CStr(Len(target)) & "|" & Units(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"byte8_grouped_double"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As Double
+data(6) = 240
+data(7) = 63
+target = (data)
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"integer_array_to_double"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 3) As Integer
+Dim target As Double
+data(3) = 16368
+target = data
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, false),
+            (r####"double_array_to_double"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 0) As Double
+Dim target As Double
+data(0) = 1
+target = data
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, false),
+            (r####"variant_array_to_double"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 0) As Variant
+Dim target As Double
+data(0) = 1
+target = data
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, false),
+            (r####"string_array_to_double"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 0) As String
+Dim target As Double
+data(0) = "1"
+target = data
+Probe = "OK|" & TypeName(target) & "|" & CStr(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, false),
+            (r####"byte8_to_object"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 7) As Byte
+Dim target As Object
+data(6) = 240
+data(7) = 63
+target = data
+Probe = "OK|" & TypeName(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"variant_array_to_object"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim data(0 To 0) As Variant
+Dim target As Object
+data(0) = 1
+target = data
+Probe = "OK|" & TypeName(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true),
+            (r####"function_variant_array_to_text"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim unused As Long
+Dim target As String
+
+target = ReturnArray()
+Probe = "OK|String|" & CStr(Len(target)) & "|" & Units(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+Private Function ReturnArray() As Variant()
+Dim result() As Variant
+ReDim result(0 To 0)
+result(0) = 1
+ReturnArray = result
+End Function
+"####, false),
+            (r####"function_integer_array_to_text"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Public Function Probe() As String
+On Error GoTo Failed
+Dim unused As Long
+Dim target As String
+
+target = ReturnArray()
+Probe = "OK|String|" & CStr(Len(target)) & "|" & Units(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+Private Function ReturnArray() As Integer()
+Dim result() As Integer
+ReDim result(0 To 0)
+result(0) = 1
+ReturnArray = result
+End Function
+"####, false),
+            (r####"record_variant_array_to_text"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Private Type Holder
+items(0 To 0) As Variant
+End Type
+Public Function Probe() As String
+On Error GoTo Failed
+Dim value As Holder
+Dim target As String
+value.items(0) = 1
+target = value.items
+Probe = "OK|String|" & CStr(Len(target)) & "|" & Units(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, false),
+            (r####"record_byte_array_to_text"####, r####"Attribute VB_Name = "ArrayNumericBoundary"
+Option Explicit
+Private Type Holder
+items(0 To 7) As Byte
+End Type
+Public Function Probe() As String
+On Error GoTo Failed
+Dim value As Holder
+Dim target As String
+value.items(6) = 240
+value.items(7) = 63
+target = value.items
+Probe = "OK|String|" & CStr(Len(target)) & "|" & Units(target)
+Exit Function
+Failed:
+Probe = "ERR|" & CStr(Err.Number) & "|" & Err.Source & "|" & Err.Description & "|" & Err.HelpFile & "|" & CStr(Err.HelpContext)
+End Function
+Private Function Units(ByVal text As String) As String
+Dim i As Long
+For i = 1 To Len(text)
+Units = Units & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+Next i
+End Function
+"####, true)
+        ];
+        let mut failures = Vec::new();
+        let mut count = 0;
+        for (name, source, expected) in cases {
+            let actual = compilation_outcome(source, ErrorLanguage::Japanese, builtin_compilation_references());
+            if actual.compiled != expected {
+                failures.push(format!("{name}: compiled={} expected={} error={:?}",
+                    actual.compiled, expected, actual.error.as_ref().map(|e| &e.message)));
+            }
+            count += 1;
+        }
+        assert_eq!(count, 32);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
 
     #[test]
     fn caption_close_and_activation_match_raw_excel_returns() {
@@ -101758,6 +103163,52 @@ Dim x As Variant
         }
         assert!(fell.is_empty(), "panicked ({}): {}", fell.len(), fell.join("
 "));
+    }
+
+    #[test]
+    fn ansi_and_string_storage_match_excel_native1040() {
+        // Exact programs and ASCII type/byte/error observations from Excel64,
+        // with systemACP932, userLCID1033 and explicit1033/1041 conversions.
+        let cases = [
+            ("string_argument_Variant_inputs340", "Attribute VB_Name = \"StringArgumentVariants\"\nOption Explicit\nPublic Function Probe() As String\nDim value As Variant\nDim bytes() As Byte\nDim odd As String\nDim sample As Long\nDim operation As Long\nReDim bytes(0 To 0)\nbytes(0) = 65\nodd = bytes\nFor sample = 0 To 16\nSelect Case sample\nCase 0: value = 12\nCase 1: value = CByte(12)\nCase 2: value = CLng(12)\nCase 3: value = CSng(12)\nCase 4: value = CDbl(12)\nCase 5: value = CCur(12)\nCase 6: value = CDec(12)\nCase 7: value = CDate(12)\nCase 8: value = True\nCase 9: value = Empty\nCase 10: value = Null\nCase 11: value = CVErr(2042)\nCase 12: value = \"AB\"\nCase 13: value = vbNullString\nCase 14: value = odd\nCase 15: value = bytes\nCase 16: Set value = Nothing\nEnd Select\nFor operation = 1 To 20\nProbe = Probe & CStr(sample) & \".\" & CStr(operation) & \":\" & Action(value, operation) & \";\"\nNext operation\nNext sample\nEnd Function\nPrivate Function Action(ByVal value As Variant, ByVal operation As Long) As String\nOn Error GoTo Failed\nDim result As Variant\nSelect Case operation\nCase 1: result = CStr(value)\nCase 2: result = Val(value)\nCase 3: result = Trim(value)\nCase 4: result = LTrim(value)\nCase 5: result = RTrim(value)\nCase 6: result = UCase(value)\nCase 7: result = LCase(value)\nCase 8: result = StrReverse(value)\nCase 9: result = StrComp(value, \"A\", vbBinaryCompare)\nCase 10: result = StrComp(value, \"A\", vbTextCompare)\nCase 11: result = InStr(1, value, \"A\", vbBinaryCompare)\nCase 12: result = InStrRev(value, \"A\", -1, vbBinaryCompare)\nCase 13: result = Replace(value, \"A\", \"Z\")\nCase 14: result = Join(Split(value, \"A\"), \"|\")\nCase 15: result = String(2, value)\nCase 16: result = Join(Array(\"A\", \"B\"), value)\nCase 17: result = Join(Filter(Array(\"A\", \"B\"), value), \"|\")\nCase 18: result = Join(value, \"|\")\nCase 19: result = StrConv(value, vbUnicode)\nCase 20: result = StrConv(value, vbFromUnicode)\nEnd Select\nIf IsNull(result) Then\nAction = \"NULL\"\nElseIf IsArray(result) Then\nAction = \"A|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|L\" & CStr(Len(CStr(result))) & \"B\" & CStr(LenB(CStr(result))) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElseIf VarType(result) = vbString Then\nAction = \"S|L\" & CStr(Len(result)) & \"B\" & CStr(LenB(result)) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElse\nAction = \"N|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|\" & CStr(result)\nEnd If\nExit Function\nFailed:\nAction = \"ERR|\" & CStr(Err.Number)\nEnd Function\nPrivate Function Units(ByVal value As String) As String\nDim i As Long\nFor i = 1 To Len(value)\nUnits = Units & Right$(\"0000\" & Hex$(AscW(Mid$(value, i, 1)) And &HFFFF&), 4)\nNext i\nEnd Function\nPrivate Function RawBytes(ByVal value As String) As String\nDim i As Long\nFor i = 1 To LenB(value)\nRawBytes = RawBytes & Right$(\"00\" & Hex$(AscB(MidB$(value, i, 1))), 2)\nNext i\nEnd Function\n", "0.1:S|L2B4U00310032R31003200;0.2:N|Double|5|12;0.3:S|L2B4U00310032R31003200;0.4:S|L2B4U00310032R31003200;0.5:S|L2B4U00310032R31003200;0.6:S|L2B4U00310032R31003200;0.7:S|L2B4U00310032R31003200;0.8:S|L2B4U00320031R32003100;0.9:N|Integer|2|-1;0.10:N|Integer|2|-1;0.11:N|Long|3|0;0.12:N|Long|3|0;0.13:S|L2B4U00310032R31003200;0.14:S|L2B4U00310032R31003200;0.15:S|L2B4U000C000CR0C000C00;0.16:S|L4B8U0041003100320042R4100310032004200;0.17:S|L0B0UR;0.18:ERR|13;0.19:S|L4B8U0031000000320000R3100000032000000;0.20:S|L1B2U3231R3132;1.1:S|L2B4U00310032R31003200;1.2:N|Double|5|12;1.3:S|L2B4U00310032R31003200;1.4:S|L2B4U00310032R31003200;1.5:S|L2B4U00310032R31003200;1.6:S|L2B4U00310032R31003200;1.7:S|L2B4U00310032R31003200;1.8:S|L2B4U00320031R32003100;1.9:N|Integer|2|-1;1.10:N|Integer|2|-1;1.11:N|Long|3|0;1.12:N|Long|3|0;1.13:S|L2B4U00310032R31003200;1.14:S|L2B4U00310032R31003200;1.15:S|L2B4U000C000CR0C000C00;1.16:S|L4B8U0041003100320042R4100310032004200;1.17:S|L0B0UR;1.18:ERR|13;1.19:S|L4B8U0031000000320000R3100000032000000;1.20:S|L1B2U3231R3132;2.1:S|L2B4U00310032R31003200;2.2:N|Double|5|12;2.3:S|L2B4U00310032R31003200;2.4:S|L2B4U00310032R31003200;2.5:S|L2B4U00310032R31003200;2.6:S|L2B4U00310032R31003200;2.7:S|L2B4U00310032R31003200;2.8:S|L2B4U00320031R32003100;2.9:N|Integer|2|-1;2.10:N|Integer|2|-1;2.11:N|Long|3|0;2.12:N|Long|3|0;2.13:S|L2B4U00310032R31003200;2.14:S|L2B4U00310032R31003200;2.15:S|L2B4U000C000CR0C000C00;2.16:S|L4B8U0041003100320042R4100310032004200;2.17:S|L0B0UR;2.18:ERR|13;2.19:S|L4B8U0031000000320000R3100000032000000;2.20:S|L1B2U3231R3132;3.1:S|L2B4U00310032R31003200;3.2:N|Double|5|12;3.3:S|L2B4U00310032R31003200;3.4:S|L2B4U00310032R31003200;3.5:S|L2B4U00310032R31003200;3.6:S|L2B4U00310032R31003200;3.7:S|L2B4U00310032R31003200;3.8:S|L2B4U00320031R32003100;3.9:N|Integer|2|-1;3.10:N|Integer|2|-1;3.11:N|Long|3|0;3.12:N|Long|3|0;3.13:S|L2B4U00310032R31003200;3.14:S|L2B4U00310032R31003200;3.15:S|L2B4U000C000CR0C000C00;3.16:S|L4B8U0041003100320042R4100310032004200;3.17:S|L0B0UR;3.18:ERR|13;3.19:S|L4B8U0031000000320000R3100000032000000;3.20:S|L1B2U3231R3132;4.1:S|L2B4U00310032R31003200;4.2:N|Double|5|12;4.3:S|L2B4U00310032R31003200;4.4:S|L2B4U00310032R31003200;4.5:S|L2B4U00310032R31003200;4.6:S|L2B4U00310032R31003200;4.7:S|L2B4U00310032R31003200;4.8:S|L2B4U00320031R32003100;4.9:N|Integer|2|-1;4.10:N|Integer|2|-1;4.11:N|Long|3|0;4.12:N|Long|3|0;4.13:S|L2B4U00310032R31003200;4.14:S|L2B4U00310032R31003200;4.15:S|L2B4U000C000CR0C000C00;4.16:S|L4B8U0041003100320042R4100310032004200;4.17:S|L0B0UR;4.18:ERR|13;4.19:S|L4B8U0031000000320000R3100000032000000;4.20:S|L1B2U3231R3132;5.1:S|L2B4U00310032R31003200;5.2:N|Double|5|12;5.3:S|L2B4U00310032R31003200;5.4:S|L2B4U00310032R31003200;5.5:S|L2B4U00310032R31003200;5.6:S|L2B4U00310032R31003200;5.7:S|L2B4U00310032R31003200;5.8:S|L2B4U00320031R32003100;5.9:N|Integer|2|-1;5.10:N|Integer|2|-1;5.11:N|Long|3|0;5.12:N|Long|3|0;5.13:S|L2B4U00310032R31003200;5.14:S|L2B4U00310032R31003200;5.15:S|L2B4U000C000CR0C000C00;5.16:S|L4B8U0041003100320042R4100310032004200;5.17:S|L0B0UR;5.18:ERR|13;5.19:S|L4B8U0031000000320000R3100000032000000;5.20:S|L1B2U3231R3132;6.1:S|L2B4U00310032R31003200;6.2:N|Double|5|12;6.3:S|L2B4U00310032R31003200;6.4:S|L2B4U00310032R31003200;6.5:S|L2B4U00310032R31003200;6.6:S|L2B4U00310032R31003200;6.7:S|L2B4U00310032R31003200;6.8:S|L2B4U00320031R32003100;6.9:N|Integer|2|-1;6.10:N|Integer|2|-1;6.11:N|Long|3|0;6.12:N|Long|3|0;6.13:S|L2B4U00310032R31003200;6.14:S|L2B4U00310032R31003200;6.15:S|L2B4U000C000CR0C000C00;6.16:S|L4B8U0041003100320042R4100310032004200;6.17:S|L0B0UR;6.18:ERR|13;6.19:S|L4B8U0031000000320000R3100000032000000;6.20:S|L1B2U3231R3132;7.1:S|L9B18U0031002F00310031002F0031003900300030R31002F00310031002F003100390030003000;7.2:N|Double|5|1;7.3:S|L9B18U0031002F00310031002F0031003900300030R31002F00310031002F003100390030003000;7.4:S|L9B18U0031002F00310031002F0031003900300030R31002F00310031002F003100390030003000;7.5:S|L9B18U0031002F00310031002F0031003900300030R31002F00310031002F003100390030003000;7.6:S|L9B18U0031002F00310031002F0031003900300030R31002F00310031002F003100390030003000;7.7:S|L9B18U0031002F00310031002F0031003900300030R31002F00310031002F003100390030003000;7.8:S|L9B18U0030003000390031002F00310031002F0031R30003000390031002F00310031002F003100;7.9:N|Integer|2|-1;7.10:N|Integer|2|-1;7.11:N|Long|3|0;7.12:N|Long|3|0;7.13:S|L9B18U0031002F00310031002F0031003900300030R31002F00310031002F003100390030003000;7.14:S|L9B18U0031002F00310031002F0031003900300030R31002F00310031002F003100390030003000;7.15:S|L2B4U000C000CR0C000C00;7.16:S|L11B22U00410031002F00310031002F00310039003000300042R410031002F00310031002F0031003900300030004200;7.17:S|L0B0UR;7.18:ERR|13;7.19:S|L18B36U00310000002F00000031000000310000002F000000310000003900000030000000300000R310000002F00000031000000310000002F00000031000000390000003000000030000000;7.20:S|L4B9U2F313131312F3039R312F31312F31393030;8.1:S|L4B8U0054007200750065R5400720075006500;8.2:N|Double|5|0;8.3:S|L4B8U0054007200750065R5400720075006500;8.4:S|L4B8U0054007200750065R5400720075006500;8.5:S|L4B8U0054007200750065R5400720075006500;8.6:S|L4B8U0054005200550045R5400520055004500;8.7:S|L4B8U0074007200750065R7400720075006500;8.8:S|L4B8U0065007500720054R6500750072005400;8.9:N|Integer|2|1;8.10:N|Integer|2|1;8.11:N|Long|3|0;8.12:N|Long|3|0;8.13:S|L4B8U0054007200750065R5400720075006500;8.14:S|L4B8U0054007200750065R5400720075006500;8.15:S|L2B4UF8F3F8F3RF3F8F3F8;8.16:S|L6B12U004100540072007500650042R410054007200750065004200;8.17:S|L0B0UR;8.18:ERR|13;8.19:S|L8B16U00540000007200000075000000650000R54000000720000007500000065000000;8.20:S|L2B4U72546575R54727565;9.1:S|L0B0UR;9.2:N|Double|5|0;9.3:S|L0B0UR;9.4:S|L0B0UR;9.5:S|L0B0UR;9.6:S|L0B0UR;9.7:S|L0B0UR;9.8:S|L0B0UR;9.9:N|Integer|2|-1;9.10:N|Integer|2|-1;9.11:N|Long|3|0;9.12:N|Long|3|0;9.13:S|L0B0UR;9.14:S|L0B0UR;9.15:S|L2B4U00000000R00000000;9.16:S|L2B4U00410042R41004200;9.17:S|L3B6U0041007C0042R41007C004200;9.18:ERR|13;9.19:S|L0B0UR;9.20:S|L0B0UR;10.1:ERR|94;10.2:ERR|94;10.3:NULL;10.4:NULL;10.5:NULL;10.6:NULL;10.7:NULL;10.8:ERR|94;10.9:NULL;10.10:NULL;10.11:NULL;10.12:ERR|94;10.13:ERR|94;10.14:ERR|94;10.15:NULL;10.16:ERR|94;10.17:ERR|94;10.18:ERR|13;10.19:NULL;10.20:NULL;11.1:S|L8B16U30A830E930FC00200032003000340032RA830E930FC3020003200300034003200;11.2:ERR|13;11.3:ERR|13;11.4:ERR|13;11.5:ERR|13;11.6:ERR|13;11.7:ERR|13;11.8:ERR|13;11.9:ERR|13;11.10:ERR|13;11.11:ERR|13;11.12:ERR|13;11.13:ERR|13;11.14:ERR|13;11.15:ERR|13;11.16:ERR|13;11.17:ERR|13;11.18:ERR|13;11.19:ERR|13;11.20:ERR|13;12.1:S|L2B4U00410042R41004200;12.2:N|Double|5|0;12.3:S|L2B4U00410042R41004200;12.4:S|L2B4U00410042R41004200;12.5:S|L2B4U00410042R41004200;12.6:S|L2B4U00410042R41004200;12.7:S|L2B4U00610062R61006200;12.8:S|L2B4U00420041R42004100;12.9:N|Integer|2|1;12.10:N|Integer|2|1;12.11:N|Long|3|1;12.12:N|Long|3|1;12.13:S|L2B4U005A0042R5A004200;12.14:S|L2B4U007C0042R7C004200;12.15:S|L2B4U00410041R41004100;12.16:S|L4B8U0041004100420042R4100410042004200;12.17:S|L0B0UR;12.18:ERR|13;12.19:S|L4B8U0041000000420000R4100000042000000;12.20:S|L1B2U4241R4142;13.1:S|L0B0UR;13.2:N|Double|5|0;13.3:S|L0B0UR;13.4:S|L0B0UR;13.5:S|L0B0UR;13.6:S|L0B0UR;13.7:S|L0B0UR;13.8:S|L0B0UR;13.9:N|Integer|2|-1;13.10:N|Integer|2|-1;13.11:N|Long|3|0;13.12:N|Long|3|0;13.13:S|L0B0UR;13.14:S|L0B0UR;13.15:ERR|5;13.16:S|L2B4U00410042R41004200;13.17:S|L3B6U0041007C0042R41007C004200;13.18:ERR|13;13.19:S|L0B0UR;13.20:S|L0B0UR;14.1:S|L0B1UR41;14.2:N|Double|5|0;14.3:S|L0B0UR;14.4:S|L0B0UR;14.5:S|L0B0UR;14.6:S|L0B0UR;14.7:S|L0B0UR;14.8:S|L0B0UR;14.9:N|Integer|2|-1;14.10:N|Integer|2|-1;14.11:N|Long|3|0;14.12:N|Long|3|0;14.13:S|L0B0UR;14.14:S|L0B0UR;14.15:ERR|5;14.16:S|L2B4U00410042R41004200;14.17:S|L3B6U0041007C0042R41007C004200;14.18:ERR|13;14.19:S|L1B2U0041R4100;14.20:S|L0B0UR;15.1:S|L0B1UR41;15.2:N|Double|5|0;15.3:S|L0B0UR;15.4:S|L0B0UR;15.5:S|L0B0UR;15.6:S|L0B0UR;15.7:S|L0B0UR;15.8:S|L0B0UR;15.9:N|Integer|2|-1;15.10:N|Integer|2|-1;15.11:N|Long|3|0;15.12:N|Long|3|0;15.13:S|L0B0UR;15.14:S|L0B0UR;15.15:ERR|13;15.16:S|L2B4U00410042R41004200;15.17:S|L3B6U0041007C0042R41007C004200;15.18:ERR|5;15.19:S|L1B2U0041R4100;15.20:S|L0B0UR;16.1:ERR|91;16.2:ERR|91;16.3:ERR|91;16.4:ERR|91;16.5:ERR|91;16.6:ERR|91;16.7:ERR|91;16.8:ERR|91;16.9:ERR|91;16.10:ERR|91;16.11:ERR|91;16.12:ERR|91;16.13:ERR|91;16.14:ERR|91;16.15:ERR|91;16.16:ERR|91;16.17:ERR|91;16.18:ERR|13;16.19:ERR|91;16.20:ERR|91;"),
+            ("ANSI_character_vectors120", "Attribute VB_Name = \"AnsiCharacterVariants\"\nOption Explicit\nPublic Function Probe() As String\nDim values As Variant\nDim sample As Long\nDim operation As Long\nvalues = Array(0, 1, 12, 65, 128, 129, 160, 161, 223, 224, 252, 253, 254, 255, 256, 65535, -1, 33440, -32096, 8364)\nFor sample = 0 To 19\nFor operation = 1 To 6\nProbe = Probe & CStr(sample) & \".\" & CStr(operation) & \":\" & Action(values(sample), operation) & \";\"\nNext operation\nNext sample\nEnd Function\nPrivate Function Action(ByVal value As Variant, ByVal operation As Long) As String\nOn Error GoTo Failed\nDim result As Variant\nSelect Case operation\nCase 1: result = Chr(value)\nCase 2: result = String(2, value)\nCase 3: result = Asc(Chr(value))\nCase 4: result = AscW(Chr(value))\nCase 5: result = StrConv(Chr(value), vbFromUnicode)\nCase 6: result = StrConv(Chr(value), vbUnicode)\nEnd Select\nIf IsNull(result) Then\nAction = \"NULL\"\nElseIf IsArray(result) Then\nAction = \"A|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|L\" & CStr(Len(CStr(result))) & \"B\" & CStr(LenB(CStr(result))) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElseIf VarType(result) = vbString Then\nAction = \"S|L\" & CStr(Len(result)) & \"B\" & CStr(LenB(result)) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElse\nAction = \"N|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|\" & CStr(result)\nEnd If\nExit Function\nFailed:\nAction = \"ERR|\" & CStr(Err.Number)\nEnd Function\nPrivate Function Units(ByVal value As String) As String\nDim i As Long\nFor i = 1 To Len(value)\nUnits = Units & Right$(\"0000\" & Hex$(AscW(Mid$(value, i, 1)) And &HFFFF&), 4)\nNext i\nEnd Function\nPrivate Function RawBytes(ByVal value As String) As String\nDim i As Long\nFor i = 1 To LenB(value)\nRawBytes = RawBytes & Right$(\"00\" & Hex$(AscB(MidB$(value, i, 1))), 2)\nNext i\nEnd Function\n", "0.1:S|L1B2U0000R0000;0.2:S|L2B4U00000000R00000000;0.3:N|Integer|2|0;0.4:N|Integer|2|0;0.5:S|L0B1UR00;0.6:S|L2B4U00000000R00000000;1.1:S|L1B2U0001R0100;1.2:S|L2B4U00010001R01000100;1.3:N|Integer|2|1;1.4:N|Integer|2|1;1.5:S|L0B1UR01;1.6:S|L2B4U00010000R01000000;2.1:S|L1B2U000CR0C00;2.2:S|L2B4U000C000CR0C000C00;2.3:N|Integer|2|12;2.4:N|Integer|2|12;2.5:S|L0B1UR0C;2.6:S|L2B4U000C0000R0C000000;3.1:S|L1B2U0041R4100;3.2:S|L2B4U00410041R41004100;3.3:N|Integer|2|65;3.4:N|Integer|2|65;3.5:S|L0B1UR41;3.6:S|L2B4U00410000R41000000;4.1:S|L1B2U0080R8000;4.2:S|L2B4U00800080R80008000;4.3:N|Integer|2|128;4.4:N|Integer|2|128;4.5:S|L0B1UR3F;4.6:S|L2B4U20AC0000RAC200000;5.1:S|L1B2U30FBRFB30;5.2:S|L2B4U30FB30FBRFB30FB30;5.3:N|Integer|2|-32443;5.4:N|Integer|2|12539;5.5:S|L0B1URB7;5.6:S|L2B4U00FB0030RFB003000;6.1:S|L1B2UF8F0RF0F8;6.2:S|L2B4UF8F0F8F0RF0F8F0F8;6.3:N|Integer|2|160;6.4:N|Integer|2|-1808;6.5:S|L0B1UR3F;6.6:S|L2B4U00F000F8RF000F800;7.1:S|L1B2UFF61R61FF;7.2:S|L2B4UFF61FF61R61FF61FF;7.3:N|Integer|2|161;7.4:N|Integer|2|-159;7.5:S|L0B1UR3F;7.6:S|L2B4U006100FFR6100FF00;8.1:S|L1B2UFF9FR9FFF;8.2:S|L2B4UFF9FFF9FR9FFF9FFF;8.3:N|Integer|2|223;8.4:N|Integer|2|-97;8.5:S|L0B1UR3F;8.6:S|L2B4U017800FFR7801FF00;9.1:S|L1B2U30FBRFB30;9.2:S|L2B4U30FB30FBRFB30FB30;9.3:N|Integer|2|-32443;9.4:N|Integer|2|12539;9.5:S|L0B1URB7;9.6:S|L2B4U00FB0030RFB003000;10.1:S|L1B2U30FBRFB30;10.2:S|L2B4U30FB30FBRFB30FB30;10.3:N|Integer|2|-32443;10.4:N|Integer|2|12539;10.5:S|L0B1URB7;10.6:S|L2B4U00FB0030RFB003000;11.1:S|L1B2UF8F1RF1F8;11.2:S|L2B4UF8F1F8F1RF1F8F1F8;11.3:N|Integer|2|253;11.4:N|Integer|2|-1807;11.5:S|L0B1UR3F;11.6:S|L2B4U00F100F8RF100F800;12.1:S|L1B2UF8F2RF2F8;12.2:S|L2B4UF8F2F8F2RF2F8F2F8;12.3:N|Integer|2|254;12.4:N|Integer|2|-1806;12.5:S|L0B1UR3F;12.6:S|L2B4U00F200F8RF200F800;13.1:S|L1B2UF8F3RF3F8;13.2:S|L2B4UF8F3F8F3RF3F8F3F8;13.3:N|Integer|2|255;13.4:N|Integer|2|-1805;13.5:S|L0B1UR3F;13.6:S|L2B4U00F300F8RF300F800;14.1:ERR|5;14.2:S|L2B4U00000000R00000000;14.3:ERR|5;14.4:ERR|5;14.5:ERR|5;14.6:ERR|5;15.1:ERR|5;15.2:ERR|6;15.3:ERR|5;15.4:ERR|5;15.5:ERR|5;15.6:ERR|5;16.1:ERR|5;16.2:S|L2B4UF8F3F8F3RF3F8F3F8;16.3:ERR|5;16.4:ERR|5;16.5:ERR|5;16.6:ERR|5;17.1:ERR|5;17.2:ERR|6;17.3:ERR|5;17.4:ERR|5;17.5:ERR|5;17.6:ERR|5;18.1:ERR|5;18.2:S|L2B4UF8F0F8F0RF0F8F0F8;18.3:ERR|5;18.4:ERR|5;18.5:ERR|5;18.6:ERR|5;19.1:ERR|5;19.2:S|L2B4UFF6CFF6CR6CFF6CFF;19.3:ERR|5;19.4:ERR|5;19.5:ERR|5;19.6:ERR|5;"),
+            ("strconv_locale_and_utf16_vectors104", "Attribute VB_Name = \"StrConvLocaleVariants\"\nOption Explicit\nPublic Function Probe() As String\nDim value As Variant\nDim bytes() As Byte\nDim sample As Long\nDim operation As Long\nReDim bytes(0 To 0)\nbytes(0) = 65\nFor sample = 0 To 12\nSelect Case sample\nCase 0: value = \"AB\"\nCase 1: value = ChrW(&H3042)\nCase 2: value = ChrW(&H30FB)\nCase 3: value = ChrW(&HF8F3)\nCase 4: value = ChrW(&H80)\nCase 5: value = ChrW(&H20AC)\nCase 6: value = ChrW(&HD800)\nCase 7: value = ChrW(&HD83D) & ChrW(&HDE00)\nCase 8: value = CStr(bytes)\nCase 9: value = bytes\nCase 10: value = Null\nCase 11: value = CVErr(2042)\nCase 12: Set value = Nothing\nEnd Select\nFor operation = 1 To 8\nProbe = Probe & CStr(sample) & \".\" & CStr(operation) & \":\" & Action(value, operation) & \";\"\nNext operation\nNext sample\nEnd Function\nPrivate Function Action(ByVal value As Variant, ByVal operation As Long) As String\nOn Error GoTo Failed\nDim result As Variant\nSelect Case operation\nCase 1: result = StrConv(value, vbUnicode)\nCase 2: result = StrConv(value, vbFromUnicode)\nCase 3: result = StrConv(value, vbUnicode, 1033)\nCase 4: result = StrConv(value, vbFromUnicode, 1033)\nCase 5: result = StrConv(value, vbUnicode, 1041)\nCase 6: result = StrConv(value, vbFromUnicode, 1041)\nCase 7: result = StrConv(value, vbUnicode, 0)\nCase 8: result = StrConv(value, vbFromUnicode, 0)\nEnd Select\nIf IsNull(result) Then\nAction = \"NULL\"\nElseIf IsArray(result) Then\nAction = \"A|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|L\" & CStr(Len(CStr(result))) & \"B\" & CStr(LenB(CStr(result))) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElseIf VarType(result) = vbString Then\nAction = \"S|L\" & CStr(Len(result)) & \"B\" & CStr(LenB(result)) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElse\nAction = \"N|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|\" & CStr(result)\nEnd If\nExit Function\nFailed:\nAction = \"ERR|\" & CStr(Err.Number)\nEnd Function\nPrivate Function Units(ByVal value As String) As String\nDim i As Long\nFor i = 1 To Len(value)\nUnits = Units & Right$(\"0000\" & Hex$(AscW(Mid$(value, i, 1)) And &HFFFF&), 4)\nNext i\nEnd Function\nPrivate Function RawBytes(ByVal value As String) As String\nDim i As Long\nFor i = 1 To LenB(value)\nRawBytes = RawBytes & Right$(\"00\" & Hex$(AscB(MidB$(value, i, 1))), 2)\nNext i\nEnd Function\n", "0.1:S|L4B8U0041000000420000R4100000042000000;0.2:S|L1B2U4241R4142;0.3:S|L4B8U0041000000420000R4100000042000000;0.4:S|L1B2U4241R4142;0.5:S|L4B8U0041000000420000R4100000042000000;0.6:S|L1B2U4241R4142;0.7:S|L4B8U0041000000420000R4100000042000000;0.8:S|L1B2U4241R4142;1.1:S|L2B4U00420030R42003000;1.2:S|L0B1UR3F;1.3:S|L2B4U00420030R42003000;1.4:S|L0B1UR3F;1.5:S|L2B4U00420030R42003000;1.6:S|L1B2UA082R82A0;1.7:S|L2B4U00420030R42003000;1.8:S|L0B1UR3F;2.1:S|L2B4U00FB0030RFB003000;2.2:S|L0B1URB7;2.3:S|L2B4U00FB0030RFB003000;2.4:S|L0B1URB7;2.5:S|L1B2U30FBRFB30;2.6:S|L1B2U4581R8145;2.7:S|L2B4U00FB0030RFB003000;2.8:S|L0B1URB7;3.1:S|L2B4U00F300F8RF300F800;3.2:S|L0B1UR3F;3.3:S|L2B4U00F300F8RF300F800;3.4:S|L0B1UR3F;3.5:S|L1B2UE2EBREBE2;3.6:S|L0B1URFF;3.7:S|L2B4U00F300F8RF300F800;3.8:S|L0B1UR3F;4.1:S|L2B4U20AC0000RAC200000;4.2:S|L0B1UR3F;4.3:S|L2B4U20AC0000RAC200000;4.4:S|L0B1UR3F;4.5:S|L2B4U00800000R80000000;4.6:S|L0B1UR80;4.7:S|L2B4U20AC0000RAC200000;4.8:S|L0B1UR3F;5.1:S|L2B4U00AC0020RAC002000;5.2:S|L0B1UR80;5.3:S|L2B4U00AC0020RAC002000;5.4:S|L0B1UR80;5.5:S|L2B4UFF6C0020R6CFF2000;5.6:S|L0B1UR3F;5.7:S|L2B4U00AC0020RAC002000;5.8:S|L0B1UR80;6.1:S|L2B4U000000D8R0000D800;6.2:S|L0B1UR3F;6.3:S|L2B4U000000D8R0000D800;6.4:S|L0B1UR3F;6.5:S|L2B4U0000FF98R000098FF;6.6:S|L0B1UR3F;6.7:S|L2B4U000000D8R0000D800;6.8:S|L0B1UR3F;7.1:S|L4B8U003D00D8000000DER3D00D8000000DE00;7.2:S|L1B2U3F3FR3F3F;7.3:S|L4B8U003D00D8000000DER3D00D8000000DE00;7.4:S|L1B2U3F3FR3F3F;7.5:S|L4B8U003DFF980000FF9ER3D0098FF00009EFF;7.6:S|L1B2U3F3FR3F3F;7.7:S|L4B8U003D00D8000000DER3D00D8000000DE00;7.8:S|L1B2U3F3FR3F3F;8.1:S|L1B2U0041R4100;8.2:S|L0B0UR;8.3:S|L1B2U0041R4100;8.4:S|L0B0UR;8.5:S|L1B2U0041R4100;8.6:S|L0B0UR;8.7:S|L1B2U0041R4100;8.8:S|L0B0UR;9.1:S|L1B2U0041R4100;9.2:S|L0B0UR;9.3:S|L1B2U0041R4100;9.4:S|L0B0UR;9.5:S|L1B2U0041R4100;9.6:S|L0B0UR;9.7:S|L1B2U0041R4100;9.8:S|L0B0UR;10.1:NULL;10.2:NULL;10.3:NULL;10.4:NULL;10.5:NULL;10.6:NULL;10.7:NULL;10.8:NULL;11.1:ERR|13;11.2:ERR|13;11.3:ERR|13;11.4:ERR|13;11.5:ERR|13;11.6:ERR|13;11.7:ERR|13;11.8:ERR|13;12.1:ERR|91;12.2:ERR|91;12.3:ERR|91;12.4:ERR|91;12.5:ERR|91;12.6:ERR|91;12.7:ERR|91;12.8:ERR|91;"),
+            ("string_character_callforms136", "Attribute VB_Name = \"StringCallForms\"\nOption Explicit\nPublic Function Probe() As String\nDim value As Variant\nDim bytes() As Byte\nDim odd As String\nDim sample As Long\nDim operation As Long\nReDim bytes(0 To 0)\nbytes(0) = 65\nodd = bytes\nFor sample = 0 To 16\nSelect Case sample\nCase 0: value = 12\nCase 1: value = CByte(12)\nCase 2: value = CLng(12)\nCase 3: value = CSng(12)\nCase 4: value = CDbl(12)\nCase 5: value = CCur(12)\nCase 6: value = CDec(12)\nCase 7: value = CDate(12)\nCase 8: value = True\nCase 9: value = Empty\nCase 10: value = Null\nCase 11: value = CVErr(2042)\nCase 12: value = \"AB\"\nCase 13: value = vbNullString\nCase 14: value = odd\nCase 15: value = bytes\nCase 16: Set value = Nothing\nEnd Select\nFor operation = 1 To 8\nProbe = Probe & CStr(sample) & \".\" & CStr(operation) & \":\" & Action(value, operation) & \";\"\nNext operation\nNext sample\nEnd Function\nPrivate Function Action(ByVal value As Variant, ByVal operation As Long) As String\nOn Error GoTo Failed\nDim result As Variant\nSelect Case operation\nCase 1: result = String(2, value)\nCase 2: result = String$(2, value)\nCase 3: result = String(0, value)\nCase 4: result = String$(0, value)\nCase 5: result = Chr(value)\nCase 6: result = Chr$(value)\nCase 7: result = Asc(value)\nCase 8: result = AscW(value)\nEnd Select\nIf IsNull(result) Then\nAction = \"NULL\"\nElseIf IsArray(result) Then\nAction = \"A|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|L\" & CStr(Len(CStr(result))) & \"B\" & CStr(LenB(CStr(result))) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElseIf VarType(result) = vbString Then\nAction = \"S|L\" & CStr(Len(result)) & \"B\" & CStr(LenB(result)) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElse\nAction = \"N|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|\" & CStr(result)\nEnd If\nExit Function\nFailed:\nAction = \"ERR|\" & CStr(Err.Number)\nEnd Function\nPrivate Function Units(ByVal value As String) As String\nDim i As Long\nFor i = 1 To Len(value)\nUnits = Units & Right$(\"0000\" & Hex$(AscW(Mid$(value, i, 1)) And &HFFFF&), 4)\nNext i\nEnd Function\nPrivate Function RawBytes(ByVal value As String) As String\nDim i As Long\nFor i = 1 To LenB(value)\nRawBytes = RawBytes & Right$(\"00\" & Hex$(AscB(MidB$(value, i, 1))), 2)\nNext i\nEnd Function\n", "0.1:S|L2B4U000C000CR0C000C00;0.2:S|L2B4U000C000CR0C000C00;0.3:S|L0B0UR;0.4:S|L0B0UR;0.5:S|L1B2U000CR0C00;0.6:S|L1B2U000CR0C00;0.7:N|Integer|2|49;0.8:N|Integer|2|49;1.1:S|L2B4U000C000CR0C000C00;1.2:S|L2B4U000C000CR0C000C00;1.3:S|L0B0UR;1.4:S|L0B0UR;1.5:S|L1B2U000CR0C00;1.6:S|L1B2U000CR0C00;1.7:N|Integer|2|49;1.8:N|Integer|2|49;2.1:S|L2B4U000C000CR0C000C00;2.2:S|L2B4U000C000CR0C000C00;2.3:S|L0B0UR;2.4:S|L0B0UR;2.5:S|L1B2U000CR0C00;2.6:S|L1B2U000CR0C00;2.7:N|Integer|2|49;2.8:N|Integer|2|49;3.1:S|L2B4U000C000CR0C000C00;3.2:S|L2B4U000C000CR0C000C00;3.3:S|L0B0UR;3.4:S|L0B0UR;3.5:S|L1B2U000CR0C00;3.6:S|L1B2U000CR0C00;3.7:N|Integer|2|49;3.8:N|Integer|2|49;4.1:S|L2B4U000C000CR0C000C00;4.2:S|L2B4U000C000CR0C000C00;4.3:S|L0B0UR;4.4:S|L0B0UR;4.5:S|L1B2U000CR0C00;4.6:S|L1B2U000CR0C00;4.7:N|Integer|2|49;4.8:N|Integer|2|49;5.1:S|L2B4U000C000CR0C000C00;5.2:S|L2B4U000C000CR0C000C00;5.3:S|L0B0UR;5.4:S|L0B0UR;5.5:S|L1B2U000CR0C00;5.6:S|L1B2U000CR0C00;5.7:N|Integer|2|49;5.8:N|Integer|2|49;6.1:S|L2B4U000C000CR0C000C00;6.2:S|L2B4U000C000CR0C000C00;6.3:S|L0B0UR;6.4:S|L0B0UR;6.5:S|L1B2U000CR0C00;6.6:S|L1B2U000CR0C00;6.7:N|Integer|2|49;6.8:N|Integer|2|49;7.1:S|L2B4U000C000CR0C000C00;7.2:S|L2B4U000C000CR0C000C00;7.3:S|L0B0UR;7.4:S|L0B0UR;7.5:S|L1B2U000CR0C00;7.6:S|L1B2U000CR0C00;7.7:N|Integer|2|49;7.8:N|Integer|2|49;8.1:S|L2B4UF8F3F8F3RF3F8F3F8;8.2:S|L2B4UF8F3F8F3RF3F8F3F8;8.3:S|L0B0UR;8.4:S|L0B0UR;8.5:ERR|5;8.6:ERR|5;8.7:N|Integer|2|84;8.8:N|Integer|2|84;9.1:S|L2B4U00000000R00000000;9.2:S|L2B4U00000000R00000000;9.3:S|L0B0UR;9.4:S|L0B0UR;9.5:S|L1B2U0000R0000;9.6:S|L1B2U0000R0000;9.7:ERR|5;9.8:ERR|5;10.1:NULL;10.2:ERR|94;10.3:NULL;10.4:ERR|94;10.5:ERR|94;10.6:ERR|94;10.7:ERR|94;10.8:ERR|94;11.1:ERR|13;11.2:ERR|13;11.3:ERR|13;11.4:ERR|13;11.5:ERR|13;11.6:ERR|13;11.7:ERR|13;11.8:ERR|13;12.1:S|L2B4U00410041R41004100;12.2:S|L2B4U00410041R41004100;12.3:S|L0B0UR;12.4:S|L0B0UR;12.5:ERR|13;12.6:ERR|13;12.7:N|Integer|2|65;12.8:N|Integer|2|65;13.1:ERR|5;13.2:ERR|5;13.3:ERR|5;13.4:ERR|5;13.5:ERR|13;13.6:ERR|13;13.7:ERR|5;13.8:ERR|5;14.1:ERR|5;14.2:ERR|5;14.3:ERR|5;14.4:ERR|5;14.5:ERR|13;14.6:ERR|13;14.7:ERR|5;14.8:ERR|5;15.1:ERR|13;15.2:ERR|13;15.3:ERR|13;15.4:ERR|13;15.5:ERR|13;15.6:ERR|13;15.7:ERR|5;15.8:ERR|5;16.1:ERR|91;16.2:ERR|91;16.3:ERR|91;16.4:ERR|91;16.5:ERR|91;16.6:ERR|91;16.7:ERR|91;16.8:ERR|91;"),
+            ("byte_array_storage_from_String_and_StrConv12", "Attribute VB_Name = \"ByteStorage\"\nOption Explicit\nPublic Function OxiGenRun() As String\nOxiGenRun = Probe()\nEnd Function\nPublic Function Probe() As String\nDim value As Variant\nDim odd As String\nDim source(0 To 0) As Byte\nDim sample As Long\nsource(0) = 65\nodd = source\nFor sample = 0 To 11\nSelect Case sample\nCase 0: value = \"AB\"\nCase 1: value = \"A\"\nCase 2: value = vbNullString\nCase 3: value = \"\"\nCase 4: value = odd\nCase 5: value = StrConv(\"AB\", vbFromUnicode)\nCase 6: value = StrConv(\"A\", vbFromUnicode)\nCase 7: value = Empty\nCase 8: value = Null\nCase 9: value = CVErr(2042)\nCase 10: value = source\nCase 11: value = Array(65)\nEnd Select\nProbe = Probe & CStr(sample) & \":\" & Store(value) & \";\"\nNext sample\nEnd Function\nPrivate Function Store(ByVal value As Variant) As String\nDim bytes() As Byte\nDim item As Variant\nDim number As Long\nDim lower As Long\nDim upper As Long\nReDim bytes(3 To 3)\nbytes(3) = 99\nOn Error Resume Next\nbytes = value\nnumber = Err.Number\nErr.Clear\nStore = CStr(number) & \"|\" & TypeName(bytes) & \"|\" & CStr(VarType(bytes))\nlower = LBound(bytes)\nStore = Store & \"|L\" & CStr(Err.Number) & \":\" & CStr(lower)\nErr.Clear\nupper = UBound(bytes)\nStore = Store & \"|U\" & CStr(Err.Number) & \":\" & CStr(upper)\nErr.Clear\nFor Each item In bytes\nStore = Store & \"|\" & CStr(item)\nNext item\nStore = Store & \"|E\" & CStr(Err.Number)\nEnd Function\n", "0:0|Byte()|8209|L0:0|U0:3|65|0|66|0|E0;1:0|Byte()|8209|L0:0|U0:1|65|0|E0;2:0|Byte()|8209|L0:0|U0:-1|E0;3:0|Byte()|8209|L0:0|U0:-1|E0;4:0|Byte()|8209|L0:0|U0:0|65|E0;5:0|Byte()|8209|L0:0|U0:1|65|66|E0;6:0|Byte()|8209|L0:0|U0:0|65|E0;7:13|Byte()|8209|L0:3|U0:3|99|E0;8:13|Byte()|8209|L0:3|U0:3|99|E0;9:13|Byte()|8209|L0:3|U0:3|99|E0;10:0|Byte()|8209|L0:0|U0:0|65|E0;11:13|Byte()|8209|L0:3|U0:3|99|E0;"),
+            ("len_typed_and_boxed_storage48", "Attribute VB_Name = \"LenStorage\"\nOption Explicit\nPublic Function Probe() As String\nDim boxed As Variant\nDim x0 As Byte\nDim x1 As Integer\nDim x2 As Long\nDim x3 As LongLong\nDim x4 As LongPtr\nDim x5 As Single\nDim x6 As Double\nDim x7 As Currency\nDim x8 As Date\nDim x9 As Boolean\nDim x10 As String\nDim x11 As Variant\nx0 = 12\nboxed = x0\nProbe = Probe & \"0.L:\" & Describe(Len(x0)) & \";\"\nProbe = Probe & \"0.B:\" & Describe(LenB(x0)) & \";\"\nProbe = Probe & \"0.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"0.VB:\" & Describe(LenB(boxed)) & \";\"\nx1 = 12\nboxed = x1\nProbe = Probe & \"1.L:\" & Describe(Len(x1)) & \";\"\nProbe = Probe & \"1.B:\" & Describe(LenB(x1)) & \";\"\nProbe = Probe & \"1.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"1.VB:\" & Describe(LenB(boxed)) & \";\"\nx2 = 12\nboxed = x2\nProbe = Probe & \"2.L:\" & Describe(Len(x2)) & \";\"\nProbe = Probe & \"2.B:\" & Describe(LenB(x2)) & \";\"\nProbe = Probe & \"2.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"2.VB:\" & Describe(LenB(boxed)) & \";\"\nx3 = 12\nboxed = x3\nProbe = Probe & \"3.L:\" & Describe(Len(x3)) & \";\"\nProbe = Probe & \"3.B:\" & Describe(LenB(x3)) & \";\"\nProbe = Probe & \"3.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"3.VB:\" & Describe(LenB(boxed)) & \";\"\nx4 = 12\nboxed = x4\nProbe = Probe & \"4.L:\" & Describe(Len(x4)) & \";\"\nProbe = Probe & \"4.B:\" & Describe(LenB(x4)) & \";\"\nProbe = Probe & \"4.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"4.VB:\" & Describe(LenB(boxed)) & \";\"\nx5 = 12\nboxed = x5\nProbe = Probe & \"5.L:\" & Describe(Len(x5)) & \";\"\nProbe = Probe & \"5.B:\" & Describe(LenB(x5)) & \";\"\nProbe = Probe & \"5.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"5.VB:\" & Describe(LenB(boxed)) & \";\"\nx6 = 12\nboxed = x6\nProbe = Probe & \"6.L:\" & Describe(Len(x6)) & \";\"\nProbe = Probe & \"6.B:\" & Describe(LenB(x6)) & \";\"\nProbe = Probe & \"6.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"6.VB:\" & Describe(LenB(boxed)) & \";\"\nx7 = 12\nboxed = x7\nProbe = Probe & \"7.L:\" & Describe(Len(x7)) & \";\"\nProbe = Probe & \"7.B:\" & Describe(LenB(x7)) & \";\"\nProbe = Probe & \"7.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"7.VB:\" & Describe(LenB(boxed)) & \";\"\nx8 = 12\nboxed = x8\nProbe = Probe & \"8.L:\" & Describe(Len(x8)) & \";\"\nProbe = Probe & \"8.B:\" & Describe(LenB(x8)) & \";\"\nProbe = Probe & \"8.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"8.VB:\" & Describe(LenB(boxed)) & \";\"\nx9 = True\nboxed = x9\nProbe = Probe & \"9.L:\" & Describe(Len(x9)) & \";\"\nProbe = Probe & \"9.B:\" & Describe(LenB(x9)) & \";\"\nProbe = Probe & \"9.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"9.VB:\" & Describe(LenB(boxed)) & \";\"\nx10 = \"12\"\nboxed = x10\nProbe = Probe & \"10.L:\" & Describe(Len(x10)) & \";\"\nProbe = Probe & \"10.B:\" & Describe(LenB(x10)) & \";\"\nProbe = Probe & \"10.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"10.VB:\" & Describe(LenB(boxed)) & \";\"\nx11 = 12\nboxed = x11\nProbe = Probe & \"11.L:\" & Describe(Len(x11)) & \";\"\nProbe = Probe & \"11.B:\" & Describe(LenB(x11)) & \";\"\nProbe = Probe & \"11.VL:\" & Describe(Len(boxed)) & \";\"\nProbe = Probe & \"11.VB:\" & Describe(LenB(boxed)) & \";\"\nEnd Function\nPrivate Function Describe(ByVal value As Variant) As String\nDescribe = TypeName(value) & \"|\" & CStr(VarType(value)) & \"|\" & CStr(value)\nEnd Function\n", "0.L:Integer|2|1;0.B:Integer|2|1;0.VL:Long|3|2;0.VB:Long|3|4;1.L:Integer|2|2;1.B:Integer|2|2;1.VL:Long|3|2;1.VB:Long|3|4;2.L:Integer|2|4;2.B:Integer|2|4;2.VL:Long|3|2;2.VB:Long|3|4;3.L:Integer|2|8;3.B:Integer|2|8;3.VL:Long|3|2;3.VB:Long|3|4;4.L:Integer|2|8;4.B:Integer|2|8;4.VL:Long|3|2;4.VB:Long|3|4;5.L:Integer|2|4;5.B:Integer|2|4;5.VL:Long|3|2;5.VB:Long|3|4;6.L:Integer|2|8;6.B:Integer|2|8;6.VL:Long|3|2;6.VB:Long|3|4;7.L:Integer|2|8;7.B:Integer|2|8;7.VL:Long|3|2;7.VB:Long|3|4;8.L:Integer|2|8;8.B:Integer|2|8;8.VL:Long|3|9;8.VB:Long|3|18;9.L:Integer|2|2;9.B:Integer|2|2;9.VL:Long|3|4;9.VB:Long|3|8;10.L:Long|3|2;10.B:Long|3|4;10.VL:Long|3|2;10.VB:Long|3|4;11.L:Long|3|2;11.B:Long|3|4;11.VL:Long|3|2;11.VB:Long|3|4;"),
+            ("strconv_LCID_19x4x2_152", "Attribute VB_Name = \"StrConvLCIDs\"\nOption Explicit\nPublic Function Probe() As String\nDim value As Variant\nDim bytes(0 To 0) As Byte\nDim locales As Variant\nDim sample As Long\nDim operation As Long\nDim index As Long\nlocales = Array(0,1033,2057,1031,1036,3082,1041,1049,1032,1025,1042,2052,1028,1054,127,1024,2048,65535,-1)\nbytes(0) = 65\nFor index = 0 To 18\nFor sample = 0 To 3\nSelect Case sample\nCase 0: value = \"AB\"\nCase 1: value = bytes\nCase 2: value = ChrW(&H3042)\nCase 3: value = ChrW(&H20AC)\nEnd Select\nFor operation = 1 To 2\nProbe = Probe & CStr(index) & \".\" & CStr(sample) & \".\" & CStr(operation) & \":\" & Action(value, operation, CLng(locales(index))) & \";\"\nNext operation\nNext sample\nNext index\nEnd Function\nPrivate Function Action(ByVal value As Variant, ByVal operation As Long, ByVal locale As Long) As String\nOn Error GoTo Failed\nDim result As Variant\nSelect Case operation\nCase 1: result = StrConv(value, vbUnicode, locale)\nCase 2: result = StrConv(value, vbFromUnicode, locale)\nEnd Select\nIf IsNull(result) Then\nAction = \"NULL\"\nElseIf IsArray(result) Then\nAction = \"A|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|L\" & CStr(Len(CStr(result))) & \"B\" & CStr(LenB(CStr(result))) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElseIf VarType(result) = vbString Then\nAction = \"S|L\" & CStr(Len(result)) & \"B\" & CStr(LenB(result)) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElse\nAction = \"N|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|\" & CStr(result)\nEnd If\nExit Function\nFailed:\nAction = \"ERR|\" & CStr(Err.Number)\nEnd Function\nPrivate Function Units(ByVal value As String) As String\nDim i As Long\nFor i = 1 To Len(value)\nUnits = Units & Right$(\"0000\" & Hex$(AscW(Mid$(value, i, 1)) And &HFFFF&), 4)\nNext i\nEnd Function\nPrivate Function RawBytes(ByVal value As String) As String\nDim i As Long\nFor i = 1 To LenB(value)\nRawBytes = RawBytes & Right$(\"00\" & Hex$(AscB(MidB$(value, i, 1))), 2)\nNext i\nEnd Function\n", "0.0.1:S|L4B8U0041000000420000R4100000042000000;0.0.2:S|L1B2U4241R4142;0.1.1:S|L1B2U0041R4100;0.1.2:S|L0B0UR;0.2.1:S|L2B4U00420030R42003000;0.2.2:S|L0B1UR3F;0.3.1:S|L2B4U00AC0020RAC002000;0.3.2:S|L0B1UR80;1.0.1:S|L4B8U0041000000420000R4100000042000000;1.0.2:S|L1B2U4241R4142;1.1.1:S|L1B2U0041R4100;1.1.2:S|L0B0UR;1.2.1:S|L2B4U00420030R42003000;1.2.2:S|L0B1UR3F;1.3.1:S|L2B4U00AC0020RAC002000;1.3.2:S|L0B1UR80;2.0.1:S|L4B8U0041000000420000R4100000042000000;2.0.2:S|L1B2U4241R4142;2.1.1:S|L1B2U0041R4100;2.1.2:S|L0B0UR;2.2.1:S|L2B4U00420030R42003000;2.2.2:S|L0B1UR3F;2.3.1:S|L2B4U00AC0020RAC002000;2.3.2:S|L0B1UR80;3.0.1:S|L4B8U0041000000420000R4100000042000000;3.0.2:S|L1B2U4241R4142;3.1.1:S|L1B2U0041R4100;3.1.2:S|L0B0UR;3.2.1:S|L2B4U00420030R42003000;3.2.2:S|L0B1UR3F;3.3.1:S|L2B4U00AC0020RAC002000;3.3.2:S|L0B1UR80;4.0.1:S|L4B8U0041000000420000R4100000042000000;4.0.2:S|L1B2U4241R4142;4.1.1:S|L1B2U0041R4100;4.1.2:S|L0B0UR;4.2.1:S|L2B4U00420030R42003000;4.2.2:S|L0B1UR3F;4.3.1:S|L2B4U00AC0020RAC002000;4.3.2:S|L0B1UR80;5.0.1:S|L4B8U0041000000420000R4100000042000000;5.0.2:S|L1B2U4241R4142;5.1.1:S|L1B2U0041R4100;5.1.2:S|L0B0UR;5.2.1:S|L2B4U00420030R42003000;5.2.2:S|L0B1UR3F;5.3.1:S|L2B4U00AC0020RAC002000;5.3.2:S|L0B1UR80;6.0.1:S|L4B8U0041000000420000R4100000042000000;6.0.2:S|L1B2U4241R4142;6.1.1:S|L1B2U0041R4100;6.1.2:S|L0B0UR;6.2.1:S|L2B4U00420030R42003000;6.2.2:S|L1B2UA082R82A0;6.3.1:S|L2B4UFF6C0020R6CFF2000;6.3.2:S|L0B1UR3F;7.0.1:S|L4B8U0041000000420000R4100000042000000;7.0.2:S|L1B2U4241R4142;7.1.1:S|L1B2U0041R4100;7.1.2:S|L0B0UR;7.2.1:S|L2B4U00420030R42003000;7.2.2:S|L0B1UR3F;7.3.1:S|L2B4U00AC0020RAC002000;7.3.2:S|L0B1UR88;8.0.1:S|L4B8U0041000000420000R4100000042000000;8.0.2:S|L1B2U4241R4142;8.1.1:S|L1B2U0041R4100;8.1.2:S|L0B0UR;8.2.1:S|L2B4U00420030R42003000;8.2.2:S|L0B1UR3F;8.3.1:S|L2B4U00AC0020RAC002000;8.3.2:S|L0B1UR80;9.0.1:S|L4B8U0041000000420000R4100000042000000;9.0.2:S|L1B2U4241R4142;9.1.1:S|L1B2U0041R4100;9.1.2:S|L0B0UR;9.2.1:S|L2B4U00420030R42003000;9.2.2:S|L0B1UR3F;9.3.1:S|L2B4U00AC0020RAC002000;9.3.2:S|L0B1UR80;10.0.1:S|L4B8U0041000000420000R4100000042000000;10.0.2:S|L1B2U4241R4142;10.1.1:S|L1B2U0041R4100;10.1.2:S|L0B0UR;10.2.1:S|L2B4U00420030R42003000;10.2.2:S|L1B2UA2AARAAA2;10.3.1:S|L1B2U003FR3F00;10.3.2:S|L1B2UE6A2RA2E6;11.0.1:S|L4B8U0041000000420000R4100000042000000;11.0.2:S|L1B2U4241R4142;11.1.1:S|L1B2U0041R4100;11.1.2:S|L0B0UR;11.2.1:S|L2B4U00420030R42003000;11.2.2:S|L1B2UA2A4RA4A2;11.3.1:S|L1B2U003FR3F00;11.3.2:S|L0B1UR80;12.0.1:S|L4B8U0041000000420000R4100000042000000;12.0.2:S|L1B2U4241R4142;12.1.1:S|L1B2U0041R4100;12.1.2:S|L0B0UR;12.2.1:S|L2B4U00420030R42003000;12.2.2:S|L0B1UR3F;12.3.1:S|L1B2U003FR3F00;12.3.2:S|L1B2UE1A3RA3E1;13.0.1:S|L4B8U0041000000420000R4100000042000000;13.0.2:S|L1B2U4241R4142;13.1.1:S|L1B2U0041R4100;13.1.2:S|L0B0UR;13.2.1:S|L2B4U00420030R42003000;13.2.2:S|L0B1UR3F;13.3.1:S|L2B4U0E0C0020R0C0E2000;13.3.2:S|L0B1UR80;14.0.1:S|L4B8U0041000000420000R4100000042000000;14.0.2:S|L1B2U4241R4142;14.1.1:S|L1B2U0041R4100;14.1.2:S|L0B0UR;14.2.1:S|L2B4U00420030R42003000;14.2.2:S|L0B1UR3F;14.3.1:S|L2B4U00AC0020RAC002000;14.3.2:S|L0B1UR80;15.0.1:S|L4B8U0041000000420000R4100000042000000;15.0.2:S|L1B2U4241R4142;15.1.1:S|L1B2U0041R4100;15.1.2:S|L0B0UR;15.2.1:S|L2B4U00420030R42003000;15.2.2:S|L0B1UR3F;15.3.1:S|L2B4U00AC0020RAC002000;15.3.2:S|L0B1UR80;16.0.1:S|L4B8U0041000000420000R4100000042000000;16.0.2:S|L1B2U4241R4142;16.1.1:S|L1B2U0041R4100;16.1.2:S|L0B0UR;16.2.1:S|L2B4U00420030R42003000;16.2.2:S|L1B2UA082R82A0;16.3.1:S|L2B4UFF6C0020R6CFF2000;16.3.2:S|L0B1UR3F;17.0.1:ERR|5;17.0.2:ERR|5;17.1.1:ERR|5;17.1.2:ERR|5;17.2.1:ERR|5;17.2.2:ERR|5;17.3.1:ERR|5;17.3.2:ERR|5;18.0.1:ERR|5;18.0.2:ERR|5;18.1.1:ERR|5;18.1.2:ERR|5;18.2.1:ERR|5;18.2.2:ERR|5;18.3.1:ERR|5;18.3.2:ERR|5;"),
+            ("strconv_LCID_neutral_sort_reserved_128", "Attribute VB_Name = \"StrConvLCIDForms\"\nOption Explicit\nPublic Function Probe() As String\nDim value As Variant\nDim bytes(0 To 0) As Byte\nDim locales As Variant\nDim sample As Long\nDim operation As Long\nDim index As Long\nlocales = Array(9,17,4,31748,1081,1095,4096,66567,66569,984073,-64503,16778249,-2147482615,66560,2048,1024)\nbytes(0) = 65\nFor index = 0 To 15\nFor sample = 0 To 3\nSelect Case sample\nCase 0: value = \"AB\"\nCase 1: value = bytes\nCase 2: value = ChrW(&H3042)\nCase 3: value = ChrW(&H20AC)\nEnd Select\nFor operation = 1 To 2\nProbe = Probe & CStr(index) & \".\" & CStr(sample) & \".\" & CStr(operation) & \":\" & Action(value, operation, CLng(locales(index))) & \";\"\nNext operation\nNext sample\nNext index\nEnd Function\nPrivate Function Action(ByVal value As Variant, ByVal operation As Long, ByVal locale As Long) As String\nOn Error GoTo Failed\nDim result As Variant\nSelect Case operation\nCase 1: result = StrConv(value, vbUnicode, locale)\nCase 2: result = StrConv(value, vbFromUnicode, locale)\nEnd Select\nIf IsNull(result) Then\nAction = \"NULL\"\nElseIf IsArray(result) Then\nAction = \"A|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|L\" & CStr(Len(CStr(result))) & \"B\" & CStr(LenB(CStr(result))) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElseIf VarType(result) = vbString Then\nAction = \"S|L\" & CStr(Len(result)) & \"B\" & CStr(LenB(result)) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElse\nAction = \"N|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|\" & CStr(result)\nEnd If\nExit Function\nFailed:\nAction = \"ERR|\" & CStr(Err.Number)\nEnd Function\nPrivate Function Units(ByVal value As String) As String\nDim i As Long\nFor i = 1 To Len(value)\nUnits = Units & Right$(\"0000\" & Hex$(AscW(Mid$(value, i, 1)) And &HFFFF&), 4)\nNext i\nEnd Function\nPrivate Function RawBytes(ByVal value As String) As String\nDim i As Long\nFor i = 1 To LenB(value)\nRawBytes = RawBytes & Right$(\"00\" & Hex$(AscB(MidB$(value, i, 1))), 2)\nNext i\nEnd Function\n", "0.0.1:S|L4B8U0041000000420000R4100000042000000;0.0.2:S|L1B2U4241R4142;0.1.1:S|L1B2U0041R4100;0.1.2:S|L0B0UR;0.2.1:S|L2B4U00420030R42003000;0.2.2:S|L0B1UR3F;0.3.1:S|L2B4U00AC0020RAC002000;0.3.2:S|L0B1UR80;1.0.1:S|L4B8U0041000000420000R4100000042000000;1.0.2:S|L1B2U4241R4142;1.1.1:S|L1B2U0041R4100;1.1.2:S|L0B0UR;1.2.1:S|L2B4U00420030R42003000;1.2.2:S|L1B2UA082R82A0;1.3.1:S|L2B4UFF6C0020R6CFF2000;1.3.2:S|L0B1UR3F;2.0.1:S|L4B8U0041000000420000R4100000042000000;2.0.2:S|L1B2U4241R4142;2.1.1:S|L1B2U0041R4100;2.1.2:S|L0B0UR;2.2.1:S|L2B4U00420030R42003000;2.2.2:S|L1B2UA2A4RA4A2;2.3.1:S|L1B2U003FR3F00;2.3.2:S|L0B1UR80;3.0.1:S|L4B8U0041000000420000R4100000042000000;3.0.2:S|L1B2U4241R4142;3.1.1:S|L1B2U0041R4100;3.1.2:S|L0B0UR;3.2.1:S|L2B4U00420030R42003000;3.2.2:S|L0B1UR3F;3.3.1:S|L1B2U003FR3F00;3.3.2:S|L1B2UE1A3RA3E1;4.0.1:S|L4B8U0041000000420000R4100000042000000;4.0.2:S|L1B2U4241R4142;4.1.1:S|L1B2U0041R4100;4.1.2:S|L0B0UR;4.2.1:S|L2B4U00420030R42003000;4.2.2:S|L1B2UA082R82A0;4.3.1:S|L2B4UFF6C0020R6CFF2000;4.3.2:S|L0B1UR3F;5.0.1:S|L4B8U0041000000420000R4100000042000000;5.0.2:S|L1B2U4241R4142;5.1.1:S|L1B2U0041R4100;5.1.2:S|L0B0UR;5.2.1:S|L2B4U00420030R42003000;5.2.2:S|L1B2UA082R82A0;5.3.1:S|L2B4UFF6C0020R6CFF2000;5.3.2:S|L0B1UR3F;6.0.1:S|L4B8U0041000000420000R4100000042000000;6.0.2:S|L1B2U4241R4142;6.1.1:S|L1B2U0041R4100;6.1.2:S|L0B0UR;6.2.1:S|L2B4U00420030R42003000;6.2.2:S|L1B2UA082R82A0;6.3.1:S|L2B4UFF6C0020R6CFF2000;6.3.2:S|L0B1UR3F;7.0.1:S|L4B8U0041000000420000R4100000042000000;7.0.2:S|L1B2U4241R4142;7.1.1:S|L1B2U0041R4100;7.1.2:S|L0B0UR;7.2.1:S|L2B4U00420030R42003000;7.2.2:S|L0B1UR3F;7.3.1:S|L2B4U00AC0020RAC002000;7.3.2:S|L0B1UR80;8.0.1:ERR|5;8.0.2:ERR|5;8.1.1:ERR|5;8.1.2:ERR|5;8.2.1:ERR|5;8.2.2:ERR|5;8.3.1:ERR|5;8.3.2:ERR|5;9.0.1:ERR|5;9.0.2:ERR|5;9.1.1:ERR|5;9.1.2:ERR|5;9.2.1:ERR|5;9.2.2:ERR|5;9.3.1:ERR|5;9.3.2:ERR|5;10.0.1:ERR|5;10.0.2:ERR|5;10.1.1:ERR|5;10.1.2:ERR|5;10.2.1:ERR|5;10.2.2:ERR|5;10.3.1:ERR|5;10.3.2:ERR|5;11.0.1:ERR|5;11.0.2:ERR|5;11.1.1:ERR|5;11.1.2:ERR|5;11.2.1:ERR|5;11.2.2:ERR|5;11.3.1:ERR|5;11.3.2:ERR|5;12.0.1:ERR|5;12.0.2:ERR|5;12.1.1:ERR|5;12.1.2:ERR|5;12.2.1:ERR|5;12.2.2:ERR|5;12.3.1:ERR|5;12.3.2:ERR|5;13.0.1:ERR|5;13.0.2:ERR|5;13.1.1:ERR|5;13.1.2:ERR|5;13.2.1:ERR|5;13.2.2:ERR|5;13.3.1:ERR|5;13.3.2:ERR|5;14.0.1:S|L4B8U0041000000420000R4100000042000000;14.0.2:S|L1B2U4241R4142;14.1.1:S|L1B2U0041R4100;14.1.2:S|L0B0UR;14.2.1:S|L2B4U00420030R42003000;14.2.2:S|L1B2UA082R82A0;14.3.1:S|L2B4UFF6C0020R6CFF2000;14.3.2:S|L0B1UR3F;15.0.1:S|L4B8U0041000000420000R4100000042000000;15.0.2:S|L1B2U4241R4142;15.1.1:S|L1B2U0041R4100;15.1.2:S|L0B0UR;15.2.1:S|L2B4U00420030R42003000;15.2.2:S|L0B1UR3F;15.3.1:S|L2B4U00AC0020RAC002000;15.3.2:S|L0B1UR80;"),
+        ];
+        for (name, source, expected) in cases {
+            let module = parse_module(source).unwrap();
+            let mut book = workbook();
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.automation_code_page = Some(AnsiCodePage::Japanese);
+            host.error_language = ErrorLanguage::Japanese;
+            let value = Runtime::new(&module).with_host(&mut host)
+                .with_error_environment(ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() })
+                .with_limits(20_000_000,64).call("Probe",vec![]).unwrap();
+            let Value::String(actual) = value else {panic!("{name}: expected ASCII observation String")};
+            let first = actual.split(';').zip(expected.split(';')).find(|(a,b)|a!=b);
+            assert_eq!(first,None,"{name}");
+            assert_eq!(actual.len(),expected.len(),"{name}");
+        }
+    }
+
+    #[test]
+    fn ansi_all_locales_runtime_matches_excel934_fingerprints() {
+        use sha2::Digest;
+        let module = parse_module("Attribute VB_Name = \"StrConvAllLocales\"\nOption Explicit\nPublic Function Probe() As String\nDim locales(0 To 466) As Long\nDim rows(0 To 933) As String\nDim bytes(0 To 127) As Byte\nDim signature As String\nDim i As Long\nlocales(0) = 0\nlocales(1) = 1\nlocales(2) = 2\nlocales(3) = 3\nlocales(4) = 4\nlocales(5) = 5\nlocales(6) = 6\nlocales(7) = 7\nlocales(8) = 8\nlocales(9) = 9\nlocales(10) = 10\nlocales(11) = 11\nlocales(12) = 12\nlocales(13) = 13\nlocales(14) = 14\nlocales(15) = 15\nlocales(16) = 16\nlocales(17) = 17\nlocales(18) = 18\nlocales(19) = 19\nlocales(20) = 20\nlocales(21) = 21\nlocales(22) = 22\nlocales(23) = 23\nlocales(24) = 24\nlocales(25) = 25\nlocales(26) = 26\nlocales(27) = 27\nlocales(28) = 28\nlocales(29) = 29\nlocales(30) = 30\nlocales(31) = 31\nlocales(32) = 32\nlocales(33) = 33\nlocales(34) = 34\nlocales(35) = 35\nlocales(36) = 36\nlocales(37) = 37\nlocales(38) = 38\nlocales(39) = 39\nlocales(40) = 40\nlocales(41) = 41\nlocales(42) = 42\nlocales(43) = 43\nlocales(44) = 44\nlocales(45) = 45\nlocales(46) = 46\nlocales(47) = 47\nlocales(48) = 48\nlocales(49) = 49\nlocales(50) = 50\nlocales(51) = 51\nlocales(52) = 52\nlocales(53) = 53\nlocales(54) = 54\nlocales(55) = 55\nlocales(56) = 56\nlocales(57) = 57\nlocales(58) = 58\nlocales(59) = 59\nlocales(60) = 60\nlocales(61) = 61\nlocales(62) = 62\nlocales(63) = 63\nlocales(64) = 64\nlocales(65) = 65\nlocales(66) = 66\nlocales(67) = 67\nlocales(68) = 68\nlocales(69) = 69\nlocales(70) = 70\nlocales(71) = 71\nlocales(72) = 72\nlocales(73) = 73\nlocales(74) = 74\nlocales(75) = 75\nlocales(76) = 76\nlocales(77) = 77\nlocales(78) = 78\nlocales(79) = 79\nlocales(80) = 80\nlocales(81) = 81\nlocales(82) = 82\nlocales(83) = 83\nlocales(84) = 84\nlocales(85) = 85\nlocales(86) = 86\nlocales(87) = 87\nlocales(88) = 88\nlocales(89) = 89\nlocales(90) = 90\nlocales(91) = 91\nlocales(92) = 92\nlocales(93) = 93\nlocales(94) = 94\nlocales(95) = 95\nlocales(96) = 96\nlocales(97) = 97\nlocales(98) = 98\nlocales(99) = 99\nlocales(100) = 100\nlocales(101) = 101\nlocales(102) = 102\nlocales(103) = 103\nlocales(104) = 104\nlocales(105) = 105\nlocales(106) = 106\nlocales(107) = 107\nlocales(108) = 108\nlocales(109) = 109\nlocales(110) = 110\nlocales(111) = 111\nlocales(112) = 112\nlocales(113) = 113\nlocales(114) = 114\nlocales(115) = 115\nlocales(116) = 116\nlocales(117) = 117\nlocales(118) = 118\nlocales(119) = 119\nlocales(120) = 120\nlocales(121) = 121\nlocales(122) = 122\nlocales(123) = 124\nlocales(124) = 126\nlocales(125) = 127\nlocales(126) = 128\nlocales(127) = 129\nlocales(128) = 130\nlocales(129) = 131\nlocales(130) = 132\nlocales(131) = 133\nlocales(132) = 134\nlocales(133) = 135\nlocales(134) = 136\nlocales(135) = 140\nlocales(136) = 145\nlocales(137) = 146\nlocales(138) = 1024\nlocales(139) = 1025\nlocales(140) = 1026\nlocales(141) = 1027\nlocales(142) = 1028\nlocales(143) = 1029\nlocales(144) = 1030\nlocales(145) = 1031\nlocales(146) = 1032\nlocales(147) = 1033\nlocales(148) = 1034\nlocales(149) = 1035\nlocales(150) = 1036\nlocales(151) = 1037\nlocales(152) = 1038\nlocales(153) = 1039\nlocales(154) = 1040\nlocales(155) = 1041\nlocales(156) = 1042\nlocales(157) = 1043\nlocales(158) = 1044\nlocales(159) = 1045\nlocales(160) = 1046\nlocales(161) = 1047\nlocales(162) = 1048\nlocales(163) = 1049\nlocales(164) = 1050\nlocales(165) = 1051\nlocales(166) = 1052\nlocales(167) = 1053\nlocales(168) = 1054\nlocales(169) = 1055\nlocales(170) = 1056\nlocales(171) = 1057\nlocales(172) = 1058\nlocales(173) = 1059\nlocales(174) = 1060\nlocales(175) = 1061\nlocales(176) = 1062\nlocales(177) = 1063\nlocales(178) = 1064\nlocales(179) = 1065\nlocales(180) = 1066\nlocales(181) = 1067\nlocales(182) = 1068\nlocales(183) = 1069\nlocales(184) = 1070\nlocales(185) = 1071\nlocales(186) = 1072\nlocales(187) = 1073\nlocales(188) = 1074\nlocales(189) = 1075\nlocales(190) = 1076\nlocales(191) = 1077\nlocales(192) = 1078\nlocales(193) = 1079\nlocales(194) = 1080\nlocales(195) = 1081\nlocales(196) = 1082\nlocales(197) = 1083\nlocales(198) = 1085\nlocales(199) = 1086\nlocales(200) = 1087\nlocales(201) = 1088\nlocales(202) = 1089\nlocales(203) = 1090\nlocales(204) = 1091\nlocales(205) = 1092\nlocales(206) = 1093\nlocales(207) = 1094\nlocales(208) = 1095\nlocales(209) = 1096\nlocales(210) = 1097\nlocales(211) = 1098\nlocales(212) = 1099\nlocales(213) = 1100\nlocales(214) = 1101\nlocales(215) = 1102\nlocales(216) = 1103\nlocales(217) = 1104\nlocales(218) = 1105\nlocales(219) = 1106\nlocales(220) = 1107\nlocales(221) = 1108\nlocales(222) = 1109\nlocales(223) = 1110\nlocales(224) = 1111\nlocales(225) = 1112\nlocales(226) = 1113\nlocales(227) = 1114\nlocales(228) = 1115\nlocales(229) = 1116\nlocales(230) = 1117\nlocales(231) = 1118\nlocales(232) = 1119\nlocales(233) = 1120\nlocales(234) = 1121\nlocales(235) = 1122\nlocales(236) = 1123\nlocales(237) = 1124\nlocales(238) = 1125\nlocales(239) = 1126\nlocales(240) = 1127\nlocales(241) = 1128\nlocales(242) = 1129\nlocales(243) = 1130\nlocales(244) = 1131\nlocales(245) = 1132\nlocales(246) = 1133\nlocales(247) = 1134\nlocales(248) = 1135\nlocales(249) = 1136\nlocales(250) = 1137\nlocales(251) = 1138\nlocales(252) = 1139\nlocales(253) = 1140\nlocales(254) = 1141\nlocales(255) = 1142\nlocales(256) = 1143\nlocales(257) = 1144\nlocales(258) = 1145\nlocales(259) = 1146\nlocales(260) = 1148\nlocales(261) = 1150\nlocales(262) = 1152\nlocales(263) = 1153\nlocales(264) = 1154\nlocales(265) = 1155\nlocales(266) = 1156\nlocales(267) = 1157\nlocales(268) = 1158\nlocales(269) = 1159\nlocales(270) = 1160\nlocales(271) = 1164\nlocales(272) = 1169\nlocales(273) = 1170\nlocales(274) = 1281\nlocales(275) = 1534\nlocales(276) = 2048\nlocales(277) = 2049\nlocales(278) = 2051\nlocales(279) = 2052\nlocales(280) = 2055\nlocales(281) = 2057\nlocales(282) = 2058\nlocales(283) = 2060\nlocales(284) = 2064\nlocales(285) = 2067\nlocales(286) = 2068\nlocales(287) = 2070\nlocales(288) = 2072\nlocales(289) = 2073\nlocales(290) = 2074\nlocales(291) = 2077\nlocales(292) = 2080\nlocales(293) = 2092\nlocales(294) = 2094\nlocales(295) = 2098\nlocales(296) = 2107\nlocales(297) = 2108\nlocales(298) = 2110\nlocales(299) = 2115\nlocales(300) = 2117\nlocales(301) = 2118\nlocales(302) = 2121\nlocales(303) = 2128\nlocales(304) = 2137\nlocales(305) = 2141\nlocales(306) = 2143\nlocales(307) = 2144\nlocales(308) = 2145\nlocales(309) = 2151\nlocales(310) = 2155\nlocales(311) = 2163\nlocales(312) = 2305\nlocales(313) = 2559\nlocales(314) = 3072\nlocales(315) = 3073\nlocales(316) = 3076\nlocales(317) = 3079\nlocales(318) = 3081\nlocales(319) = 3082\nlocales(320) = 3084\nlocales(321) = 3098\nlocales(322) = 3131\nlocales(323) = 3152\nlocales(324) = 3153\nlocales(325) = 3179\nlocales(326) = 4096\nlocales(327) = 4097\nlocales(328) = 4100\nlocales(329) = 4103\nlocales(330) = 4105\nlocales(331) = 4106\nlocales(332) = 4108\nlocales(333) = 4122\nlocales(334) = 4155\nlocales(335) = 4191\nlocales(336) = 5121\nlocales(337) = 5124\nlocales(338) = 5127\nlocales(339) = 5129\nlocales(340) = 5130\nlocales(341) = 5132\nlocales(342) = 5146\nlocales(343) = 5179\nlocales(344) = 6145\nlocales(345) = 6153\nlocales(346) = 6154\nlocales(347) = 6156\nlocales(348) = 6170\nlocales(349) = 6203\nlocales(350) = 7169\nlocales(351) = 7177\nlocales(352) = 7178\nlocales(353) = 7180\nlocales(354) = 7194\nlocales(355) = 7227\nlocales(356) = 8192\nlocales(357) = 8193\nlocales(358) = 8201\nlocales(359) = 8202\nlocales(360) = 8204\nlocales(361) = 8218\nlocales(362) = 8251\nlocales(363) = 9216\nlocales(364) = 9217\nlocales(365) = 9225\nlocales(366) = 9226\nlocales(367) = 9228\nlocales(368) = 9242\nlocales(369) = 9275\nlocales(370) = 10240\nlocales(371) = 10241\nlocales(372) = 10249\nlocales(373) = 10250\nlocales(374) = 10252\nlocales(375) = 10266\nlocales(376) = 11264\nlocales(377) = 11265\nlocales(378) = 11273\nlocales(379) = 11274\nlocales(380) = 11276\nlocales(381) = 11290\nlocales(382) = 12288\nlocales(383) = 12289\nlocales(384) = 12297\nlocales(385) = 12298\nlocales(386) = 12300\nlocales(387) = 12314\nlocales(388) = 13312\nlocales(389) = 13313\nlocales(390) = 13321\nlocales(391) = 13322\nlocales(392) = 13324\nlocales(393) = 14336\nlocales(394) = 14337\nlocales(395) = 14345\nlocales(396) = 14346\nlocales(397) = 14348\nlocales(398) = 15360\nlocales(399) = 15361\nlocales(400) = 15369\nlocales(401) = 15370\nlocales(402) = 15372\nlocales(403) = 16384\nlocales(404) = 16385\nlocales(405) = 16393\nlocales(406) = 16394\nlocales(407) = 17408\nlocales(408) = 17417\nlocales(409) = 17418\nlocales(410) = 18432\nlocales(411) = 18441\nlocales(412) = 18442\nlocales(413) = 19456\nlocales(414) = 19465\nlocales(415) = 19466\nlocales(416) = 20490\nlocales(417) = 21514\nlocales(418) = 22538\nlocales(419) = 23562\nlocales(420) = 25626\nlocales(421) = 26650\nlocales(422) = 27674\nlocales(423) = 28698\nlocales(424) = 28731\nlocales(425) = 29740\nlocales(426) = 29755\nlocales(427) = 30724\nlocales(428) = 30740\nlocales(429) = 30746\nlocales(430) = 30764\nlocales(431) = 30779\nlocales(432) = 30787\nlocales(433) = 30800\nlocales(434) = 30813\nlocales(435) = 30815\nlocales(436) = 31748\nlocales(437) = 31764\nlocales(438) = 31770\nlocales(439) = 31784\nlocales(440) = 31790\nlocales(441) = 31803\nlocales(442) = 31811\nlocales(443) = 31814\nlocales(444) = 31824\nlocales(445) = 31833\nlocales(446) = 31836\nlocales(447) = 31837\nlocales(448) = 31839\nlocales(449) = 31847\nlocales(450) = 31848\nlocales(451) = 31878\nlocales(452) = 31890\nlocales(453) = 65663\nlocales(454) = 66567\nlocales(455) = 66574\nlocales(456) = 66615\nlocales(457) = 133124\nlocales(458) = 135172\nlocales(459) = 136196\nlocales(460) = 197636\nlocales(461) = 263172\nlocales(462) = 263185\nlocales(463) = 265220\nlocales(464) = 267268\nlocales(465) = 329732\nlocales(466) = 331780\nsignature = ChrW(&H20AC&) & ChrW(&H410&) & ChrW(&H391&) & ChrW(&H5D0&) & ChrW(&H627&) & ChrW(&HE01&) & ChrW(&H11E&) & ChrW(&H104&) & ChrW(&H100&) & ChrW(&H1EAE&) & ChrW(&H3042&) & ChrW(&HAC00&) & ChrW(&H6C49&) & ChrW(&H6F22&)\nFor i = 0 To 127\nbytes(i) = i + 128\nNext i\nFor i = 0 To 466\nrows(i * 2) = CStr(locales(i)) & \".E:\" & Action(signature, 2, locales(i))\nrows(i * 2 + 1) = CStr(locales(i)) & \".D:\" & Action(bytes, 1, locales(i))\nNext i\nProbe = Join(rows, \";\")\nEnd Function\nPrivate Function Action(ByVal value As Variant, ByVal operation As Long, ByVal locale As Long) As String\nOn Error GoTo Failed\nDim result As Variant\nSelect Case operation\nCase 1: result = StrConv(value, vbUnicode, locale)\nCase 2: result = StrConv(value, vbFromUnicode, locale)\nEnd Select\nIf IsNull(result) Then\nAction = \"NULL\"\nElseIf IsArray(result) Then\nAction = \"A|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|L\" & CStr(Len(CStr(result))) & \"B\" & CStr(LenB(CStr(result))) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElseIf VarType(result) = vbString Then\nAction = \"S|L\" & CStr(Len(result)) & \"B\" & CStr(LenB(result)) & \"U\" & Units(CStr(result)) & \"R\" & RawBytes(CStr(result))\nElse\nAction = \"N|\" & TypeName(result) & \"|\" & CStr(VarType(result)) & \"|\" & CStr(result)\nEnd If\nExit Function\nFailed:\nAction = \"ERR|\" & CStr(Err.Number)\nEnd Function\nPrivate Function Units(ByVal value As String) As String\nDim i As Long\nFor i = 1 To Len(value)\nUnits = Units & Right$(\"0000\" & Hex$(AscW(Mid$(value, i, 1)) And &HFFFF&), 4)\nNext i\nEnd Function\nPrivate Function RawBytes(ByVal value As String) As String\nDim i As Long\nFor i = 1 To LenB(value)\nRawBytes = RawBytes & Right$(\"00\" & Hex$(AscB(MidB$(value, i, 1))), 2)\nNext i\nEnd Function\n").unwrap();
+        let mut book = workbook();
+        let mut host = WorkbookHost::new(&mut book,0).unwrap();
+        host.automation_code_page = Some(AnsiCodePage::Japanese);
+        host.error_language = ErrorLanguage::Japanese;
+        let result = Runtime::new(&module).with_host(&mut host)
+            .with_error_environment(ErrorEnvironment {language:ErrorLanguage::Japanese,help_file:String::new()})
+            .with_limits(50_000_000,64).call("Probe",vec![]).unwrap();
+        let Value::String(actual) = result else {panic!("expected ASCII Native observations")};
+        assert_eq!(actual.split(';').count(),934);
+        assert_eq!(format!("{:x}",sha2::Sha256::digest(actual.as_bytes())),"c351ffb5722d7dc94b567aa57f7ca7fc15b9107c86116ca02ed6ce8aeca90f88");
     }
 
     #[test]

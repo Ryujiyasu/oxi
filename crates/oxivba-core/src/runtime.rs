@@ -69,6 +69,8 @@ pub enum Value {
     String(String),
     /// BSTR contents containing unpaired UTF-16 units. Never decoded lossily.
     Utf16(Vec<u16>),
+    /// A BSTR with an odd byte length. The final byte is part of the value.
+    ByteString(Vec<u8>),
     /// A null BSTR, distinct from an allocated zero-length string.
     NullString,
     Array(ArrayValue),
@@ -247,6 +249,13 @@ pub struct HostEventResult {
 }
 
 pub trait Host {
+    /// Encode complete UTF-16 units using the system ANSI page (`None`) or
+    /// the requested conversion locale (`Some(0)` means the user locale).
+    fn encode_ansi(&self, _units: &[u16], _locale: Option<i64>) -> Option<Vec<u8>> { None }
+
+    /// Decode raw ANSI bytes, preserving embedded NULs and incomplete leads.
+    fn decode_ansi(&self, _bytes: &[u8], _locale: Option<i64>) -> Option<Vec<u16>> { None }
+
     /// Successfully bound source modules in the identified code project.
     /// Called before procedure execution; storage initialization is independent.
     fn project_modules_compiled(&mut self, _project: u64, _modules: &BTreeSet<String>) {}
@@ -4564,13 +4573,18 @@ impl<'a> Runtime<'a> {
                 }
                 None => Value::Empty,
             };
-            let result_slot = VariableSlot::new(starting);
-            result_slot.set_declared(procedure.return_type.as_ref().map(|kind| kind.name.as_str()).unwrap_or("Variant"));
+            let result_slot = if let Some(kind) = procedure.return_type.as_ref().filter(|kind|kind.is_array) {
+                array_result_slot(starting, &kind.name)
+            } else {
+                let slot = VariableSlot::new(starting);
+                slot.set_declared(procedure.return_type.as_ref().map(|kind| kind.name.as_str()).unwrap_or("Variant"));
+                slot
+            };
             frame.values.insert(frame.procedure_name.clone(), result_slot);
             if procedure
                 .return_type
                 .as_ref()
-                .is_none_or(|type_name| type_name.name.eq_ignore_ascii_case("variant"))
+                .is_none_or(|type_name| !type_name.is_array && type_name.name.eq_ignore_ascii_case("variant"))
             {
                 frame.variants.insert(frame.procedure_name.clone());
             }
@@ -4647,6 +4661,7 @@ impl<'a> Runtime<'a> {
                 .map(|value| value.borrow().clone())
                 .unwrap_or(Value::Empty);
             match procedure.return_type.as_ref() {
+                Some(return_type) if return_type.is_array => value,
                 Some(return_type) => {
                     self.coerce_runtime(value, &return_type.name, procedure.span.line, self.this_year())?
                 }
@@ -6137,7 +6152,7 @@ impl<'a> Runtime<'a> {
         Some(match (name.to_ascii_lowercase().as_str(), args) {
             ("curdir" | "curdir$", []) => self.files.current_directory(None).map(Value::String).map_err(failure),
             ("curdir" | "curdir$", [drive]) => match drive {
-                Value::String(_) | Value::Utf16(_) | Value::NullString => text(drive).map_err(mismatch)
+                Value::String(_) | Value::Utf16(_) | Value::ByteString(_) | Value::NullString => text(drive).map_err(mismatch)
                     .and_then(|drive| self.files.current_directory(Some(&drive)).map(Value::String).map_err(failure)),
                 _ => Err(mismatch("CurDir requires a String drive".to_string())),
             },
@@ -8582,6 +8597,18 @@ impl<'a> Runtime<'a> {
                     Some(width) => coerce_string_width(value, width, Some(line))?,
                     None => value,
                 };
+                // A declared Byte SAFEARRAY accepts the String's raw bytes,
+                // including an odd last byte. The array variable keeps its
+                // declared type; Null/Empty/Error must fail without replacing
+                // the existing allocation. A Variant merely holding an array
+                // has no array declaration and remains free to change type.
+                if let Some(slot) = self.lookup_slot(frame, name) {
+                    if slot.array_declared.borrow().is_some() && !matches!(value, Value::Array(_)) {
+                        let byte_array = matches!(&*slot.borrow(), Value::Array(a)
+                            if matches!(a.element_default.as_ref(), Value::Byte(_)));
+                        value = utf16::array_storage(value, byte_array, Some(line))?;
+                    }
+                }
                 if implicit_variant || self.is_variant_variable(frame, name) {
                     if let Value::Array(array) = &mut value {
                         array.resizable = true;
@@ -10265,6 +10292,11 @@ impl<'a> Runtime<'a> {
             && matches!(args.as_slice(), [Value::Object(object)] if self.disconnected_source_object(object))
         {
             return Ok(Value::String("Object".into()));
+        }
+        if let Some(result) = utf16::ansi_builtin(
+            name, read_args.as_deref().unwrap_or(&args), line, self.host.as_deref(),
+        ) {
+            return result;
         }
         if let Some(result) = call_builtin(
             name,
@@ -13402,9 +13434,16 @@ pub(crate) fn call_builtin(
     if !is_builtin_function(&name) {
         return None;
     }
+    if let Some(converted) = utf16::byte_array_arguments(&name, args, line) {
+        return match converted {
+            Ok(values) => call_builtin(&name, &values, line, option_compare_text, this_year),
+            Err(error) => Some(Err(error)),
+        };
+    }
     Some((|| {
+        if let Some(result)=utf16::ansi_builtin(&name,args,line,None){return result;}
         if let Some(result)=utf16::builtin(&name,args,line,option_compare_text){return result;}
-        if args.len()==1 && matches!(args[0],Value::Nothing) && matches!(name.as_str(),"cdec"|"cint"|"clng"|"clnglng"|"clngptr"|"cbyte"|"cbool"|"csng"|"cdbl"|"ccur"|"cdate"|"cstr") {
+        if args.len()==1 && matches!(args[0],Value::Nothing) && matches!(name.as_str(),"cdec"|"cint"|"clng"|"clnglng"|"clngptr"|"cbyte"|"cbool"|"csng"|"cdbl"|"ccur"|"cdate"|"cstr"|"val") {
             return Err(error(RuntimeErrorKind::ObjectVariableNotSet,"object variable is Nothing",line));
         }
 
@@ -13418,7 +13457,7 @@ pub(crate) fn call_builtin(
             name.as_str(),
             "monthname" | "str" | "strconv" | "weekdayname"
         ) {
-            return call_text_conversion_builtin(&name, args, line);
+            return call_text_conversion_builtin(&name, args, line, None);
         }
         if matches!(
             name.as_str(),
@@ -14288,6 +14327,7 @@ pub(crate) fn call_builtin(
                         .map_err(|message| invalid_procedure_call(message, line))?;
                     Ok(Value::String(general_date(parts)))
                 }
+                Value::Array(_) => byte_array_string(value, line).unwrap_or_else(||Err(error(RuntimeErrorKind::TypeMismatch,"type mismatch converting array to String",line))),
                 _ => Ok(Value::String(text(value).map_err(mismatch)?)),
             },
             "cvar" => Ok(value.clone()),
@@ -14352,8 +14392,7 @@ pub(crate) fn call_builtin(
             },
             "lenb" => match value {
                 Value::Null => Ok(Value::Null),
-                // A `Byte()` array -- what `StrConv(s, vbFromUnicode)` hands
-                // back -- answers its byte count. Every other string answers
+                // A `Byte()` array answers its byte count. Ordinary strings answer
                 // twice its UTF-16 length, the two bytes VBA holds each unit
                 // in. (`LenB("ab")` is 4; `LenB(StrConv("ab", vbFromUnicode))`
                 // is 2.)
@@ -15102,6 +15141,7 @@ fn call_text_conversion_builtin(
     name: &str,
     args: &[Value],
     line: Option<u32>,
+    host: Option<&dyn Host>,
 ) -> Result<Value, RuntimeError> {
     let count_error = || {
         error(
@@ -15221,9 +15261,7 @@ fn call_text_conversion_builtin(
             // falls on is per function -- `Val(Null)` and `Space(Null)` raise
             // 94 while `Len(Null)` and `Abs(Null)` pass it along.
             let conversion = integer_argument(&args[1], line)?;
-            if let Some(locale) = args.get(2) {
-                integer_argument(locale, line)?;
-            }
+            let locale = args.get(2).map(|v| integer_argument(v, line)).transpose()?.unwrap_or(0);
             if matches!(args[0], Value::Null) {
                 return Ok(Value::Null);
             }
@@ -15240,12 +15278,24 @@ fn call_text_conversion_builtin(
                     line,
                 ));
             }
-            // vbUnicode (64): the input is the `Byte()` array a former
-            // vbFromUnicode handed out; read it back to text.
+            let value = byte_array_string(&args[0], line).transpose()?.unwrap_or_else(|| args[0].clone());
+            // These modes cross the ANSI/UTF-16 boundary on the String's
+            // actual bytes. FromUnicode still returns a String BSTR, including
+            // an odd last byte; it does not return a Byte SAFEARRAY.
             if conversion & 64 != 0 {
-                return Ok(Value::String(ansi_bytes_to_text(&args[0]).map_err(mismatch)?));
+                let raw = match value.string_bytes() {
+                    Some(bytes) => bytes.into_owned(),
+                    None => utf16::units(&value, line)?.into_iter().flat_map(u16::to_le_bytes).collect(),
+                };
+                return utf16::decode_ansi(host, &raw, Some(locale), line).map(Value::from_utf16);
             }
-            let mut value = text(&args[0]).map_err(mismatch)?;
+            if conversion & 128 != 0 {
+                let units = utf16::units(&value, line)?;
+                return utf16::encode_ansi(host, &units, Some(locale), line).map(Value::from_bstr_bytes);
+            }
+            // The same String coercion rejects Error variants and Nothing.
+            utf16::units(&value, line)?;
+            let mut value = text(&value).map_err(mismatch)?;
             if conversion & 4 != 0 {
                 value = convert_width_unicode(&value, true);
             }
@@ -15264,14 +15314,6 @@ fn call_text_conversion_builtin(
                 3 => proper_case(&value),
                 _ => unreachable!(),
             };
-            // vbFromUnicode (128): hand back the ANSI bytes as the `Byte()`
-            // array VBA returns. On this (Western) host each character is one
-            // byte -- the codepage's default `?` where it cannot be spelt --
-            // so the array's LenB is the character count. Measured against
-            // Excel: a three-character string of one unmappable char yields three bytes.
-            if conversion & 128 != 0 {
-                return Ok(ansi_byte_array(&value));
-            }
             Ok(Value::String(value))
         }
         _ => unreachable!(),
@@ -15293,45 +15335,6 @@ fn optional_boolean(
         Some(value) => {
             truthy(value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))
         }
-    }
-}
-
-/// The `Byte()` array `StrConv(s, vbFromUnicode)` returns: one ANSI byte per
-/// character, the codepage's default `?` (0x3F) where a character has no place
-/// in it. Zero-based, as VBA's is.
-fn ansi_byte_array(value: &str) -> Value {
-    let values: Vec<Value> = value
-        .chars()
-        .map(|character| Value::Byte(u8::try_from(character as u32).unwrap_or(b'?')))
-        .collect();
-    Value::Array(ArrayValue {
-        dimensions: vec![ArrayDimension {
-            lower_bound: 0,
-            length: values.len(),
-        }],
-        values,
-        element_default: Box::new(Value::Byte(0)),
-        resizable: true,
-    })
-}
-
-/// The inverse, for `StrConv(bytes, vbUnicode)`: read a `Byte()` array back to
-/// text, one character per byte.
-fn ansi_bytes_to_text(value: &Value) -> Result<String, String> {
-    match value {
-        Value::Array(array) => array
-            .values
-            .iter()
-            .map(|element| match element {
-                Value::Byte(byte) => Ok(char::from(*byte)),
-                _ => u8::try_from(number(element).map_err(|_| {
-                    "StrConv(..., vbUnicode) expects a byte array".to_string()
-                })? as i64)
-                .map(char::from)
-                .map_err(|_| "StrConv(..., vbUnicode) byte out of range".to_string()),
-            })
-            .collect(),
-        _ => Err("StrConv(..., vbUnicode) expects a byte array".to_string()),
     }
 }
 
@@ -15375,22 +15378,7 @@ fn proper_case(value: &str) -> String {
 /// ("①","1",1) and ("²","2",1) are 0; ("ß","st",1) is -1; ("a-b","ab",1),
 /// ("co-op","coop",1) and ("-","",1) are 1.
 fn text_collate(left: &str, right: &str) -> std::cmp::Ordering {
-    let (left, right) = (collation_spelling(left, true), collation_spelling(right, true));
-    let passed = |character: &char| matches!(character, '-' | '\'');
-    let primary = |value: &str| value.chars().filter(|character| !passed(character)).collect::<String>();
-    // A letter with an accent sorts with its own letter, the accent only
-    // breaking a tie: measured, StrComp("é", "f", 1) and ("ée", "ef") are -1
-    // while StrComp("é", "e", 1) is 1, and ø, å, ü, ñ, ç, ÿ go the same way.
-    let base = |value: &str| value.chars().filter(|character| !passed(character)).map(latin_base_letter).collect::<String>();
-    base(&left)
-        .encode_utf16()
-        .cmp(base(&right).encode_utf16())
-        .then_with(|| primary(&left).encode_utf16().cmp(primary(&right).encode_utf16()))
-        .then_with(|| {
-            let count = |value: &str| value.chars().filter(passed).count();
-            count(&left).cmp(&count(&right))
-        })
-        .then_with(|| left.encode_utf16().cmp(right.encode_utf16()))
+    utf16::text_order(&left.encode_utf16().collect::<Vec<_>>(), &right.encode_utf16().collect::<Vec<_>>())
 }
 
 /// The plain letter an accented Latin letter is sorted with (Latin-1 and
@@ -17125,6 +17113,7 @@ fn value_date_serial(value: &Value, this_year: i64) -> Result<f64, String> {
             }
         }
         Value::String(value) => parse_date_text(value, this_year)?,
+        Value::ByteString(_) => bstr_date(value, this_year)?,
         Value::Empty => 0.0,
         Value::Null => return Err("invalid use of Null".to_string()),
         _ => return Err("value cannot be converted to a Date".to_string()),
@@ -17867,91 +17856,6 @@ fn call_string_builtin(
                 _ => unreachable!(),
             }))
         }
-        // The byte forms, on the string's UTF-16 bytes, two to a
-        // character. Measured: LenB("abc") 6, LeftB("abc",2) "a",
-        // RightB("abc",2) "c", MidB("abcd",3,2) "b", InStrB("abc","c") 5,
-        // AscB("A") 65.
-        "lenb" | "leftb" | "rightb" | "midb" | "instrb" | "ascb" => {
-            let text_of = |value: &Value| nullable_text(value);
-            let bytes_to_units = |n: i64| usize::try_from(n.max(0) / 2).unwrap_or(0);
-            // A cut at an odd byte pairs the bytes afresh: measured,
-            // AscB(MidB("abc", 2)) is 0, the high byte of the a. A last byte
-            // left over has no unit of its own to live in and is dropped.
-            let bytes_of = |value: &str| value.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
-            let paired = |bytes: &[u8]| {
-                String::from_utf16_lossy(&bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect::<Vec<_>>())
-            };
-            match name {
-                "lenb" => {
-                    if args.len() != 1 {
-                        return Err(wrong_count("1 argument"));
-                    }
-                    let Some(value) = text_of(&args[0])? else { return Ok(Value::Null) };
-                    Ok(Value::Integer(2 * value.encode_utf16().count() as i64))
-                }
-                "ascb" => {
-                    if args.len() != 1 {
-                        return Err(wrong_count("1 argument"));
-                    }
-                    let value = text_of(&args[0])?.ok_or_else(|| invalid_null(line))?;
-                    let unit = value.encode_utf16().next().ok_or_else(|| {
-                        invalid_procedure_call("AscB requires a non-empty String".to_string(), line)
-                    })?;
-                    Ok(Value::Int16((unit & 0xFF) as i16))
-                }
-                "leftb" | "rightb" => {
-                    if args.len() != 2 {
-                        return Err(wrong_count("2 arguments"));
-                    }
-                    let Some(value) = text_of(&args[0])? else { return Ok(Value::Null) };
-                    let bytes = bytes_of(&value);
-                    let length = usize::try_from(integer_argument(&args[1], line)?.max(0)).unwrap_or(0).min(bytes.len());
-                    let selected = if name == "leftb" { &bytes[..length] } else { &bytes[bytes.len() - length..] };
-                    Ok(Value::String(paired(selected)))
-                }
-                "midb" => {
-                    if !(2..=3).contains(&args.len()) {
-                        return Err(wrong_count("2 or 3 arguments"));
-                    }
-                    let Some(value) = text_of(&args[0])? else { return Ok(Value::Null) };
-                    let start = integer_argument(&args[1], line)?;
-                    if start < 1 {
-                        return Err(invalid_procedure_call("String position must be positive".to_string(), line));
-                    }
-                    let bytes = bytes_of(&value);
-                    let from = usize::try_from(start - 1).unwrap_or(0).min(bytes.len());
-                    let length = match args.get(2) {
-                        Some(argument) => usize::try_from(integer_argument(argument, line)?.max(0)).unwrap_or(0).min(bytes.len() - from),
-                        None => bytes.len() - from,
-                    };
-                    Ok(Value::String(paired(&bytes[from..from + length])))
-                }
-                _ => {
-                    // InStrB([start,] string1, string2): a byte position.
-                    if !(2..=3).contains(&args.len()) {
-                        return Err(wrong_count("2 or 3 arguments"));
-                    }
-                    let (start, source, needle) = if args.len() == 3 {
-                        (integer_argument(&args[0], line)?, &args[1], &args[2])
-                    } else {
-                        (1, &args[0], &args[1])
-                    };
-                    let (Some(source), Some(needle)) = (text_of(source)?, text_of(needle)?) else {
-                        return Ok(Value::Null);
-                    };
-                    if start < 1 {
-                        return Err(invalid_procedure_call("String position must be positive".to_string(), line));
-                    }
-                    let (hay, find) = (source.encode_utf16().collect::<Vec<_>>(), needle.encode_utf16().collect::<Vec<_>>());
-                    let from = bytes_to_units(start - 1);
-                    if find.is_empty() {
-                        return Ok(Value::Integer(if from <= hay.len() { start } else { 0 }));
-                    }
-                    let found = (from..hay.len().saturating_sub(find.len() - 1)).find(|at| hay[*at..*at + find.len()] == find[..]);
-                    Ok(Value::Integer(found.map_or(0, |at| 2 * at as i64 + 1)))
-                }
-            }
-        }
         // Environ: nothing is set in a browser, so every name reads "".
         "environ" | "environ$" => {
             if args.len() != 1 {
@@ -17980,7 +17884,7 @@ fn call_string_builtin(
             }
             Ok(Value::String("C:\\".to_string()))
         }
-        "asc" | "ascw" => {
+        "ascw" => {
             if args.len() != 1 {
                 return Err(wrong_count("1 argument"));
             }
@@ -17989,36 +17893,14 @@ fn call_string_builtin(
             let unit = value.encode_utf16().next().ok_or_else(|| {
                 invalid_procedure_call(format!("{name} requires a non-empty String"), line)
             })?;
-            // `AscW` hands back the UTF-16 unit as a SIGNED sixteen bits, so
-            // 65535 answers -1. `Asc` is not that: it puts the character
-            // through the host's ANSI code page first, and anything that does
-            // not fit comes back as 63, the question mark. Measured against
-            // Excel: `Asc(ChrW(300))`, `Asc(ChrW(32767))` and
-            // `Asc(ChrW(65535))` are all 63, where AscW gives 300, 32767
-            // and -1.
-            //
-            // WHICH characters fit is the code page's business and so depends
-            // on the machine -- the second thing on this surface that does,
-            // after the text of an Error variant. Single-byte range and
-            // nothing else is the en-US reading, and the only one available in
-            // a browser.
-            let value = if name == "ascw" {
-                unit as i16
-            } else if unit < 256 {
-                unit as i16
-            } else {
-                63
-            };
-            Ok(Value::Int16(value))
+            Ok(Value::Int16(unit as i16))
         }
-        "chr" | "chrw" => {
+        "chrw" => {
             if args.len() != 1 {
                 return Err(wrong_count("1 argument"));
             }
             let value = integer_argument(&args[0], line)?;
-            let valid = (name == "chrw" && (-32_768..=65_535).contains(&value))
-                || (name == "chr" && (0..=255).contains(&value));
-            let unit = if valid {
+            let unit = if (-32_768..=65_535).contains(&value) {
                 value as u16
             } else {
                 return Err(invalid_procedure_call(
@@ -18171,10 +18053,10 @@ fn call_string_builtin(
                 return Err(wrong_count("2 to 4 arguments"));
             }
             let Some(source) = nullable_text(&args[0])? else {
-                return Ok(Value::Null);
+                return Err(invalid_null(line));
             };
             let Some(needle) = nullable_text(&args[1])? else {
-                return Ok(Value::Null);
+                return Err(invalid_null(line));
             };
             let source = source.encode_utf16().collect::<Vec<_>>();
             let needle = needle.encode_utf16().collect::<Vec<_>>();
@@ -18307,6 +18189,9 @@ fn call_string_builtin(
             let Value::Array(array) = &args[0] else {
                 return Err(mismatch("Join requires an array".to_string()));
             };
+            if matches!(array.element_default.as_ref(), Value::Byte(_)) {
+                return Err(invalid_procedure_call("Join does not accept a Byte array".into(), line));
+            }
             if array.dimensions.len() != 1 {
                 return Err(mismatch(
                     "Join requires a one-dimensional array".to_string(),
@@ -18342,36 +18227,6 @@ fn call_string_builtin(
                 ));
             }
             Ok(Value::String(" ".repeat(length)))
-        }
-        "string" => {
-            if args.len() != 2 {
-                return Err(wrong_count("2 arguments"));
-            }
-            let length = nonnegative_length(&args[0], line)?;
-            if length > 1_000_000 {
-                return Err(error(
-                    RuntimeErrorKind::Overflow,
-                    "String result exceeds the browser runtime limit",
-                    line,
-                ));
-            }
-            let character = match &args[1] {
-                // Measured: `String(2, Null)` is Null.
-                Value::Null => return Ok(Value::Null),
-                Value::String(value) => value.chars().next().ok_or_else(|| {
-                    invalid_procedure_call("String requires a character".to_string(), line)
-                })?,
-                value => {
-                    let code = integer_argument(value, line)?;
-                    // The code is an Integer: measured, a Date (36532) is
-                    // error 6.
-                    if !(-32_768..=32_767).contains(&code) {
-                        return Err(error(RuntimeErrorKind::Overflow, "overflow", line));
-                    }
-                    char::from_u32((code & 0xff) as u32).unwrap_or('\u{fffd}')
-                }
-            };
-            Ok(Value::String(character.to_string().repeat(length)))
         }
         _ => unreachable!(),
     }
@@ -18862,7 +18717,7 @@ fn element_type_name(default: &Value) -> Option<&'static str> {
         Value::Date(_) => "date",
         Value::Boolean(_) => "boolean",
         Value::Nothing => "object",
-        Value::String(_) | Value::Utf16(_) | Value::NullString => "string",
+        Value::String(_) | Value::Utf16(_) | Value::ByteString(_) | Value::NullString => "string",
         _ => return None,
     })
 }
@@ -18902,9 +18757,32 @@ pub fn coerce_automation_scalar(value: &Value, target: AutomationScalarType) -> 
     }.map_err(|_| host_error(13, "Type mismatch"))
 }
 
+#[inline(never)]
+fn array_result_slot(element: Value, declared: &str) -> ValueSlot {
+    let slot = VariableSlot::new(Value::Array(ArrayValue {
+        dimensions: Vec::new(), values: Vec::new(), element_default: Box::new(element), resizable: true,
+    }));
+    slot.set_array_declared(declared);
+    slot
+}
+
+fn byte_array_string(value: &Value, line: Option<u32>) -> Option<Result<Value, RuntimeError>> {
+    let Value::Array(array) = value else { return None; };
+    if !matches!(array.element_default.as_ref(), Value::Byte(_)) || array.dimensions.len() > 1 { return None; }
+    if array.dimensions.is_empty() { return Some(Ok(Value::NullString)); }
+    let bytes = array.values.iter().map(|v| match v {
+        Value::Byte(byte) => Ok(*byte),
+        _ => Err(error(RuntimeErrorKind::TypeMismatch, "invalid Byte array element", line)),
+    }).collect::<Result<Vec<_>, _>>();
+    Some(bytes.map(Value::from_bstr_bytes))
+}
+
 pub(crate) fn coerce_declared(value: Value, declared: &str, line: u32, this_year: i64) -> Result<Value, RuntimeError> {
     let lower = declared.to_ascii_lowercase();
     if lower=="string" && value.is_string() {return Ok(value);}
+    if lower == "string" {
+        if let Some(converted) = byte_array_string(&value, Some(line)) { return converted; }
+    }
     // No typed variable holds a Null: measured, `x = Null` into a Byte,
     // Integer, Long, LongLong, Single, Double, Currency, Date, Boolean or
     // String is error 94 and the variable keeps what it had.
@@ -18975,7 +18853,7 @@ pub(crate) fn coerce_declared(value: Value, declared: &str, line: u32, this_year
             return Ok(Value::Boolean(match &value {
                 Value::Boolean(value) => *value,
                 // "True" and "False" read as themselves, as CBool reads them.
-                Value::String(_) | Value::Utf16(_) | Value::NullString => truthy(&value)
+                Value::String(_) | Value::Utf16(_) | Value::ByteString(_) | Value::NullString => truthy(&value)
                     .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))?,
                 Value::Int16(_)
                 | Value::Byte(_)
@@ -19100,7 +18978,7 @@ fn value_type_name(value: &Value) -> String {
         Value::Decimal(_) => "Decimal".to_string(),
         Value::Date(_) => "Date".to_string(),
         Value::Error(_) => "Error".to_string(),
-        Value::String(_) | Value::Utf16(_) | Value::NullString => "String".to_string(),
+        Value::String(_) | Value::Utf16(_) | Value::ByteString(_) | Value::NullString => "String".to_string(),
         // An array is named for what it holds: measured, `Split` gives
         // String(), and a Long array handed round in a Variant is Long().
         Value::Array(array) => match array.element_default.as_ref() {
@@ -19129,7 +19007,7 @@ fn value_var_type(value: &Value) -> i64 {
         Value::Date(_) => 7,
         Value::Byte(_) => 17,
         Value::Error(_) => 10,
-        Value::String(_) | Value::Utf16(_) | Value::NullString => 8,
+        Value::String(_) | Value::Utf16(_) | Value::ByteString(_) | Value::NullString => 8,
         Value::Object(_) | Value::Nothing => 9,
         Value::Boolean(_) => 11,
         Value::Array(array) => {
@@ -19161,6 +19039,7 @@ fn argument_count_error(procedure: &Procedure, received: usize, line: Option<u32
 fn number(value: &Value) -> Result<f64, String> {
     match value {
         Value::Utf16(_) | Value::NullString => Err("type mismatch converting String to number".into()),
+        Value::ByteString(_) => bstr_number(value),
         Value::Empty | Value::Boolean(false) => Ok(0.0),
         Value::Boolean(true) => Ok(-1.0),
         Value::Int16(value) => Ok(*value as f64),
@@ -19204,6 +19083,7 @@ fn reads_as_a_number(value: &Value) -> bool {
         Value::Empty | Value::Boolean(_) | Value::Decimal(_) => true,
         Value::Date(_) => false,
         Value::String(text) => numeric_text(text).is_some(),
+        Value::ByteString(_) => number(value).is_ok(),
         value => any_number(value).is_some(),
     }
 }
@@ -19294,6 +19174,7 @@ fn numeric_text(text: &str) -> Option<f64> {
 fn truthy(value: &Value) -> Result<bool, String> {
     match value {
         Value::Utf16(_) | Value::NullString => Err("type mismatch converting String to Boolean".into()),
+        Value::ByteString(_) => bstr_truthy(value),
         Value::Empty | Value::Null | Value::Boolean(false) => Ok(false),
         Value::Boolean(true) => Ok(true),
         Value::Int16(value) => Ok(*value != 0),
@@ -19462,6 +19343,16 @@ pub(crate) fn unary(op: UnaryOp, value: Value) -> Result<Value, String> {
     }
 }
 
+#[inline(never)]
+fn concat_odd_bstr(lhs:&Value,rhs:&Value)->Result<Value,(RuntimeErrorKind,String)> {
+    let side=|v:&Value|->Result<Vec<u8>,(RuntimeErrorKind,String)>{
+        if matches!(v,Value::Null){return Ok(Vec::new());}
+        if let Some(bytes)=v.string_bytes(){return Ok(bytes.into_owned());}
+        utf16::units(v,None).map(|u|u.into_iter().flat_map(u16::to_le_bytes).collect()).map_err(|e|(e.kind,e.message))
+    };
+    let mut bytes=side(lhs)?;bytes.extend(side(rhs)?);Ok(Value::from_bstr_bytes(bytes))
+}
+
 pub(crate) fn binary(
     op: BinaryOp,
     lhs: Value,
@@ -19471,12 +19362,14 @@ pub(crate) fn binary(
     use BinaryOp::*;
     if (op==Concat && !matches!(lhs,Value::Array(_)|Value::Record(_)|Value::Object(_)|Value::Nothing|Value::Error(_)|Value::Missing) && !matches!(rhs,Value::Array(_)|Value::Record(_)|Value::Object(_)|Value::Nothing|Value::Error(_)|Value::Missing)) || (op==Add && (lhs.is_string() || rhs.is_string()) && (lhs.is_string() || matches!(lhs,Value::Empty)) && (rhs.is_string() || matches!(rhs,Value::Empty))) {
         if matches!((&lhs,&rhs),(Value::Null,Value::Null)){return Ok(Value::Null);}
+        if matches!(lhs,Value::ByteString(_)) || matches!(rhs,Value::ByteString(_)) {
+            return concat_odd_bstr(&lhs,&rhs);
+        }
         let side=|v:&Value|->Result<Vec<u16>,(RuntimeErrorKind,String)>{if matches!(v,Value::Null){return Ok(Vec::new());}utf16::units(v,None).map_err(|e|(e.kind,e.message))};
         let mut a=side(&lhs)?;a.extend(side(&rhs)?);return Ok(Value::from_utf16(a));
     }
-    if matches!(op,Eq|Ne|Lt|Le|Gt|Ge) && lhs.is_string() && rhs.is_string() && (matches!(lhs,Value::Utf16(_)|Value::NullString)||matches!(rhs,Value::Utf16(_)|Value::NullString)) {
-        let a=lhs.string_units().unwrap();let b=rhs.string_units().unwrap();
-        let order=if option_compare_text {utf16::collation(&a).cmp(&utf16::collation(&b))}else{a.cmp(&b)};
+    if matches!(op,Eq|Ne|Lt|Le|Gt|Ge) && lhs.is_string() && rhs.is_string() && (matches!(lhs,Value::Utf16(_)|Value::ByteString(_)|Value::NullString)||matches!(rhs,Value::Utf16(_)|Value::ByteString(_)|Value::NullString)) {
+        let order=if option_compare_text {utf16::text_value_order(&lhs,&rhs,None).map_err(|e|(e.kind,e.message))?}else{lhs.binary_string_cmp(&rhs).unwrap()};
         return Ok(Value::Boolean(match op{Eq=>order.is_eq(),Ne=>!order.is_eq(),Lt=>order.is_lt(),Le=>!order.is_gt(),Gt=>order.is_gt(),Ge=>!order.is_lt(),_=>unreachable!()}));
     }
     if op == Is {
@@ -20509,10 +20402,33 @@ fn numeric_result(value: f64, lhs: &Value, rhs: &Value) -> Value {
     }
 }
 
+#[inline(never)]
+fn bstr_padded_text(bytes: &[u8]) -> Result<String,String> {
+    let units=bytes.chunks(2).map(|b|u16::from_le_bytes([b[0],b.get(1).copied().unwrap_or(0)])).collect::<Vec<_>>();
+    String::from_utf16(&units).map_err(|_|"BSTR contains an unpaired surrogate".to_owned())
+}
+#[inline(never)]
+fn bstr_number(value:&Value)->Result<f64,String>{
+    let spelling=text(value)?;
+    numeric_text(spelling.split('\0').next().unwrap_or(""))
+        .ok_or_else(||"type mismatch converting String to number".to_owned())
+}
+#[inline(never)]
+fn bstr_truthy(value:&Value)->Result<bool,String>{
+    let spelling=text(value)?;
+    truthy(&Value::String(spelling.split('\0').next().unwrap_or("").to_owned()))
+}
+#[inline(never)]
+fn bstr_date(value:&Value,this_year:i64)->Result<f64,String>{
+    let spelling=text(value)?;
+    parse_date_text(spelling.split('\0').next().unwrap_or(""),this_year)
+}
+
 fn text(value: &Value) -> Result<String, String> {
     Ok(match value {
         Value::NullString => String::new(),
         Value::Utf16(units) => String::from_utf16(units).map_err(|_| "UTF16 string cannot be represented as Unicode scalar text".to_string())?,
+        Value::ByteString(bytes) => bstr_padded_text(bytes)?,
         Value::Empty => String::new(),
         Value::Missing => return Err("invalid use of Missing".to_string()),
         Value::Nothing => return Err("object variable or With block variable not set".to_string()),
@@ -20665,6 +20581,7 @@ fn plain_digits(digits: &str, exponent: i32) -> String {
 fn string_width(value:&Value)->usize {value.string_units().map_or(0,|u|u.len())}
 pub(crate) fn coerce_string_width(value:Value,width:usize,line:Option<u32>)->Result<Value,RuntimeError>{
     if matches!(value,Value::Null){return Err(invalid_null(line));}
+    let value = match byte_array_string(&value, line) { Some(converted) => converted?, None => value };
     let mut units=utf16::units(&value,line)?;units.truncate(width);units.resize(width,32);
     Ok(Value::from_utf16(units))
 }
@@ -24292,10 +24209,9 @@ Private stored As Long
     fn lenb_counts_bytes_and_strconv_crosses_the_unicode_line() {
         // Measured against Excel COM on a Western-locale host: LenB of an
         // ordinary string is twice its UTF-16 length, while LenB of the
-        // Byte() array StrConv(..., vbFromUnicode) returns is the byte
-        // count -- one byte per character here, the default `?` where a
-        // character has no place in the codepage. StrConv(..., vbUnicode)
-        // reads such an array back to text.
+        // raw-byte String BSTR returned by FromUnicode has one byte per ANSI
+        // character here, including an odd last byte. Unicode decodes those
+        // actual bytes back to ordinary UTF-16 string data.
         let value = run(
             "Public Function ByteWidths() As String\n\
                ByteWidths = LenB(\"ab\") & \"|\" & LenB(\"\u{3042}\") & \"|\"\n\
