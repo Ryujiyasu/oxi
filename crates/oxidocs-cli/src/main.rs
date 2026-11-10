@@ -1921,6 +1921,20 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         if blank_skip && seg_text.chars().all(|c| c.is_control()) {
                             continue;
                         }
+                        // OXI_PDF_PUA_BLANK (2026-11-10, default ON, opt-out _DISABLE): a
+                        // private-use character that no face in the PDF covers is blank, as Word
+                        // draws it (its fallback face shows nothing); the stand-in face's .notdef
+                        // drew a box. zh dev creative__0f11c107: every bullet item opens with
+                        // U+F06C in DengXian -- Word's PDF shows it in Calibri with no ink, the
+                        // CLI drew «□» after each «●».
+                        if std::env::var_os("OXI_PDF_PUA_BLANK_DISABLE").is_none()
+                            && seg_text.chars().all(|c| ('\u{E000}'..='\u{F8FF}').contains(&c))
+                            && embedded_fonts.get(&seg_font).map_or(true, |f| {
+                                seg_text.chars().all(|c| !f.unicode_to_gid.contains_key(&(c as u32)))
+                            })
+                        {
+                            continue;
+                        }
                         if fx_on && effects.shadow {
                             contents.push(ContentElement::Text(TextSpan {
                                 x: sx + 1.0, y: text_y + 1.0,
