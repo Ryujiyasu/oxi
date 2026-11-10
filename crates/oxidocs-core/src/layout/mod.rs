@@ -12772,6 +12772,24 @@ cells={} pitch={:.2} text={:?}",
                             } else {
                                 hdr_h += extra_lines as f32 * lh;
                             }
+                            // OXI_HDR_LINE_TALLEST_RUN (2026-11-10, default ON, opt-out
+                            // _DISABLE): a one-line header paragraph reserves its laid-out
+                            // line, the tallest run's -- not the first visible run's ascii
+                            // face. zh dev legal__00849104: «审校日期 4/22/2021» (ascii TNR,
+                            // the CJK in SimSun 11) was priced at TNR's 12.75 while the line
+                            // itself is 14.27; Word's second header baseline sits at
+                            // 36 + 14.27 + Calibri's 10.47 = 60.74 (PDF 60.72) and the body
+                            // starts at 63.76; Oxi started it 1.5pt high on every page.
+                            // An empty paragraph keeps its mark line (the estimate prices it
+                            // with the eastAsia face: 14.5 where Word reserves 13.5).
+                            if one_lines == 1 && visible_run.is_some() && !crate::env_flag!("OXI_HDR_LINE_TALLEST_RUN_DISABLE") {
+                                let sp = para.style.space_before.unwrap_or(0.0).max(0.0)
+                                    + para.style.space_after.unwrap_or(0.0).max(0.0);
+                                let line = one - sp;
+                                if line > lh_used + 0.01 {
+                                    hdr_h += (line - lh_used) * (extra_lines + 1) as f32;
+                                }
+                            }
                             if crate::env_flag!("OXI_DBG_HDR") {
                                 let txt: String = para
                                     .runs
