@@ -46,9 +46,18 @@ pub(crate) fn select(
             }
         }
     }
+    // OXI_PMINGLIU_ALL (2026-11-11, default ON, opt-out _DISABLE): PMingLiU takes
+    // every character it has, not only Big5 ones. S1591's Big5 gate was the old
+    // truth machine's Word; `_pb_cjk_glyph_fallback2_gen.py` on the current one
+    // (Calibri docDefaults, MS Mincho base, theme Jpan ＭＳ 明朝 / 游明朝 / none):
+    // Yu Gothic when it has the character, else PMingLiU -- 专业丛东 (not Big5) as
+    // well as 丳乒乓 -- else SimSun, 8 / 8 characters per class in every arm. zh dev
+    // educational__005919f8's 报 / 讲 / 连续谱 drew in PMingLiU, Oxi's in SimSun, and
+    // each such line came out 0.7pt short.
+    let pmingliu_all = !crate::env_flag!("OXI_PMINGLIU_ALL_DISABLE");
     data.priority.iter().find(|name| {
         registry.supports_family(name)
             && data.faces.get(*name).is_some_and(|ranges| contains(ranges, cp))
-            && (name.as_str() != "PMingLiU" || contains(&data.traditional_initial, cp))
+            && (name.as_str() != "PMingLiU" || pmingliu_all || contains(&data.traditional_initial, cp))
     }).map(String::as_str)
 }

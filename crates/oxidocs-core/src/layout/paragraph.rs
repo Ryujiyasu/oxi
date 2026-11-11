@@ -3976,6 +3976,20 @@ impl<'a> ParagraphLayouter<'a> {
         } else {
             raw_spaced_tw
         };
+        // OXI_FALLBACK_EXTENT_UNSCALED: the basis is rebuilt from the first line's
+        // faces and would scale a glyph-fallback face's extent with the multiple;
+        // line_height_for_line already adds it unscaled, so take that line.
+        let raw_spaced_tw: f32 = if raw_spaced_tw > 0.0
+            && !crate::env_flag!("OXI_FALLBACK_EXTENT_UNSCALED_DISABLE")
+            && para.style.line_spacing.is_some_and(|f| f > 1.0)
+            && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+            && lines.first().is_some_and(|l| l.fragments.iter().any(|f| f.style.fallback_declared_latin.is_some()))
+            && !line_heights.is_empty()
+        {
+            line_heights[0] * 20.0
+        } else {
+            raw_spaced_tw
+        };
         // OXI_TEXT_SHADOW_LINE: the cumulative basis is rebuilt from the first
         // line's fonts, not from line_heights, so it needs the shadow growth too.
         let raw_spaced_tw: f32 = if shadow_line_scope && raw_spaced_tw > 0.0 && !lines.is_empty() {

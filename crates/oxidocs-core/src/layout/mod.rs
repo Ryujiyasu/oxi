@@ -17951,6 +17951,32 @@ cells={} pitch={:.2} text={:?}",
         // feeds the line ADVANCE here; mix_split's 23.03 is reached by neither
         // fold alone.
         let union_box = self.line_union_box(line, para_style, para_font_size);
+        // OXI_FALLBACK_EXTENT_UNSCALED (2026-11-11, default ON, opt-out _DISABLE): what a
+        // glyph-fallback face adds to the union box is not scaled by an auto multiple --
+        // only the line of the declared faces is. `_pb_pmingliu_pitch_gen.py` (Normal.dotm
+        // 1.158, MS Mincho base + PMingLiU fallback chars): Word's line = the Mincho line x
+        // 1.158 + the raw descent difference (+0.72 / +0.66 / +0.99 at 12 / 10.5 / 16pt);
+        // scaling the whole union put ja/reports__33da7949's mixed lines 0.13pt low each.
+        let fallback_unscaled = para_style.line_spacing.is_some_and(|f| f > 1.0)
+            && matches!(para_style.line_spacing_rule.as_deref(), None | Some("auto"))
+            && !crate::env_flag!("OXI_FALLBACK_EXTENT_UNSCALED_DISABLE")
+            && line.fragments.iter().any(|f| f.style.fallback_declared_latin.is_some());
+        let union_box = match para_style.line_spacing {
+            Some(factor) if fallback_unscaled => {
+                let declared = Line {
+                    fragments: line.fragments.iter()
+                        .filter(|f| f.style.fallback_declared_latin.is_none()).cloned().collect(),
+                    ..Line::default()
+                };
+                let primary = self.line_union_box(&declared, para_style, para_font_size);
+                if primary > 0.0 && union_box > primary {
+                    primary + (union_box - primary) / factor
+                } else {
+                    union_box
+                }
+            }
+            _ => union_box,
+        };
         if union_box > max_combined {
             max_combined = union_box;
         }
@@ -18069,6 +18095,10 @@ cells={} pitch={:.2} text={:?}",
                     if s1298_vis2 && Self::s1298_glyphless(frag) {
                         continue;
                     }
+                    // a fallback face enters only through the unscaled union extent
+                    if fallback_unscaled && frag.style.fallback_declared_latin.is_some() {
+                        continue;
+                    }
                     let font_size = frag.style.font_size.unwrap_or(para_font_size);
                     let metrics = &*self.metrics_for_text(&frag.text, &frag.style, para_style);
                     let formula = metrics.word_line_height_no_grid(font_size);
@@ -18130,7 +18160,15 @@ cells={} pitch={:.2} text={:?}",
                 s1322_win_natural * (83.0 / 64.0)
             };
         }
-        let base = if s1363_exact {
+        let base = if s1363_exact && fallback_unscaled {
+            // the fallback face's extent is already in `base`, unscaled
+            let declared = Line {
+                fragments: line.fragments.iter()
+                    .filter(|f| f.style.fallback_declared_latin.is_none()).cloned().collect(),
+                ..Line::default()
+            };
+            base.max(self.cjk_baseline_union(&declared, para_style, para_font_size))
+        } else if s1363_exact {
             base.max(self.cjk_baseline_union(line, para_style, para_font_size))
         } else {
             base
