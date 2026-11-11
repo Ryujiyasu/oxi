@@ -109,6 +109,10 @@ with tempfile.TemporaryDirectory() as tmp:
     checked=len(items)
     if GDI:
         fa=fingerprints(items,True,tmp); fb=fingerprints(items,False,tmp)
+        # a GDI binary older than OXI_LAYOUT_FINGERPRINT writes its ordinary dump,
+        # which leaves out colours and borders: refuse rather than under-report
+        stale=[t for t in list(fa.values())+list(fb.values()) if t and not re.fullmatch(r'\{"pages":\[("[0-9a-f]{16}",?)*\]\}',t)]
+        if stale: sys.exit("OXI_GDI_EXE does not write layout fingerprints (built before OXI_LAYOUT_FINGERPRINT); rebuild it or unset OXI_GDI_EXE")
         # a document that failed to lay out is drawn: no fingerprint, no skip
         todo=[(b,d) for b,d in items if fa.get(d) is None or fa.get(d)!=fb.get(d)]
         print(f"layout fingerprints: {len(todo)} of {checked} differ (or failed) -> drawn with DWrite")
