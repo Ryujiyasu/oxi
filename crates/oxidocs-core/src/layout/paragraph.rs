@@ -2274,7 +2274,26 @@ impl<'a> ParagraphLayouter<'a> {
                     // ship together, with hr_rule lines EXCLUDED from the
                     // extra (a rule paragraph has no text leading to scale).
                     let hr_line = line.fragments.iter().any(|f| f.style.hr_rule.is_some());
-                    let extra = if !crate::env_flag!("OXI_S875_DISABLE") && !hr_line {
+                    // OXI_OBJ_LINE_MARK_LEADING (2026-11-11, default ON, opt-out _DISABLE):
+                    // the multiple's extra leading comes from the line's TEXT, and a
+                    // picture-only line has none unless it is the last line, which
+                    // carries the paragraph mark. `_pb_inline_pics_wrap_gen.py` (no grid,
+                    // line 360, pictures 300pt wide wrapping one per line): Word stacks
+                    // 228 / 224, 100 / 60, 30 / 30 and 100 / 100 / 40 edge to edge and
+                    // adds the 6.04 leading once, after the last; Oxi added it to every
+                    // line. With a typed grid the object line already drops it
+                    // (OXI_GRID_OBJ_NOLEAD). PICTURES only: a wps shape keeps it --
+                    // blind-B creative__0158c02a's 24pt inline «Rectangle 21» over a
+                    // 272.8pt picture (line 276): Word draws the picture at 98.07 =
+                    // 72 + 24 + 2.07, the shape line's leading included.
+                    let mark_less_object_line = !crate::env_flag!("OXI_OBJ_LINE_MARK_LEADING_DISABLE")
+                        && li + 1 < lines.len()
+                        && line.fragments.iter().any(|f| f.style.inline_object_image.is_some())
+                        && line.fragments.iter().all(|f| {
+                            f.style.inline_object_image.as_ref().map_or(f.text.is_empty(), |im| !im.data.is_empty())
+                                && !f.style.inline_group_object
+                        });
+                    let extra = if !crate::env_flag!("OXI_S875_DISABLE") && !hr_line && !mark_less_object_line {
                         // line_spacing under the auto rule is stored as the
                         // MULTIPLE itself (1.15, not 13.8pt — the [S875] trace:
                         // drug rows ls=Some(1.15), member rows ls=Some(1.0)).
@@ -3938,10 +3957,20 @@ impl<'a> ParagraphLayouter<'a> {
         // Where the block does fire on a real doc the object is SMALL
         // (reference__0042471c: obj 11.2 → target 13.42 against a text basis
         // already ≥ that), so the max() is a no-op. Latent-correctness fix.
+        // OXI_S1116_EQUAL_LINES (2026-11-11, default ON, opt-out _DISABLE): the
+        // multi-line case where EVERY line grew to the same height still takes
+        // the equal-height cumulative branch, so the basis needs the target there
+        // too. zh dev technical__006f0290 (two 228 / 224pt inline pictures that
+        // wrap onto two lines, both 234 with the grid): each line advanced the
+        // 23.4 text pitch, the second picture drew over the first and the text
+        // after them sat ~210pt high.
+        let s1116_equal_lines = !crate::env_flag!("OXI_S1116_EQUAL_LINES_DISABLE")
+            && !line_heights.is_empty()
+            && line_heights.iter().all(|&h| (h - line_heights[0]).abs() < 0.001);
         let raw_spaced_tw: f32 = if !crate::env_flag!("OXI_S1116_DISABLE")
             && s1116_line0_target > 0.0
             && raw_spaced_tw > 0.0
-            && lines.len() == 1
+            && (lines.len() == 1 || s1116_equal_lines)
         {
             raw_spaced_tw.max(s1116_line0_target * 20.0)
         } else {
@@ -4221,6 +4250,9 @@ impl<'a> ParagraphLayouter<'a> {
                 .map(|f| &f.style)
                 .unwrap_or(&default_style);
             let line_height = line_heights[line_idx];
+            if crate::env_flag!("OXI_DBG_LINEADV") {
+                eprintln!("[LINEADV] li={} of {} y={:.2} lh={:.2} all={:?}", line_idx, lines.len(), cursor.cursor_y, line_height, line_heights);
+            }
             // S1497: the paragraph-relative wrapTopAndBottom band.
             if let Some((bt, bb)) = s1497_band {
                 if pages.len() == s758_entry_pages {
