@@ -9169,6 +9169,20 @@ impl<'a> ParagraphLayouter<'a> {
                 // S1527: every text fragment keeps its source run (cell text
                 // included) so a footnote reference can be found on its line.
                 el.run_index = Some(frag.run_index);
+                if frag.field_type == Some(FieldType::Page) {
+                    // the last tab before the field places it; else the paragraph
+                    el.page_field_anchor = match line.fragments[..frag_idx].iter().rev()
+                        .find_map(|f| f.tab_alignment) {
+                        Some(TabStopAlignment::Center) => 0.5,
+                        Some(TabStopAlignment::Right) => 1.0,
+                        Some(_) => 0.0,
+                        None => match para.alignment {
+                            Alignment::Center => 0.5,
+                            Alignment::Right => 1.0,
+                            _ => 0.0,
+                        },
+                    };
+                }
                 if let Some(pi) = body_para_index {
                     el.paragraph_index = Some(pi);
                     el.char_offset = Some(frag.char_offset);

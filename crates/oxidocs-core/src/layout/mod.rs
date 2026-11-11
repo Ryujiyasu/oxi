@@ -2699,6 +2699,11 @@ pub struct LayoutElement {
     /// remaining -1 outliers w_i=202, 314, 483 because the existing
     /// R7.47 row-LRPB check only inspects `cell.blocks.first()`.
     pub is_paragraph_start_with_lrpb: bool,
+    /// OXI_PGNUM_ALIGN: the share of a PAGE field's width change that moves its
+    /// left edge when the formatted number replaces the placeholder (0 = the start
+    /// stays, 0.5 = the centre, 1 = the end). Set at emission from the paragraph
+    /// alignment or the tab stop that places the field.
+    pub page_field_anchor: f32,
     /// R7.61 (Day 36 part 8, 2026-05-14): true on text elements emitted from
     /// vMerge="restart" cell content whose final Y exceeds the page bottom.
     /// Post-paginate sweep moves these to the next page so pagination reports
@@ -2809,6 +2814,7 @@ impl LayoutElement {
             cell_col_index: None,
             cell_ancestor_path: Vec::new(),
             is_paragraph_start_with_lrpb: false,
+            page_field_anchor: 0.5,
             vmerge_restart_overflow_to_next_page: false,
             vmerge_destination_page: None,
             margin_float: false,
@@ -2859,6 +2865,7 @@ impl LayoutElement {
             cell_col_index: None,
             cell_ancestor_path: Vec::new(),
             is_paragraph_start_with_lrpb: false,
+            page_field_anchor: 0.5,
             vmerge_restart_overflow_to_next_page: false,
             vmerge_destination_page: None,
             margin_float: false,
@@ -5282,6 +5289,7 @@ impl LayoutEngine {
             // w:fmt="numberInDash"/>` → Word renders "- 34 -"; Oxi rendered
             // the bare number. layout_to_ir_page maps this LayoutPage back to
             // its IR section page, which carries page_number_format.
+            let pgnum_align = !crate::env_flag!("OXI_PGNUM_ALIGN_DISABLE");
             let page_num_fmt = layout_to_ir_page
                 .get(page_idx)
                 .and_then(|&ir| doc_resolved.pages.get(ir))
@@ -5291,6 +5299,7 @@ impl LayoutEngine {
                     text,
                     field_type: Some(ft),
                     font_size,
+                    font_family,
                     ..
                 } = &mut elem.content
                 {
@@ -5309,7 +5318,24 @@ impl LayoutEngine {
                         // instruction element is empty — skip it.
                         FieldType::CrossRef | FieldType::Cached | FieldType::CustomNoteReference => continue,
                     };
-                    if &new_text != text {
+                    if &new_text != text && pgnum_align {
+                        // OXI_PGNUM_ALIGN (2026-11-11, default ON, opt-out _DISABLE): the
+                        // number keeps the edge its paragraph / tab stop anchors, and the
+                        // width change is measured, not estimated per digit.
+                        // `_pb_pgnum_dash_align_gen.py` (numberInDash, TNR 9, pages 1 / 12):
+                        // Word keeps the start for jc left / both and in a left text box,
+                        // the centre for jc center and a centre tab, the end for jc right
+                        // and a right tab; «- 1 -» is 15.0pt (3.0 + 2.25 + 4.5 + 2.25 + 3.0),
+                        // the old per-digit estimate 22.5. zh dev correspondence__015abfaf's
+                        // left footer box drew «- 1 -» 14pt left of the box and lost the «-».
+                        let fs = *font_size;
+                        let m = &*self.registry.get(font_family.as_deref().unwrap_or("Times New Roman"));
+                        let w_of = |t: &str| t.chars().map(|c| m.char_width_pt(c, fs)).sum::<f32>();
+                        let dw = w_of(&new_text) - w_of(text);
+                        elem.x -= dw * elem.page_field_anchor;
+                        elem.width = (elem.width + dw).max(0.0);
+                        *text = new_text;
+                    } else if &new_text != text {
                         // Estimate new width: each digit is ~size/2 pt for typical fonts.
                         // Old width is `elem.width`. The element's text already reflects
                         // the placeholder text length (typically "1") used during layout.
