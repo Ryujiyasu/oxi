@@ -582,7 +582,213 @@ pub(crate) fn format_number(n: u32, fmt: &str) -> String {
         }
         "lowerRoman" => to_roman(n, false),
         "upperRoman" => to_roman(n, true),
+        _ if !crate::env_flag!("OXI_NUMFMT_CJK_DISABLE") => {
+            format_number_more(n, fmt).unwrap_or_else(|| n.to_string())
+        }
         _ => n.to_string(), // fallback to decimal
+    }
+}
+
+/// OXI_NUMFMT_CJK (2026-11-11, default ON, opt-out _DISABLE): the CJK counting,
+/// ideograph, enclosed and English text formats, which all fell back to decimal
+/// (zh dev forms__00243d36's chineseCounting headings read «1、» for «一、»).
+/// Every string is Word's own: tools/metrics/_pb_numfmt_cjk_gen.py reads
+/// ListFormat.ListString for 20 formats at 1-25, 99-102, 109-111, 119-121,
+/// 999-1001, 1010-1011, 9999-10001, 10010 and 20001.
+fn format_number_more(n: u32, fmt: &str) -> Option<String> {
+    const ZH: [&str; 10] = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+    // Simplified counting: «一百〇一», «一千〇一十», «一万〇一十»; ten alone is «十»
+    const ZH_THOUSAND: Counting = Counting {
+        digits: ZH, zero: "〇", units: ["十", "百", "千"], wan: "万",
+        one_ten_lead: false, one_ten_inner: true, one_big: true, one_wan: true,
+    };
+    const TW_THOUSAND: Counting = Counting { zero: "零", wan: "萬", ..ZH_THOUSAND };
+    // Japanese counting writes no zero and no «一» before 十 / 百 / 千 (百一, 千十), but «一万»
+    const JA: Counting = Counting {
+        zero: "", wan: "万", one_ten_inner: false, one_big: false, ..ZH_THOUSAND
+    };
+    const ZH_LEGAL: Counting = Counting {
+        digits: ["零", "壹", "贰", "叁", "肆", "伍", "陆", "柒", "捌", "玖"], zero: "零",
+        units: ["拾", "佰", "仟"], wan: "萬",
+        one_ten_lead: true, one_ten_inner: true, one_big: true, one_wan: true,
+    };
+    const TW_LEGAL: Counting = Counting {
+        digits: ["零", "壹", "貳", "參", "肆", "伍", "陸", "柒", "捌", "玖"], ..ZH_LEGAL
+    };
+    const JA_LEGAL: Counting = Counting {
+        digits: ["", "壱", "弐", "参", "四", "伍", "六", "七", "八", "九"], zero: "",
+        units: ["拾", "百", "阡"], ..ZH_LEGAL
+    };
+    let digital = |zero: &str| -> String {
+        n.to_string().chars().map(|c| match c.to_digit(10) {
+            Some(0) => zero.to_string(),
+            Some(d) => ZH[d as usize].to_string(),
+            None => c.to_string(),
+        }).collect()
+    };
+    let enclosed = |base: u32, last: u32| -> String {
+        if (1..=last).contains(&n) { char::from_u32(base + n - 1).map(String::from).unwrap_or_default() } else { n.to_string() }
+    };
+    let seq = |s: &str| -> String {
+        let c: Vec<char> = s.chars().collect();
+        if (1..=c.len() as u32).contains(&n) { c[n as usize - 1].to_string() } else { n.to_string() }
+    };
+    Some(match fmt {
+        "chineseCountingThousand" => ZH_THOUSAND.format(n),
+        "taiwaneseCountingThousand" => TW_THOUSAND.format(n),
+        // counting up to 99, then the digits with «○» (U+25CB)
+        "chineseCounting" | "taiwaneseCounting" => if n < 100 { ZH_THOUSAND.format(n) } else { digital("○") },
+        "taiwaneseDigital" => digital("○"),
+        "ideographDigital" => digital("〇"),
+        // Word gives no string from 10000 on
+        "japaneseDigitalTenThousand" => if n < 10000 { digital("〇") } else { String::new() },
+        "japaneseCounting" => JA.format(n),
+        "chineseLegalSimplified" => ZH_LEGAL.format(n),
+        "ideographLegalTraditional" => TW_LEGAL.format(n),
+        "japaneseLegal" => JA_LEGAL.format(n),
+        "ideographTraditional" => seq("甲乙丙丁戊己庚辛壬癸"),
+        // Word's 11th is «戍» (U+620D), not «戌»
+        "ideographZodiac" => seq("子丑寅卯辰巳午未申酉戍亥"),
+        "decimalEnclosedParen" => enclosed(0x2474, 20),
+        "decimalEnclosedFullstop" => enclosed(0x2488, 20),
+        "decimalEnclosedCircleChinese" => enclosed(0x2460, 10),
+        "ideographEnclosedCircle" => enclosed(0x3220, 10),
+        "cardinalText" => english_words(n, false),
+        "ordinalText" => english_words(n, true),
+        "ordinal" => {
+            let suf = match (n % 10, n % 100) {
+                (_, 11..=13) => "th",
+                (1, _) => "st",
+                (2, _) => "nd",
+                (3, _) => "rd",
+                _ => "th",
+            };
+            format!("{}{}", n, suf)
+        }
+        _ => return None,
+    })
+}
+
+/// A counting system: digits, the ten / hundred / thousand units, the ten-thousand
+/// unit, the gap zero (empty = none), and where a leading «one» is written.
+#[derive(Clone, Copy)]
+struct Counting {
+    digits: [&'static str; 10],
+    zero: &'static str,
+    units: [&'static str; 3],
+    wan: &'static str,
+    /// «一十» when the number starts with its ten (10-19)
+    one_ten_lead: bool,
+    /// «一十» inside a larger number (110 = 一百一十)
+    one_ten_inner: bool,
+    /// «一百», «一千»
+    one_big: bool,
+    /// «一万»
+    one_wan: bool,
+}
+
+impl Counting {
+    fn format(&self, n: u32) -> String {
+        if n == 0 {
+            return self.digits[0].to_string();
+        }
+        if n >= 10000 {
+            let (hi, lo) = (n / 10000, n % 10000);
+            let mut s = if hi == 1 && !self.one_wan { String::new() } else { self.group(hi, true) };
+            s.push_str(self.wan);
+            if lo > 0 {
+                if lo < 1000 {
+                    s.push_str(self.zero);
+                }
+                s.push_str(&self.group(lo, false));
+            }
+            return s;
+        }
+        self.group(n, true)
+    }
+
+    fn group(&self, x: u32, leading: bool) -> String {
+        let mut out = String::new();
+        let (mut started, mut gap) = (false, false);
+        for pos in (0..4).rev() {
+            let d = (x / 10u32.pow(pos)) % 10;
+            if d == 0 {
+                gap |= started;
+                continue;
+            }
+            if gap {
+                out.push_str(self.zero);
+                gap = false;
+            }
+            if pos == 0 {
+                out.push_str(self.digits[d as usize]);
+            } else {
+                let one = match pos {
+                    1 if !started && leading => self.one_ten_lead,
+                    1 => self.one_ten_inner,
+                    _ => self.one_big,
+                };
+                if d != 1 || one {
+                    out.push_str(self.digits[d as usize]);
+                }
+                out.push_str(self.units[pos as usize - 1]);
+            }
+            started = true;
+        }
+        out
+    }
+}
+
+/// cardinalText / ordinalText as Word writes them: «One hundred twenty-one»,
+/// «Twenty thousand first» (no «and», a hyphen inside 21-99, capitalised).
+fn english_words(n: u32, ordinal: bool) -> String {
+    const ONES: [&str; 20] = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+    const TENS: [&str; 10] = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+    fn below_1000(x: u32) -> String {
+        let mut parts = Vec::new();
+        if x >= 100 {
+            parts.push(format!("{} hundred", ONES[(x / 100) as usize]));
+        }
+        let r = x % 100;
+        if r > 0 {
+            parts.push(if r < 20 {
+                ONES[r as usize].to_string()
+            } else if r % 10 == 0 {
+                TENS[(r / 10) as usize].to_string()
+            } else {
+                format!("{}-{}", TENS[(r / 10) as usize], ONES[(r % 10) as usize])
+            });
+        }
+        parts.join(" ")
+    }
+    let mut s = if n == 0 {
+        "zero".to_string()
+    } else {
+        let mut parts = Vec::new();
+        if n >= 1000 {
+            parts.push(format!("{} thousand", below_1000(n / 1000)));
+        }
+        if n % 1000 > 0 {
+            parts.push(below_1000(n % 1000));
+        }
+        parts.join(" ")
+    };
+    if ordinal {
+        const IRREGULAR: [(&str, &str); 8] = [("one", "first"), ("two", "second"), ("three", "third"),
+            ("five", "fifth"), ("eight", "eighth"), ("nine", "ninth"), ("twelve", "twelfth"), ("y", "ieth")];
+        let cut = s.rfind(|c| c == ' ' || c == '-').map_or(0, |i| i + 1);
+        let last = s[cut..].to_string();
+        let new_last = IRREGULAR.iter().find(|(a, _)| if *a == "y" { last.ends_with('y') } else { last == *a })
+            .map(|(a, b)| if *a == "y" { format!("{}{}", &last[..last.len() - 1], b) } else { b.to_string() })
+            .unwrap_or_else(|| format!("{}th", last));
+        s.truncate(cut);
+        s.push_str(&new_last);
+    }
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => s,
     }
 }
 
