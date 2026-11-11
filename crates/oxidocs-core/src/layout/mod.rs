@@ -2269,6 +2269,7 @@ fn apply_revision_styling_to_run(
 }
 
 /// Result of layout: positioned elements across pages
+#[derive(Debug)]
 pub struct LayoutResult {
     pub pages: Vec<LayoutPage>,
     /// The header and footer parts some page draws (see
@@ -2276,6 +2277,7 @@ pub struct LayoutResult {
     pub hf_parts_shown: std::collections::BTreeSet<String>,
 }
 
+#[derive(Debug)]
 pub struct LayoutPage {
     pub width: f32,
     pub height: f32,
@@ -2637,7 +2639,7 @@ pub struct FontGlyph {
     pub bounds_em: [f32; 4],
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LayoutElement {
     pub x: f32,
     pub y: f32,
@@ -2907,7 +2909,7 @@ impl TextEffects {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum LayoutContent {
     Text {
         text: String,

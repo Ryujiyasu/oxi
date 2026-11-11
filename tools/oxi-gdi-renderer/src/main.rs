@@ -64,7 +64,38 @@ fn layout_and_dump(docx_path: &str, dump_path: &str) {
         engine.with_show_comments(false)
     };
     let result = engine.layout(&doc);
-    dump_layout_json(&result, dump_path);
+    if std::env::var_os("OXI_LAYOUT_FINGERPRINT").is_some() {
+        write_layout_fingerprint(&result, dump_path);
+    } else {
+        dump_layout_json(&result, dump_path);
+    }
+}
+
+/// OXI_LAYOUT_FINGERPRINT: instead of the dump, write one hash per page of the
+/// page's FULL layout (every element and field, `Debug` form), as
+/// `{"pages":["<hex>",...]}`. tools/metrics/ssim_ab.py lays out every document
+/// under A and B this way and draws only those whose fingerprints differ: the
+/// dump leaves out colours, borders and shading, the fingerprint does not.
+fn write_layout_fingerprint(result: &oxidocs_core::layout::LayoutResult, path: &str) {
+    use std::hash::Hasher;
+    struct H(std::collections::hash_map::DefaultHasher);
+    impl std::fmt::Write for H {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    let hashes: Vec<String> = result
+        .pages
+        .iter()
+        .map(|p| {
+            let mut h = H(Default::default());
+            let _ = std::fmt::write(&mut h, format_args!("{:?}", p));
+            format!("\"{:016x}\"", h.0.finish())
+        })
+        .collect();
+    std::fs::write(path, format!("{{\"pages\":[{}]}}", hashes.join(",")))
+        .expect("Failed to write layout fingerprint");
 }
 
 /// `--batch=LIST`: lay out many documents in ONE process. Each line of LIST is
