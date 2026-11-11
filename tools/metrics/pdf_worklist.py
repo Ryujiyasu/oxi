@@ -17,6 +17,7 @@ lowest penalized score.  The first-divergence text is where to open the
 document; everything after it is often only the consequence.
 """
 import difflib
+import re
 import json
 import os
 import sys
@@ -45,19 +46,35 @@ def ssim(ref, cand):
 
 
 def lines(pdf):
-    """[(page, y_top, text)] for every text line, reading order per page."""
+    """[(page, baseline y, text)] for every text line, top to bottom per page. The
+    baseline, not the bbox top: the top follows each font's ascent in the PDF (Word's
+    YaHei reads 2.8pt taller than the same line in Oxi's PDF at the same baseline)."""
     out = []
     for pi, page in enumerate(pdf):
+        rows = []
         for b in page.get_text("dict")["blocks"]:
             for ln in b.get("lines", []):
                 t = "".join(s["text"] for s in ln["spans"]).strip()
                 if t:
-                    out.append((pi + 1, round(ln["bbox"][1], 2), " ".join(t.split())))
+                    rows.append((round(ln["spans"][0]["origin"][1], 2), ln["bbox"][0], " ".join(t.split())))
+        # top to bottom, left to right: the PDFs write headers, footers and
+        # text boxes at different points of their content streams; pieces on one
+        # baseline are one line (Word splits a line where its font changes)
+        merged = []
+        for y, x, t in sorted(rows):
+            if merged and abs(merged[-1][0] - y) < 0.6:
+                merged[-1] = (merged[-1][0], merged[-1][1] + " " + t)
+            else:
+                merged.append((y, t))
+        out += [(pi + 1, y, t) for y, t in merged]
     return out
 
 
 def first_divergence(wl, ol, tol):
-    sm = difflib.SequenceMatcher(None, [x[2] for x in wl], [x[2] for x in ol], autojunk=False)
+    # spaces differ by extraction (a justified gap, a CJK/Latin auto-space), not by layout
+    # and a tab leader's dot count follows the font, not the line
+    key = lambda t: re.sub(r"[.…·]{3,}", "...", "".join(t.split()))
+    sm = difflib.SequenceMatcher(None, [key(x[2]) for x in wl], [key(x[2]) for x in ol], autojunk=False)
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             for k in range(i2 - i1):
