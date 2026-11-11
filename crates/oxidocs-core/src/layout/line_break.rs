@@ -2528,14 +2528,24 @@ impl<'a> LineBreaker<'a> {
                 })
             });
             let natural_punctuation_boundary = english_ea_natural || narrow_punctuation_natural;
+            // OXI_ZH_LANG_OIKOMI (2026-11-11, default ON, opt-out _DISABLE): Chinese
+            // takes the same pull-in limit. `_pb_cp_fit_lang_gen.py` (compressPunctuation,
+            // the zh dev legal__00558607 line, YaHei / SimSun / MS Mincho, right indent
+            // 0-30pt): Word's first-line counts for zh-CN equal ja-JP's in every arm --
+            // jc left and both, compat absent / 14 / 15 -- and Oxi matched ja-JP but
+            // packed 1-2 characters more for zh-CN when justified under a legacy
+            // compat (the generic capacity break squeezed 〔 〕 ） 《 0.2 em each).
             let japanese_language_oikomi = s476_body && !vertical
                 && !narrow_punctuation_natural
                 && (self.compat_mode < 15 || is_justified)
                 && !para_off_grid
                 && (!lines_and_chars || self.compat_mode >= 15)
                 && self.compress_punctuation
-                && style.east_asia_lang.as_deref().map_or(false, |lang|
-                    lang.eq_ignore_ascii_case("ja") || lang.to_ascii_lowercase().starts_with("ja-"));
+                && style.east_asia_lang.as_deref().map_or(false, |lang| {
+                    let l = lang.to_ascii_lowercase();
+                    l == "ja" || l.starts_with("ja-")
+                        || (!crate::env_flag!("OXI_ZH_LANG_OIKOMI_DISABLE") && (l == "zh" || l.starts_with("zh-")))
+                });
             let natural_break_jc = !crate::env_flag!("OXI_S492_DISABLE")
                 && !is_justified
                 && (!lines_and_chars || s492_full || para_off_grid)
