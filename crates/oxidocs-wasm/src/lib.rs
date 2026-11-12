@@ -321,12 +321,34 @@ pub fn parse_document(data: &[u8]) -> Result<JsValue, JsError> {
     serde_wasm_bindgen::to_value(&doc).map_err(|e| JsError::new(&e.to_string()))
 }
 
+// Workbook metadata crosses worker and JSON boundaries as ordinary data.
+#[cfg(feature = "suite")]
+pub(crate) fn spreadsheet_value_to_js<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
+    let json = serde_json::to_value(value).map_err(|error| JsError::new(&error.to_string()))?;
+    json.serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
+        .map_err(|error| JsError::new(&error.to_string()))
+}
+
+#[cfg(feature = "suite")]
+pub(crate) fn spreadsheet_workbook_from_js(value: JsValue) -> Result<oxicells_core::ir::Workbook, String> {
+    // Accept existing callers' Maps as well as JSON object keys for numeric
+    // column indices. serde_json handles the latter's numeric string keys.
+    match serde_wasm_bindgen::from_value(value.clone()) {
+        Ok(workbook) => Ok(workbook),
+        Err(original) => {
+            let json: serde_json::Value = serde_wasm_bindgen::from_value(value)
+                .map_err(|_| original.to_string())?;
+            serde_json::from_value(json).map_err(|error| error.to_string())
+        }
+    }
+}
+
 #[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn parse_spreadsheet(data: &[u8]) -> Result<JsValue, JsError> {
     let workbook = oxicells_core::parse_xlsx(data)
         .map_err(|e| JsError::new(&e.to_string()))?;
-    serde_wasm_bindgen::to_value(&workbook).map_err(|e| JsError::new(&e.to_string()))
+    spreadsheet_value_to_js(&workbook)
 }
 
 /// Resolve a cell color for display using the workbook's theme and palette.
@@ -905,7 +927,7 @@ pub fn edit_xlsx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
 #[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn edit_xlsx_from_workbook(data: &[u8], workbook: JsValue) -> Result<Vec<u8>, JsError> {
-    let workbook: oxicells_core::ir::Workbook = serde_wasm_bindgen::from_value(workbook)
+    let workbook: oxicells_core::ir::Workbook = spreadsheet_workbook_from_js(workbook)
         .map_err(|error| JsError::new(&error.to_string()))?;
 
     let mut editor = oxicells_core::XlsxEditor::new(data)
@@ -933,7 +955,7 @@ pub fn edit_xlsx_from_workbook(data: &[u8], workbook: JsValue) -> Result<Vec<u8>
 #[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn conditional_formats(workbook: JsValue, sheet: usize) -> Result<JsValue, JsError> {
-    let workbook: oxicells_core::ir::Workbook = serde_wasm_bindgen::from_value(workbook)
+    let workbook: oxicells_core::ir::Workbook = spreadsheet_workbook_from_js(workbook)
         .map_err(|error| JsError::new(&error.to_string()))?;
     let caught = oxicells_core::conditional::caught(&workbook, sheet);
     serde_wasm_bindgen::to_value(&caught).map_err(|error| JsError::new(&error.to_string()))
@@ -1129,7 +1151,7 @@ mod spreadsheet_device_font_tests {
 #[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn recalculate_spreadsheet(workbook: JsValue, now: Option<f64>) -> Result<JsValue, JsError> {
-    let mut workbook: oxicells_core::ir::Workbook = serde_wasm_bindgen::from_value(workbook)
+    let mut workbook: oxicells_core::ir::Workbook = spreadsheet_workbook_from_js(workbook)
         .map_err(|error| JsError::new(&error.to_string()))?;
     // A browser has no system clock to ask — `SystemTime::now` does not merely
     // fail there, it panics — so `TODAY()` is answered from the moment the
@@ -1141,7 +1163,7 @@ pub fn recalculate_spreadsheet(workbook: JsValue, now: Option<f64>) -> Result<Js
         }
         None => oxicells_core::formula::evaluate_workbook_formulas(&mut workbook),
     }
-    serde_wasm_bindgen::to_value(&workbook).map_err(|error| JsError::new(&error.to_string()))
+    spreadsheet_value_to_js(&workbook)
 }
 
 /// Put rows or columns into a sheet, or take them out, and hand the workbook
@@ -1163,7 +1185,7 @@ pub fn shift_band(
     at: u32,
     count: i32,
 ) -> Result<JsValue, JsError> {
-    let mut workbook: oxicells_core::ir::Workbook = serde_wasm_bindgen::from_value(workbook)
+    let mut workbook: oxicells_core::ir::Workbook = spreadsheet_workbook_from_js(workbook)
         .map_err(|error| JsError::new(&error.to_string()))?;
     let band = if rows {
         oxicells_core::bands::Band::Rows
@@ -1175,7 +1197,7 @@ pub fn shift_band(
     } else {
         oxicells_core::bands::remove(&mut workbook, sheet, band, at, (-count) as u32);
     }
-    serde_wasm_bindgen::to_value(&workbook).map_err(|error| JsError::new(&error.to_string()))
+    spreadsheet_value_to_js(&workbook)
 }
 
 /// Move a formula's relative references as Excel does when a cell is copied.
@@ -1201,7 +1223,7 @@ pub fn translate_formula(formula: &str, rows: i32, columns: i32) -> Result<Strin
 #[cfg(feature = "suite")]
 #[wasm_bindgen]
 pub fn rename_sheet(workbook: JsValue, index: usize, new_name: &str) -> Result<JsValue, JsError> {
-    let mut workbook: oxicells_core::ir::Workbook = serde_wasm_bindgen::from_value(workbook)
+    let mut workbook: oxicells_core::ir::Workbook = spreadsheet_workbook_from_js(workbook)
         .map_err(|error| JsError::new(&error.to_string()))?;
     let old = workbook
         .sheets
@@ -1221,7 +1243,7 @@ pub fn rename_sheet(workbook: JsValue, index: usize, new_name: &str) -> Result<J
             }
         }
     }
-    serde_wasm_bindgen::to_value(&workbook).map_err(|error| JsError::new(&error.to_string()))
+    spreadsheet_value_to_js(&workbook)
 }
 
 /// Renders a number the way a sheet shows it under `format`.

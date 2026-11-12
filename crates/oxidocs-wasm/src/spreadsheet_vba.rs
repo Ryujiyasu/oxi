@@ -45665,7 +45665,7 @@ enum OutputValue {
 
 
 fn serialize_vba_outcome<T:Serialize>(outcome:&T)->Result<JsValue,JsError>{
-    let js=serde_wasm_bindgen::to_value(outcome).map_err(|e|JsError::new(&e.to_string()))?;
+    let js=crate::spreadsheet_value_to_js(outcome)?;
     fn convert(value:&JsValue)->Result<(),JsValue>{
         let tag=js_sys::Reflect::get(value,&JsValue::from_str("type"))?.as_string();
         let payload=js_sys::Reflect::get(value,&JsValue::from_str("value"))?;
@@ -46900,18 +46900,18 @@ impl SpreadsheetVbaSession {
     pub fn select_workbook(&mut self, identity: &str) -> Result<JsValue, JsError> {
         let selection = select_session_workbook(&mut self.state, identity)
             .map_err(|error| JsError::new(&error))?;
-        serde_wasm_bindgen::to_value(&selection).map_err(|error| JsError::new(&error.to_string()))
+        crate::spreadsheet_value_to_js(&selection)
     }
 
     /// Preserve pending editor changes before selecting another open book.
     pub fn select_workbook_with_edits(&mut self, identity: &str, workbook: JsValue,
         active_sheet: usize, edit_revision: Option<JsValue>) -> Result<JsValue, JsError> {
         let revision = edit_revision.map(validate_editor_revision).transpose()?;
-        let workbook = serde_wasm_bindgen::from_value(workbook)
+        let workbook = crate::spreadsheet_workbook_from_js(workbook)
             .map_err(|error| JsError::new(&format!("invalid workbook: {error}")))?;
         let selection = select_session_workbook_with_revision(&mut self.state, identity, workbook, active_sheet, revision)
             .map_err(|error| JsError::new(&error))?;
-        serde_wasm_bindgen::to_value(&selection).map_err(|error| JsError::new(&error.to_string()))
+        crate::spreadsheet_value_to_js(&selection)
     }
 
     /// Run the selected workbook's native Save or SaveCopyAs path, including
@@ -47480,7 +47480,7 @@ fn prepare_spreadsheet_vba(
         .map_err(|error| JsError::new(&error))?;
     let worksheet_dbcs_language = options.worksheet_dbcs_language;
     let environment = options.error_environment().map_err(|error| JsError::new(&error))?;
-    let mut workbook: Workbook = serde_wasm_bindgen::from_value(workbook)
+    let mut workbook: Workbook = crate::spreadsheet_workbook_from_js(workbook)
         .map_err(|error| JsError::new(&format!("invalid workbook: {error}")))?;
     if let Some(dbcs_language) = worksheet_dbcs_language {
         workbook.calculation.dbcs_language = Some(dbcs_language);

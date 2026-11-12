@@ -32,6 +32,21 @@ const verify = (outcome, item, label) => {
     assert.deepEqual(outcome.result, {type: 'string', value: item.expected}, label + ': ' + item.method + '(' + item.args.join(',') + ')');
     return outcome.workbook;
 };
+// Both existing JS Map callers and JSON's numeric string keys must retain
+// column provenance. All returned workbook metadata must survive JSON copying.
+for (const custom of [new Map([[3, true]]), {'3': true}]) {
+    const book = seed(1);
+    book.sheets[0].col_widths[3] = 9.140625;
+    book.sheets[0].col_custom_widths = custom;
+    const item = {method: 'WidthProbeRoot', args: ['CELL("width",D1)', 'application'],
+        expected: '0|Variant():False|A1:1:2|5:8|11:False'};
+    const returned = verify(wasm.run_spreadsheet_vba_with_outcome(book, source, item.method, item.args, 0, 'arrays.xlsx', options), item, 'workbook metadata input');
+    assert.deepEqual(JSON.parse(JSON.stringify(returned)), returned, 'JSON copying preserves the complete workbook');
+    const saved = wasm.edit_xlsx_from_workbook(original, returned);
+    const reopened = wasm.parse_spreadsheet(saved);
+    assert.deepEqual(JSON.parse(JSON.stringify(reopened)), reopened, 'parsed workbooks preserve JSON metadata');
+    verify(wasm.run_spreadsheet_vba_with_outcome(reopened, source, item.method, item.args, 0, 'arrays.xlsx', options), item, 'workbook metadata save/reopen');
+}
 for (const version of [1]) {
     let book = seed(version);
     for (const item of cases.filter(c => c.version === version)) {
