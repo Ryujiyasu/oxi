@@ -368,7 +368,17 @@ impl PdfWriter {
                 // If we have a CID→Unicode mapping (from embedded font), use that;
                 // otherwise the CIDs ARE Unicode codepoints (identity mapping).
                 let cmap_data = if let Some(tounicode_map) = cid_to_unicode.get(name) {
-                    build_tounicode_cmap_from_map(tounicode_map)
+                    if base_font_name.to_ascii_lowercase().starts_with("symbol")
+                        && std::env::var_os("OXI_PDF_SYMBOL_TOUNICODE_DISABLE").is_none()
+                    {
+                        let remapped = tounicode_map
+                            .iter()
+                            .map(|(&cid, &u)| (cid, symbol_pua_to_unicode(u)))
+                            .collect();
+                        build_tounicode_cmap_from_map(&remapped)
+                    } else {
+                        build_tounicode_cmap_from_map(tounicode_map)
+                    }
                 } else {
                     build_tounicode_cmap(used_chars)
                 };
@@ -797,6 +807,27 @@ fn encode_utf16be_hex(s: &str) -> String {
         write!(hex, "{:04X}", code_unit).unwrap();
     }
     hex
+}
+
+/// OXI_PDF_SYMBOL_TOUNICODE (2026-11-12, default ON, opt-out _DISABLE): the text a
+/// Symbol-font private-use character copies out as, as Word's PDF writes it. Word maps
+/// only these eleven and leaves every other U+F0xx as it is (`_pb_symbol_tounicode_gen.py`,
+/// U+F020..U+F0FF through Word's PDF export); a list bullet U+F0B7 copied out as U+F0B7
+/// from the CLI's PDF, as «•» from Word's.
+fn symbol_pua_to_unicode(u: u32) -> u32 {
+    match u {
+        0xF028 => 0x28,
+        0xF029 => 0x29,
+        0xF02B => 0x2B,
+        0xF02D => 0x2212,
+        0xF03D => 0x3D,
+        0xF05E => 0x22A5,
+        0xF0AE => 0x2192,
+        0xF0B7 => 0x2022,
+        0xF0BE => 0x23AF,
+        0xF0D3 | 0xF0E3 => 0xA9,
+        other => other,
+    }
 }
 
 /// Build a ToUnicode CMap from an explicit CID→Unicode mapping.
