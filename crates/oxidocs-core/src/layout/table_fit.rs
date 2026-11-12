@@ -6268,8 +6268,26 @@ impl<'a> TableFitLayouter<'a> {
                                                 eprintln!("[FIT_CELL] id={:?} ch={:?} cs={:.9} cw={:.9} x={:.9} buf={:.9} cap={:.9} sum={:.9}",
                                                     run.style.fit_text_id, ch, cs, cw, line_x, buf_w, effective_wrap, line_x + buf_w + cw);
                                             }
+                                            // OXI_CELL_KERN_PAIR: a closing pair that ENDS the line is billed with
+                                            // its first mark at half an em under w:kern; one in mid-line is billed
+                                            // whole (tests/fixtures/cell_pair_boundaries kern arms: «甲乙、「丙丁戊己庚|辛»).
+                                            // `_pb_pair_seam_gen.py` (policies__07543a6b p33 cell): «（ PT「投薬欠落」）»
+                                            // holds one line through w:right 100tw and wraps from 115tw (bill 108-109.7
+                                            // = one mark at half), with or without text after the pair; «…落）» alone
+                                            // is billed whole (fits 220tw, wraps 240tw).
+                                            let pair_end_credit = if !crate::env_flag!("OXI_CELL_KERN_PAIR_DISABLE")
+                                                && !(self.compat_mode < 15 && self.compress_punctuation)
+                                                && kinsoku::is_yakumono_trigger(ch)
+                                                && (s586_run_offset + s586_ci).checked_sub(1)
+                                                    .and_then(|i| s586_para_chars.get(i).copied())
+                                                    .is_some_and(|p| kinsoku::is_yakumono_closing(p) && crate::font::is_fullwidth(p))
+                                                && run.style.kern.or_else(|| para.style.default_run_style.as_ref().and_then(|r| r.kern))
+                                                    .map_or(false, |kv| kv > 0.0 && font_size >= kv)
+                                                && !['\u{3001}', '\u{3002}'].iter()
+                                                    .all(|&m| { let w = cm.char_width_em(m); w > 0.0 && w < 0.99 })
+                                            { font_size * 0.5 } else { 0.0 };
                                             let would_overflow_natural =
-                                                line_x + buf_w + cw > effective_wrap;
+                                                line_x + buf_w + cw - pair_end_credit > effective_wrap;
                                             let run_has_neg_cs = cs <= -0.1;
                                             // S586 orphan + small-overflow + 約物→opener oikomi (scaffold).
                                             let s586_overflow_fixed = if s586_orphan
@@ -7175,6 +7193,12 @@ impl<'a> TableFitLayouter<'a> {
                                                 let mut group = 0.0f32;
                                                 let mut n = 0usize;
                                                 let mut k = s586_ci + 1;
+                                                // OXI_CELL_KERN_PAIR: the closers in the group are
+                                                // billed as the wrapper above bills them -- a closing
+                                                // mark before another mark at half an em under w:kern.
+                                                let kern_pair = !crate::env_flag!("OXI_CELL_KERN_PAIR_DISABLE")
+                                                    && run.style.kern.or_else(|| para.style.default_run_style.as_ref().and_then(|r| r.kern))
+                                                        .map_or(false, |kv| kv > 0.0 && font_size >= kv);
                                                 while let Some(c) = s586_run_chars.get(k) {
                                                     // ★the run is what CANNOT START A LINE, which is
                                                     // the whole justification for dragging the
@@ -7187,11 +7211,16 @@ impl<'a> TableFitLayouter<'a> {
                                                     if !kinsoku::is_line_start_prohibited(*c) {
                                                         break;
                                                     }
-                                                    group += self
+                                                    let natural = self
                                                         .registry
                                                         .char_width_pt_with_fallback(
                                                             *c, font_size, cm,
                                                         );
+                                                    group += if kern_pair
+                                                        && kinsoku::is_yakumono_closing(*c)
+                                                        && s586_para_chars.get(s586_run_offset + k + 1)
+                                                            .copied().is_some_and(kinsoku::is_yakumono_trigger)
+                                                    { natural.min(font_size * 0.5) } else { natural };
                                                     n += 1;
                                                     k += 1;
                                                 }
@@ -8271,6 +8300,81 @@ impl<'a> TableFitLayouter<'a> {
                                                     nf.0 = p;
                                                     nf.2 = rw * scale;
                                                     out.push(nf);
+                                                }
+                                            }
+                                            *line = out;
+                                        }
+                                    }
+                                    // OXI_CELL_KERN_PAIR: under w:kern Word DRAWS the first mark of a closing
+                                    // pair at half an em wherever it sits (`_pb_cell_pair_kern2_gen.py`: kern 2
+                                    // cells advance 」）、「。」）」）、、（ 5.16-5.28 of 10.5, like the body; kern 0
+                                    // never) -- the wrapper billed it whole (or, at a line end, took the half as
+                                    // credit). A pair inside one fragment is cut after its first mark, the first
+                                    // mark of every pair loses its half, and the line shortens by that much.
+                                    // Legacy cells (compat < 15 + compressPunctuation) already billed the pair at
+                                    // half; their pieces only redistribute the fragment's width.
+                                    if !crate::env_flag!("OXI_CELL_KERN_PAIR_DISABLE")
+                                        && !(grid_char_pitch.is_some_and(|p| p > 0.0) && grid_char_cw_ratio.is_some_and(|r| r > 0.0))
+                                    {
+                                        let legacy = self.compat_mode < 15 && self.compress_punctuation;
+                                        for line in lines.iter_mut() {
+                                            let firsts: Vec<Option<char>> = line.iter().map(|f| f.0.chars().next()).collect();
+                                            let mut out = Vec::with_capacity(line.len());
+                                            for (fi, frag) in line.drain(..).enumerate() {
+                                                let fs = frag.1;
+                                                let kern_on = frag.16.kern
+                                                    .or_else(|| para.style.default_run_style.as_ref().and_then(|r| r.kern))
+                                                    .map_or(false, |kv| kv > 0.0 && fs >= kv);
+                                                // OXI_PROP_PAIR: a proportional face (its 、。 under an em)
+                                                // takes no pair compression at all, cells included.
+                                                let ea_fm = self.registry.get(frag.14.as_deref().or(frag.8.as_deref()).unwrap_or(""));
+                                                let proportional = ['\u{3001}', '\u{3002}'].iter()
+                                                    .all(|&m| { let w = ea_fm.char_width_em(m); w > 0.0 && w < 0.99 });
+                                                if !kern_on || proportional {
+                                                    out.push(frag);
+                                                    continue;
+                                                }
+                                                let chars: Vec<char> = frag.0.chars().collect();
+                                                let half = |c: char| kinsoku::is_yakumono_closing(c) && crate::font::is_fullwidth(c);
+                                                let cuts: Vec<usize> = (0..chars.len().saturating_sub(1))
+                                                    .filter(|&i| half(chars[i]) && kinsoku::is_yakumono_trigger(chars[i + 1]))
+                                                    .map(|i| i + 1)
+                                                    .collect();
+                                                let tail_pair = chars.last().copied().is_some_and(half)
+                                                    && firsts.get(fi + 1).copied().flatten().is_some_and(kinsoku::is_yakumono_trigger);
+                                                if cuts.is_empty() && (!tail_pair || legacy) {
+                                                    out.push(frag);
+                                                    continue;
+                                                }
+                                                let latin_fm = self.registry.get(frag.8.as_deref().unwrap_or(""));
+                                                let natural = |c: char| -> f32 {
+                                                    let fm = if kinsoku::is_cjk(c) || crate::font::is_fullwidth(c) { &ea_fm } else { &latin_fm };
+                                                    self.registry.char_width_pt_with_fallback(c, fs, fm)
+                                                };
+                                                let mut total = frag.2;
+                                                if !legacy {
+                                                    total -= cuts.len() as f32 * fs * 0.5;
+                                                    if tail_pair { total -= fs * 0.5; }
+                                                }
+                                                let mut bounds = vec![0usize];
+                                                bounds.extend(cuts.iter().copied());
+                                                bounds.push(chars.len());
+                                                let mut pieces: Vec<(String, f32)> = bounds.windows(2).map(|w| {
+                                                    let piece = &chars[w[0]..w[1]];
+                                                    let mut width: f32 = piece.iter().map(|&c| natural(c)).sum();
+                                                    if w[1] < chars.len() || (tail_pair && !legacy) {
+                                                        width -= fs * 0.5;
+                                                    }
+                                                    (piece.iter().collect(), width)
+                                                }).collect();
+                                                let rest: f32 = pieces[1..].iter().map(|p| p.1).sum();
+                                                pieces[0].1 = total - rest;
+                                                for (k, (text, width)) in pieces.into_iter().enumerate() {
+                                                    let mut f = frag.clone();
+                                                    f.0 = text;
+                                                    f.2 = width;
+                                                    if k > 0 { f.13 = false; }
+                                                    out.push(f);
                                                 }
                                             }
                                             *line = out;

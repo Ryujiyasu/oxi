@@ -3557,6 +3557,8 @@ pub struct LayoutEngine {
     twoseg_left_strip: std::cell::Cell<bool>,
     default_font_family: Option<String>,
     default_font_family_east_asia: Option<String>,
+    /// OXI_EA_LITERAL_MINCHO: the docDefaults eastAsia face came from the theme.
+    default_east_asia_from_theme: bool,
     /// S1370: the face a CJK character takes when its eastAsia font is
     /// Latin-only (theme minor Jpan, else 游明朝).
     cjk_substitute_face: String,
@@ -4279,6 +4281,7 @@ impl LayoutEngine {
             twoseg_left_strip: std::cell::Cell::new(false),
             default_font_family: None,
             default_font_family_east_asia: None,
+            default_east_asia_from_theme: false,
             cjk_substitute_face: "Yu Mincho".to_string(),
             doc_east_asia_lang_cjk: false,
             doc_latin_lang_cjk: false,
@@ -4434,6 +4437,10 @@ impl LayoutEngine {
             .styles
             .effective_doc_default_run_style()
             .and_then(|s| s.font_family_east_asia.clone());
+        let default_east_asia_from_theme = doc
+            .styles
+            .effective_doc_default_run_style()
+            .is_some_and(|s| s.east_asia_from_theme);
         let cjk_substitute_face = doc
             .styles
             .cjk_substitute_face
@@ -4502,6 +4509,7 @@ impl LayoutEngine {
             twoseg_left_strip: std::cell::Cell::new(false),
             default_font_family,
             default_font_family_east_asia,
+            default_east_asia_from_theme,
             cjk_substitute_face,
             doc_east_asia_lang_cjk,
             doc_latin_lang_cjk,
@@ -5804,16 +5812,16 @@ impl LayoutEngine {
             if let Some(ref ff) = run_style.font_family_east_asia {
                 // S634: substitute MS Mincho when the explicit eastAsia font is
                 // Latin-only (no CJK glyphs) — matches Word's font-linking.
-                return Some(self.cjk_ea_family(ff.as_str(), run_style.has_explicit_east_asia, cjk_script));
+                return Some(self.cjk_ea_family_lit(ff.as_str(), run_style.has_explicit_east_asia, !run_style.east_asia_from_theme, cjk_script));
             }
             if let Some(ref drs) = para_style.default_run_style {
                 if let Some(ref ff) = drs.font_family_east_asia {
-                    return Some(self.cjk_ea_family(ff.as_str(), false, cjk_script));
+                    return Some(self.cjk_ea_family_lit(ff.as_str(), false, !drs.east_asia_from_theme, cjk_script));
                 }
             }
             // Fall back to document-level default East Asian font (from docDefaults/theme)
             if let Some(ref ff) = self.default_font_family_east_asia {
-                return Some(self.cjk_ea_family(ff.as_str(), false, cjk_script));
+                return Some(self.cjk_ea_family_lit(ff.as_str(), false, !self.default_east_asia_from_theme, cjk_script));
             }
             // With no East Asian slot, Japanese text uses the document's
             // default CJK face even if the ASCII face can draw those glyphs.
@@ -6469,6 +6477,28 @@ impl LayoutEngine {
     /// wider class. MEASURED (Calibri doc, Word PDF span fonts): ■●→①×○“•½–
     /// Calibri; 〒～ｱあ漢　： YuMincho-Regular; ☐✓ SegoeUISymbol; ※ MS-Mincho.
     /// A paragraph mark or a symbol-only run therefore keeps the declared face.
+    /// OXI_EA_LITERAL_MINCHO (2026-11-12, default ON, opt-out _DISABLE): a Latin face
+    /// NAMED in the eastAsia slot -- on the run, in a style or in docDefaults -- goes
+    /// through font linking to ＭＳ 明朝 like S1495's explicit run face; only a face the
+    /// slot took from the theme gets the theme's answer (S1370 / S1594).
+    /// `_pb_ea_theme_base_gen.py` («あいう日本語の文章», docDefaults eastAsia literal
+    /// «Calibri» vs eastAsiaTheme, theme Jpan ＭＳ 明朝 / 游明朝 / ＭＳ Ｐゴシック / メイリオ /
+    /// no theme): literal -> MS-Mincho in all five; theme reference -> the Jpan face, and
+    /// YuMincho without a theme part. Oxi took the theme's face for the literal arms.
+    /// Only CJK-script text is routed (the probe's characters); a CJK-class character
+    /// outside the script set keeps S634 / S1495's handling -- routing every one of
+    /// them too moved blind-G ja/reports__597cb86c's paragraph 18 onto page 1.
+    fn cjk_ea_family_lit<'a>(&'a self, ff: &'a str, has_explicit: bool, literal: bool, cjk_script: bool) -> &'a str {
+        if cjk_script && literal && !has_explicit
+            && crate::font::is_latin_only_font(ff)
+            && !crate::env_flag!("OXI_EA_LITERAL_MINCHO_DISABLE")
+            && !crate::env_flag!("OXI_S634_DISABLE")
+        {
+            return "MS Mincho";
+        }
+        self.cjk_ea_family(ff, has_explicit, cjk_script)
+    }
+
     fn cjk_ea_family<'a>(&'a self, ff: &'a str, has_explicit: bool, cjk_script: bool) -> &'a str {
         // S1370 (2026-09-13, default ON, opt-out OXI_S1370_DISABLE): a CJK
         // character whose eastAsia font has no CJK glyphs is drawn by Word in
@@ -6579,17 +6609,17 @@ impl LayoutEngine {
             }
         };
         if let Some(ref ff) = run_style.font_family_east_asia {
-            let ff = self.cjk_ea_family(ff.as_str(), run_style.has_explicit_east_asia, cjk_script);
+            let ff = self.cjk_ea_family_lit(ff.as_str(), run_style.has_explicit_east_asia, !run_style.east_asia_from_theme, cjk_script);
             return Some(metrics(ff));
         }
         if let Some(ref drs) = para_style.default_run_style {
             if let Some(ref ff) = drs.font_family_east_asia {
-                return Some(metrics(self.cjk_ea_family(ff.as_str(), false, cjk_script)));
+                return Some(metrics(self.cjk_ea_family_lit(ff.as_str(), false, !drs.east_asia_from_theme, cjk_script)));
             }
         }
         // Fall back to document-level default East Asian font
         if let Some(ref ff) = self.default_font_family_east_asia {
-            return Some(metrics(self.cjk_ea_family(ff.as_str(), false, cjk_script)));
+            return Some(metrics(self.cjk_ea_family_lit(ff.as_str(), false, !self.default_east_asia_from_theme, cjk_script)));
         }
         if cjk_script && !crate::env_flag!("OXI_CJK_DEFAULT_SLOT_DISABLE") {
             return Some(metrics(self.cjk_substitute_face.as_str()));
@@ -22318,7 +22348,18 @@ cells={} pitch={:.2} text={:?}",
                 // When gate active + this run has neg cs + natural would overflow,
                 // ask whether per-char compression would let trial line fit. If yes,
                 // do NOT wrap — matches the actual render decision.
-                let would_overflow_natural = line_x + buf_w + cw > effective_wrap;
+                // OXI_CELL_KERN_PAIR: the cell wrapper's line-end pair credit (table_fit).
+                let pair_end_credit = if Self::cell_kern_closing_pair()
+                    && !(self.compat_mode < 15 && self.compress_punctuation)
+                    && kinsoku::is_yakumono_trigger(ch)
+                    && s1082_here.checked_sub(1).and_then(|i| s1082_para_chars.get(i).copied())
+                        .is_some_and(|p| kinsoku::is_yakumono_closing(p) && crate::font::is_fullwidth(p))
+                    && run.style.kern.or_else(|| para.style.default_run_style.as_ref().and_then(|r| r.kern))
+                        .map_or(false, |kv| kv > 0.0 && font_size >= kv)
+                    && !['\u{3001}', '\u{3002}'].iter()
+                        .all(|&m| { let w = cm.char_width_em(m); w > 0.0 && w < 0.99 })
+                { font_size * 0.5 } else { 0.0 };
+                let would_overflow_natural = line_x + buf_w + cw - pair_end_credit > effective_wrap;
                 let run_has_neg_cs = cs <= -0.1;
                 // S466CELL 約物-oikomi (count mirror of the emit-site gate; see emit comment).
                 let s466_oikomi = crate::env_flag!("OXI_S466CELL")
@@ -25721,6 +25762,20 @@ cells={} pitch={:.2} text={:?}",
             previous = Some(ch);
         }
         pool.min(pairs as f32 * font_size * 0.5)
+    }
+
+    /// OXI_CELL_KERN_PAIR (2026-11-12, default ON, opt-out _DISABLE): in a table cell under
+    /// w:kern, as in the body (S547), Word DRAWS the first of two adjacent marks whose first is a
+    /// closing mark at half an em -- compat and compressPunctuation change nothing
+    /// (`_pb_cell_pair_kern2_gen.py`, S547's kern 0/2 docs x compressPunctuation x compat, the
+    /// sampler in a one-cell table and in the body: kern 2 advances 」）、「。」）」）、、（ 5.16-5.28
+    /// of 10.5 in all eight cell arms; kern 0 never). BREAKING bills such a pair whole in
+    /// mid-line (tests/fixtures/cell_pair_boundaries) but takes the half as credit when the pair
+    /// ENDS the line (`_pb_pair_seam_gen.py`, the ja/policies__07543a6b p33 cell «（ PT「投薬欠落」）»:
+    /// one line through w:right 100tw, wraps from 115tw, with or without text after the pair;
+    /// «…落）» alone is billed whole). The cell wrappers had neither.
+    fn cell_kern_closing_pair() -> bool {
+        !crate::env_flag!("OXI_CELL_KERN_PAIR_DISABLE")
     }
 
     fn cell_lead_middot_free() -> bool {

@@ -783,6 +783,17 @@ impl OoxmlParser {
             }
             None => self.parse_styles_with_theme(&theme)?,
         };
+        // OXI_EA_LITERAL_MINCHO: a package with no theme part at all gives a theme
+        // reference nothing to resolve, and Word draws its CJK in its own default
+        // 游明朝 (`_pb_ea_theme_base_gen.py` theme_none arm: YuMincho); a Latin face
+        // named in the slot is linked to ＭＳ 明朝 before this is consulted.
+        if styles.cjk_substitute_face.is_none()
+            && std::env::var_os("OXI_EA_LITERAL_MINCHO_DISABLE").is_none()
+            && self.read_part("word/theme/theme1.xml").is_err()
+            && s1425_template.as_ref().and_then(|t| t.0.as_ref()).is_none()
+        {
+            styles.cjk_substitute_face = Some("Yu Mincho".to_string());
+        }
         // An unstyled, unthemed package inherits the reference application's
         // Japanese defaults, as sectionless page setup does. Hosts may override
         // the family and size without changing document-declared properties.
