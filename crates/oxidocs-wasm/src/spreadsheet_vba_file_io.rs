@@ -194,6 +194,18 @@ impl WorkbookFiles {
         if matches!(kind, SheetKind::MacroSheet | SheetKind::InternationalMacroSheet) {
             types = types.replace("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml", "application/vnd.ms-excel.sheet.macroEnabled.main+xml");
         }
+        // A new package already owns its Normal font. Initialize that cache
+        // here so no-op font assignments retain it on the first save.
+        let descent = if kind == SheetKind::Worksheet {
+            font.latin_font_name().and_then(|face|
+                oxicells_core::row_defaults::font_saved_descent_twentieths(face,
+                    font.font_size.unwrap_or(11.0), font.bold, font.italic, font.font_position.is_some())).flatten()
+        } else { None };
+        let descent_attribute = descent.map(|value|
+            format!(r#" x14ac:dyDescent="{}""#, f64::from(value) / 20.0)).unwrap_or_default();
+        let descent_namespaces = if descent.is_some() {
+            r#" xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x14ac""#
+        } else { "" };
         for index in 1..=count {
             sheets.push_str(&format!(r#"<sheet name="{name}{index}" sheetId="{index}" r:id="sheet{index}"/>"#));
             relationships.push_str(&format!(r#"<Relationship Id="sheet{index}" Type="{relationship}" Target="{folder}/sheet{index}.xml"/>"#));
@@ -204,10 +216,10 @@ impl WorkbookFiles {
                 let width = if dimensions.0 > 0.0 { format!(r#" defaultColWidth="{}""#, dimensions.0) } else { String::new() };
                 let properties = if kind == SheetKind::Worksheet { String::new() }
                     else { format!(r#"<sheetPr codeName="{name}{index}"/>"#) };
-                format!(r#"{properties}<dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr{width} defaultRowHeight="{}"/><sheetData/>"#, dimensions.1)
+                format!(r#"{properties}<dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr{width} defaultRowHeight="{}"{descent_attribute}/><sheetData/>"#, dimensions.1)
             };
             parts.push((format!("xl/{folder}/sheet{index}.xml"),
-                format!(r#"<{root} xmlns="{main}" xmlns:xm="{xlm}" xmlns:r="{rel}">{body}</{root}>"#)));
+                format!(r#"<{root} xmlns="{main}" xmlns:xm="{xlm}" xmlns:r="{rel}"{descent_namespaces}>{body}</{root}>"#)));
             if kind == SheetKind::Chart {
                 parts.push((format!("xl/{folder}/_rels/sheet{index}.xml.rels"),
                     format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="drawing" Type="{rel}/drawing" Target="../drawings/drawing{index}.xml"/></Relationships>"#)));
@@ -675,6 +687,11 @@ impl WorkbookFiles {
     /// protect the row, and unrelated original rows retain their exact bytes.
     pub(super) fn prune_empty_cached_rows_xml(xml:&str, eligible:&BTreeSet<u32>)
         -> Result<(Vec<u8>,BTreeSet<u32>),String> {
+        Self::prune_cached_rows_xml(xml, eligible, false)
+    }
+
+    fn prune_cached_rows_xml(xml:&str, eligible:&BTreeSet<u32>, format_cache:bool)
+        -> Result<(Vec<u8>,BTreeSet<u32>),String> {
         use quick_xml::events::Event;
         let mut reader=quick_xml::NsReader::from_str(xml);
         let mut path:Vec<(Vec<u8>,bool)>=Vec::new();
@@ -704,7 +721,8 @@ impl WorkbookFiles {
                                 let descent=attribute.key.local_name().as_ref()==b"dyDescent"
                                     && matches!(reader.resolve_attribute(attribute.key).0,
                                         quick_xml::name::ResolveResult::Bound(namespace)if namespace.as_ref()==b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac");
-                                ordinary &= matches!(attribute.key.as_ref(),b"r"|b"spans") || descent;
+                                ordinary &= matches!(attribute.key.as_ref(),b"r"|b"spans") || descent
+                                    || (format_cache && matches!(attribute.key.as_ref(), b"ht"|b"customHeight"|b"s"|b"customFormat"));
                             }
                             if matches!(&event,Event::Empty(_)) {
                                 if ordinary {cuts.push((before,after));removed.insert(row);}
@@ -729,6 +747,48 @@ impl WorkbookFiles {
         let mut result=Vec::with_capacity(xml.len());let mut cursor=0;
         for (start,end)in cuts {result.extend_from_slice(&xml.as_bytes()[cursor..start]);cursor=end;}
         result.extend_from_slice(&xml.as_bytes()[cursor..]);Ok((result,removed))
+    }
+
+    /// A UsedRange read releases ordinary redundant cache records. Preserve
+    /// every other byte, including opaque attributes and foreign payloads.
+    pub(super) fn release_cached_allocations_xml(xml: &str, cells: &BTreeSet<String>, rows: &BTreeSet<u32>)
+        -> Result<(Vec<u8>, BTreeSet<String>, BTreeSet<u32>), String> {
+        let found: BTreeSet<_> = Self::xml_elements(xml, b"row", 2)?.iter()
+            .filter_map(|row| row.get("r")?.parse::<u32>().ok()).collect();
+        let (xml, cells) = Self::prune_empty_normal_cell_xml(xml, cells)?;
+        let xml = String::from_utf8(xml).map_err(|error| error.to_string())?;
+        let (xml, mut removable) = Self::prune_cached_rows_xml(&xml, rows, true)?;
+        // New allocations have no original payload to protect.
+        removable.extend(rows.difference(&found));
+        Ok((xml, cells, removable))
+    }
+
+    pub(super) fn cached_allocations_xml(xml: &str, cells: &BTreeSet<String>, rows: &BTreeSet<u32>)
+        -> Result<(BTreeSet<String>, BTreeSet<u32>), String> {
+        let (_, cells, rows) = Self::release_cached_allocations_xml(xml, cells, rows)?;
+        Ok((cells, rows))
+    }
+
+    pub(super) fn cached_allocations(&mut self, sheet: usize, cells: &BTreeSet<String>, rows: &BTreeSet<u32>)
+        -> Result<(BTreeSet<String>, BTreeSet<u32>), String> {
+        let Some(package) = self.package.as_deref() else { return Ok((cells.clone(), rows.clone())); };
+        let mut archive = oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error| error.to_string())?;
+        let workbook = archive.read_part("xl/workbook.xml").map_err(|error| error.to_string())?;
+        let relations = archive.read_part("xl/_rels/workbook.xml.rels").map_err(|error| error.to_string())?;
+        let sheets = Self::xml_elements(&workbook, b"sheet", 2)?;
+        let relations = Self::xml_elements(&relations, b"Relationship", 1)?;
+        let sheet = sheets.get(sheet).ok_or("Missing worksheet identity")?;
+        let rid = sheet.iter().find_map(|(key, value)| (key.rsplit(':').next() == Some("id")).then_some(value))
+            .ok_or("Missing worksheet relationship")?;
+        let relation = relations.iter().find(|relation| relation.get("Id") == Some(rid)).ok_or("Missing worksheet relationship")?;
+        let target = Self::related_part("xl/workbook.xml", relation.get("Target").ok_or("Missing worksheet target")?)?;
+        let original = archive.read_part(&target).map_err(|error| error.to_string())?;
+        let (xml, cells, rows) = Self::release_cached_allocations_xml(&original, cells, rows)?;
+        drop(archive);
+        if xml != original.as_bytes() {
+            self.package = Some(Self::replace_package_parts(package, BTreeMap::from([(target, xml)]), &BTreeSet::new())?);
+        }
+        Ok((cells, rows))
     }
 
     fn package_without_empty_normal_cells(package: &[u8], candidates: &BTreeMap<usize, BTreeSet<String>>, empty_rows:&BTreeMap<usize,BTreeSet<u32>>,
@@ -2348,28 +2408,12 @@ impl WorkbookHost<'_> {
         }
         let mut bytes = editor.save().map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
         let host = &*self;
-        let normal = &self.workbook.default_style;
+        let inherited_normal = host.inherited_normal_style();
+        let normal = &inherited_normal;
         let empty_cells: BTreeMap<usize, BTreeSet<String>> = self.workbook.sheets.iter().enumerate()
             .filter_map(|(index, sheet)| {
                 let cells: BTreeSet<_> = sheet.rows.iter().flat_map(|row| row.cells.iter()
-                    .filter(move |cell| matches!(cell.value, CellValue::Empty) && cell.formula.is_none()
-                        && cell.formula_utf16.is_none() && cell.array_block.is_none() && cell.spill.is_none()
-                        && cell.runs.is_empty()
-                        && {
-                            let inherited=host.template_style(CellAddress {sheet:index,row:row.index,column:cell.col});
-                            // A blank that exactly repeats a row/column/sheet
-                            // template carries no extra format. Compare the
-                            // complete style, including parent/apply intent;
-                            // matching visible properties alone is insufficient.
-                            let band=host.templates.contains_key(&super::FormatScope::Row(index,row.index))
-                                || host.templates.contains_key(&super::FormatScope::Column(index,cell.col))
-                                || host.templates.contains_key(&super::FormatScope::Sheet(index));
-                            (band && cell.style==inherited)
-                                // A bare Normal cell can cancel a formatted
-                                // band and must retain that explicit override.
-                                || (&cell.style==normal && (inherited==*normal
-                                    || inherited==CellStyle::default() || inherited==host.inherited_normal_style()))
-                        }
+                    .filter(move |cell| host.redundant_used_range_cell(index, row.index, cell, normal)
                         && !sheet.merge_cells.iter().any(|merge| (merge.start_row..=merge.end_row).contains(&row.index)
                             && (merge.start_col..=merge.end_col).contains(&cell.col)))
                     .map(move |cell|format!("{}{}", oxicells_core::editor::col_to_letter(cell.col), row.index)))
@@ -2423,15 +2467,24 @@ impl WorkbookHost<'_> {
         // row override merely by inheriting a manually sized sheet default.
         let manual_empty_rows:Vec<_>=self.workbook.sheets.iter().enumerate().flat_map(|(index,sheet)| {
             let removed=empty_cells.get(&index);
-            sheet.rows.iter().filter(move |row|sheet.default_row_custom && row.height.is_none()
-                && !row.custom_height && !row.cells.is_empty() && row.cells.iter().all(|cell|
+            sheet.rows.iter().filter(move |row|sheet.default_row_custom
+                && ((row.height.is_none() && !row.custom_height)
+                    || (row.custom_height && row.height==Some(sheet.default_row_height)))
+                && host.templates.get(&super::FormatScope::Row(index,row.index)).is_none_or(|style|style==normal)
+                && !row.cells.is_empty() && row.cells.iter().all(|cell|
                     removed.is_some_and(|cells|cells.contains(&format!("{}{}",oxicells_core::editor::col_to_letter(cell.col),row.index)))))
-                .map(move |row|(index,row.index))
+                .map(move |row|(index,row.index,host.templates.get(&super::FormatScope::Row(index,row.index))==Some(normal)))
         }).collect();
         if !manual_empty_rows.is_empty() {
-            for (index,row) in manual_empty_rows {
-                if let Some(row)=export_workbook.to_mut().sheets[index].rows.iter_mut().find(|held|held.index==row) {
-                    row.cells.clear();
+            for (index,row,dormant_normal) in manual_empty_rows {
+                let sheet = &mut export_workbook.to_mut().sheets[index];
+                if dormant_normal { sheet.band_styles.rows.remove(&row); }
+                if let Some(held)=sheet.rows.iter_mut().find(|held|held.index==row) {
+                    held.cells.clear();held.height=None;held.custom_height=false;
+                    if dormant_normal {
+                        held.format_recorded=None;held.style_font=None;
+                        empty_rows.entry(index).or_default().insert(row);
+                    }
                 }
             }
             let mut editor=oxicells_core::XlsxEditor::new(&package).map_err(|_|CopyFailure::Method(self.copy_method_failure()))?;
@@ -2513,6 +2566,13 @@ impl WorkbookHost<'_> {
         }
         for (index,rows)in removed_rows {
             self.workbook.sheets[index].rows.retain(|row|!rows.contains(&row.index));
+            for row in rows {
+                let scope = super::FormatScope::Row(index,row);
+                if self.templates.get(&scope)==Some(normal) {
+                    self.templates.remove(&scope);
+                    self.workbook.sheets[index].band_styles.rows.remove(&row);
+                }
+            }
         }
         if let Some((path, _)) = backup_file { self.file_io.exports.insert(path); }
         self.file_io.read_only_recommended = recommended;

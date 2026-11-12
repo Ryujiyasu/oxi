@@ -1791,6 +1791,13 @@ impl XlsxEditor {
                 .collect(),
         };
 
+        let original_descent_styles = {
+            let mut xml = String::new();
+            if let Ok(mut part) = archive.by_name("xl/styles.xml") {
+                part.read_to_string(&mut xml).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            }
+            if xml.is_empty() { None } else { Some(SavedFontDescents::parse(&xml)?) }
+        };
         let mut style_indices: Vec<u32> = Vec::new();
         let mut conditional_style_indices: Vec<u32> = Vec::new();
         if !distinct.is_empty() || self.indexed_colors.is_some() || !conditional_styles.is_empty() || !self.named_style_fonts.is_empty() || self.named_style_plan.is_some() {
@@ -1846,6 +1853,10 @@ impl XlsxEditor {
             style_indices = indices;
         }
 
+        let descent_styles = match patched_styles.as_deref() {
+            Some(xml) => Some(SavedFontDescents::parse(xml)?),
+            None => original_descent_styles.clone(),
+        };
         // Where each cell's style ended up, ready for the sheet writer.
         let mut cell_styles: HashMap<usize, BTreeMap<(u32, u32), u32>> = HashMap::new();
         for ((sheet, row, col), slot) in &style_slot {
@@ -2219,6 +2230,8 @@ impl XlsxEditor {
                     .and_then(|origin| self.validations.get(&origin).map(|rules| (origin, rules)));
                 let conditional_change = sheet_paths_by_index.iter().position(|part| *part == name)
                     .and_then(|origin| self.conditional_rules.get(&origin).map(|rules| (origin, rules)));
+                let font_cache_change = (!self.named_style_fonts.is_empty() || self.named_style_plan.is_some())
+                    && sheet_paths_by_index.iter().any(|path| *path == name);
                 if let Some(sheet_edits) = path_edits.get(&name) {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)
@@ -2259,13 +2272,17 @@ impl XlsxEditor {
                     if let Some(anchors) = drawing_package.ole_anchors.get(&name) {
                         patched = patch_ole_object_anchors(&patched, anchors)?;
                     }
+                    if let Some(model) = &descent_styles {
+                        patched = patch_saved_font_descents(&patched, model,
+                            original_descent_styles.as_ref().map(|old| (xml.as_str(), old)), default_row.is_some())?;
+                    }
                     writer.write_all(patched.as_bytes())
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                } else if protection_change.is_some() || colour_change.is_some() || header_change.is_some() || default_width.is_some() || default_row.is_some() || legacy_edits.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_legacy_drawing.contains_key(&name) || drawing_package.ole_anchors.contains_key(&name) || drawing_package.worksheet_ole_objects.contains_key(&name) {
+                } else if font_cache_change || protection_change.is_some() || colour_change.is_some() || header_change.is_some() || default_width.is_some() || default_row.is_some() || legacy_edits.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_legacy_drawing.contains_key(&name) || drawing_package.ole_anchors.contains_key(&name) || drawing_package.worksheet_ole_objects.contains_key(&name) {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                    let mut recoloured = xml;
+                    let mut recoloured = xml.clone();
                     if let Some((contents, flags)) = protection_change {
                         recoloured = set_sheet_protection_in_worksheet(&recoloured, *contents, flags.as_ref())?;
                     }
@@ -2286,6 +2303,10 @@ impl XlsxEditor {
                     }
                     if let Some(anchors) = drawing_package.ole_anchors.get(&name) {
                         recoloured = patch_ole_object_anchors(&recoloured, anchors)?;
+                    }
+                    if let Some(model) = &descent_styles {
+                        recoloured = patch_saved_font_descents(&recoloured, model,
+                            original_descent_styles.as_ref().map(|old| (xml.as_str(), old)), default_row.is_some())?;
                     }
                     writer.write_all(recoloured.as_bytes())
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
@@ -2371,6 +2392,10 @@ impl XlsxEditor {
                             &sheet.hyperlinks,
                             &relationship_ids,
                         )?.into_bytes();
+                    }
+                    if let Some(model) = &descent_styles {
+                        sheet_xml = patch_saved_font_descents(std::str::from_utf8(&sheet_xml)
+                            .map_err(|error| XlsxError::InvalidData(error.to_string()))?, model, None, true)?.into_bytes();
                     }
                     writer.write_all(&sheet_xml)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
@@ -12356,6 +12381,293 @@ fn patch_workbook_calculation(xml: &str, settings: CalculationSettings) -> Resul
     crate::compatibility::patch_version(&patched, settings.compatibility_version)
 }
 
+type SavedFontSignature = std::rc::Rc<(String, u32, bool, bool)>;
+type SavedDescentProfile = BTreeMap<Option<u32>, (usize, usize, SavedDescentContext)>;
+
+#[derive(Clone, PartialEq, Eq)]
+struct SavedDescentContext {
+    // Outer None is unmeasured; Some(None) is a measured omitted cache.
+    descent: Option<Option<u16>>,
+    fonts: std::collections::BTreeSet<SavedFontSignature>,
+}
+
+impl SavedDescentContext {
+    fn new(descent: Option<Option<u16>>, font: Option<SavedFontSignature>) -> Self {
+        Self { descent, fonts: font.into_iter().collect() }
+    }
+    fn include(&mut self, descent: Option<Option<u16>>, font: Option<SavedFontSignature>) {
+        self.descent = self.descent.zip(descent).map(|(a, b)| a.zip(b).map(|(a, b)| a.max(b)));
+        if let Some(font) = font { self.fonts.insert(font); }
+    }
+}
+
+#[derive(Clone)]
+struct SavedFontDescents {
+    normal: Option<Option<u16>>,
+    styles: Vec<Option<Option<u16>>>,
+    normal_signature: Option<SavedFontSignature>,
+    style_signatures: Vec<Option<SavedFontSignature>>,
+}
+
+impl SavedFontDescents {
+    fn parse(xml: &str) -> Result<Self, XlsxError> {
+        let nodes = style_xml_nodes(xml)?;
+        let mut children = vec![Vec::new(); nodes.len()];
+        for (index, node) in nodes.iter().enumerate() {
+            if let Some(parent) = node.parent { children[parent].push(index); }
+        }
+        let mut fonts = Vec::new();
+        let mut signatures = Vec::new();
+        for (index, node) in nodes.iter().enumerate() {
+            if !node.standard || node.name != "font"
+                || !node.parent.is_some_and(|p| nodes[p].standard && nodes[p].name == "fonts") { continue; }
+            let mut face = None;
+            let mut size = Some(11.0);
+            let mut bold = false;
+            let mut italic = false;
+            let mut unmeasured_feature = false;
+            for &child in &children[index] {
+                let item = &nodes[child];
+                if !item.standard { continue; }
+                let attributes = named_node_attributes(xml, item)?;
+                match item.name.as_str() {
+                    "name" => face = attributes.get("val").cloned(),
+                    "sz" => size = attributes.get("val").and_then(|v| v.parse::<f32>().ok()).filter(|size| size.is_finite() && *size > 0.0),
+                    "b" => bold = !matches!(attributes.get("val").map(String::as_str), Some("0" | "false")),
+                    "i" => italic = !matches!(attributes.get("val").map(String::as_str), Some("0" | "false")),
+                    "vertAlign" => unmeasured_feature |= attributes.get("val").is_some_and(|value| value != "baseline"),
+                    _ => {}
+                }
+            }
+            let descent = (!unmeasured_feature).then_some(()).and_then(|()|
+                face.as_deref().zip(size).and_then(|(face, size)|
+                    crate::row_defaults::font_saved_descent_twentieths(face, size, bold, italic, false)));
+            signatures.push(face.zip(size).map(|(face, size)| std::rc::Rc::new((face, size.to_bits(), bold, italic))));
+            fonts.push(descent);
+        }
+        let mut styles = Vec::new();
+        let mut style_signatures = Vec::new();
+        let mut named = Vec::new();
+        let mut named_signatures = Vec::new();
+        let mut normal_style = 0;
+        for node in &nodes {
+            if !node.standard { continue; }
+            let parent = node.parent.map(|p| &nodes[p]);
+            if node.name == "xf" && parent.is_some_and(|p| p.standard && p.name == "cellXfs") {
+                let font = style_node_number(xml, node, "fontId")? as usize;
+                styles.push(fonts.get(font).copied().flatten());
+                style_signatures.push(signatures.get(font).cloned().flatten());
+            } else if node.name == "xf" && parent.is_some_and(|p| p.standard && p.name == "cellStyleXfs") {
+                let font = style_node_number(xml, node, "fontId")? as usize;
+                named.push(fonts.get(font).copied().flatten());
+                named_signatures.push(signatures.get(font).cloned().flatten());
+            } else if node.name == "cellStyle" && parent.is_some_and(|p| p.standard && p.name == "cellStyles") {
+                let attributes = named_node_attributes(xml, node)?;
+                if attributes.get("builtinId").is_some_and(|v| v == "0") {
+                    normal_style = style_node_number(xml, node, "xfId")? as usize;
+                }
+            }
+        }
+        Ok(Self {
+            normal: named.get(normal_style).copied().unwrap_or_else(|| fonts.first().copied().flatten()), styles,
+            normal_signature: named_signatures.get(normal_style).cloned().unwrap_or_else(|| signatures.first().cloned().flatten()),
+            style_signatures,
+        })
+    }
+}
+
+fn saved_descent_profile(xml: &str, model: &SavedFontDescents)
+    -> Result<SavedDescentProfile, XlsxError> {
+    let nodes = style_xml_nodes(xml)?;
+    let Some(root) = nodes.iter().position(|n| n.parent.is_none() && n.standard && n.name == "worksheet") else {
+        return Ok(BTreeMap::new());
+    };
+    let mut base = SavedDescentContext::new(model.normal, model.normal_signature.clone());
+    for node in &nodes {
+        if node.standard && node.name == "col" && node.parent.is_some_and(|p|
+            nodes[p].standard && nodes[p].name == "cols" && nodes[p].parent == Some(root)) {
+            let attrs = named_node_attributes(xml, node)?;
+            if attrs.contains_key("style") {
+                let style = style_node_number(xml, node, "style")? as usize;
+                base.include(model.styles.get(style).copied().flatten(), model.style_signatures.get(style).cloned().flatten());
+            }
+        }
+    }
+    let mut profile = BTreeMap::new();
+    let mut row_nodes = HashMap::new();
+    for (index, node) in nodes.iter().enumerate() {
+        if !node.standard { continue; }
+        if node.name == "sheetFormatPr" && node.parent == Some(root) {
+            profile.insert(None, (node.start, node.head_end, base.clone()));
+        } else if node.name == "row" && node.parent.is_some_and(|p|
+            nodes[p].standard && nodes[p].name == "sheetData" && nodes[p].parent == Some(root)) {
+            let row = style_node_number(xml, node, "r")?;
+            let mut value = base.clone();
+            if named_node_attributes(xml, node)?.contains_key("s") {
+                let style = style_node_number(xml, node, "s")? as usize;
+                value = SavedDescentContext::new(model.styles.get(style).copied().flatten(), model.style_signatures.get(style).cloned().flatten());
+            }
+            row_nodes.insert(index, row);
+            profile.insert(Some(row), (node.start, node.head_end, value));
+        } else if node.name == "c" {
+            if let Some(row) = node.parent.and_then(|p| row_nodes.get(&p)) {
+                if let Some((_, _, value)) = profile.get_mut(&Some(*row)) {
+                    let style = style_node_number(xml, node, "s")? as usize;
+                    value.include(model.styles.get(style).copied().flatten(), model.style_signatures.get(style).cloned().flatten());
+                }
+            }
+        }
+    }
+    // A measured unavailable device font disables these caches for the
+    // entire worksheet, including rows whose own fonts remain measurable.
+    // An unmeasured font remains unknown and never licenses metadata removal.
+    if profile.values().any(|(_, _, value)| value.descent == Some(None))
+        && profile.values().all(|(_, _, value)| value.descent.is_some()) {
+        for (_, _, value) in profile.values_mut() { value.descent = Some(None); }
+    }
+    Ok(profile)
+}
+
+// Edit only the selected attribute's value. Other attributes retain their
+// original quotes, entities, order and whitespace, including opaque metadata.
+fn saved_descent_tag_attribute(tag: &str, key: &str, value: &str) -> String {
+    let bytes = tag.as_bytes();
+    let mut at = 1;
+    while at < bytes.len() && !bytes[at].is_ascii_whitespace() && !matches!(bytes[at], b'/' | b'>') { at += 1; }
+    while at < bytes.len() {
+        while at < bytes.len() && bytes[at].is_ascii_whitespace() { at += 1; }
+        if at == bytes.len() || matches!(bytes[at], b'/' | b'>') { break; }
+        let name = at;
+        while at < bytes.len() && !bytes[at].is_ascii_whitespace() && bytes[at] != b'=' { at += 1; }
+        let end = at;
+        while at < bytes.len() && (bytes[at].is_ascii_whitespace() || bytes[at] == b'=') { at += 1; }
+        if at == bytes.len() { break; }
+        let quote = bytes[at]; at += 1;
+        let start = at;
+        while at < bytes.len() && bytes[at] != quote { at += 1; }
+        if &tag[name..end] == key {
+            return format!("{}{}{}", &tag[..start], value, &tag[at..]);
+        }
+        at += 1;
+    }
+    let end = if tag.ends_with("/>") { tag.len() - 2 } else { tag.len() - 1 };
+    format!("{} {}=\"{}\"{}", &tag[..end], key, value, &tag[end..])
+}
+
+fn saved_descent_tag_without_attribute(tag: &str, key: &str) -> String {
+    let bytes = tag.as_bytes();
+    let mut at = 1;
+    while at < bytes.len() && !bytes[at].is_ascii_whitespace() && !matches!(bytes[at], b'/' | b'>') { at += 1; }
+    while at < bytes.len() {
+        let whitespace = at;
+        while at < bytes.len() && bytes[at].is_ascii_whitespace() { at += 1; }
+        if at == bytes.len() || matches!(bytes[at], b'/' | b'>') { break; }
+        let name = at;
+        while at < bytes.len() && !bytes[at].is_ascii_whitespace() && bytes[at] != b'=' { at += 1; }
+        let end = at;
+        while at < bytes.len() && (bytes[at].is_ascii_whitespace() || bytes[at] == b'=') { at += 1; }
+        if at == bytes.len() { break; }
+        let quote = bytes[at];
+        at += 1;
+        while at < bytes.len() && bytes[at] != quote { at += 1; }
+        if &tag[name..end] == key {
+            return format!("{}{}", &tag[..whitespace], &tag[(at + 1).min(bytes.len())..]);
+        }
+        at += 1;
+    }
+    tag.to_string()
+}
+
+
+fn patch_saved_font_descents(xml: &str, model: &SavedFontDescents,
+    original: Option<(&str, &SavedFontDescents)>, refresh_default: bool) -> Result<String, XlsxError> {
+    use quick_xml::name::ResolveResult;
+    const DESCENT: &[u8] = b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac";
+    const COMPATIBILITY: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+    let wanted = saved_descent_profile(xml, model)?;
+    if wanted.is_empty() { return Ok(xml.to_string()); }
+    let before = original.map(|(xml, model)| saved_descent_profile(xml, model)).transpose()?.unwrap_or_default();
+    let wanted: HashMap<_, _> = wanted.into_iter().filter_map(|(location, (start, end, context))| {
+        let value = context.descent?;
+        let changed = !before.get(&location).is_some_and(|old| old.2 == context)
+            || (location.is_none() && refresh_default);
+        changed.then_some((start, (end, value)))
+    }).collect();
+    if wanted.is_empty() { return Ok(xml.to_string()); }
+    let mut reader = quick_xml::NsReader::from_str(xml);
+    let mut edits = Vec::new();
+    let mut needs_prefix = false;
+    let mut root = None;
+    let mut compatibility_key = None;
+    let mut compatibility_value = String::new();
+    let mut prefix = "oxiDescent".to_string();
+    for suffix in 0.. {
+        let candidate = if suffix == 0 { "oxiDescent".to_string() } else { format!("oxiDescent{suffix}") };
+        if !xml.contains(&format!("xmlns:{candidate}")) {
+            prefix = candidate; break;
+        }
+    }
+    loop {
+        let start = reader.buffer_position() as usize;
+        let (_, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let end = reader.buffer_position() as usize;
+        match event {
+            Event::Start(tag) | Event::Empty(tag) => {
+                if root.is_none() { root = Some((start, end)); }
+                let mut held = None;
+                for attr in tag.attributes().with_checks(false) {
+                    let attr = attr.map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                    let (namespace, local) = reader.resolve_attribute(attr.key);
+                    if local.as_ref() == b"dyDescent" && matches!(namespace, ResolveResult::Bound(ns) if ns.as_ref() == DESCENT) {
+                        if held.is_some() { return Err(XlsxError::InvalidData("duplicate native font-descent attribute".into())); }
+                        held = Some((String::from_utf8_lossy(attr.key.as_ref()).into_owned(),
+                            attr.decode_and_unescape_value(reader.decoder()).map_err(XlsxError::Xml)?.into_owned()));
+                    } else if root == Some((start, end)) && local.as_ref() == b"Ignorable"
+                        && matches!(namespace, ResolveResult::Bound(ns) if ns.as_ref() == COMPATIBILITY.as_bytes()) {
+                        compatibility_key = Some(String::from_utf8_lossy(attr.key.as_ref()).into_owned());
+                        compatibility_value = attr.decode_and_unescape_value(reader.decoder()).map_err(XlsxError::Xml)?.into_owned();
+                    }
+                }
+                if let Some(&(head_end, value)) = wanted.get(&start) {
+                    let Some(value) = value else {
+                        if let Some((key, _)) = held {
+                            edits.push((start, head_end, saved_descent_tag_without_attribute(&xml[start..head_end], &key)));
+                        }
+                        continue;
+                    };
+                    let desired = f64::from(value) / 20.0;
+                    if held.as_ref().is_some_and(|(_, old)| old.parse::<f64>().ok() == Some(desired)) { continue; }
+                    let key = held.map(|(key, _)| key).unwrap_or_else(|| { needs_prefix = true; format!("{prefix}:dyDescent") });
+                    edits.push((start, head_end, saved_descent_tag_attribute(&xml[start..head_end], &key, &format!("{desired}"))));
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    if edits.is_empty() { return Ok(xml.to_string()); }
+    if !needs_prefix { return apply_style_xml_edits(xml, edits); }
+    let (start, end) = root.ok_or_else(|| XlsxError::InvalidData("worksheet has no root".into()))?;
+    let mut head = saved_descent_tag_attribute(&xml[start..end], &format!("xmlns:{prefix}"), std::str::from_utf8(DESCENT).unwrap());
+    let compatibility_key = match compatibility_key {
+        Some(key) => key,
+        None => {
+            let mut name = "oxiCompat".to_string();
+            for suffix in 0.. {
+                let candidate = if suffix == 0 { "oxiCompat".to_string() } else { format!("oxiCompat{suffix}") };
+                if !xml.contains(&format!("xmlns:{candidate}")) { name = candidate; break; }
+            }
+            head = saved_descent_tag_attribute(&head, &format!("xmlns:{name}"), COMPATIBILITY);
+            format!("{name}:Ignorable")
+        }
+    };
+    let ignored = if compatibility_value.is_empty() { prefix } else { format!("{compatibility_value} {prefix}") };
+    head = saved_descent_tag_attribute(&head, &compatibility_key, &escape(&ignored));
+    edits.push((start, end, head));
+    apply_style_xml_edits(xml, edits)
+}
+
+
 fn patch_sheet_defaults(xml: &str, width: Option<f32>, row: Option<(f32, bool)>) -> Result<String, XlsxError> {
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -18208,6 +18520,114 @@ xmlns:f="urn:oxi:foreign-style-probe" xmlns:mc="http://schemas.openxmlformats.or
                         <v>first value</v></c></row></sheetData>";
         assert!(patched.contains(expected));
     }
+
+    #[test]
+    fn saved_row_font_owns_its_descent_before_explicit_cell_fonts() {
+        let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><name val="Aptos Narrow"/><sz val="32"/></font><font><name val="Arial"/><sz val="26"/></font><font><name val="Aptos Narrow"/><sz val="11"/></font></fonts><cellStyleXfs count="1"><xf fontId="0"/></cellStyleXfs><cellXfs count="3"><xf fontId="0"/><xf fontId="2"/><xf fontId="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" builtinId="0" xfId="0"/></cellStyles></styleSheet>"#;
+        let model = SavedFontDescents::parse(styles).unwrap();
+        let sheet = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetFormatPr defaultRowHeight="42"/><cols><col min="2" max="2" style="2"/></cols><sheetData><row r="1" s="1"/><row r="2" s="1"><c r="B2" s="2"/></row><row r="3"/></sheetData></worksheet>"#;
+        let result = patch_saved_font_descents(sheet, &model, None, false).unwrap();
+        let mut reader = quick_xml::NsReader::from_str(&result);
+        let mut caches = Vec::new();
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(tag) | Event::Empty(tag) if matches!(tag.local_name().as_ref(), b"sheetFormatPr" | b"row") => {
+                    let row = tag.try_get_attribute("r").unwrap()
+                        .map(|attr| attr.unescape_value().unwrap().parse::<u32>().unwrap());
+                    let mut values = Vec::new();
+                    for attribute in tag.attributes() {
+                        let attribute = attribute.unwrap();
+                        let (ns, local) = reader.resolve_attribute(attribute.key);
+                        if local.as_ref() == b"dyDescent" && matches!(ns,
+                            quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac") {
+                            values.push(attribute.unescape_value().unwrap().into_owned());
+                        }
+                    }
+                    assert_eq!(values.len(), 1);
+                    caches.push((row, values[0].clone()));
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        assert_eq!(caches, vec![(None, "0.65".into()), (Some(1), "0.25".into()),
+            (Some(2), "0.45".into()), (Some(3), "0.65".into())]);
+        assert_eq!(crate::row_defaults::font_saved_descent_twentieths("\u{6e38}\u{30b4}\u{30b7}\u{30c3}\u{30af}", 32.0, false, false, false), Some(Some(20)));
+    }
+
+    fn saved_descent_test_styles() -> SavedFontDescents {
+        SavedFontDescents::parse(r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><name val="Aptos Narrow"/><sz val="11"/></font><font><name val="Aptos Narrow"/><sz val="16"/></font></fonts><cellStyleXfs count="1"><xf fontId="0"/></cellStyleXfs><cellXfs count="2"><xf fontId="0"/><xf fontId="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" builtinId="0" xfId="0"/></cellStyles></styleSheet>"#).unwrap()
+    }
+
+    #[test]
+    fn saved_font_descent_changes_preserve_namespace_aliases_and_opaque_bytes() {
+        let model = saved_descent_test_styles();
+        let original = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:a="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac" xmlns:v="urn:vendor" xmlns:m="http://schemas.openxmlformats.org/markup-compatibility/2006" m:Ignorable="a v"><sheetFormatPr defaultRowHeight="15" a:dyDescent='0.25'/><sheetData><row r="1" ht="22" customHeight="1" a:dyDescent='0.25' v:dyDescent='9.5' v:note='a"b&amp;c'><c r="A1" s="0"/></row></sheetData></worksheet>"#;
+        let changed = original.replace("s=\"0\"", "s=\"1\"");
+        let result = patch_saved_font_descents(&changed, &model, Some((original, &model)), false).unwrap();
+        assert_eq!(result, changed.replace("a:dyDescent='0.25' v:", "a:dyDescent='0.35' v:"));
+        assert!(result.contains("ht=\"22\" customHeight=\"1\""));
+        assert!(result.contains("v:note='a\"b&amp;c'"));
+        assert!(!result.contains("oxiDescent"));
+    }
+
+    #[test]
+    fn saved_font_descent_new_rows_avoid_prefix_collisions_and_foreign_elements() {
+        let model = saved_descent_test_styles();
+        let original = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:oxiDescent   = "urn:foreign" xmlns:v="urn:vendor" v:raw='x"y&amp;z'><sheetFormatPr defaultRowHeight="15"/><sheetData><row r="1"><c r="A1" s="1"/></row></sheetData><extLst><v:row r="2" v:dyDescent="9.5"/></extLst></worksheet>"#;
+        let result = patch_saved_font_descents(original, &model, None, false).unwrap();
+        assert!(result.contains("xmlns:oxiDescent   = \"urn:foreign\""));
+        assert!(result.contains("v:raw='x\"y&amp;z'"));
+        assert!(result.contains("<v:row r=\"2\" v:dyDescent=\"9.5\"/>"));
+        assert!(result.contains("oxiDescent1:dyDescent=\"0.25\""));
+        assert!(result.contains("oxiDescent1:dyDescent=\"0.35\""));
+        let mut reader = quick_xml::NsReader::from_str(&result);
+        let mut values = Vec::new();
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(tag) | Event::Empty(tag) => for attr in tag.attributes().flatten() {
+                    let (ns, local) = reader.resolve_attribute(attr.key);
+                    if local.as_ref() == b"dyDescent" && matches!(ns, quick_xml::name::ResolveResult::Bound(ns)
+                        if ns.as_ref() == b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac") {
+                        values.push(String::from_utf8_lossy(&attr.value).into_owned());
+                    }
+                },
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        assert_eq!(values, vec!["0.25", "0.35"]);
+    }
+
+    #[test]
+    fn saved_font_descent_unmeasured_and_unaffected_contexts_keep_original_bytes() {
+        let known = saved_descent_test_styles();
+        let mut unknown = known.clone();
+        unknown.normal = None;
+        unknown.styles.fill(None);
+        let original = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:a="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"><sheetFormatPr defaultRowHeight="15" a:dyDescent="0.7"/><sheetData><row r="1" a:dyDescent="0.8"><c r="A1" s="0"/></row></sheetData></worksheet>"#;
+        assert_eq!(patch_saved_font_descents(original, &unknown, None, false).unwrap(), original);
+        assert_eq!(patch_saved_font_descents(original, &known, Some((original, &known)), false).unwrap(), original);
+        for feature in ["<i/>", "<vertAlign val=\"superscript\"/>"] {
+            let styles = format!(r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><name val="Aptos Narrow"/><sz val="11"/>{feature}</font></fonts><cellStyleXfs count="1"><xf fontId="0"/></cellStyleXfs><cellXfs count="1"><xf fontId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" builtinId="0" xfId="0"/></cellStyles></styleSheet>"#);
+            let unmeasured = SavedFontDescents::parse(&styles).unwrap();
+            assert_eq!(patch_saved_font_descents(original, &unmeasured, None, false).unwrap(), original);
+        }
+    }
+
+
+    #[test]
+    fn saved_font_descent_equal_metric_font_changes_refresh_missing_caches() {
+        let model = SavedFontDescents::parse(r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><name val="Aptos Narrow"/><sz val="11"/></font><font><name val="Arial"/><sz val="11"/></font></fonts><cellStyleXfs count="1"><xf fontId="0"/></cellStyleXfs><cellXfs count="2"><xf fontId="0"/><xf fontId="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" builtinId="0" xfId="0"/></cellStyles></styleSheet>"#).unwrap();
+        let before = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetFormatPr defaultRowHeight="15"/><sheetData><row r="1"><c r="A1" s="0"/></row></sheetData></worksheet>"#;
+        let after = before.replace("s=\"0\"", "s=\"1\"");
+        let result = patch_saved_font_descents(&after, &model, Some((before, &model)), false).unwrap();
+        assert!(result.contains("<sheetFormatPr defaultRowHeight=\"15\"/>"));
+        assert!(result.contains("<row r=\"1\" oxiDescent:dyDescent=\"0.25\">"));
+        assert!(result.contains("<c r=\"A1\" s=\"1\"/>"));
+    }
+
+
     #[test]
     fn workbook_edits_preserve_opaque_attribute_values_across_repeated_saves() {
         let original = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
@@ -18258,5 +18678,52 @@ xmlns:f="urn:oxi:foreign-style-probe" xmlns:mc="http://schemas.openxmlformats.or
         }
     }
 
+
+    #[test]
+    fn saved_font_cache_absence_applies_to_the_whole_sheet_and_preserves_foreign_attributes() {
+        let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><name val="Aptos Narrow"/><sz val="11"/></font><font><name val="Yu Gothic"/><sz val="16"/></font></fonts><cellStyleXfs count="1"><xf fontId="0"/></cellStyleXfs><cellXfs count="2"><xf fontId="0"/><xf fontId="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" builtinId="0" xfId="0"/></cellStyles></styleSheet>"#;
+        let model = SavedFontDescents::parse(styles).unwrap();
+        let original = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:a="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac" xmlns:v="urn:vendor"><sheetFormatPr defaultRowHeight="15" a:dyDescent='0.25'/><sheetData><row r="2" a:dyDescent='0.25' v:dyDescent='7' v:note='a"b&amp;c'><c r="B2" s="0"/></row><row r="3" a:dyDescent="0.25"><c r="B3" s="0"/></row></sheetData><extLst><v:row a:dyDescent='8'/></extLst></worksheet>"#;
+        let changed = original.replacen("r=\"B2\" s=\"0\"", "r=\"B2\" s=\"1\"", 1);
+        let result = patch_saved_font_descents(&changed, &model, Some((original, &model)), false).unwrap();
+        let expected = changed.replace(" a:dyDescent='0.25'", "").replace(" a:dyDescent=\"0.25\"", "");
+        assert_eq!(result, expected);
+        assert!(result.contains("v:dyDescent='7' v:note='a\"b&amp;c'"));
+        assert!(result.contains("<v:row a:dyDescent='8'/>"));
+        assert_eq!(patch_saved_font_descents(&result, &model, Some((&result, &model)), false).unwrap(), result);
+    }
+
+    #[test]
+    fn saved_font_cache_measured_points_include_weight_and_slant_without_inventing_line_boxes() {
+        for (face, size, descent) in [("Calibri", 26, Some(10)), ("Yu Gothic", 16, None)] {
+            for weight in ["", "<b/>"] {
+                for slant in ["", "<i/>"] {
+                    let styles = format!(r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><name val="{face}"/><sz val="{size}"/>{weight}{slant}</font></fonts><cellStyleXfs count="1"><xf fontId="0"/></cellStyleXfs><cellXfs count="1"><xf fontId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" builtinId="0" xfId="0"/></cellStyles></styleSheet>"#);
+                    let model = SavedFontDescents::parse(&styles).unwrap();
+                    assert_eq!(model.normal, Some(descent), "{face} {size} {weight} {slant}");
+                    assert_eq!(model.styles, vec![Some(descent)]);
+                }
+            }
+        }
+        let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><name val="Calibri"/><sz val="26"/><vertAlign val="subscript"/></font></fonts><cellStyleXfs count="1"><xf fontId="0"/></cellStyleXfs><cellXfs count="1"><xf fontId="0"/></cellXfs></styleSheet>"#;
+        assert_eq!(SavedFontDescents::parse(styles).unwrap().normal, None);
+    }
+
+
+
+    #[test]
+    fn editing_default_geometry_refreshes_a_missing_cache_without_a_font_change() {
+        let model = saved_descent_test_styles();
+        let original = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:v="urn:vendor" v:note='a"b&amp;c'><sheetFormatPr defaultRowHeight="15" v:cache='kept&amp;exact'/><sheetData/></worksheet>"#;
+        assert_eq!(patch_saved_font_descents(original, &model, Some((original, &model)), false).unwrap(), original);
+        let changed = original.replace("defaultRowHeight=\"15\"", "defaultRowHeight=\"22\"");
+        let result = patch_saved_font_descents(&changed, &model, Some((original, &model)), true).unwrap();
+        assert!(result.contains("defaultRowHeight=\"22\" v:cache='kept&amp;exact' oxiDescent:dyDescent=\"0.25\""));
+        assert!(result.contains("v:note='a\"b&amp;c'"));
+        let mut unknown = model.clone();
+        unknown.normal = None;
+        unknown.styles.fill(None);
+        assert_eq!(patch_saved_font_descents(&changed, &unknown, Some((original, &unknown)), true).unwrap(), changed);
+    }
 
 }

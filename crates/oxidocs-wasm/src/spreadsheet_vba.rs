@@ -7184,11 +7184,9 @@ impl<'a> WorkbookHost<'a> {
 
     fn set_normal_style_font(&mut self,name:&str,value:&Value) -> Result<bool,String> {
         let old_digit = self.digit_width();
-        // A manual default equal to the old automatic default can still
-        // follow Normal when no saved row records pin that geometry.
-        let unrecorded_manual_defaults: Vec<_> = self.workbook.sheets.iter().enumerate()
-            .map(|(index,sheet)|sheet.default_row_custom && sheet.rows.is_empty()
-                && sheet.default_row_height==self.automatic_default_row_height(index)).collect();
+        // A manual sheet default without saved row records follows Normal.
+        let unrecorded_manual_defaults: Vec<_> = self.workbook.sheets.iter()
+            .map(|sheet|sheet.default_row_custom && sheet.rows.is_empty()).collect();
         let retained: Vec<_> = self.workbook.sheets.iter().enumerate().map(|(index,sheet)| {
             let column_formatted = self.templates.keys().any(|scope| matches!(scope,
                 FormatScope::Column(held, _) if *held == index));
@@ -14915,10 +14913,10 @@ impl<'a> WorkbookHost<'a> {
             .unwrap_or("Aptos Narrow");
         let size = sheet.normal_font.as_ref().map(|font| font.1)
             .or(self.workbook.default_style.font_size).unwrap_or(11.0);
-        let native = oxicells_core::row_defaults::font_styled_default_geometry_px(face,size,self.normal_style().bold,self.normal_style().italic)
+        let native = oxicells_core::row_defaults::font_styled_default_row_px(face,size,self.normal_style().bold,self.normal_style().italic)
             .or_else(|| (!spreadsheet_font_metrics().knows_family(face))
-                .then(|| oxicells_core::row_defaults::unavailable_font_geometry_px(size)).flatten());
-        let fallback = native.map(|(_,row)| if row>=546 {409.6}else{f32::from(row)*0.75})
+                .then(|| oxicells_core::row_defaults::unavailable_font_geometry_px(size).map(|(_, row)| row)).flatten());
+        let fallback = native.map(|row| if row>=546 {409.6}else{f32::from(row)*0.75})
             .unwrap_or(sheet.default_row_height);
         let columns: Vec<_> = self.templates.iter().filter_map(|(scope, style)| match scope {
             FormatScope::Column(held, column) if *held == index => Some((*column, style)),
@@ -17434,6 +17432,23 @@ impl<'a> WorkbookHost<'a> {
     }
 
     /// The rectangle a sheet's written cells fill.
+    fn used_range_template_style(&self, at: CellAddress, normal: &CellStyle) -> CellStyle {
+        self.templates.get(&FormatScope::Row(at.sheet, at.row)).filter(|style| *style != normal)
+            .or_else(|| self.templates.get(&FormatScope::Column(at.sheet, at.column)))
+            .or_else(|| self.templates.get(&FormatScope::Sheet(at.sheet)))
+            .cloned().unwrap_or_else(|| self.workbook.default_style.clone())
+    }
+
+    fn redundant_used_range_cell(&self, sheet: usize, row: u32, cell: &Cell, normal: &CellStyle) -> bool {
+        if !matches!(cell.value, CellValue::Empty) || cell.formula.is_some() || cell.formula_utf16.is_some()
+            || cell.array_block.is_some() || !cell.spill.is_none() || !cell.runs.is_empty() { return false; }
+        let inherited = self.used_range_template_style(CellAddress { sheet, row, column: cell.col }, normal);
+        let bare = CellStyle::default();
+        let plain = cell.style == bare || cell.style == self.workbook.default_style || &cell.style == normal;
+        let inherits_plain = inherited == bare || inherited == self.workbook.default_style || &inherited == normal;
+        (plain && inherits_plain) || cell.style == inherited
+    }
+
     fn used_axes_bounds(&self, sheet: usize) -> Result<(Option<(u32, u32)>, Option<(u32, u32)>), String> {
         let worksheet = self
             .workbook
@@ -17444,23 +17459,11 @@ impl<'a> WorkbookHost<'a> {
         // the range shrinks back after `Clear` and after `ClearFormats` on
         // a cell that was only bold, and does not count a cell that only
         // held a value once.
-        let bare = CellStyle::default();
         let normal = self.inherited_normal_style();
         let mut bounds = None::<(u32, u32, u32, u32)>;
         for row in &worksheet.rows {
             for cell in &row.cells {
-                if matches!(cell.value, CellValue::Empty)
-                    && cell.formula.is_none()
-                    && cell.runs.is_empty()
-                {
-                    let inherited = self.template_style(CellAddress { sheet, row: row.index, column: cell.col });
-                    let plain = cell.style == bare || cell.style == self.workbook.default_style || cell.style == normal;
-                    let inherits_plain = inherited == bare || inherited == self.workbook.default_style || inherited == normal;
-                    // Normal's format-reference metadata is not itself a
-                    // format. A Normal cell overriding a styled row/column
-                    // still occupies space (Native99), including after Clear.
-                    if plain && inherits_plain { continue; }
-                }
+                if self.redundant_used_range_cell(sheet, row.index, cell, &normal) { continue; }
                 bounds = Some(match bounds {
                     Some((start_row, start_column, end_row, end_column)) => (
                         start_row.min(row.index),
@@ -17509,7 +17512,9 @@ impl<'a> WorkbookHost<'a> {
         for row in &worksheet.rows {
             let redundant_manual = worksheet.default_row_custom
                 && row.height == Some(worksheet.default_row_height);
-            if row.hidden || (row.custom_height && row.height.is_some() && !redundant_manual) {
+            let explicit_automatic = worksheet.default_row_custom && !row.custom_height
+                && row.height.is_some_and(|height| height != worksheet.default_row_height);
+            if row.hidden || (row.custom_height && row.height.is_some() && !redundant_manual) || explicit_automatic {
                 include_row(row.index);
             }
         }
@@ -17519,7 +17524,7 @@ impl<'a> WorkbookHost<'a> {
         }
         for scope in self.templates.keys() {
             if let FormatScope::Row(held, row) = scope {
-                if *held == sheet { include_row(*row); }
+                if *held == sheet && self.templates.get(scope) != Some(&normal) { include_row(*row); }
             }
         }
         let mut include_column = |column: u32| {
@@ -17549,27 +17554,49 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn used_range_object(&mut self, sheet: usize) -> Result<Value, String> {
-        let CellRange { start_row, start_column, end_row, end_column, .. } =
-            self.used_range(sheet)?;
-        let held = &mut self.workbook.sheets[sheet];
-        held.pending_used_bounds = None;
-        if held.default_row_custom {
-            for row in &mut held.rows {
-                if row.custom_height && row.height == Some(held.default_row_height)
-                    && row.cells.is_empty() && row.style_font.is_none()
-                    && !row.hidden && !row.thick_top && !row.thick_bottom {
-                    row.height = None;
-                    row.custom_height = false;
+        let range = self.used_range(sheet)?;
+        let normal = self.inherited_normal_style();
+        let held = &self.workbook.sheets[sheet];
+        let mut cells = BTreeSet::new();
+        let mut rows = BTreeSet::new();
+        let mut normal_rows = BTreeSet::new();
+        for row in &held.rows {
+            for cell in &row.cells {
+                if self.redundant_used_range_cell(sheet, row.index, cell, &normal)
+                    && !held.merge_cells.iter().any(|merge| (merge.start_row..=merge.end_row).contains(&row.index)
+                        && (merge.start_col..=merge.end_col).contains(&cell.col)) {
+                    cells.insert(format!("{}{}", oxicells_core::editor::col_to_letter(cell.col), row.index));
                 }
             }
+            let dormant = self.templates.get(&FormatScope::Row(sheet, row.index)) == Some(&normal);
+            let manual_cache = held.default_row_custom && row.custom_height && row.height == Some(held.default_row_height);
+            let empty = row.cells.iter().all(|cell| cells.contains(&format!("{}{}", oxicells_core::editor::col_to_letter(cell.col), row.index)));
+            if empty && !row.hidden && !row.thick_top && !row.thick_bottom
+                && (row.style_font.is_none() || dormant)
+                && (manual_cache || (dormant && !row.custom_height))
+                && (!self.templates.contains_key(&FormatScope::Row(sheet, row.index)) || dormant)
+                && !held.merge_cells.iter().any(|merge| (merge.start_row..=merge.end_row).contains(&row.index))
+                && !self.notes.iter().any(|note| note.at.sheet == sheet && note.at.row == row.index)
+                && !self.threaded_notes.iter().any(|note| note.at.sheet == sheet && note.at.row == row.index && !note.deleted) {
+                    rows.insert(row.index);
+                    if dormant { normal_rows.insert(row.index); }
+                }
         }
-        Ok(self.object(HostObject::Range(CellRange {
-            sheet,
-            start_row,
-            start_column,
-            end_row,
-            end_column,
-        })))
+        // UsedRange releases redundant caches without dirtying the workbook.
+        // Keep allocations when their original XML cannot be qualified.
+        let (cells, rows) = if cells.is_empty() && rows.is_empty() { (cells, rows) }
+            else { self.file_io.cached_allocations(sheet, &cells, &rows).unwrap_or_default() };
+        let held = &mut self.workbook.sheets[sheet];
+        held.pending_used_bounds = None;
+        for row in &mut held.rows {
+            row.cells.retain(|cell| !cells.contains(&format!("{}{}", oxicells_core::editor::col_to_letter(cell.col), row.index)));
+        }
+        held.rows.retain(|row| !rows.contains(&row.index));
+        for row in normal_rows.intersection(&rows) {
+            self.templates.remove(&FormatScope::Row(sheet, *row));
+            held.band_styles.rows.remove(row);
+        }
+        Ok(self.object(HostObject::Range(range)))
     }
 
     fn worksheet_axis_object_or_item(
@@ -22512,7 +22539,21 @@ impl<'a> WorkbookHost<'a> {
         Self::range_cell_count(range)?;
         self.invalidate_plain_row_format_records(range.sheet);
         for address in range.addresses() {
-            self.update_one_cell_style(address, &mut update)?;
+            // An unchanged point format already supplied by its row or column
+            // does not allocate a cell. Whole-band intersections still need
+            // their explicit cells, and an unformatted point still allocates.
+            let inherited_band = self.templates.contains_key(&FormatScope::Row(address.sheet, address.row))
+                || self.templates.contains_key(&FormatScope::Column(address.sheet, address.column));
+            if inherited_band && self.cell_here(address.sheet, address.row, address.column).is_none() {
+                let inherited = self.template_style(address);
+                let mut updated = inherited.clone();
+                update(address, &mut updated);
+                if updated != inherited {
+                    self.update_one_cell_style(address, &mut |_, style| *style = updated.clone())?;
+                }
+            } else {
+                self.update_one_cell_style(address, &mut update)?;
+            }
         }
         Ok(())
     }
@@ -22930,8 +22971,11 @@ impl<'a> WorkbookHost<'a> {
             sheet.default_row_height = height;
             sheet.default_row_custom = true;
             for row in &mut sheet.rows {
-                row.height = None;
-                row.custom_height = false;
+                // A row-wide format is already a stored row even without cells.
+                let explicit = height > 0.0 && (!row.cells.is_empty()
+                    || self.templates.contains_key(&FormatScope::Row(range.sheet, row.index)));
+                row.height = explicit.then_some(height);
+                row.custom_height = explicit;
                 if height > 0.0 {
                     self.wrote |= row.hidden;
                     row.hidden = false;
@@ -48230,6 +48274,1832 @@ mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
 
+    #[test]
+    fn used_range_cache_release_keeps_opaque_payload_bytes() {
+        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:q="urn:opaque"><sheetData><row r="2" ht="21.95" customHeight="1"><c r="B2" s="0"/></row><row r="3" ht="21.95" customHeight="1" q:keep='a"b&amp;c&apos;d'><c r="B3" s="0"/></row><row r="4"><c r="B4" q:keep='a"b&amp;c&apos;d'/></row><row r="5"><q:payload/></row></sheetData></worksheet>"#;
+        let cells = ["B2", "B3", "B4"].into_iter().map(str::to_string).collect();
+        let rows = [2, 3, 4, 5].into_iter().collect();
+        let (edited, allowed_cells, allowed_rows) = file_io::WorkbookFiles::release_cached_allocations_xml(xml, &cells, &rows).unwrap();
+        let edited = String::from_utf8(edited).unwrap();
+        assert_eq!(allowed_cells, ["B2", "B3"].into_iter().map(str::to_string).collect());
+        assert_eq!(allowed_rows, [2].into_iter().collect());
+        assert_eq!(edited, xml.replace(r#"<row r="2" ht="21.95" customHeight="1"><c r="B2" s="0"/></row>"#, "")
+            .replace(r#"<c r="B3" s="0"/>"#, ""));
+        let mut reader = quick_xml::NsReader::from_str(&edited);
+        while !matches!(reader.read_event().unwrap(), quick_xml::events::Event::Eof) {}
+    }
+
+
+
+    // Exact saved packages used by the independently measured cold controls.
+    // One compressed container shares them across all observer/resave cases.
+    fn cold_cache_native_fixture_file(name: &str) -> Vec<u8> {
+        use std::io::Read;
+        const PACKED: &str = concat!(
+            "504b030414000000080000002100fc4d97dd7a110100c23a040006000000696e70757473ecdd05505e5bb6286a5c82bbbb070f0477770dee102cb80497e01e5c82bb05777777d7e0eeeef692ec3ea777e7ee737bf7e9beefbe7ee71fa9829f4aad45256b",
+            "ce35d69af3ab313e130101c9498282a1024100410101011101652b768fca00030141810101a100418168085a59da1b5adaebbc73b636b4d3a273b23027cc0403a14c07020102c4ffe8288a1e94e9644014be117b14dca40d5eaae0837a7be4dd8bdc4049",
+            "a0bb2eae3f4deffc6de2991be5a69c2f03ed036bb9fee8373b6ea6d421961954b3c0fce6af7309e1aac025d7128d35fa6921b5e7916809d98a134e90688b2015f397d7461573106dde1578ca4592545cd05e1f2195896f8071539879d4bfecb2d610f7b9",
+            "506920de648dfbe4374bae2a7c7181634969e2235121472bc55958660fd28d401b6d6c4b5562c4f21eaf96da7c5794722f4c750326f3851d8213eff4b33903a3d8aeec33c4e1054f3eb33c35e5f69b5c47d37eff39ccb3a38df3c107325eda37ab13ac61",
+            "25fc772e860520b882600565a06233a74db6d4d59cb73ceda3ed94e76f5a2a229f3dd46e43c3859e20225be335fade187f4aa881385d301ccdcceb9b2a75be0436b525794cf3c01ce66984250563346583df918b0e174abc0f2985796a54488798236edd",
+            "d843f8fe3ff9f202facb34ac566220b9fcfe49eafb2c83f93e0d756c0dcdede8e97e7c054c3f40fc9c7e51d2b29d0cb0fe27628f017d37d34b118802928efc628d44ef3c3e897f43a80ecb22c5596aa5c0457c87ed032aead9ecf138b0b8c415b6df4774",
+            "bdce5c14828cca4952e358ec1f7f6ff311f235b96d9c884dd15a1792c3f4d5f4f5175109674a87e6f0d75febf23324fb57484426cf84ca1147e954b0a1517270fdd1b9bf78a9f748ab2debdf96004f0b281e15fb97d5b2a6ef478f2679cec6e5eec1f106",
+            "b24b1d4e7c41ebb3d3379e2f71eb3327babac356523461372dd34fb5e52076d6796fde762194d48af2e4462b93dca740cc8c7cfb6654b4972cfdca53bd8af96c30c5b98b15baf36bdf69bf770841fe32f01f4d92d0707bf0715020a0246820a01fd3c8c9",
+            "9cded1cad64cdfcacaec479e2a525eb4dc604174a71ff344bc1c098ca13cf0668339d067e6ab8042b69a0081400f15ea352795cfa15ce42f7b59ce70eb2fa6fc660ea781da3fbef6e50b13499ac7fc546cf57a214a05d6e226d822bad52bb5e06d3d73cf",
+            "246979138d1423e9fed7f3a7e54f5d9c0f83f3a5adc925392e4df1e7e3209f727116258b17e76c1af4fbcd6652fae258cb2a230a8db073f7dbf7d4bbd5e669d9673f6ed56186272706f52c1377ed63c2d6ab067a1b57ec9a2defd206aea34df2b56a04d7",
+            "2c664d77335abf550c770f79a5560b6443ff3a230d426eb130e4f6312332784965f5daff7646a4dd118cd77b6dfd58d6bb1841743a53ae221ac61d646c24ee12f205da01ca19c57bb81713374008af5ba563f3b44d228ca7ff837d1b76f327a4c74913b0",
+            "ecb72664feabeec8c3bcd6764795937ef9b747ca0de8668ba5452c5f0acdbfeaa78c486638b3d780260cbcf5ac4cbf67d913066fc4bf5e6a731881b76d5150eec7282abd84f56d0a2058a473e00e0d23833250302dc1ce757e8d03c7f1edeeaa3211a76c",
+            "3207cc4f63f6b1549b12de0ffc1e44676d203861c951458abe585bc980336c6785c3dab324f59eb7db6da2066bd2dc83084679d8b8c972c796646c3f35e3edc187770c94d2601ea150d77d8fb16ef3bdea770820467e41c1a07af30a2bcbad08484ee9eb",
+            "cd62a55515abcf5c8d9f8496cad0b2e1bae48f0bef71cf913d3c7bbac8f4e2024c365de832e5a3328244dd99cf2aa9464013a3981f80b5f3e535c5660eb6645e41d8992bf63d04144bd6cc9f20e2de64bab1bf609df0f4859ed03d3413f4284e5e5a82eb",
+            "38d267322a9ad951242a94f4b210d3395d5c3a34e0b39c0815c413e6422932cc973cf574772263a2f0328cf2db601a193cb0835264e9c6a4c76cb2678abf0286ea84ad77c676d6dedc464cf18abc089e18d3f65a60501f964366cddd42dedd30621ef773",
+            "454b629a7216f73f3c2200dd43950331c28425f15eea533d0d6bd9bd64f0be071b23419505c195f7b51b15650ed54455e87b27c1c47ae3c33588b2b2d9db84bffe92250e2f8c78b2c2e9bf1545c5ad58e4e45b3bfd5687b40894cc020fa4a5b49fdc2341",
+            "37102b53f18d708c1026597f20f158d40e24a9a49de7bdc04c5debedfb9057296ba623f6085b66af1d137ab739968af1d13116fdb4529751b5dc52bed49da43eb376e29cb6ac8b62cb5a85334bb56a8fd0855735f719af9ce4f662cbd2459bdb363d6dde",
+            "bb9cf7d2bcb87bfa5e84037f5c26e32261eed0e6e14f8d5710f231fdd441751d299a6177cbdc0f0daf8dac5d1c32bd737ea4605cda7779d51aa8c5f4e68e75f5ec983e6edaa679d19b85216699efdb18c1fec127876bd63f4c9161010bd6abdf3fd17ecf",
+            "84d84050c0df67ff6f59f2f7f780ffc898c0df3326f0fff88c1139f8e1e7039bdfb34f823bb7c3ab9c98bef918819aee2720a27082ae385fa3a8194f9d35ef253e319679a81288253b520b47de8d7419d4fa1b19c1c8adf43e359d9b92e9532577ae666f",
+            "7dc612161fc76c3d627fadbbdbb2a7ec76318e2e2d02d51cf45e6c8ec853ffbe9aac71eb6dd07a665337dcb06c4c0dd81e7c29c9bafe0b8cd017ce74ae83770fea82df6647d30ba948cf8f2c57989b731cadc249d8eb3ff1c5998a61c8c506d106f9b726",
+            "9389b60dde0e739f45a5fa29dfe3da688798c17773e3b5b873598b927eedade8669345c7e27ad83cc7f8a3f1b172333237f0fd9ad77ecf10987fcd0e76268686f676f43fbf31fe1822c9d1edc18b0c88fe277e2d3e634b714773e2b8eb34f3b992377294",
+            "479627155c35c234fd6203e419974b9c0e81b51192aa657c4c336e2fa146551e6c059f9bbc3e4eec7af7e809419be8bd2e48f26e69e102979448de69584f19971b6362bb2fbb7b34756776385107928d48d7e2d73879403390a94aaf839146c07e99ea79",
+            "7d3c5e0567d70cae1dc65f68208e3afc655d611246cff0442fa1210ec4410417d5c4d34b75b7aef7518bdad53187ca0641c6a691f7d28ba15054888a736f942406994c79348c252e1e6fc63d5891aeaf7f3d7e3551cb50e4252c2aaa03dbf80301f1172d",
+            "db165a5e63f60d7de2a5194f0c72992f7eaceccca778b16e34396c49aafd9ce6d7fc736ede70b3862a906a6897a38f6671561bc2d8d9e17b061196c6e2659a34d1841295f4ce71b91747742f92ac0712fa010185817e0de98b0915c32eb8a92bc89f8f5b",
+            "b9cf9a1ec1f1a010281115df0c19990e79b0dd8696984019b296cb6e983f97657b271270bc4ce2b67a99abeb8c91c25f8422db582fe77f45e937685499768694597d24e290ca6b72f86687baef0cba526f91ed90ede3c25595dea5dd271fe86a754f64ef",
+            "859c73466953adee46f8c907d1cfc9b09af1f9032cb894ace505c21f5dff23a5a9be6e48202034e21f6fb23fafbfbd89a185e16f5f7f5efa43f52533d27a244f844d4fc4271ece25ee1523e3f03bcd9592a3b707f3703794a326b9d5cab5d8e206ae5090",
+            "7a709037c8509a02dac8e7710188b6113eb84411bc3d6592b677240a0a3752b55c898b571ed6f1ba0f391a175f274abf4a284d2bacbc6cbe31da4d8612779eb8f2766d09107bb3c59448d3b05cd95f37711df18eed8b5e0fcac495b2904b1ad7ed9eecf1",
+            "06375a64026184ec26feb14ba4c29e76f5eb3c86d02deed428308f243b2403f05a7df91468376017036538f756b5304669ae9855cc299e2fa37b31e9075fe94b4a9f6ddcaf5c4fda5dbc917cd490c9aeda6282508a5355152038396198054a363f41db7f",
+            "569bf5a9377ad417a08b0dc08c7be5b1ebd27277518870ac72a64dd735053f1ff56dee71cbb6beed9086d92eb87bcf48c113b5e6a05da41598a13a0ca7faea45240d78750f3595794361068b39d18373a89c4cce616f6cc914fc2d8ece84cee23aae7de2",
+            "5399e51e6bba94a7fb03566fca7899de1a1c65276bcd2937efa1e307f4e54f6fdcec607408aed4d7fa3a70e4ba4c6c6bc22c6b168e8c3e2ff36d271f71aea5184d5ac1d93979799bcc09c5a7ea8fa05453cfe83f7a8730023147e809a3642b537dd9a012",
+            "b2a557d2cc248aa5eaa446c8615b43f67f628022bcdcf7a8bb6345ef75058bcf7e4baf4b5cebcf4c409ae79d5b78c00d52ac0d7dbebf6855aae361f7746e35aba2324bffe20dbf4bacf0e5b5a425014548c53747cfc7694f8f1b98cb93d6e7b5c6528fa3",
+            "9ec137cf5769ad6e4f379e1e692eaa1ffca8b49fb60f6657dc9ef66b5b1f67d35a6c4d4ea0ddd4fd654da44839883176a9c2d780c3a8cc9f37df7d93d147d6fb20be0a65cff92efcdd7be070e5847a6b77fda4d3fa4f341b203c9a2d6575a942fa05f906",
+            "dbbdf2e6c008ecc6ee74c9104e453bafd59c2aa4d08ffbbb2b425d83cfeacd8e81656820c3e3a8b255f615d80303852f12d684d6c0c50305ee593d440237f678b2a62a0e88525ed1dd69668c52ee1bec33f7fba6aa7bbd833a9ac47cacb0450253d1a861",
+            "77fb7c9f5c9fea223662414a033384bb49e1ab66e41618ffaa972e1605b7b2a21da12c58935456595fbd272c1b44961e6ac3849944a1e17d2a94d372d424818198b94c2d41859239895fa6315d0a64c2c51bdbbe5108a4cf8a14c68942868779e7b002a8",
+            "5906259aa78296a588ee081e6dfd328ebc795db6374928ed4c62d68612c29f7675e23ad606037c170f6cbab713ea2aa464bb941d8ea0f7433f3fdbeaf95d0313c1eaac6211edcee7c143b8a7aab3d08bf106137e3d4451d1e5ee7028da7ff015f396d2a9",
+            "4c2146c8af12b8f6a5b985e709f88a1364ec178d19a29518de76a0bc9bfa4a35f4f38e5b47aeb1e12a921f3ae27ab7690c05b27d8cb76b95e4818d6ff142ce490ea7b64ac7f9ca6211a36a3cbd65231dbfff377508e4078d4523ef2f6ff9911850a4c6bd",
+            "a897bc03b79e05846695486aec07868f8435ea80b149beae04999ee76eef40c1b4d37b242cef647de4b6ec3e993c391ca07e606d48d6aa7b695f360a8cef67f4b2ad48a93b564f6a9ce97968b5b27028de6af4df2ec9a83733d12cd525c8c9a072c134b1",
+            "0a2ec6af3c4339f976f345b147662a3812d4b4c683b46966a887c1e43a7ba867d38880216c558117414a770d1d04078bb4ee1e4b695cdc57718ee0d510ddb6c0762106728e66474d24168b6be1a6bf65e55d5528c21dcde231f383a48791409012e331ab",
+            "ee06154e40f1ebd88ca46237b90b0d4556730ca3af1fa5f90697fd854cdf24090df36756e3bb814237db5deba9dae3d22ca83f2d2869e4027dc0296d7365f5aebd2a99cd370ed5158577b9fc72adb8bd5fed586dc7939fe788151d4b0254835ecbbd34ae",
+            "e9c893ead14033b5dc31890ebd114353648edca392db1e8dd404b733aeb6ecf8d2f2a9b1b894d34f92d66501f5605a6ecca49ad7bff423727d248eaac2082a0d3f46598fa0aa3d7ee27ad5c1b0de0a26dd06aab7e8be23fd10ba35109312b1c6d94994ba",
+            "02d134e22065655d3fc7174ffdc240bed01e2d59de17725c55fd2831911250c99b5e09ba2998e35e11f8264bd72f433bef0b073ce8c34c248d6b23d62bdfaf3d4e07b672aa4a9e93d53d90266aa52bd6a0ca32faaa66a1999c8ce4fb6ef810da5d857638",
+            "cf9147a39d3966bdd99a5fe1d87c7dce6864ea7b11a530b28df50d35060ecfaeb69c7f8fced38861b7065a16a3a1a3c571deddae78268e7adf208f3251597ddc7032459a573b96befc75617ef7ebc125563b4be3944342b914c3f52733cf2075c62fc2d2",
+            "4ccb239d1ca63b592cd50873483185b276014b2cc21da6418eb44f848e4c1f3efaa9b2c6919f0eaf39df9927a5b57cda64f455ec221b9469540371ccad960af73b3ba24a2b3e9724af148abed364cd517bed29b11d3842d7a8bdbb8f7bd1b9d184a30b9d",
+            "2e3d0a436d4eb27b786dceaf75683b6ede6ee95bc9722dd2fa01c68a74a6b70847afb27a37b3986e9662bf418595c92cc050d662a2ac1c55d34203e9f30bb8ff0c3be7d0b02dfde617c958c7056bbf386f87e6b487306d77441608b4d6254ca5fdea061d",
+            "5356976a89d2f17cf02c91558487b51d3e59619bb1be160fcc4e53448dad15be84b3e213c2f52bafd966aaf0afdfdc76e4de2eb3aef083651c7006063df7b5838a82145ba34e756ab3e5c3faf3572a20040c4b342a1d2841e8d9615ea79bb0f6368f72db",
+            "5bb6f17bb2e186e3e8e5b003692e9dbc7dddec6121675a23fa648d1bba2f48d0e67c57ef5b8b996267a7d196b376b5dafa876f051183eab1f5dfdf0884218080e07ecbfa76f6cee686763ff27df6bbe10f8b7c882d18f7f083cbb1b1a883d561d972bd48",
+            "600a94a47edab31303da15bc46d5325b71da518e9497702e07396363b38c9bec1cd477a2e439b4fdc29c9c9cf7db497746ac3c05397cac43ef34bf82418af288486d35ac7e885b7554f9c2da965ff10eed9d493772933e1a8fb84e4b207523f2a1ed4882",
+            "30504621d868b1562854c1397b7415c7044cee6af69488028c0613c9740783fabb630a2ab1dd0777622a953a61ccfe474f3ed2b7b3837ef166f5e971b2f5ab0ed3ba7aa417e37752a6827920f933fce1dbf9f0f7e442d5f3e4a64de1e762a9385a7b13f8",
+            "c074e386fd76d709c711b0d0c337629f1e99b309893d9ce45c2d5203a748fc97ac2908643614a8353234e963c119bdf2cdda77d5f7105edb898ecc8be4d85c212dc901a70245338f548f41a845c073cc3aa1c6168539d5b5eaac3cabae3c6bae2c155bb5",
+            "369e4649d0291fd9ece276e52cd3a025db11390809c4a3e09ac206ab19bd83c0a92a2f5586e9cbd7ad534f203f2618671254e1c7fce84128ddc19cfa41b18de144a3ec634eb96e0e78a6ffe8b665b50bf04a410d3a98ec86f7e417e577750aea1129c05b",
+            "9b528192aca72783a0870d421fa8984c4743c03aa76da4e712e5fa7acccf16c23a4f32abe746fd853f3a072204e22d40663bee4546b3b523acb4f03cde83745678f14d9261c47de5458418ca5cae6d737ca5eab898b87d58c147f14a7922a74ca5b113ec",
+            "e488b5685512eb3873f91cc70227f0fbcf3079efc61cd9552de85f63d2ab8e4f9c827972e0b462cb8c548ce1dc6e78cd721a45b286f6a0d0efa77ca68836df0d78dedb1949f1ec09b34acd67f66f642e046b8231523ccced1a6ca66f4f91966cfd229fbe",
+            "b4c503fbf07c4079da7c3887d0a49d06dfc4ffc2765e410945f1b47c4b3390097fb31b44ef23eb9dee6e807b67f2befebdf7d762650dbf066d44e81a4f2a6ff358c2871bde27b83f1ae391f577d1a1dfdf6cc6bf8f73a4ef6fbeefad0ce46cadacede80d",
+            "ac6c0dffb2430378e1fdb9443a28d1c580e977e37d225771929d8214395190be2ec16f2d648311b5523e974b16f4b912c7480e11ec23359d90a61330b896737b7cbfa67667959d8d90ca3a5d3ffb1ddb8bf8e3fc135bc5355f1fc39ae1263aee7be03c68",
+            "18e7ead099d721d7b015d9c4c991946b72221f234c5812924f4df7c785da82c514105f83996221c7e34b0f9a68144c75aa4e580406d16042b2ae2b13eb670e29bfb391d8852f00a1e31861fecc8f2482da8e3526232ac4ccf7864320b791780038543f90",
+            "10a284d40186eef9fc3562f9e395404928fb86dcb422d324e1315bd2780b9bedc9a0f5fba2e90f7eea54e17ae78d4e06cea66f09a6e19d67d0c0516f435dde01c90741d96f54b93acf3af39ab6a6dd94f0da5f88d4d27dbc106625a8fc782151bb6c7fa0",
+            "5c4b67bf31b4cf85fb312d953300b2617c7749a74a27dc9d0b6230383cf0dde076588d80aedd95e7eacbfbc44767ad27a24f6ab940a53ab3726af4c3f4efd0e5e5ec83276b0e162ccbd7639aa236d81593d436ad6e2a05ee21cf086fd38204f9563708d2",
+            "186ec1fe68082fcfbb87a77c1f9f58df5fce117f3f84f5acad0123f8af911c556ef96371e206c41dd2cb558a1dcebb2d1d1355260496ea439b83833f879a10551421bdf712a3f63d0b56e5a5c52331bb7820496d4ac3d292e7e3dd99d3bacbe25c915f42",
+            "a82378928c6d9cd7640bb3a562d9d5fec13cda20f26b95d70778a8e690415a83e1045dc4f7404870d9a1349aaf55c3308d9229b404b3267cdf8b4a6c1964454cd4adb51486fae39412e058f78d5e3c4675a2b7c7caa5fa6511e1e01ad33e979aee7dec8d",
+            "3f5669e46b5370836fc72e8ed0a66ac5c2733f4733d2a9c12e5a3590475c42be3460ae8bae5fdd7847535dc14061a04695c4777ae35d073e0d67912125a550c566c69f15aef686d7d47c87c6550e9a23d9bbfa35f6564459430dd19e010eb288f31c2fc1",
+            "752b82ec68405e3cdddc0b723236643942af714f797dc4648b97f764cf882e10f11aea47c331817b6dda775d9e11b2bd9bdc9d6ddcab346640b8c7b81757b27949cfa7a90fe494b5246b984b583724c59d032b94beb5e5a9e8dd15ca4812f7411b73e1e0",
+            "36922861354c5f66072cd2dd0eee3476e3563de6ecd99b9337d36cef57e4a54f6f52e24afff3c903188416e8bfda3bff35fe6027fdd713fcedaedfef23e0fb3cf9dd1ee0af07feba13f2bb5b20c4ffb22ff2ebc17fbb90fafb287cf5f3e0ff6259f5d7f3",
+            "fcbae0f6d71880fdaf97df7e3dcbafcb36bf3b0bfc1f2ee2fc7a825f9f00ff1a6de8bf3c0ffe7ae8df26d6df47361610d0ff92667f3dfc6f6f6abf0f63dcdf1dfe975b9c9c2438c48fbf83fefe87e7fb2fe420f8f15307406400022032002203100091f1",
+            "6f2732f672f0f2c7fe7722c3c22a8b0df1d963e209b2cb919e05534c6e12adb441e2a8f043e5510aaae996f7e4edab04a65cf1ea85170f83f389da49aad966caf6397c7c5ea68ba188efff98dc1afcfa7d3f7363963b5f8b90da9c222157decad61118e6",
+            "f262edca1afd6af3bb218ff5e6a7bbcb591d991905ee6fe277bac07c8ba387b1335a9b6ceef5eb7007bcfd9f6bcb2a630af5b073f797f738bbd5a64bd966a58fea3021653a85ccac90883fc2fa6bd209f733a9c1c3595da10b9d259aa6af940acd9e8c27",
+            "9e63d6f917046408e698737caa43a91e9325c9b7786b68efb022d17dfcc1da55d0cd2c6b15a72d5cb7aeee215af760493e8c32f6704bc113c4c458f23ee5058cd3b7e955fbb63bec67c1cccfebe13f450638c17b34dc326f63066f4fecb04f5522c54288",
+            "4d089977909625ee2e15a86f5be72566f5b56efcde922b565b4c17cd3a9331971a394029d66f97a24f8d91f9e4ebcd76b6e02c8cecf18fc40f14de46c155a7fa44dc9c322d769704949783e975556f171a26e6554ca777a6e8f07ead47e2d41297abfbd8",
+            "fd82edbb2ea79a4e7f8a5652143aa7e5d97f3980fd8ebb72d2e4ac1af20663dff4569166bd6430c128c44eadc2857147ba3602c70bff0453bdb2859fcc6742685594af4c149d7e73707976c01391815afa1d2ed460dcfdf5b345601b28da91b04b412cf8",
+            "8df13c3be97e22b7c0021fee7449e128217db4d50a74aa112a065162440cb1043995c42b5e21454d271e687d0eb2678453017079aaf974154e2acca12fd244272735747346ad82d6cc81fb778f274e37fc466e76f3274f0ca989b98e24b70d9ee8615fd4",
+            "9334c6956db92b916cda93f26627afea9ca95f3783304a3382471f2d58697e2bfdc4782678818b1aa0c752e915a9823a152e8f9f0b9d992129870bc13ed0e1a640cabf2d28252232022361e00afe61c3a4da405c33294e323d3c695c08e358e9fd889c31",
+            "1a5665ad276cb6a20074821e7332f2a14c18f8caee85763849be2c10b7800dee3a9530db8d9b1085228674fe4e668c91e57180731c8581c7d001d13d6fe2a62ad8f873b3816a49c2845df700a49386d69961878bdcc40cd1ea4394f9ba2cf221b0b07a04",
+            "48177337a53848f0236c176a14cdf05347a0a9e44c5deba36e4822dbc664f21ef0c0ecbb63b6f0a1eab9627cf4f81f24431b4dcb3ef62f24c3ecb4655b141b8355143b57876e1b43742175e7c2aab6bbbce74c38aabb77b15745e58ce0e2f1e609698417",
+            "62ca39fa34748ceafa1cd339750f3f638f04fc3a525430f1fe07c84843d12e1dec0ddf5acc19d18edc1bf4446a347a7f6ed596b5a443f375c7a516dc4297a639b22e83776616f8e8d20a00320020e31f06191bcf66f307dfaf3931d8df0319d2e1493f40",
+            "46ec3d01cd4a3b5f9fa5f727a54af129ee7785f71f1d878094cbc2cc8da3f3f73d4ff8846a14e8f624089d612f861e5c7aee26c53f6ea215458b6030c39348f0c1288a2fa15eee845b94a5773997502f63c18173fb64c96ef522dc8dcf359b0173f17b3b",
+            "805b349f30f5249bf0db6024e2337b1484297d3330c1d9768169c28e7ed71b45e9a21b2c294def3bb4dcc9f09116bc288c8d72ec19a47ccc26fc5e8bda95753ca60e32af6e89e09e0f739a449fe22f1ea3225e0467d011ef9ea79b0a63f3fd99f8698ab4",
+            "61cf539284c42bb3e402f7c0f70ee36e669efd71a121d47b332f5a096c86e8da5b636dacefce79c4cf1e072496752b1d3bf04bcad6eacc1d2294f83d47554276a639247c4c70b821f7ee15b18bd64d50bac293ec1b552d8cfacdaf03e29cc9ca3b7da8f5",
+            "33e8765f67140df5aedd91aded3eaba18c3aae6480ae01c374c5c056d63319f13ede7a6b8c470c58dad66e987b54ff06328671797d7e0319f176125dedce59b9d2a4e147238517d8c96d7782f609da1f8beb770c2d872375a9cf1e3547034222dfd73d5b",
+            "997c0901f6a9817eb33e0e9c494110afce6db50a531b36f5d95e2edc059faa1c03453ed0ccea9e7f8ba4611e2bdc3237bfbb114a95e855396735a3c72bffca86e5e3737a2080d800880d80d800880d80d800880d80d8f89f2c36c23a9a4686bfbf3244fe",
+            "a1d8501afef08de1a7d8107014ada95c3ea6ab1164c5114cf71350d855321bc4417ac2544b72d170115fce1863dd2d8e1710d431261a1d8f6ce685a77a12a7fb3a2ef6436cf4549ec9938037e8e76eab93b1b19d32eabf9e055709016be51e6d4212a9ce",
+            "294c17a08e5b45fb7a267fffa8a6b918ab6b8c11aa0686582873ea573ded1bc1d1aa1b3503d9a0ff4a46c282b4baec2d8c828aff78a643783661c6094250b6e61abc1ef1852770e494261d35fd6c4566dce80fb1a1af477ad1bf27602ab80392cfd2fe69",
+            "3b1fda9f5c286c1ec2b41961fd87d83898c007fa4d6c441c2784fe2636d87e8a0dfa9b1e2e64533ed8c675199ee49e1ce51a917aedd730fa20f22adefd3913274adb9f932b1b637bae20ed85c19d40a426d8660570def373e46b1ec8bfab38ee593a3aba",
+            "bf7fb8bfefbddf36727f1ad6a22fd8d49fc60b18e1d7dc1d56e864c7d01725b5676c8fec494f3014312ce3c7797053e217021f9e6eafba79b675d5db7d0d95b50c3a0121b551cf02ce7cd102a6a1820da3ac4ef8e176bda35859e5947376c67bd554d3ba",
+            "612cf855bc04640513614a32b4cd36f6b39633422355a4fa80d4c22471fbe95e1db1b9b4d87b0307a7a59eb59b718e43fc22ea9997ceccdc6f6bbc6b6f3395c8944b9458a4c76cc11d9a91bf51b7d1a16d2e90b53beab47e7b7a840dabcdf0d996a4a351",
+            "6915c7670831d2915929305d8a5f4477c1002f542f8ba2f3e35ec12377b26a3502d719b0763c806b9da8f1133b5df6d87a87e04f076176f8155b1d4db98a99ab9d403697bea7329ae652e4d97e130e5e6d332c6b6f2804a277729e06e721c3f3b1809537",
+            "95817bc1061204d2479c56b72741ba220975f4ba05ec8605efa966c5cb21ed810df79e3eabeda64290f7144290e35ca4b3b36f309330190e72329a32c4e55b96a80c561a183f6b29ee9d89fe7f208efb9f8843ec27e27889bac4f8c3715f49de3304501c",
+            "ff0dc5c10f501c00c501501c00c5f1ff37c5f1ebeec9bf487114fc438ae3d755babf46ffbf4471ecff39c5f1eb53e15f63f5ef298ebf4dacbf8fb97f4e7124fd09c561f95371cc02140720008a03a0380001501cff768a8369bd797dec1fa8ab2189be4e",
+            "632f0c4a1a4278464eababcb2f693f2452ab10734438e77922d7b2a5806a59e32f1dbc797a3a348435b0a3c3a2645a547728a4282b65eb2fed33ebac18786fa3ef9164d4c71a2653dea06ba878117437c47931d85dda9a5c8a73c76c9548010ab46fa94f",
+            "17fb017470ff9cac54d571a6aac93f5698843a579792a0b82436196d29ca4e29362eecacaf30217f98568050b6dd041d26f222bbff2178f6030cb1733fead8495ce6d1b58992c72bcdee4dc595cca602f54f09210af93bc053cc855c756e4538fddb6475",
+            "cd4425e591a778ede1ba26874fe265976bf9129b157b897e1ca0266692f73e2f601abe4dd0eddb06b0328299719bd419764eba64a269efdf72e8867dd6057b61c6063685538726744a13b243f8667eb1ee4624e1d11a5bd2be704dfdd53e576292522d6f",
+            "4280525b4a0ac17f38b1f54b843bce55a6af1264638db13a0624fb8a58d62acc4cfc875702cb9db252388bf03d0bc8be4871c1838954f8acd52078c78ff76ac370736715c07e38b58fa5da62bfd5d5c830746edb5e825394cc8adfea0af599af85ff96d6",
+            "bff32ccb08b3c8a2173c5c92981c5b4955baa0568964f2d6d864b8e1d516ac048a17018937de1b57329deb72e5679f4f6a2559fafcaa3553b5a3278260f87dbaf4133864704e2d522584f28ee6e0a6a036a88d852dbe4db72b3a6f24522205293be4d789",
+            "b1c3195f051110cf3a1273120585895f82364564115aa996c67152990c0589139d10c495cc1bb50a588f85ac3b3dc32cbb471cafbc7da826585074df5b826939fe9c392e687041b89fa9262b25647eba7d7764cd4dc3132840cb2f6520d5fe9ef3060723",
+            "5c52574a53f6c4677d6c887c3b4496849e54ded73a311409ce203493f93ad2aad160a55a9122541494e4002d67cd05fc83a0d594a0f8b73deaf836ee12573c2da7382f1e416df4f77dcb1e38621401c8634bba6ce473f866302df22a29d82e7269402ebe",
+            "eb639d067db2fb7c1e8fe5616efb7394b941290dda89d9915f2fb27410da5f6c7e14d6385ce14cdc8a127f1b4be3e95d3b4dab23f49f8535444a08f420292742df0722232aa28651da460fd97047751524e1f57fb8c1486bca74339b1bfeb29fe1f6710b",
+            "7e83af76def29aa17e4ee6f0fc3277d77b51a8d7bdf66105f6a4ed212acd247929cd04d3b339553bcdc43556a695f77d1e76c0ac3c72aa25c1f2b2bfa7d4e4ca8da8ea0ba6dc8156078a40ef9cb8e0261ba3f0d420d7a6f19c30fc95c9e10425d91c2779",
+            "93e6ced7d1adc5dc19edc8b3034fa4c641b11d1d1fc8c6565591de694be812af8c4b88f5c467391dc8aa90566080e200288e7f5471a029611def7fbfe6c7a07f5f712cfca7e240a120420c84a2466cdcc77fadf4d480631ca5dae5f03e09fcdd55ab232e",
+            "9846108c3a15c135e9c510e7c697ad49f1ab4db8a2681115e630941f8a437249f9727634de4426e84273b68915fbb50b84689a721a2f6d78cfb116e42a3472d557939d27b937db4290c18d73b0e967920645ebf8b5358696656d07e3e257349251588a9a",
+            "1f5c8862ae91fc4db1a974cdbaf8bdae3102fd525da74e38d8eba8a58344ad83179ff4027de541891d2ae29fb904a8e433dd2caacbdd660d96f39877bc9369b4b196a3cd12c63d30c4c5f5c298c2c22387e8124f2675cac037d6451a465f88a4129960ac",
+            "dee0ae72be7e48c8b67731303c29eb87d4abc4a189198c835453b994d5ce5e946694cc746611cfe44ae2114dca9c131aed2655db39b8e3d2c8f3dcfba026c9b51681563ef6ce3e5aa146fdf3f08546c7f8532d79ea89071f42072884181574733d931181",
+            "879bb022b2e67ccac9e05cd20a4d41c65ac0b2276b2f3de1e2880ab3e44677cc6f653590fa376ce2af9c6164745f883846403513f0d1d6a22983ec7cbb151f995bc22baeb58431f4424732a27bb8e6baf562aab65249f45769ddb66a621722f11323b5e4",
+            "f4e9bda33067976189f4bd061c7ab22a0e4a3aeb410ed3487b24587b6e0fc837dd93a6a6790188038038008803803800880380380088e37f34e2a85e9164d9f8fec6b0fe87882376e9c322036aef09a42b6486ab4a0d8eb178995662ae7f07848f439946",
+            "771c8abcda9b8a09769c46d315bd32d6b9254b086ad714813403d19ae8ba2ab3da63f2b8cfd969cf3b82146bfc5a50f6edf6ddb1a165b53bfa5def0bdfd061207938c6b19184be163414f18ba2e930535ef3b9dd0a297b63d62e131f8a0506a526ec642a",
+            "c54e942d115f943e9dfafa8b6face69e3776c23e7881c4b089f2bca01f61cb01bc387f7d17ad9e42b62728553e8f4eac4c61701436cf8e77d2c7ce8e7c310a0a9802e61498087557d0c4cc059c0f04d32e76e206cd8eb2ed8adfe77b12f72a72ec0e97e1",
+            "cdd6e7fe84317b5190f30b316d3ecd97cf27d51ee4a67ccc8dab2cee6cf07664d27e0ad551e41d3c50d54409c99257fce40ed06fbe1d0577ee9334a483d0e093db24bcce607e13c111a8691059a57bf479f1e020699080359ed7aaa4c492ae75f1889db6",
+            "4eb576b0e52da2eb47eaf4007c1e3f9ea9e4e0de4f70b5200c18993b6a66818294c09d5552ba681f372a3f42d389e5cf2863d070d7bb66ec2d5cf82c034f686206d8e53039e125252c9c56e7b2a1d2b0aed66f87e43c612b759c686281a2a10660e5c190",
+            "159495cf27ef42acca0cf8b255d3efba7b0468ed889504673350a8f9aed12ee45bfaaf8ab19a3b1f759d3f54c52d75de13dead94e78fd43ef2a65cf3ad7466d6e421d14a96d754cf2a2965a14d5d0958530069a84414b742ad783cb83c1cc0bcb3a5801c",
+            "56d1c4a423b0c64f506b86c933ab3435a73601696e06cf4c2c4f2ef1655fa4137162f5e87cd3f27af5ccbe71f91cc6105bc8d7716396e5405b71a588a5943adffd3633761be9d99ecbfd6d2a1e450b936d1e8971d9288831ae94b10c035be28851ffdcd5",
+            "52d668b3ff25c151fe5e5a84ae1543011833ed12fb6210efd23cf1b7a4aaf32417c879f72303cf5d7c88d403d287921d587ffbcd50ff07af68b0545e1cf8dc5e7ee4cb2ac851730dbab3a61a60f5b3f6ae536f683ad6fa85f7f9567ea4ed9748147de428",
+            "ef6f76505f20fe68364c07f8d30268c79f5b6b95ec64c0ed39f15ec9d85cce59d215db7b9d7f984dc826dfe4b7794253632a9eb9686920c88f38f5d509f16c158672b71fe3f18dcdb1598203bdcc25e9721497ac07d70bc5997192cdfb23ef08bd0eea3e",
+            "5ab63e101914f47317f0e299c2bfd20e7eda1fb423f5fc27eda8f81deda03691fc493b68ff423b8c7ed28e291b895d9602503a0e19acde742892e05558933c03626c622c3c92493ca42d20114621445015e446700c4f67b440d567172215f2649b7cf582",
+            "2fa6988e51c3bb7cb88d496f707170c24432e4070c121ee9b475d435fb45ab05533f0a0383f364e1a3f1bd230659e279666bdd6bc66f6e4dbda65fb1df91701cfdb823ee785cf97147c051c7fe46dd71d4fea16b7f09cf8d8bebfafac6be71a995dbd593",
+            "e7f20c8c869a875881f60beb02acd770f5b3d74bb4e9f9ce47387f20a32f204dfc5a2486c5ccad725f33d37751077fd28eed9fb4632b8ce6bcf6418dc8c7c709f371b40b89f0f42c5c16d30d04403b00b403403bfe8fd28e5fb754feafd08e5f97eefed5",
+            "b463efcfd18e5f9f15ff1a2b7f8f76fc6d62fd7d1cfd73b4a3ec4fd00e9f9fb4631e403b0001a01d00da010800edf8b7a31d2e15efc3fe819629f9217e6c30fd516340fdc4624de23098aa63c87895e3c5a8869c50d72b9c3156f5a87e49c57a21c4ec1c",
+            "5c4c76469b17f44985ccca9a0e9905bde4ec9db9ed074d54424f6c2cadd24ca8092279aa5a65150577736edb29775bebb33a23b3616e89acc3d1c0401f5959e225aa330c3fde45a914719aa96b778e6446a22932c4862bcf4a8c045bf6d7174a0cf6cc55",
+            "be26ff60178238a0c890d82db0c9657adeb25ebde02da6fd06fcb231c7a4915b3d360d4485f16eaa96d2aa109d703b1375df19e86dd86b047a8203910a67684bab4033735237ee5b24580c574f647377b642e47af306a38c11a08585a8e755de7674222b",
+            "81b23b4c9fc9887cb23b895d5c7c55f193e8a226d038473092dbbc712831b33109a8f607d244d755a3248c1d18f9f387627bb8991a1db51c26a544917e8e587481337df37b068b99c761efc3c53a0cb2438eb96af7c906b6be3b116c709db296778a88e7",
+            "f81ee60b730e0c337184a1f9ef3467a4cec415a9c7d6464ad3a6bf7de2566349b7de887b9986e9cf28e3d359a5d654c3af7076ec9c9ad8356467a1583bd4803c1eddb47bc94b10b64862e83652911e19988f51392a9a87aa4a64aa32d2f2b385c8096a43",
+            "08d70d18d2ee8f772f8a7d21d48d3bc857458ca3bd3a7a7a40f4827cf32de452441cf4983e9a5a6c0a4f837f810fb7bba4909e88befd066351ba421e19312692549859fa0db377ae9709a2d35c2edbb0c92368538476026b91ca600a2af3f65c76c40d82",
+            "c6ac79e50a11dba1b00dd70bf8098f58f8cf96290b8a4b97c7e03a8ea2e3bb05e5ce881fc78b7ac989599c2e1e7fb44c2110ca8823cc45cad5add07a080be92563202f294dfb613b7ab64376d8deaf1b2211cb1f92ec0b43071f91f2d5841c0181e83e88",
+            "bf61a8d096c75ea096c311c9c2975897a9d50471d70ce768b0a61774f76fa2e98b687e32204cc195e043f0590bd475cda6bd15d1faf80193df1d6417299884209cb2a36043405984e555be4116b4f4e1d4d5246998560ac1930bd44b38393b2a7f9de789",
+            "499c24f9f4bb8a47e865e55a37a44af898aa8f50b72de4388dfca178e9624c5144122298dde5a248264336ee51520aac9c51d3c7f43cf39920664e894cd38277fb0378db192d468dd39debfa8d658393499930562878374b932f464e90cbf18f421b87cf",
+            "429dfdb3077b5741352a7b970f820e8536f67814e37bd7e3471697bdcc4fee9ebe57e1c0d5cb645c44f6be29cc029f993202efbf847bc336f665f0a4d431cb405f8743d3cfdeeddbddd51454ab6c6efe6c99327137bbba764c1f376e53fd9796299a933f",
+            "5ba69c015aa6006cc73f6e3be03c4a3c0efe94ed900c596440ec3df1f380cc68a46d9d09924e266b9c1fe34695d07114c65f248e7b4f6a182d77bfc4e920561321a97a2a88edea7191363eb47e96ef720e31239e458d1d804496ee579063497d7fb0439e",
+            "a0b8ce35fbf624cc3f38b56dbc776b4736c4a79c7316d8c91bece8f582336f4c28fbb8d73a1d33a8c9e304e6d7bade628b2f3834a72eb60adc929994c6c192d2a3be13cb9d0cd224e0456173d463cfb0e56376e1f75a14908e19bf754c5944f062f8c0d7",
+            "a57c3d91464e492611535acc1267e53af48069ac1991d54dddced9ecfbe59035320675866df216b1ffb0e88ee5c91bed47850e969746069b1e9aa6fe33a015f9fe5ed26e0415e57378495ea8c1d2b272cd9a6f830d999ec16af7e7c9dba611a533e21186",
+            "17cc94c1771caac32a6a2dcece1e03acdd3a0d9a53c8b24e43c1aa26afef51156b34a57ed88ef61fb6c3caf3a7ed08a4c272b5331bb27c3c43931edf1db0746355b4f2a8ccf6f73f717d59c26df964cea9334e0a1f0229d1b5ec9c4527422adbab3593f7",
+            "96cdeb2960970167ade3321f2a4d483c99842675bd77cf3da2fae4b57aa8813d36a7e9804f0a1eb9b8d9313b31c472878aa54601de5ec697392689433539d4f58524bd503641438d0df979c3d9354de06b5954fd1c1c834743a66df794a92d00ee00e00e",
+            "00ee00e00e00ee00e00e00ee00e00e00ee00e00e00eef8311b6e30eb6d01b8e3bf51b70338f6ff73753b50ffbdeb7628feae6ec724a06e0700770070c7ff0ddcf1eba6cabf0877fc63dd577e5dbbfb6bfc6bbaaf1cfcb3b863edefe18ebf4dacbf8f937f",
+            "0e7754fc09dce1f71377d40270072000b803803b0001c01dff76b8837669efe01fc51d5ae340fdc4d63f6d070332ded7bfda0eda9df54cebcab7e6f2a4a201c64623a16ecf861ab10b89212526fb0532236525671c66e7991ec9fb2bdb54e7f6c5d14523",
+            "6af3536e85bc17322fb66707f43b49225cdcccc3d110401f59a755146a5af4ece783ff03775420a14533a0858bccbe1a39b7ecae2f92e8ec9a637cad3c750fdf8e91a7cb3c68187956d77f1f3c6b0b49ecd44f3a76a22cbc1866a2e4f04ab3bb4b7125b3",
+            "a840fd9313e580000f427a83b2e1f396c112d4b59cf7a286be9906b00ea407586737aeac7771565621318af42ccd16161f0ee784e8338a39e2391dd8e20666b2bf105cfbacdfc09a57ac354fff00bb2e7be97f16ee3823724a13aa44f826f5b4eea616f3",
+            "6849a115567da4a25c2015dba05c2143ee4ce4cc33ad95c082f36cc97f6931874176a83ec7a2b554f7437798b0eb54b4c4d8219e43f14e4b9bab63524b228ac849d07d20779e9a42b6afbb39307ecbaa2bfa1502b564f856c79d880d157d17c6cd8f7ad0",
+            "ed7a6c89a17ec2455ee6aa4fc7eda0edc9cfe9f885069d7fb147aaa25b29badc967147a9d1a4065c9d97a14a4fcbefcd4fdd11a01b42b3dc178ff7b3ffcae0bb77b050839fef8f9f0d02db40d7c2899b23057c1e066f5f217f1c9c896041146d29dd97ec",
+            "0bb97922cba40a221e154e95e6162261e22382a392d05a8788660e0af2f1fc84d17156e97f655b1defdd91bc8f7aee51f571b86603bedd4367b374a775f509b2e0acd3f0db43069792f449c96ad2b112f387428b93100e2b16453c249426670fde25d8a4",
+            "1b613a15c25ce85cdd0a8d87308c706a5d2973156ec8ee8c04e9abf8a9a0ac185dc89cc80024b862e857136c42e2abec7abba45da47b6d7d4e82a626a57c1698d52e94411ad3b6d097366f0b773b9a4fa7b1d6df50085ef7f4f27160c57cc286e8846edf",
+            "16523b2d6edadf64f0be7f952e4a09afc9950145111796cfca18294a8b22cccc82b228bd4e5aa5e43175d0fec29bb82907f67cbb2c4fa322d557af3b8fd2546ce48655011f53650775db4286b3a01d489b0e9529814486124ae88b3a6ff3619e2e28abcb",
+            "5ff5f3fbd88741d91aca51ccd46da96bb99642db80fad2923d8fabb2ba6fb487179725bb8f6a45eb2d9ef72bb056ed3f2b772ca79860ba37a7eafca8dc31d4ba9297870d39ab879b6c493064d44e70b1797306b54100fac14dcc496a174c43fc130d7566",
+            "6003d56524ea625f265d98393639586329343debfcbddd1d4b01e3eb372e0ff4fa2ba1ef9ed1ea5a5f42723e6a1ed7a6c3c1e6b022aa5c06dc73a46b3dc20170070077fca3b8c3f18d04c4caf76b8e01f6f771c706036cef09cc035ee849d0c52e75ce9e",
+            "dc023c67809fa18ee3ac3cf2e41c7c0da785da756369d4d890007d4ec4a71c21de2743f1aff1211ffa385529c2464c7145623ea1e746340cec95a695b67b23efd4d33919306f5ebefadc52c4eba99e12c6dd80dd86426a123fb9f0e0d09f80f296f25860",
+            "d2bb873ea73cd895d9a25bd3cc0bc33de2832ab230536edd943d21cd1109ac629c42db486034c81164a09fbfebd4c987f9069cdfea766c14c0f9cad312c37f7ffe5c10a492d7bf533635b8cb686fa03ff385b12dbf25bdcdad656e7ea18b8eeac0369620",
+            "20fe0297783238aada5387297e73c5eb1b4431d4d178887deb25911a8d2a2baa7c0e2c99e63b2ca2eaa8e5e01c252cf3623eb1c71396c92c56e18e2ee5b0483947bac7a26abe3339afcf382f3a7f4daf55fa2a08efb890187d20d9127960e6ab87938724",
+            "5be3cb48d7452782099f531b1823d992397e28bb036f4b06f5bec0bcd6a1196fd20a0d55fa665e8f27eb0e3de1d7851de6a04e7389203676aba9e1a0cd96a5c1f506500aeb67443c19112dcee3ef4fdcc35f74a9cf9eada918deebc2d6bbf4323df23f46",
+            "a46fa1b96dd5442d44420c687725237352860b70b94e3a4c6cab76b43bd1ac194dd77dfab49f89a8a180bd6125e2c8bf2151fa020c001d00d001001d00d001001d00d001001d80962b80962b80962bffb35aae00e806806e00e806806e00e806806efcf1",
+            "96c9ff15baf1ebcadcbf9a6eacfcb32d57a6fffb7463f89fa31b117f826e18fca41bd500ba010800dd00d00d4000e8c6bf1ddd18cbc70419f9dfd10d0bab2c36c4678f8927c82e470c1c2931b94925101195022d258b9ae668e2624d6b6c1d60bb1ed282",
+            "c2a71356727a77ce14dba510649cc58dded1212e03db7b43c5d811895de54297c32894438ecc1125a28380f2078bb88c8c832aff59707a25da9ee36893257ae3d667db06e5fb33ed025148a07d8743ba3053fd51b38b9c7c27d74c6cf9ce0181bd601ccc",
+            "7dc8528baa55e146d48e77393b065ca7afe9cc1c43100f0c18a6f489ec220b9bbe0a59d410aac77c037a72a04a720857deea6d53d2e475801b509a06ea6aa6c971dee7d7ca1bd8b8085037f5d0f15ec441e6c0815b017e84f2ef5949039324f85cf8be44",
+            "e92bfa36587a33ed1ec233ca21d23939585238231b7c908b7a51f6f09a572cbe5bd4f4eaa7b74ec0bfd5e5f83a2b01dbfe40aaeeb4badd689c07a316bc586c8fb7ccace36cc8a4d420d3afd1f9ca5488d18104b3b0da8929a3d168a11f591914f73ef220",
+            "056fd32d274580c64925110bca1981d7c1fd1012534312b1279b5960f65ba0d034847dddc581f1db59030a49f0578e25dd3a295320af602ec15b04062f12566a55bed1a4c8c41bb006edaca85b7b96a435f06eb94d3053b1ba7964d86a8f18677ed8fe40",
+            "32be9f9af5d68a3ac68e521acc03160abeef31d6edae57fd0e0164bb3e2c18526f5e6185a71501c9297da359ac34d461f58eabf993d0d2295a365c97fc61e13deef99bc767ae4bc62472357f4a2ca1315826668984704c432c1cf02104aa6760ed5dfe64",
+            "eae52f5b32afd0ed0e15fa1e0272245be64b11711d2b9cd85fb04e78faae4f129f16100e0a9a2f2d73546be933cb058ded280e048a7be988799c2e2e1dea8e314edeebfda52c47ca83745f001903b9defb1b7e1b5523831bf6ec980a44262101fdac0830",
+            "932823586114ae647d116474381791656a89a7ab5753f7cb050f5175e52a745eaedfae591a4e8b0c5cfd79e8c5d29a9f582264e0c9741b97ad85ca782bd0f50de8d4276fd279a02fa1baa3a1c2293b68a090f03ebb31677b852327ded384aa0ee4660c87",
+            "bb7377bdf492cd63f037799ea8c649960c4b5d3c222d2bcfea336ed1529a1e209eba4b3b600bf481a48b55f2c49184e64e020beb2582eb094df8facdc3a81d3caf47ab4c8d1d38c2587250ea68d43fb1d558d424714bd1d5a03472355335dc7254dbac1c",
+            "3db376e29cb6a08a621bd78a6293ebd01bc78b2e6897cddf341eaa6ef46f31a7e05af1d6b7a43e321ab49e849f3e33a62f37fae6f97eb66e23a784420e368911364958430467ce1417cb0b5ddd255bdbe2d071a75be1b9ba0e96d27e0999d312617941e7",
+            "5a7eeab655d77390b486bbcc9945a9bd7cb8e7484f7902b80d80dbf887dd4695f928e7ea9f721bd2e1eb3f9228f59167a06d9ee9602f5066e81c70959daa6995ce4d448385108a8a3826dfd7a793831a6fb52018810f5fe7c2085a3fa7745ff44f1de225",
+            "cf9a30a50a311aeba26d2fc461bd5cd97126d86efb54d5178d0bf48caede5d9c5fe475232d2dab007921b5df87aa1031db113515b68911e881c63da3ee86c2be6f50b8edf11a6a24540c61fe4cd12166e12c9bd0e88aa98aaade8e3dddfe098ebb8b9f16",
+            "74ef26d6f2d1cf688a9b8d64e9790c1635d11f9153ebc0fa383d19ebad272d2d47fdd78263c53751c129b8dc54cd9d9289239ed1fd265b630648c4c421da1716774c8c280a5ae2b5572b7ee2221ded8d9638b75e1204d131a1a54597a02c6e882cf51d0b",
+            "1bb6173e234ccfc6d5cf6f52425992da251b2420b3f28ecc1996268c9bc57bf6aec9f064a2fa755a34371339be2977e3a262e9e468d2602c9d3ece585fbe14ab453412c8f9bce283461e5998ff4674bc1856ba19bc286783d2786474315c8efbca39bfd3",
+            "91cb035c4b9968c31479b827b9c007c1844e86d8f1287567e7ad93f085e8ae89fd74751c3f1d067c78a8baf88e68bcb7808b48da573bae8e93ee1b686cb50ed63d090beeaf19bb425c36db2e5b3642079fa4a98f8224e6f4d291e994853110c5b470e525",
+            "5f7559332e803668ef012a7100e006006e00e006006e00e006006e00e006006e00e0c6ff38b811c280950e801b7f6e25f56f1aaaf089fc970d550e09d7db31e4c6a2e96f0dd72fff6c4315072c3505a411b118ebfc747431661c29d93be62b13625d3552",
+            "2a2834ef2ad820c9f05cb4aa9c77fb7a347be85d42e8a13e38364c488cf246d4fb6c64f64953c01878c610ff471baa78f0361eb7e23637277b6836ed8fe41ca7ee8d641d7f333c18a93fe639388e3dbefed1506505bf6985f7f2e6c6bef1c966d2d595e3",
+            "1f69a8626c3e5bbda43f4ce54cd66b3780f31bdc80803c63b84d0b2201c00d00dc00c08dff57e0c6af1b26ff22b891f70fc18d5f97e6fe1abdff12b8b1f4cfc28dc9bf0737fe36b1fe3e06ff39b8f1f94fc00dbd9f7003841800370001801b00b8010800",
+            "dcf877831be277c773637fbee606653ffa3a8dbd30286908e11939adae2ebfa4fd9048ad42cc11e19ce7895ccb9602aa658d3f6df0e6eee9d0d097c8d156f3c209559bf9a0dcd4844dd82488d28b5cc4ab8dae4796e1b13e668eee7def58e9618a6da693",
+            "217a8cd667db16cbcdc926d35458a0fcc6a0fa778570345f07e39bf497d426cfb11dd0c38a12bc0bdcaa1a946d95ed25479494d4597abedf9ae493347cf952bdc769d08977c4a36fd04aa7d185cea3a8d2576885178fc60b1f51eb82fbf35a849d15ab81",
+            "183172e44641f34dbfe7e03b55d6a861496b57414d0392b583f670ddbab98768dd834ef9d83ec3c9b7301f21c666e22e215fa06ba09c51bc877b7f94dca0ed5711d8396d9370497bbf8557d64482d9ce1b26c2a7eea30c02b54c31fe0d9475b1894d2730",
+            "6ac52ac7acace669e0754ac104b3c44c4115623006ca648069e5b615fafb1591664abdd9f692a3a4996efe11d609ca5befab9c44ef889b5394c99e1a9ff21a303ddf9cf50aa3e05ee962be00ce560f653b50872673beb51eda97af1851827a5e2d6d2a75",
+            "155cba17c7fe0539e383b6fa3ded7feda7e2f7dfeea732f75ff453c93aa1afe1be264e33a2c49bc41c1f931eefeb27463548e6980a6fee92f5f884310173ee7ff5a13edabb273901f5fc59ef20d1e29a130cb299f2f34eebea12e4ded99261eb8da06b61",
+            "d272f3eac1312536f75b16844cbac4ab2ea12e08abd41599d9ce6d1fca29e42ee61e54a91ab3569bb33ab09eaeab2b3b39dcc4f92eb70ca7f7a2e281f20946f899326f04c6d9aae4250478afb470446bb8ffcb862aa0ff4b4395045dd7a2bf69a8224810",
+            "4ee56d5f17f8b987055bbe5784f12f0d55347f365479fed950a5ecd7862ae5ffd950a53e0b8a932fd288543026943198389c98b51f7796423cb9613eb2c8c1f3ac1ffd6d857f1ebb22774c69c9373dfc5db31a0d6e1aba1a989f76639565dc6685fbc9ca",
+            "df71d5bd5f9679e4589639b4555bb654b6aa59226f85a04231acd34cee6aef7aedc8e2f697862aa129cc429f5114859e8644b3601ba13820c3b4b073c01e7a7de30fdcaeeadd16a716a8df783cd1ebcf86da3fbf752a7b0831b4d73caaf9ade4c62ca0e4",
+            "06806efc77e9c64ba3b228e2f7b161fdf7e8468cf48f7e2afe277ecf3ffaa978be670d0baa8c8098e44695a83dd28aecad0934c4129f278d79bef9fc3e9976338aaeab86d435d57987fa20af72bf9f1a93fa4a6e825986d28b7f571dde42dcf3393f5336",
+            "46b53720f1c6e5539476db44de702fc241340be422309bb76f7b5c959d250d66652668b7459128e6a97456d83a7c6daea10373db816eb64b1c593f89a226bc3d31ea36bebf2536956e5eb77cfb2a79a0572ae7941527fbc297dc2e6eb6eee135361181af",
+            "4848aef3928ed072123194a98bfc382d278cc7760dabdec970cf6f9acee7a5d95acfb2b31916f67bbac58ca2b7174f55ccbbebeaa22c375a61a2e912bc54f6606efd079629a8dceb2a2a58559f65e636d0b6270d83b38a24ef5d9368bfbac993c9a7ba6b",
+            "8b84342d887cdd2a09ae99a793ae09c976e93be7b5af2c21539e13158665265b328ab198c970f610679bf79ce93a7b82b924c44df789415e49722d4678ee34e69268a26a2c2f16b0f260caf6f72770bdd14afbd14f456582264c05212630eba3fa708018",
+            "fc16ddfe207c51dbb3a07dd3a97586eb3b5fc74cd2112472d9333ba7d4f7470d51258f985a6e147e6c73ef11498fea36fe1ff6ee32a8ce2c5d1b70700baec1dd353804770dee6ec125380409c1dddd5d82bbbbbbbb047777fd3ae91eebea6fa6fb4c9f3a",
+            "3535fbf9077f76159bbdd77ad7baeabe93aac7c9bc703c631d36dd532b3a4a05de45058b59b2dd5a05e40f4f3204e0b28bf186d92a914211597da3622dc6a6decb801aa7a16090178fc498950ee3de26d9362ac5d9365ab1679bf7c48dc4305b363eda0e",
+            "197dbc6ad5bb4007500f00f500500f00f500500f00f500508fff66ea5177a71abcfbd3de9116e237a9c78fd29516bc431cef63cd17e291489d462629581f38f0239dda401ab2cc0a0303125b1687c9964e1dabb2c6e5d74ad71c9fb97b43cdc96c4c662d",
+            "8fa4a85388dcee5b2ee2d6ca06d8d56415df52f01fe2b261c846f4450738fbaf6a77cd2064c9214720d182c19e25c6ded2bb3c51925f254e5e80e5600279930b348d35602c3a24501b4b0f80a8ca00a54a16261bcf15d66ba205465631c57db4740d652c",
+            "b3ed00b544e8713ea7c367978d1bec1037d04218360a666c2e29a71f883adbd3101532c2ce57b24c23ceff08312010b3c02da77ed21c5529d82f6774ffcada22c1903ae3662ff430422a920b099f07beffcaa2b731ab596e54707f31b0245e0c2fd44b12",
+            "5a335390d607ae1c42500ab2278edf1da5dc86cf77515e56c69d9faaa37d5d8f131aa93f871f530e22a288c66bb38addc6d5b6b2febebefebebabe6545e389be973192b1c5722995616e7bcf9717c2e514e53242cf9b075c6523f6d510db09b9d96bd957",
+            "24e905480c4eb28d2d2ae8f87cbcd52c4d6d579b7bf58466b3179ce887f7ede4f16231fc8ee6faa61db3f1999e93925f3e766fc35c4c5778ae264c61529243cb096fcb2158ea55368fd3f24af3b3f3b0e25c12347ed13414a5be609bcd33f1cf409752a8",
+            "954098a0c56a32d23f6d34867580a881887ec143539c877b01ab45a4806e61a99e559a5e2dd318bb2f6bc3897255a9b6945980da49d139eef092a4f1bbbd7ea85d5cd5cea0523331ae31d0603ce3c507622cbe2eb09134346654dacf3ed2fafc3a878948",
+            "a284ce6104e164d6ca6420969d49cf751f475d4c53c0dba9959b117573a6999fca4d891faf1d9d0615e66c27aa3f69fc92f8fa6b06e31bb527dcabe2089e0435f717a7b7293d44bdb6a1ad76be8b30c2ea5c41192a4bcf759bf4af14a96a483c5a6a7dea",
+            "2a4d76679b41aa1a974456dad8cf357b035d43cdae200c8c6121b85603dd6693e0eea39079ae39979e3e84f2f63a2c1bc5639e3fab54267f24ada95f30ca37f3216ebf4644bc6641be7e0ea3bd07012810800201281080020128108002f9ff2b905fdfbe",
+            "fc490aa4e00f29905f9ff2fd6dfaff1405020fffbb14c8af378c7f1b30f4ffb102c1c0fcb714c8e2ef5020253f14080840810006a040000a04300005f21fa740de10f1e9fd5105f2150b135f153480d50408044638539f2532ffaf0c6453e93b03910adc",
+            "3c3d1d1a7a3390a7cd626f585cb7ef6d4ecac2de5ed39dc41f9be91c3fb76ac48e39af94a72a5f21cef2498fe76ce4f9e3f5015d9e5901ee49cea7aa57e97ba4d772072c1f934b54ce13edc92ab660bf52671726f866b8583728d92839488cd86bb2d3f6",
+            "7c96671c9f53f716c5f942800e237baa80e6368cd50c26dba487b9eb2831eee05ad5c0065e62b45f6e254b7080867f2c447239f9ca54dd1e31858749aefc017a6905617581fc16fc940803d3d10389da8dad10cd2732456317d9d3a1269be7f67d99405f",
+            "12823977cf1a1bf13e790b12a91f8412e52d71d19a276a9327e2e3a4316836b33189d79a1bd2308fb5ed51e5a44ffeed9152039ad962e957968442f322bd9411f10c67f672018c01660fc68c7b966321b022dcebe5318711b88f2d724afde85f4b2f5f7b",
+            "37f9a5cdd13a7005879040eaab999460e63a1362c1722cdd5d5526629545e580faa8cf3e966a91c3f980dd036b67180a751d3752e5c629951606a4085e58e1d4f128bf7f4ad3e3b6588c3661690d072bda66d4aab5ad4734b61f1d4bb467a6c4882605e6",
+            "01f6e27aeb41a27d5daef4fcc5535537739d57a566aa76f444001437df986e82aa98da89fb3d1dbe2cab399809884d746321b75f53700b0f993382af2a12219d23a32014a931f63646b7d82e444212d854374f1b0caaa08f41b3d671b60e3d198b4f9387",
+            "4a8341d21374bb2cdd40dc45dad9f117c99792f9d227fad4448913a553fb1b424cc62a16c74c8a2d173da2752fd6f7567e07ba67d2d12e507a98fad0a48bf5ab754e2ac0faeb7e4678287eba2ce5691b4b38ce02afcaf0f0f7b7f551de8b7901274e444b",
+            "3ed961f3bf923cd496c52c514e67b954628cee0aa9ff08b5b491cb3aeef301358171ca590cdcfb7b7c0710894e43bbb56419270bdaa72c3a0eaecb746ea04bc8ee4984308a8e841d220ecc4663412e7412267b469ea109ea6b29f7a103827b1edafe0cc8",
+            "cc27d7de328db7391f0251c34e6b1ab683e2edd3b38b05da6e98e7e7f0bae7400299c8d8fd4d5e730482043e32dd3c86678b6defd019843c04bdd79225fa30379c709cf1496a0b6ea3afeacef29abe7e4efaf0fc327737f360aacbadf661f5b555db4320",
+            "9e49f22aae49fca7e6644d5c13d788e196d5ad5eccf7741b762e4d4f97f72ef7bdd40f6e1ede176140f62b24ef48ec829bcd03dfd165f8fb3afb0bb35f47880824de328d40c269236915074def9c1fc97d28eddbbc6af55f363438b76acb5ad6a62eda70",
+            "a9059d6d937101b111f0c82f0559985f7d0550200005f247158879f35c1be2ef5220126149f408bd2731f738d4abed4d91e6327d85f3e6535c0a85f70d9c46afa8308816e7890bef9739c1238aa3251ae45e2dd2b7de8d5215f5569a7e4720f6ca636cc1",
+            "e49fa577e51cecf93c9ee7c0e0a3557a1b236b1bbe7869b54df45ef5c2177d4720afd8bcbc47d0aa6c4a46df546602755be4bbee9e4ae5fc40204635ac6d83eda2d5d40199ecf21a0e76c49bdbb8be2594143a45ddb27c3bc2fe9f6339a7acb0e617037e",
+            "41207310fc45b888aef3e28e6fd2a3c9235aa752583eadea2dedb06d7c4720484d13fdc3d6ee1b6262ba55d331301143c2c3b5dfe8e6236d6c48967b3cd049477e4120e22b6414a99aaafd58d46e64e6ee3e7776098fe4835ecfeea95c06ef1bc961d6a9",
+            "17c1542373db8d5247bcdebfaf64720e455bb4ab7c12982d92d3f37153e8e2551c93e29f7761661aa583227b184d646b7981a38184d8c5cfedbad9d63af8f2720a164668356069ee2860e5ce9ced1d88a77e2395c6fde52b96f218315c1ca378d7384771",
+            "ae0031fcd6c8e020da0f0512ef5c374643d9c1298bb403199577ebec946ab097e845fbf45d81c0da948deb84576d85962a0ba7413abc525b487d7016ffd88abbfec630f8a3df979758ff85773851bb1159a0976c8686d16317982dd6f28323916885040d",
+            "602446926228eb0b7b2bbd4d6d4b87d59d4b928de064586302287ac554c5cb556709adcfca5f5f80010c04c040000c04c040000c04c040000c04c040000c04c040000ce4978f444129e90b8081fcae73d95fb5b88cffc92d2e4c801697bfb5b830025a5c",
+            "000c04c040fe2f18c8afaf5ffe4f18c8af8ff9fe6c0682f0ef3210f07fc540fe7161fdfb79f3ef3190a5dfc1404a7f309011408b0b60000c04c04000036020ff710c640febc3e1f83f632026561b2c084f5ae92f7c638ec2d97007bcc93ed24cbc1590d8",
+            "5613c0e068c182bde6763199e610edcf37708683ec1a7f0903391b1e4afa1e065224a7ce387e969bbabff9fa00b3e82277ed6a43e18565343ccf2c25db9e6f30d748fe29c1fe3e2e48db837d95697d2fc32495e9557e63414b6405ecebac41e5af99cbaa",
+            "9315980eb121f9f9de054e4c0d4af46a76543d068a98a43dc859994d338e909fd9c0b254699d4722494fa8940671fc754862785bd5cf6ab07e0e0309fc250ce4ac4d82360d4246b3e87cedbcdc12d48dbcfd88c6a6aad8f304d41db4b31bfbbd57715616",
+            "656a50ae59ecf9ebf4109c3da2172816486774af239bd7d20215b0ed331a5ba76de292dcfda61fdb129bbcfeea403cbf3b10766bc6aba00b12baf965e9064c8bc5d22ab9044afbe2ec1449185a558669cd7816ac6b4bbe4b8ba90b24079ac3f8124b0dec",
+            "cd4f44555e3426da03ec90cede69fba42c34c131249044d424c8cc31d496a6501c4b0f3f1cc8862208f4acd161692a0cf80f07f24dfcc293db8e55a1a44a2b5a9e0b0e6d95c3da8320f581e78ed07cd15bbca1cef4a31aedf65753f4e1d8ac2b1021ac05",
+            "45f23c9944c8c77804f3886eacbb898def2d2eb9f5818140baf3b2abcb1eaf119df0bd64b359e58cad3d1234f8322df73027c0d7c9af15dda09ccf5a5aebe6c4dd786ac2a39c182a7024658c7dde04ae07a036c2f5538fde0169f98b85b356c51535a3a0",
+            "6c2bd4129c88a8cfda711e23605f363971bd809df08886e0d16eacc06f1598ba38265b34288fe717d434efd88f9be77210923a5d3cba37bc6139712650c627c55bd4a9507f0839eb45a5270d2d4afdb22e33947b1f6422946a914b31a037ebf56a0e113a",
+            "e0241d5224422c99f8ead15cc7a02983a94a399d25588d2bbaabd8b41ef4be0e53d1ee9b16e8fe6b1bd57002d78d9fc34060bf64bc2fdba382a989514ec11696c18370e9eac90872c3fa36f531fce88ef4dc7c50b03c25be6023570c13f64eb6d46fedc5",
+            "3852001174c355a45c439660c76bfbfd694d62b9a120a7ccc408c1da43acf9a613628d67664ac4ebf9ae5ef240521663aa4aec38629b7d5eeadee7ec256df70a21e79e53a6ac0abf73c518ce2110fbe1eb22bfee2d4bddb43c4721f42124d49ba7c91723",
+            "279895b843c18dc363c1cedb83abc77bc1c522bbe7276ece69b6a6d0c853bb076b169897f8bcd630118c170c990d810e64bd87315e7e03d5f2107356db88385d08d51ab35e19718af663b38e41a996678d16a9450cd437ad4fe8e556c2942fd0efe65eba",
+            "2738486fd4c7c07d27b0fca9ee05dc70c6689fc1010e04e040fea803a1b97e5efa7d452eab4159f408bdabf0c71e90ceb3f9d5476a8583c70e83479ded36ad2b936ca6f962c462b534bd4f27ac940ef0f772d0d009e377438e6f190f7aa34cfb3955c842",
+            "464cb085a33dd172a31b46f64ad316d73e23edd4d33a9b316d5ebe0ee5464be3290eeb39d604598342aa1a34d970abd51b0a004771ccd8e3dd881b50e9e64aac312aa96c1b24f8e140c0e4354c399094aed17c0b282974f4bbf83e5f1375f10f72ed3b86",
+            "1c2e09caafa325af3b78ec02eb2af8f9a798e7f0c0cb8847ab344f2fa8b498951fcb277fe493464b035d9d8f363ad536949353d990dc1220ae94bdb0bf7b3388818e3e61ffc4aabb1eadea14e706c223d3ef16b97ee713f3a9cdc8b1030d5dc543d3c13e",
+            "dc50fae59d45a55d6c4f69bb041a091f260d0bdff5e33d12b12c4b9a50d05de739fb9344903d4579a79b62177fcc649e77851ed7eb512b28919bd504a79607201a48f878fcdcecb4e1148687e75e563b2137f2c6c065b8cabbe148244a77e32747db47e0",
+            "0acb4fd2516c43dbd1fe5f2e84a5a489e18fb4627660d93e5ff8edd237ef2e588f0655338b7815773d74e6b48547306c6362df9c8a9ce97b85ce9ec62caa998aa8e583234a881fe6bf833e3b949a9550d783e2dc28f7ee37b506029a1622a8c97edbf35e",
+            "d8832f2e86f61908c03a00ac03c03a00ac03c03a00ac03c03afe9b59c7dbbeea8bd59f9e130e7fabc8e5abe2b0e922ef8f2297c115d4a7b98f1644145336a09fd1a0c53266abab3ec61e86a9146bd6e7c46de240bb7d5971a160bab407760e1d11af280e",
+            "bfa43bea5e48997fda4eb232ea1dd7a5615393d76420d13fc473c2904d2848ee370cd64ecb19c1c81a4048402e210e39f355baa577be272e1cf29d9cb41587058654edbe5d8affb8dfa0e8200d5600a72046e2049d03c650362d514bc94ce26c4807750c",
+            "9ecafa114c17a916523ee209ca1fff5e4f9123018984c1bc9d8d31091c862842ea7dac9c49c51a6ff5b51fb14035cf0450e1158ba87e33ba4899649138eaf62b6b4d4514eaac9b3de9a500898aefac03ae1f5e93ae2ecab5182f80c98e5993519d3b59d0",
+            "2732973f414d0c79e395bf1a542eba5c734c813d9f4fa3bc9842b3805947fbba3e6bc0dbee186170718801663431508bf74b5adaab1aeecdf58f0eb6f6f6b677ddb874fe3a9f261b40ccac2d766379e15d4ef132922051bd75926f3e9ac38a810eebe4c7",
+            "5238c9d6722f4687077bb758bcf13aa8cd8b4b347fc43fd4b44ef214ab92e1f073ac509c859e4f8cf49fecf0044fa4193d9acd4772471fc0d8cd211e78a34a2956a768e29aa5cecbf166eb71aa2587b51be7b081f723899caef439466751d5bd655cb868",
+            "adf9d94248f74956f51cd7dc2bf2172eeac2209ce751cb87b6135db9c645ff6892d539dac3fba26fd0872e484b883a71d01529181b8ba36996ad1edea9c7bbe9dd81369d9b20fd20465a275b97e6cc2138d021638de4e9a6d23015ebdbe63bc167ee4f91",
+            "dbe6246b6fecf3b4caabdfc20a06df1ca0d7ec3ff7f5a4573bcbb65379d2a999a06ddcf4567e88bab3c164d3b76271f005c1e488b26671ecf8366ecefd9e4c6b0dc76d3724d703437298d807f8a1d3a45bf7d31eed7ce8e3de0adac64a6eceea25e7d8b1",
+            "6d1a28d189f3aeab34c7e9a70f6c84fa1fde617a4b63deb77f624ac6f13399dbc0e5fee8e95c72529b3516099fe70b3590b03463aa9ed1821a08baa84dfccd92eadbf14b6e24de6f7e12f6c9ac93c2019ae37f5b73b07a3512ef6c6e3c929d7db8d9e85b",
+            "0021e8f48e8b50b70e074b26a5de9c7eab5644bd30d91719682d9ce92df0669a2f735ee763475e8108321015a1185f3e42b6a1a8860b134d96458e1cbcbe582d0169850ef692bf7a807fc05b75d96e8a0cce6ce8ba5d36793670210c59d00fbc9c3888e3",
+            "affa7721138e03c921e80309bc30ea22e768ea6e078b78bbce6761eadf6e070b28be1f96fc52b7612efcb0ded74cd71951ae54846a9af3ceb7ff643d642b67fa9302e7a6aa328acc1ae3be2c902009e158c8e4f196e6ce53f693fb4ae3f3d830d672c3d4",
+            "30faf2a7a19961aa6597c962f5e586b110c6a20beb293797636cdc5de12c478f7177aeeb338c9f433d925817a03f0f4fbffc12ea71e5f723d4c35d53c0b099a9554655906f9c427abec4acb13b50fe5c3c7467c8dc28a27579147a0fafebcb9a0741c308",
+            "860d24e4a7c70d64f0b45700d101101d00d1f1bf2a3a7e7d93f227898ec23f243a7e7d60f7b719f85344c7daefab77f9f55ef16f33f3afea5dfe7171fd87d7fef7ea5df27e87e870f9213afa01a2033000d101101d8001888eff38d1e16b9c45f547823d",
+            "06ffb1dea55dd46e48184931b00207f4e10467206e29b06378a64c28021b2735819df17c2f4e4a5395aa848320a9404abacce22c373cc71837f7ba5635b4a766da6426fa6b246cdac2fba6cad6e4a7fbc13db5c25e570a3c9a57c60d05cd530db0387954",
+            "b14d46cb01e6ce209c3005a6b9ba85b8c9258ac931cb91b69acaa141677d0509c68734fcf9a1ede1413ee44e94412ddb212b5ee45a0cb0978d39c68d5c6a9ad820ca8c5773b5f9e1f63008379948f726afaa8b1b2047f1300be6dcc02cadfcad2c503e89",
+            "9c1261d01e3f13cfdd5b2bd0409370d68f91bd3a3217f3384dd3f10b672598fb14dc6e233a25fb8944120efeebd46ed4576188afe3307fad77e1ff5eeff208c23acbcda9e91fb86a9963565ef334601a5530504339b3f71525314e9ed3b340e38215a6d0",
+            "6a434ba1ec407715d67ce7107f87ca30e653fbbdf8286f9feb6dc191de6ce79c8a177da6b8ed34fd30f2bcf1d8b791d2b4e925cf146a12f2a5866d8f2b7e1b72ea31f45b686525efc396463d1793abc2c40531b69799cf0fb657532f14dbb28bb9929577",
+            "3ed42acc69670d298321bc45aebe335f8b64dbd399106f1908e7882e94cf0df1ccb67820e3514929e1bc0d25dc5c5fb805d73e43df10364f0c783d5c5c0223d9772a85b32088d417eddbf60dde3e300640a68ec9fa12c2230b82c465da24eba06c228a65",
+            "7a23d111f1b4c13043c3f4bb342f89b5eb485b403bbf94d9f7b33ce078756a45d3edf06c2c4324fc6877e974324d5c295e3b3816623232b53816941fb89a12ee02b34a5df9deee92427e85d4c5d4fe4bbb4b19684f17fc90ad0cb6effc943bdc1279a026",
+            "1d9f0d2f993fa9aa574f8284ccbefcfefd381bbc1ca467c01395b8802b9869a731b380d8527cac447a58d2b820fab1a2f188cc0ec91b84ebb0cf76d0e4408caf7d91bd9603cad7b0dcc6f77441afa0d245c84381fb107e247ba4d6194bfe92ecd1f79764",
+            "8f479ec44d19d06fcfcdfa2ab409138cdd81224eea9a1742431c321333046b0f89e68761fa8740428951d8b26fdbc9434550ee4c8eef80c4a28646b5fb306fd0d3cc65f53f3825322e0bdc250ee06c67d46f374e77aeeb35960d4e2665c294ca23df2c7f",
+            "071d202bca8fa21b8fd7a29d9b075b87e7a28b41e6d74fb43c336c0dc193bb4e0fbbf71cf7fab14f2d3c1d77bd9e1c2748a9481ced5a6804a312e47661ef7837b01ffab280a43e617e0085a0832a9de9deb7bd7328a8543638bfd7ee2a7993f088756a7d",
+            "833eb85fb762c18785216e856fb90b7f65cfcbf98005001d00d0f1474107722909e2ef031db256df833d56c9ae3855dc214008c4023c0b35518ae1a3722d0f1af5e1cabc2c0c38a5324d56dd20c8f7b29b042378cf71964e9e771a07d3420b89f0745298",
+            "1ad26d306481d5e2c5f773d35b3d2cbc44c493771ad653c665c690d9ee15b83ff5c3f71c6bc07c071d54c6076ead7a430168df4107df46dcc20fd0a15b52db56c4206aff17d081f803749851e85874697dbe46eee2efe5da772c3e5c4ec8eda261ebfee9",
+            "cf05d1918f8ba83e2fe68199114d5eee625155fe695177b9976dcb0b9b861baaa5d23671dc23464c4c3784b11a3e6288747876eb03b5be8686e8ecd5aa7780bcd1370138d84741921bb1c01d74a573a8a46528750d9d4efbf9692d25b0a7cae49c8b38f3",
+            "7aa86dba7efd70a320b6be19314ce2f1596297548b0afba64789c1a6c8b96f19947a19b4bbb6fcaa09619d17b4dfd69e3991476b793240be01217745bfaeac6736627dbc0d2c318634542e4fb261f15091e31bbe49f160f4b3c24f9a41670ae834970e98",
+            "e3b49a9a0fd82c5f2edaaf0227b37e46c0c945d7343b764e50b7c59f136fe2d1807e9d80215f326e03ef81c443b2eb0cb25a6f91ed90fdc505a53cbb4b7a200b6174e5f24b15496c1933ae049b3a0d2d7e7a037957ec54cf6d2583c69861cea0c72b00e8",
+            "00800e00e800800e00e800800e00e800800e00e800808eff76d041d42cf60d10cff1fb4e57ffb1a525db0e55c1410e21997c85ff7cf5474bcb4f4b41063ee4bea203c63f6969d9b95eef5b00fb07d071f556ad48e950d5404c888d48b6232338117f5c83",
+            "9e6b6b722a2bc01335221b5f0172e22d312d5762ec78ac5c815f79b63a02b22a3d9c6597da8f788e291bf15d9602105a8e91d77f8de7e81564127ccb219ccbf9dbf11c926c1b32ccf28c93f4c7c449e39fd91c4efaadcdcd99307d84ff493cc7c166b3e3",
+            "b207bbbb2bfb439dd3f491c4f2dede7596e5aae1c175fdf1bb839198633bfb83a9fd55dc96559e4bf86bfba22b9b4937578ef3bfb4b424b116fab46d27bdb4bdf433dd5d34800bbcaa94045a492f89a8d05253f9aa24236317c8f8239e63ff7b3c47fd88",
+            "11dadde2d3d7f076be77af9f3fac4322dcdef692bde60602600e00e600608eff55ccf1eb4b94ff93788e5f1fd6fdd9f11cabff2ee698fe5798e31f17d67f78ed7f0f7364fe0ecc61ff0373c0005a5a0003c01c00cc011800e6f88fc31c8a4d5b1aa37fb0",
+            "a5e5ef30079f84dd9070ed5f4b5ab6e4fe12cf713a3494f03d9ea37042c5663e2037357ef3751278e9452ec2d546d723cbf0581f1347f7be578cd430d936e3c9101d7aebf3c716cbcdc92693d4d7aff21b03ea150a61a98b06e39af4965527cf311dd042",
+            "bec67b157caa6a50faa8642731a2a8a8c6d2f3d357936c92ba376faad738351ae18e58d40d6ae9349ae0792445fa2a8dd0e2d1cff11cfdbfc47330a0e7c88c82e49bfcb406dfa9b0460e4b58bb0a68e8137d3b680fd3a99b7b88d239e8948de9339c6486",
+            "b1071f9b89bd847881aa817446f61aeec548f615a4e957e6df396d13774933d8c2296b22fa2be600fe8e39964058179bd8b4fd2357ad72ccca6a9e0628530a2698c4670aaa1002d19127fd4c2ab7add00c56859bc97567db4b8e9266baf9465827c86fbd",
+            "ae7212bdc26f4e91277b6abe94d780ea7ae7ac571805f64a15f3fa71b6ba2bd982383499f37eeba17929428f14d0fddcd2a65c57f14ee7e2d8b720677cf0a35e4ffba13ac4f1e8a6ed4b5ebc8f45127db791b2d4c8c07cb4f2d1d779c8aa44c62a234d9f",
+            "8fe039016df0613a7e435afd716e5f635ef075620ff255106269ae8e9e1e103e43bc9d0bba14160339a68ba2129dc251e75be0c5ee2e29a423a0cb3aa1b359fff06d2e03f28141287a012a30939a8fa992489c31aeaee609a4295c2b9cf5abf2600a0ad3",
+            "765776f80dbcfaac79e52a01dbae90cdbb17b0136ed1b013da8766bc05f9e5cb63306d4791f1dd82726704fbf1af64a4842c4e178f0e0db82c788219b1f8b90cb93a159a0f2141bd24f4a425a5695fd6c78648b783b0a2e8afc5fc450feffc7dc5823ba6",
+            "ae10469afa1cf84d37987031544bc9618f50f361b364e1496cf2d4693f739788e068d6c57de616d04233e85b79660897862349f7fb5ed3c23583f629ab848339f8e79a968cb0def0b4291b449c100ba6ccd010bdc4b982833c31cc7a0e9efb2b84473ca9",
+            "8fe45e3a2f2be3d4719285050677c84dc59677847a38e4260708a76e522c1f45101d3c0987457dc9dfe8234489442419841e44114b2f1f8a2a35b6de1a0461aa764e2617e00e282b1fd3c35f322f16e3a2a12ffa68a6aea0685a27edd69da43eb376729e",
+            "b66c92617eb821c3ecd12ecd9b255bd0ca993c819f2fe8f9661fed9db7e8575bfb0d6ff2f2e6097186077cca25eed47b8cc16102813df418d77d3b4bd657735326ad873644ceeb49bf63d0bee55ea3c5c2f408f54deb337ab99930c70be6bbb9a7eeb71c",
+            "250ebf84739801c2390096e37f6a39187563b5fe78494b2727bc4c1f65e378a16bbe82059e63ef6b1d307d03ce2441c556d75e6103aaadc812d01e9621ab67c654dd27eb581c67100bef7d094c084492315bc580168abd51bcd14a54929e8a16bd94fd8c",
+            "6c74fa4bdd8bbbc9fbeccbf6aa57b1f819ac2416c53881f44c4d60fd92e9e0bb6752c5550668710d50c3e99f1557441d7491848264de8e4f46c8ecba62149680f9a5ac8b4035e310607218c9b69a74eb90266edeac114ffa6dd06f88c3f9cf0549cf05f9",
+            "c9113a9f4d5c8a57baf9d9a46d04db7c9c712271ca8bc26af5d810832e8991ad860dc70e4db4ea1ced7c67f028de10f2422b99ec83b9e2cdd9e6a870ce2076f63820bea2bb07a11b44359423812e221b73796399c43332e9cca2becd667027cfadce6551",
+            "5b691743bbae58d517bb7809bffc95ea33d9612621e67e243729d3d257b7b34724ebb72f4301860f276340b59e707ae21a16c7311c75f0dad6541f73bf851c55960e5b252ac854ea7fd09ede83f1cfad26915ac74f93ef08eba164b7209cc77394d574d0",
+            "619bc1cbfc32d45ebf2f83182a087d4824996af0e1e55dc0400dc9b02696a606c91d5bc7789bc402c3208b59b13428d52b9ae1360d1e129fa40727e137591aad67ab48b24959fa48381fa33d71f3be062381cfb429e7628d634df01d65a9cb65f6460b02",
+            "8d14636a0c490c0d6ba90e0d5799965702710902a5da1747a7a0d15ecc7a746fd301f007007f00f007007f00f007007f00f0c77f35fe280c61743aff69f318f05b252d55ff9f9216d87f5dd2b2b73a539e74bb2b7a7f997291628b84adc42e4255284e2a",
+            "e4bf0c0241448994f09601feacf1620e534fc19450ae23279d406b12094f984e1b3447cbd6a5265d81c813c1d01f5d0d5d7f91360a6c58cc191f8652872c8a920c33d6d432ce279398663827793175e3f56132fd672c6f9bd4472851e9a9ee8a32a40474",
+            "c1ca371b92a566d4c1e7069f38d0e522de4014c62c9241152e7d3e97c9a9099b5ae13cd9a496ad884ee07ea5a16ef4466257b381c8d520ca200cb46f54e0a3dbe29965b756c107c22b0b21e5a13ebf2cfc28fe38f208890c8125904c52b00d18021eff39",
+            "f3cf1d4705e4e43c99a8dfd66cca71c00236e5086027f8b64dc3f0d92da49734b4ad683dcc693d2c4b4a58e25687cf8237834b932c46d9cc2fec04d241961f3cc6bee4a587a1103d3294306f21b1318e388a5d48bab72182c9682652227602575fdf3578",
+            "1e421a7b936ede2f21e7ed047ed51c3dd1283b80c8d22155840ea98d19249facfbded62220879a4437a43c08ecfe41ce8c7c845cf44d82045f9dd8c3b5b0192f1bd4d6e310d3cec3219a430c41f9d086465a2e812f0bab978514643633569391eedfda5a",
+            "707fb4b5642cd29e36a64d1db3100ab5cfe67e5df472831c740557c261155c10db2936389ef0924cf2bedd5e9c4dd2d64effb6303666de5f67b49e2a086ca47694f3a3aea5dc74dca1d4939f62b82ff2e062d9c8ffe61a2bb1c210aebc3a6fa522668a59",
+            "f0a75f98c9f3592e53554d944a18cbde66e6e8113cdbbd75664e4ced4a65b62315285acd6a613e27931f3cc17b9f3be9b4e93472b633b2f4e857a01ae64c8e56cb43cb3ea4340dbe18c9b3f8c0bfa4ca7479b002b4a0794c64b5867d57a2dfcdd55b7d0f",
+            "f2b6caf74baa5577cb8114c4537f00de03cef133635e917ea325631eacb3c75755697664f5e21a68fb667c246a3ca88e154add931781acdfae4705227468090278903fec41e67f7890771490d2285604779c41166a91bb4b16e6e4905e2e313882ef6e81",
+            "a15dcec15a2593dd61272d470252bbd42377fac3765e88dba7a4913817f115a303290949e0d9f1550688644b33b716923903b0730ad698a4c11464915112a17b7b8163efa863cac8275f6787f2b2c712478f56502e8c715c3028998320158acf107cad4b",
+            "1df0366d8cb14f96ad113bf01c4c65fd8c3c162d2f650367574980081b9e0c1b311f1b0cf3ea03869e28afb18f58c01a5d297842be361dca803f63801d632523ec7a6805fb4190c04d68a06f8f7096aca94220060b4f7b11cc854477be25f17909463afd",
+            "dad007a47c6943633511ab3ce5e69dced99da89b0bf4c916fa14f94977faa3c54fcbdc8c296493f54c292526389ccd494fb58d0f2b2b2526d52ba58da5611040b89fb7ba7b15f6c01e840f104ff7b6794e3dde5a3c67963c23b4e1a87bae961ec8ab160c",
+            "0dcd6ccba85c0f20d312d052cc36056a9f7de29f39ef5b3ddef1b9848fe43be541e601d2f5f4f8d4710a02e020000e02e020ffab1ce4d7d7307f1207c9ff431ce4d7e77d7f9bbe3f8583c0ffbeb6965fef1cff3660ffaaade51fd7d5bf1fc27fafad65f3",
+            "777090da1f1c0416c0410003e020000e02180007f98fe3205178a6c763000e02e020bfc9411cb61bb91d34379ddc7df3cdfcc80955bd3eb91e36d81cde8562bdbca2cb46df843d98fe480616c2ce40b1f9d439c3bc78e80809e7228b3dead1de083fb1d1",
+            "38e87ee277adc0daecda3ebb2ccbe4626a8e2ba8c9741010e00fbbf2ae35a5c46f1842369fc4df249822de7cd67d63dd062a38e0e060279d8da932e08ebf13e3514ac4183482377a010eb3b11fa39b88aed3fdd0db44104278e62fd91e5302624b7bdfb3",
+            "3d0e6445d08f0dd347c3e3c0de54d47abcce8e1280dad5a5c746360fab065bcd2f928625ca7fff8a8bdf6677834188cdde73c5d83c0bd1de1c65b24b5a93476aa26ffa6efcaf6d2d0f37a146f50672522483696b16f683e88807bc62ea7e9e276615119c",
+            "8165202826c2bc9206c1b228ce28f562db75dc62eb53c3a106d50f41ef6bf22398df0d27ec677cb2df82bbe0d5ae5cded7b529d79cdbda931a07ab0d087d38def3606c02399170cfb471f0c8d47dbc727171cb3c52e4787a0e4f31c5d61211736a707372",
+            "c57a6690f258c5d37dd2e72d76847a0f89a34f061bb1d18522cb7391114ccf84bc3f3997232b5ee621e9543fa29c36582b55dc4cb831fb42e8302cbaa3fd05a2b15545b877da1266a14dc605c446ca23bf1464a1fbb74fa5001e04e041fe990791e6f496",
+            "43fa5d1e44eabb07f13d89b9c7a35e6d6f239d47f0f9da309c799c3151a8fd7720e4e52f2004a58d6588f1e493e193b51c8e33987ece314c620f14c9188c667f0bc5ee289e61557617c78a72d32417cae5eb586e736e7715bceaf945b43644e2cb9af462",
+            "dbce40062a3599a51e174fdcd5a905f2636b334c2308902668e1427dd548eaf8f58a3c225d434bdddd8658e01a356c944b4b6f8cdd3a81a79a982f29c6e24b5ef24b87f002c4559808e55129763baf720403a66d27cd3a1d717adcc43f688447b56bfbce",
+            "2e6f92266b3bcbc96158d81fe9fd686bb9651f7cf3bdade5915577e20de329a51bd0aaccfc0371ce050c95eb97e566e49abab64f0d43fbf8455ecf5a23177649ef62c6f5924633e7ddae5168e254dfc4885d9bb490f3d045f576e335a82a23511d661182",
+            "ef7b711b455bcc6438bb8bb12d78cc749d2d3beef2b2f1425090b4b03aaa9d3cf98d3a453bc93b18aafbae7c62c8f64ac4e3b891c26bf53457531ea30eb9602759d749519a248814a8579e768651d27921e04875ae1bc3a1ece09445da818ccabba57817",
+            "56f1d182cf9647f8c3aa18011c0b26a898faf1ad91c565840e447a0e4e5d5a9ef9d62c41aa6c0f392bf663ade0d4f65ebc601836497a2f055596f767d6d39824e1eb583b19bfdd630a067df1488c596978ee6dd7a16169cea1e12a339b0a202e62869986",
+            "990529acb4bb41000801801000080180100008018010000801801000080180100008018010000801801000080180100008f92720e4d71731ff27f920bf3ef0fbb3f34110ff5d1002f13f0721c4ff1e08d9fe1d20a4fe0708090694bd0006004200200430",
+            "0010f21f074238124d08ff290831b1da604178d24a7fe11b7314ce164cf1af2ca365e2ad8044b29a0006470b16ec35b78bc93487687fbe81db225296ad9bc7ac218fccea6565b412e67eaa28a0d2ef36a45b30d28b4436c76ca25890638247be58a416f9",
+            "6c7219c84c52b4e0fb7e886c25497bc4fd69cb6e79a0f7a1c68de955fa1ed9b65c016dc5d71695f3c42b328b5eac39d5aa0a23e8dcf3f67dce7ed5793a76657bc3790c57a561417d4b4442e7d7c28d2afe5e79160c534db2ea08fd54b99eeead289aad22",
+            "4541fa6ba6a4787e70a816cb405dcdf9de2e987c5259b499177eb931872dc0b5ac5dcc2c482db88f90be41cd3c5035dcd88a41fc356e8d3264af2c2c7e94bd04fdadec25f213891d1cfcd7ec1b31a515a0415720a2dbbc714851b32971d0f607e244d735",
+            "a3a40f7930b2678bc576b033f6daaac58c8a09c2dd2e3131fc671ff5eee92d661f87bdb01b9c10500f39e6aadd263938fbeec43149b4cb32e41811ce71ddf516e61ce86762f1834d72eacce3d7c516c97f297bf14fa15697a9b3197ec1f4de945149a73b",
+            "452df9ea3fe7e6d13d358161c0cc1065fc5c0c71b3736e722b3f94a719f7b67b1bdda2bdf02e7876b96919b2aae183f1f03d26ea6b71e4cf78b8ed7009ad91740f2a542f7c6d5fc764cbf1a9d5f7171f6e0880e10daad0f76222c197d2f2d0c3f3b16abc",
+            "aa3eb30d682aa60968799d8c66e0656ba53e90c3da06e79f3c90e3ab06bfe3f45f5ebaea8cf6e56983d913121a04af5e12e3d39796fc5bdb4b16df2f6d2f7b3fda5e045c0b93beb7bd3c0b7d0721c782f235bf8090e69492de614ed942127f8aaebf6b7b",
+            "b9bab295c14e9ceffa145a9044465c8d68df8421cb392c83e10af5b1e99d34b02441d84a5f9f8b90897929af057688117500d6f247a84b1baefddd8ee6e0cb37e74dc4fad7bf94bd7005fb12b43be4d3dc0a6b5e9a62f3b901ef2206e671c35174246c10",
+            "627ab340e7eb6779e73a6cdfab2676978c84b97309be88446107e12fb43a320d92449992aa9e415a1599b5f8abc28b2f70807ed28e0a59c6ef8193c966ef47242110b63994ddccaddfb827967acbea4150b4acfda942086ce696e983a9e7f9740ce70891",
+            "dbb063915f77b7836e5c1eab10ba661ec77163decbf0297853e96d44cfdd51846fffece0fc56440dfafce183a6fbd7b3cbb7d279bd8bef4b4bf33c862a566f44545e30640e343be4f9050e0de437d9a07c8e81dc88fbca83b0f727bb726c84cb5e224f4d",
+            "35bf72c75925a9b90a9196be081d26468cb4828739789407a7162da3557d2ebf145e4f7c56d186a8aa6c050280100008f9a32044b1b151a1ffa7f7bc16e45f95bdb4077e3ff338f169f932b61c7b647fc8d1a5bae43bc6853250d3e82884bb48186b40ec",
+            "1c25737f8cc349acde4742ad92fec6acc54398518d0b57f1fd4a1b87899dd8067d2668157df5948598b6bbd517ba68b651fb61d7ac8c6c32eb4b9ba7bbc97d9dc315fb57a9f87c8d910e2bf0123dc9bbbc36e889404ccf26c18a4b5926eadbe0304da95f",
+            "144623c907e2d7e52619754d4e74e3732380598483a1ab7804a82f97f49f4ba2be348e45d741e4d52d8709e0077f0721cd97796fc4039006f394b0061db966dc82e569fbc6d7e3d65ceafa869eb148487c984798b805df72ee7c52776f87eee98eb1537f",
+            "d18c6733445bd99cfa9e0f521ebdde1d13d3d489cb0d395852b6d770f831da5eec85582c92b68212b6e2709145b4480a17453b88ba0f5db69abc90fcfdfa239d66a969004e6a21215a62a41283e1c1f4bb77a54870c7ad5c679f6e605c107065f0730d12",
+            "8753181ef6d6901b3229a297bb2c77e61f4dc46061f15c5fcce156f96a52e84c90fcbabd901838aca6ba0336eb9707efab807eee7a996d6259b245c17482e1a9b3c871c8f633e28e96d71bdd24ef6a66ed4449ccea1a718aae53c1e14668e3f3e76faae8",
+            "c1f060c8052e796ff9040f701c00c701701c00c701701c00c701701cffcd8e237c502da6fea70702a1df6a75c956f8bb5697981894c1ea906c995e44503972621fadd98901ad0a1ea36ae9ad58ad4847f24b5897839cb1b159864d760eaa3b11d21c9a7e",
+            "214e4ecefbeda43b2356ee821c5ed621058d225008116e61c9ad8635d3d83547e504d6b6fc0a055405e36ea4263d546e31ed167faa46a4c38f23f142af320a41478b3583210bced9a3aa38266072d7b2a784e560d41989a63be8d5148ec92844771fdc08",
+            "2994eb8430fa1f3d78899967077de2ccead363dfd7af394cebe8125f8cdf499a08e401e7cff0856de7c3dd930a56cf939a34859d8ba66269ee4de002d18e1bf6db5ec71f87bf861abe11f57c64cac62774779271b548f59f22f25db626c393de90a352cf",
+            "d0a08b0163f89c6fd6beabb6074f692b32322f9c637385b82c0394fa2a8a69a47a0c5c351c8e63d60925e66b88535dabf6eab3caeab3c6ea72b1556be369a438add291cd2e7657ce0a356ab22d8183207f1c32b6c9eb4055230570acaaf2522598be7c9d",
+            "3ab578d263bc714601653e0c7b777ca90ea65453f936fa13f532fb9c729d1cb04cdfd16dcb6a17a0d5821a34d0f71b5e93094a0a75726ae129405b9b92fe12aca7278320870d82a6148c26a341a09dd336527389327d3ddfab5c3a4f32abe7467d85ec9d",
+            "fde1fd711620b21df722a2d8dae1575bb81fef813b2b3ef34e92a0c716f120800f65aed4b63942ab382e266e1f56f092412b4de494293776829e1cb17e5d9378739cb9728e6581e5ffd3cf30790a638eec2a16749418742ae313a7a01e1c58ad98d22315",
+            "6358b71b9f67398d2258837b90e9f65342c9a2cc77fd9ef77646523c7a42ac52f3997c1b990a419b608ce40f73bb069be9da53a4245a1364d397b7b85f3f3c1f909f361fcec13769a5c135f1bdb09d579043923daddc520f64c2ddec06d07d79ef95eea6",
+            "8f7d676c506fe05554aca4eed3a0850055e341e1651e83ff70c3f304fb5bffe31fbeb06803fa5afe38c738e2cdb6c3c977faa5afc591ea1ffa5a10ced660c877fbd11fdfdadc334b36b293b9205989a592f1a4be44814ea710d7d4f0f5916fa16ec6621b",
+            "00e5510439357b29995e5c335564132647b06dc9f0d184e7634a4b83325d9850ea8865bf8144fd5cf53a4022cd08754a86f28221b60a082a8264634d784954883f7a3e9063047299d8be2d7543f21b288aae206232c891b9a0a000711691410dc93a701b",
+            "b92f06d29ab85eede63a5d297044df778e11cf18a040c5c808bb115af906c79fe8263458b8c7a852d534360883b43568160d3d3648f6c87f47539657b72dff3d18424ca04c6dd88a74e9fda85fe928d9c90e5d836d46635ec3453a67ed5d836d6ee3fb06",
+            "d78246ae65ee9a7bd6072bc79ba766cd65cb56ed1b2d3c78e077e0834161010a41db212c843a8cc51e6b2f06898f429a5f083c55735f79c8cce655a8a5a6140d678dd936512cda5bcc16b11bb61ede96d4a68a3c3bf0d0195887bffef292700b0509f2b8",
+            "81ecfbdb9543008f01f018008ff1a7798c5fdf83fc9f788c5f9fb7fdd91ea3eff7f5b5fc7a07f8b769f9577d2dffb8b0fefd64fe7b7d2d86bfc363b0fdf0181d008f011880c700780cc0003cc67f9cc770e77068f823011d8348bf27a02379fc5b420263",
+            "f43f09e898fb43011dd441c24a92ed0adc6a9a54ec540d243b859434581b11ff5e4007e4cf011d9c5e78edd6e5379c9ff73a95fe3ea0c3eff67b404794d7702ff62f011db3a76de2a1dcfda6766d9838ed90cf264cc013985548bce7dc01dbb875f3dbdd",
+            "77fcd18fee549a5faa8f9495f6c46372652ba4737c649ae2e3712593983d2af11f58f685a094201a6b3ea8a143b0af8a66adc1ccc49942f3af74be97c45a84eb5940f6468c0d1c4ca4c065ad06c6395ebf571d869d3bab00f2c1aa7d2cd512850b01bbf7",
+            "52f93670ee39dc88951b2b4c3718f006a2d20ac79b276af4294d0fadc6a203254993999dea83bc5675a511d198e9c858a23deac09b2a522f3661504e836bf19643fdd24708a04a8d0fdd5e55e6055627ab799084e1ed5ad9ace298d61e091a7c19c773d0",
+            "03e0ebe40e9a6e50f66f3c3ccea2ca8fe4e804656373fd27c885230ee6c9a54cbc26c9cff8d71f3dc937c9fbb0668ab6a4a1316df5e4f21f202699170f6940219ac9431f5ad77ef618560f1944d37e2bcd6b07c7e4985ccc2cf099b489575d825dbec6a9",
+            "abd2b35fcef8504ca1f4ce19c0e28e16ac34ded17e66f8bc661724aace98144fa71aafe7172ab7e94a2bcc34ac81f2ad4bc0e42da1bbde8398e469db778fc1a6f579811ef36a0cc9f1be8fc43af440f6c3f7808e9bef011d853f0774c0ecea5a5f42d5b8",
+            "1db5b3ee17ca7742ee23f386c960bbcce541e68506edced58ec773b0049ae8e595c4919a6ceedfefce0a9c7a60470a20ff6640c7a2e7cf011da13f023ade0a0684c9a284907f8c1ab2e18aec2a48c2e9df3f454f7b97d93373caf4a1d0ef7a3a857308c4",
+            "6dd8e16790a19cc72a85be44ca71f21d649cc165d2dd058ccc3f05849ecd1eec5d05b428ef5d3e083814da3ae1907cdb7bfe766471dbcbf4e4d6ea73150655bd82fa8e60aa571a93b0378022536b3bc3e67b614bd88fc29666fdf61f852dcd7f2d6ce10c",
+            "b67b62762a7b0832b4d33892b47efdba981561f6d2ef99235df31116e031001ee38f7a8c4d7afc8d839fde73c27f15d011f50f011dbcdc2a0865a68982cb02398a8b47cb0c202aed18f323a4b2d32f2b9ffdcd73342aa83e6f320c319e1cbcf91046361d",
+            "a94cafb44f9b978127039c329673b89fdcf2b8e0021fadd2db1859dbf02539b57da277fd22ef307f7885e555287e4625bb45f2817ccf57635e9b83035c8e473993acbaceb1a9a16b702776d2825821be3283c0c1502dc8827abf8c22716815331b99b17a",
+            "982ede419cfdda90c32341f975dce475238f5dae0cc530ff14f31cce3019f168d1b47d69ac16b3f11b8a645b3e69f034c8d57905a3a5d682ec6cfa85fd813b5123f4e1da6be4587ada926cf51747dd0e76c6534a3ff0968ccc3031687465a54bf0243784",
+            "9aa60edf8db77b7cb1ec4f951a64f045c45a4eda9d473349569d73ea16eb73eaa46746357715e24683bb743415727a7e10ca5dbc31938a82aa11219d17ea1de3cfb5a4a127eefc301d406890146f8c6cf3aedc6fcfa06abd086296372d7be73fb1647b07",
+            "e2a9dd08e0b57efe8a1537497e1905f67340076964af43de9633acd2da23c1429ab67d71fd8690d165840ed5d9a3f9a85f10624e9d3b6b555f9727df22e89b6fbbafc6a3c2248a53674f5392d41c62ab64425cf4c487ba05d73616f6dc65de6425a538ec",
+            "1a0562360579a202e335ca9b1ce5eab0151d1cd13e0301c406406c00c406406c00c406406c00c4c67fb3d808e9681a19fee99121e237c586e2b0e912fd0fb1c1ef285253b9724c5b23c08a2590eec32fb7ab68368885f884a19ae4a2ee22b69231c6ba5b",
+            "1cc72fa0fd8160743ca299078ee2498cb6685cf4bbd8e8a93c9325026bd0cbdd562361633b65d0a39c05530e026de51a6d4214aece294ce7a78a5d432d3a93bd7f54d5588cd1f9801eac0a8a50287dea533ded1dced1aa133903d1a0072d2d6e415c5dc6",
+            "0c23a7ec3b9ee910968d9f71021f90adf10d4e97f0c20328624a83968a6eb6223376f4bbd8d0d325bee8dfe33711d801ce6769f7dcce87f225150c99073769865fff2e360e26705ffd2c36c28fe3837f161b6c3fc406dd4dcf3b2413ded78debd2dcc93d",
+            "394a35c2f55a94307ac0b2ca5efd3913278adba1c9958d313d57107642604ec092136cb3fc58067c1cf91a07b20a15c73dcb4747f7f70ff7f7bdf7db466e4fc39a74059b7ad3387e237c1abbc3729dece87a22c4760ced113de9f186c286657c580f9f14",
+            "f904c186a7dbab6e9e3fbaeaee524266ad804c804b6ed4b380315db480aa2b63c228a9e19bdeae77142b299f72cece78ad996858378c0542c789435430e2a72443d96c633e6b3ac3375244a80d482e4c12b69feed5119a4b891ae83b382df77cbb19e738",
+            "c4fd4a35f3d29999bbf48de71b73a622895289228bd4d847308766a425aa365ad4cd05927647edd6a5a7c7d721b5195fb62568a9955bc570e9838cb4a5570b4c96e316d15cd0c10ad5ca22697db85671489dac5a8dc0b407ac1d0f605b276a7c444f57dc",
+            "b714e07d69c1cd0e8b30d55095aa98deb5e3bdcfa5eba98ca2be147eb6db848553dd0cc9da1b0a02ef9d9ca7c67ac8f0782c60e549a5e75ab0810086f82246a3d3132f559184327add027ac382f354b3fad921ed810dfb9e2eabeda64280e7145c80e35c",
+            "b8b3b36f30133f191662328a3cc865294b44fa4d1a281f6b29f69db1de5f10c7fd0fc421fa0371bc445ea2bf02280e80e200280e80e200280e80e2f8ff2b8e5fdf9efc9f288e5f9fd2fdd98a63fff7298e5fef0aff366bff73c531f7ef298ea4dfa1382c",
+            "7f288e5980e2000c407100140760008ae33f4e7150a5f61b8dfe33c56161b5ce86f0ec3ef1e447be3a39e7fc5ea1c1ab6997b2ba28b0e228c5bbea6d00450ba9cd888d67e1c28bfb06423a4d1ef22c17a88df97b5c1ec68b21ef41bac5c2a91985aae059",
+            "221c6d7ccd2cfb1118259e904babca2148bbe2986c5ad17e338e096de3228ffafbabb84158f451989134e657f98b112d9115019295c3ca5584476056c6b09c12b49484ba94a9433588d128478172aa31b93ee11f94bca7efe1089076744eb722b798be39",
+            "2b8fab1df382d20480de1f05321fe1160f8c7e2ef2773ac624da51044180517a7b37f1655f2d4664f63d33ba81acd7a2faa1a93a9036bc3b467bf7421aa83a998822357ad3968433d0d876e865c00b4602462b4cfb3513f80e017b6eba59ee47271d92a6",
+            "f715e7702a2b88afb3d2843bf18bb5a810414fa28c8f3f27e5686bd2aa8ae1394c4c8b4e7e22891950283023313154a3170b8a38ee8cb6da6d041b678e0a8d2933239a3db7bfd8c7dfe1cc40b5136b901be1ed73bd8db02418141655f5a2efc9c9ce248d",
+            "ec698a4def6c2f4d9bd608c3296523d7489a68e520254741db85f9e443d54f54617ce2af6192422ee2823ddc5abdf6acd164e7517157678244d8ffe8bb939d3c6a3c3d7417fbe6008c8125bb383899d70473cdcf2f2264c76a5342da6c8b07327e939292",
+            "d4db50c4cdf1854170edb3ff35617314ff9787834d7024fbf733e12c08220c0a57cc9b24b7cffb9c092775095606194758d26b1f843172cb23880b5242f5e92aad6f419a10b4a26d27faa7f1c17cd82770fa1efa6768e68f1de9033994b0473d843a7b65",
+            "36fcbeb7ac9c2b30374308b31ec93299165ae0a96a9e0e8bb29681ad3435a559de0f8b28f5a1fa5308c2c51fceb8671d9a8005971f14eda4b3a154463c07365bafab72bf0526b37bdd0bb60a82c2ff0a98acac792ecd497a82f1edaaccfe2295cc8148f1",
+            "b1c4ba56b5c66b378d10ca066b3a427bdf3a5aebb4e6277dfc146c715ed8665dff08544a988618d6e24311193cf94b6ca66b447a8182237e777e18ff855844ce809806f7c46c64e52d9166dccc972cb16b2184a355cec0ad40487664620fdfdae9685ab2",
+            "6c3092236ce016ab7ee9251d2ff3f45d0336466c6c427de033c625e24a4d3c329b7d23918a81a72d3275059debf7f2849ce4da8af54fefe466cd55b8a8691d61045257503599a41496fcbe876ae036d1ed25f4cc7726f89ecd2ece1f25d4b0ee1d3ee83b",
+            "949cdd3a44068fd6e2bdcfdbe031da3b79201af2789d7f47f00dca811fd4ada3ec0823b0d78f1bc9a08fd9bcd7516f36211be3aed73b2ee9d353fd27f5d07a6583c76bedaeb16085675427a6c7ee09354a3f1a6310b7bdab2ed4a796163863650f1000e2",
+            "00208e3f8a38d23f9eb77d7f3c3cfe97a11a12610bf408bd2731f738d4abc864dfca811095b23d1bfcc48b5a8e7b1288d1ca71e68d80149f8e7120da95d6bd94063a530ddc2fd2ce86d6efb239cec167c4b27eb4aca4fb14645b42df1fecb00c50d8a41e",
+            "043a0a0bf08daeed5e9c5fe4758fcf359b01bde3f37200b3683ed909661ff75aa765e1327e94c32aaaeb2db6883fa03935b596c3198c341840894bd482b47d80ec9caa462963594fe77d80e9e2efe5da772c3e5c8ec9ed2262eb3e7a1e13e9c8c745e49c",
+            "17f3c04d8f2667f030a92aff34abbb92673704c6aedaf4b6496496fecb136d646407e607533ca2044da6d53c1e7dc69eee10bbb4178178bb21eaa67e6bcf93fc43fdc889fe9098e64e613c6f29ab32195a4e9ebec2748f9aace1c2a5afe7c69cf3d1e36c",
+            "daa599aa8952596fd3a20d5b5273b52bc6b51b341490deb31908514f81d1c80fc4066538bb4bb035bccc745d2cc3eff23ab5bda220c96075ec39ec0ca33316f7a26abc58866bbe33150363e6b17b6e6477079baf6a4957c51c258df6ff7221ac19228a1b",
+            "eaaa9532bb067a8d97b961e309339941f80989c426b4cc2930cdf74656a98566973a789cdd6e221ca291ed75e4cc92ade065d367ab251639ce093eaeb234f272743eb16033ab7b8433a898a36011c359cd205bb0391eb1e0989290b359a9be079682418f",
+            "5700c401401c00c401401c00c401401c00c4f1df8c38aa572558367e7a6458ff4dc411f3a33ea5f704c21522c355b906eb8358996662ae6f07f8178732f5ee586459d5b71513ec588d26abba65ac73cb96e054ae29fc69fa223551755566b5c7a4b1a1d9",
+            "69cf3b0264dff83421eddaedba6382cb6a77f4ba0c0adfd2a223ba3bc6b21105530a180afb44527798297dfb72bb1554f6d6ac5d3a2ef80d28a4aa909389243b41b678dcd7f4e954ca04ef188d3d2fccf87db002f16163a579011ffc96033831befa2e1a",
+            "5db96c0f108a7c6eed18e9c2c0484cee1daf24fbce8e7c5132329802a6149870355790c4cc052c53bc69175b31fd66c7f7edf23f7dde93b8d6906276de19de6c85f6c78fd989009f5f886af16abc849e54bb939af03235aeb1b8b1c1d99248f9c8554792",
+            "7670435613c4274b5cf1913a40bd5d3a0aecdc276a4807a6c625b589a7cc607a1bcee1afa11f51a57314ba7870903488c71ac76355526249dbba78c44e53a7523bd8c28ce06a4f95ee87cbedc33d951cd8eb095b0b4c8f9eb9a36ae62f400ed45925a983",
+            "6abf51690f452b9a3fa3844ecd55ef9ab1b770f16505684203c3cf3687d10927297ee1b43a970d859a75ad7e3b28e70953b1e344e30d082a8adf9b3c189282b2f2f9e45df035e9016fb66aba5d37773fcd1dd192c06c7a3255ef6f340bf996be6ba2ace6",
+            "ce475de70f55b1cb9df7f877abe5f923b58f3c29d7bcab9d993579883412e535d5b38a8a59a85357fcd664afd495c38b5b2157dd1f5c1e0e60143e92410c2b6b60d0e259e3c6ab36c3e499559a98531903373783652696279778b32fd20a3bb1ba77be6d",
+            "a15c3bb36b5c398731c414f476dc986539d0925ffdca524a95ef769b19b3fdffd8bbcba83eb3045bf8102c81e01adc5d835b70770fee6ec15d826b70770dee2138c12db83bc1dd03c1ef90eaeeaaca9de94e4dd7bc7dfb9d677fe33bff759e75ce6fed8d",
+            "786fcfe5c19c8e43d6c268fb9ec8b862f88931b6a4b1343d5bf29051dfccd7c59ce1e68073bc83829d8c481d6bfa4270269a45f6f9609ec559c285949ad31457a8598f037daf6d5cc8f43de29bb2ade701f6eb6101376f63c0d379b0e0f27bf890ce6ba0",
+            "862dd4694f9a6a41d54eda3a8f7d9ed1b2d6cf191458fb13b79d2392f592221b5c6ea13c40fe67bf0621ec672000edf8e3b44393efff31da61d893d4fe8cbc3d88900d6a6e362828405458a4d742a213c25bee3903f1a7b84eabbe2e6d2d08c2a8562df2",
+            "580663a442652323cc6e1c63460e0491439c17e1618346d513e721ff02dab13b3834b929f7dab15fa1766fceaa7ed3b9650ba01d00ed0068c7bf8876fcf8a4f227d18e823f443b7ebcbbfb4db5c69f423b767e8e76fcf8adf86b96ff11edf8fdc1fadb1c",
+            "fc73b4a3e2276887ef77da310bd00e2000ed006807108076fcdbd18ee28f56e8a37fa0a0a3eff7051d6da2bf2be858577e2ce8900a593f3efefcf945ff7b6d1607c392ba7da17949295b1f295f5621f5904d5d33cf940d133dcc663da9bea2da2f0a67c1",
+            "979b09d5da5eec9a1f4f4f5a2cf160414cae0beb158b60688ae9e29b8ceec4e64f2095d14a4b927cb2dc2baea56d952f248694345559bad395184713d5fd64717d4769d1b2574cd59f335b4fa0099e8650642ed3094d1f8deeae62d425f7f5640908a93b",
+            "81d8d05166a50bcb8e17841edf66999234967f3a80b5090ff72b87e2f1c9aabc246b1b0bcc3193ebadb546df05cf2ca5d981bf47b6403c25054f896060830b568b2ef71bfaf236eefc555f3fa78e0b9d0ef8031326a869b8da3302e70c413bf8058bb37d",
+            "7b024acfc6b8b2b68643aa62877ccaf182d7e555f2e45ad252780107c9ad499102e8f0d93e4a508db5d66ac650ecda6239eb302c8a66908f051d52df0b3a90fc109542060228d26bc29fe01cde5eab0e86cff45541f8634ddf96f389c2f9435c3fd1ce32",
+            "14ea3dbca1ca8fefc62f2e4cf23bb3e6aee34990e9c8d0c375d0ec4749d1ae8128de64d4723a73241ad94dcf62de3357a4279702f77406e734b87f2ce8287d2ce8e017e9f2a9b028b4ce580e7cca15f9452b57451cf3d83d5d8b37db6a067a0c7295dc49",
+            "c903ce25c9ddeb22075f8c4b12d1a60a7c94a99d5cba32309bedfdb3b46f7c28108f8329fe7f1b4c917a1c4cb1ef63b941f5e9f8db60cabd66b5f64d16f764c25f07534c7e194c29fc653005a7aca7eb97c1944f2892b5767f1b4c79450e376861f64a66",
+            "15bc510b1b5f5c3fa40099985cda1dbe2b2983b8ec00a2123d3cac4425b67b0fb520bc79348cc426a75ce3c965dda183fd17d580ebe72e5ad10c6e3796f8694fc4799d7274792b704c605ae4d09b31dd6433405cfd567b7b4085d8ec3404c9de86934e54",
+            "caf12b70dadd510feaa96c89b4e2b63fac456387e22ffc9dc514b1309c4c51bb6822f127080affd762ca6948f2eb35aba109908d622a27ecc08641a7eac0be2e47bdef8b295a8f8b298b0f46ce604b2ab7a26bb717a21deb7b1bfba7a2f3a1161777b43c",
+            "536c0d61e3dbce37dbd71cd7faf1772d3cedd73dde6a4748e948983a64a1916bc4b25c9e873962ef34d765334869c3197dee12fc54f6f4bed6bbcf4fcc51bd74b9a3d3737ab1736b7efce6127d60bb7e8ea68d993e7e4954631c6f6fcfdbf1821504c01d",
+            "00eef8a3b8e3907fc6e6e77087d423eef84b43073219410538a2b2a1ea04b7a2dad73dab54313dc4f9284b34d9c987251bc219718d11f1ab0ab224e3a517c3d478324544d63a694c0db9a6a9b24fd412c577f3735b3dad72d84986ec344f864cc8775e60",
+            "7b6878dcd77061363ad17893898e94e5965edef93090a9c92e74e543856b9be9a35ed67d80b56b86d082952ed2578dfefcb89812555171492fa929018a4504075d834780c67128d76a6e7844cb4472d846617519f80a49f86bd04c9ff4f519489e607097",
+            "444ef84623dcd9ab3c76f4758393fee3748df6e71729a2e2d0e6a9851e61062c662d52ad3a106babe20d830fb492c98c30d62fb15738296f1273ed5d0d0d8f2afaa074aba9a8630768e1aa2877325629924a58e74dcf0d53a4b2dd5b8672bedadd630f6e",
+            "caa82a5b8ca92a1b78ed98a98a717d8944ad944db04f93af55831b7c6ce8b8fb489a7ee4c90bd50e06294af1acb99ed108cfd39d4f01496336fcc8717b504582b2e02aeb6c79f084aa37ff2bc9e0585da23c21dc10960303a10bdba190c39237f28c57d0",
+            "bb3310f47c01a16fc4e2abd8ba27283cb0473925eeea63847fc11d583890625887ec84ae4b9f58adb00a7176327167e06367e46491d6e6525e09baf31a72aec9cd1a4eaf6a805ec820e9e799ebdf1a229fb648efeee201b803c01d00ee007007803b00dc",
+            "01e00e007700b803c01d00eef88f5fc36e4fb730803b7eeab67540bc931ec3ffd2e748b6ea28370d316aac3073559cef8da00d7af472e54c3e49f0bb6a2c23590470072a5a410d6750084d97b6843e0dad8e1a3b1b419555da3ef62bb607b1dbd93bb6aa",
+            "0bde5efa2f86eb688fb8e3198ccb87b029cad08be7df7107f917596187481396c4d463d3dd51c14f21a2f20894e0a62f901270a5064cd40b273a5e8f590605536340b1ae2a13ea657f5656b411df862b7c42cb31c4f48e0f5118a5edc588b4882013ef4b",
+            "0efefc46c27ed030bd207cc832624718dafb534a84cadbaffc6561ec6bb2930a8ce3f8876c29a32d6cb647036f0c4a26cdfcd52822744f1b9df55d4c99f126e15ca6502150be85b92a82c8053fb55fab71739976e1316dcdb82ce3b13f13fe48eb7026c4",
+            "8a57ed7026fe71c97e4ff923adfddae75d2e6c878c74ce40a886d1ed45ed1aed080f2ec881908820c581cdf05a7e1dbbafbfe00e17cdbbefb8a35c7b5a56956e904e114d4ed63e64fc117754aec63645afd52ba4a8ae5b5f56f35f439de07fcb0816e05d",
+            "59c3cba0ff060ee00e007700b8e37f1477fcf8a8f227e18ea23f843b7ebcbbfb35fd7f0aeed8fb6771c7977f843b7e7fb0fe3647ff1ceea8fa09dce1ff1d778403b80308803b00dc0104c01dff76b84367e96bd7dfc51de6d6c56c08772d63f7509d4ee8",
+            "58cf890b76949c4da93ea828a5cc1f8a479569bcc1b406adee262e2cba597692c4f528559e5d0a470a3bf8f2edf3e72482efbaa3b46ed7cf829485bdadb62b853f3edb257166d9881d7356f9bdaa4295388bbb1ecfc9d0bdedc51edd7bf342dca33cf71a",
+            "90cc1dd20bf93d16dbd4b2d7a7c90e64551bb0fbd4b945490185ae6f1a946d941d25861c34d969bbdf2a308ecea8fb89e2f812a0c3c81d2ba2790c623543c835e9616e3b498c3abad534b0419619ed565acb11eca1e11f0a919c8f8398a93b20a6f130c9",
+            "57de402f2c212ccf917f833c26c2a03dbc279eb97ea348034dc2593f4206726021e6759ca11318c94a30e31ed666233a21e74e2209075fa2782ca6dc064ae50c4af4edfde85351f31171f0b61be264af95cd39e3f7307227f3a5f63453b5daaa962f9566",
+            "95bb38d2e2f8cf6cf502e9e3ccef8df8be5a2e84423b72ef37661da4e2acbbe79544d3bdd6de79f1d4059ea75273df15034b02a1bb664c8359f24c9005d3beee6ccf989955874ce219f4c7b22bed66596c6898738896f63854c4c6a3b2442db5e6225247",
+            "a4c15687957b0deeaf5e215735960af9b3b7fc6825c9c3ce8b431bc29993dc02e65393053ab2c94f6f9f3ebde8bd8d739fed51bb827f62e41f1c02a63b2bbfbcd40a8fe89c99dd2c5a5e53b572cfd5ec2db858819a0bdb297758748d7dfaf2fa7e7feb9e",
+            "293406230a1f9b88238f0093640d05d12bb64735d9cf2ac0cb1b9d3208bacfb57941ac4d47dae2117738f4b1dce0f8e468fd0577249d2c1ab65e76389b253fe28e4321262333cb434185feaf9dc29d10d6e94bd2d31d9b69e45f913a99ba51246bcdff82",
+            "3be007ed64b103663b3d1dc7634766e01107ab10b36db67366ec28a07db8de07a3bb315d420a0f51890bb841987598300b882d24c64b6446a48c0aa21f2a190cc96e91bca87a5c5f51e07d96a84b8f8dbcff2e1c62793b541a9ea84006849bff84a9533f",
+            "e4cde655d0bb6e5a4cb961a167528b9fe1ab99423d62f0ce5c83ee2348d951f86abc8e30e225f2cf252b57119794a7dd11abe1626b1c9e7e6b21c5bac9c170e38dda2416890d630859f326e419e4e621368dbeba82515dbb5f8da1315b7f2e6397ef46ae",
+            "ad50dfc1f572dafda3eb6b0d0b7447175705fb5107b3d516b7ebe5e7d69f6e42f04c5397714d13dd9b5335714ddda2065b96377a3065e8d6ec5d9beeceaf5daf7ba86f3cbcfcce22401d9648b0c58dc39a2d42b8e8b28202d8ed23b06f7a7308a4dc318d",
+            "c103e99e954f75edda5d391656ab189c5e6b7796bd48bac53a36b9441fd8ad5bb2e4c3c210b7c6b7da86ffeac0cb798305e00e0077fc51dcf1f6288fe5b7f39cff35ee90339fa747e85986ba83e33faaa426b3c1447e6f906be4811166b5d74898618928",
+            "f1327a8c38cce3320d2715ee1409ba7634cda1f521edb0c6956327bec9f7ac3f39f5943c1f3cac26efa583b4d703256944ec377c490a3573fcf7c6c7e7a677c7860e35564758debc913aeed229080d610c745823ed22b560be5e947b354f4d1a92af86de",
+            "9207e22f5611bf53c8f77f79cedfbbc0fd5c5d49bc7daadf1712991601aaf46962abb5e2964872fce54acd9b1b01d62865a7a0994265ff47dc31b09fc73215ac19ea90f14d52d4d6f61bf1376991a436af9cdc38fba9794a4151a38454eb01ed2a12e453",
+            "f186d207dae7190c504745d62b5094571ae2ee9e862478153b64ba3ba85378090370459f7732ea82584f6ca3a46b293c8d86dd5fb94842bf4a3a354eef1cdf999652bbcddb532aace8f050eae48b1b877d6fd18c19b025d536faf091946fdf931fe62508",
+            "f41bf1ebd905d5c623d6964caa438159290b86cf9bf022e2059d59b0e517df601517fd5249b9d48628a2a0f04a70d34471e7d2e2b6689c83cf02b74d1c07cda97c78b3a4278e35ebd45ec8a8150448c1882ff8638bd4c1d5ee09a093575683920817b7c1",
+            "3c617b6ae327a2ac8a259c43b7e2ba31f500d00d806e007403a01b00dd00e8064037fe57d38d1fc7d07f4f371407cde679bf8fab0c2cc5c5a10c7c08cf95ed4104972727f6d79a1eebd7aae231fa20bd11af15ed447e0eebba97373232cdb0cece417525",
+            "429a47d327c4c9c9f938ae62c4faaa308f97f5b3a246313894c82b61c98d8615b3f815279524d64f05558aa88a265d484d7aa8afc4b45b82a81a91f66d87128540b28ac0874b35c39e169eb2c7d4708cc1e4afe44e08cbc3a833124db6d3ab291e925188",
+            "6edf781052a8d40961f4dd7af112334f0ff82798d767c6cb3c8eabe8e8129f8d5e499a0abc7f5230c517b15900774d2af86196d4b429e2f4715c65670c17f4977195c4c3c8e7bf8cab307d1f579175b34c0f9a200a587c438627bd264fa59ea5411707c1",
+            "f0b6c0bc6d5b6d079ed24e64685638cfe62be2a22c683a480cd3d0871148d548388e696794b89270e7ba56ede5fbd7cbf71acb8ba5d6ad8dc7d1e2b4ca0736dbd89d794bd4a8a976048e82fc09c8d8a6cf43548d1421b16a2acb95617a0b74ead412490f",
+            "f146190554f8301c3cf1a5da99d2cd143ed11fa95738e455eae44164070c6f5a7d70055d2eac45039759f3194f5256ac93578b4c03dd58970c92603d3e1a00db6f1034a360341d0e05ef98b4919a4996ededb638990bef38cafe30331c20e4e012041f84",
+            "330795ebb41315c3d606bfdcf2eaf6fa4947d55bde7112f4f8621e04c8cfd94b1f3f3941bf769a4fdedcafe22583561ecbab5069ec003f3a602d5991787198bd748a658915f41f7fc3bc571c71627f6d49478941f77a74ec18dc8b03ab15537aa86a04eb",
+            "dbdadb694ea328d6b06e64baddb477643116db81f73b5b43695edde1d6e9054c018d4c45e04d30460afbf99d03cd746d695212ad4972998b1baf9edfdcef911f37efcfc0376965c035f13db09d56913f25bb5bfa46dd9f0d77b91d4ce72be393e9a18f7d",
+            "6562f0d7259586ef4b2a14df97542e79ee60019001800c0064002003001900c8f8af41c68f0f21ff1290f1e37ddb9f0d32fa7e0e64fcf805f86b5afffb2023e79f0319463f0132d8bf838c160064000140060032800020e3df0e64ccb890328efc74dbc6",
+            "84267faabf83c0efcb36909442aa70c06f8e70fa131642da07a72ac4a2b071d393d805aece07f20bc35163b8d10f3a89c966985eab87847c84473e9b2fe1cd323d0fa9452d151a20dd44de1ba4336ebdb76d403b3dd10a12010399f3d4a38ddbd51bd81d",
+            "203137f122e4986aefe7ef0da0c4e8872a3e22ce516a359064fe60a8bfaf0ebb515a2f14b4c180a157b9423220c8ce54a2a48ed06756e4edd9baaed92a62deafbf82498917081797bd03b29a3eadc11d9e993f1a7b72254045dc5cde76007b1216ee570e",
+            "ff6bd706a696f868a83f07a889b9c4b5ef03b8ba5fd3b3b64dfde7ef046c69fa9435b68e3f895f67186ce055dca2d3fb7861867bd70897762234c964bb4059d5ba3836ac30372e8a4f676a5ec6b170287c309da85171e9422d26350211a834b2265d1f21",
+            "012bd79d6c4bc7499c9ae51b52192b98f181fb90fc36f2f21879bcbbd6b7b2165c57d2bccb40025542a8983790b3d553d98ec8b10125f3cd5af21df39bbecc0a5eed15aa9a9ab01d0f2fa1c9310c036e8671e7fb52a8cbad53d36f31c3ef3513e484b6d0",
+            "b373bfba77275bd1b260971e52a88db7f091f88f09ae04ca54086c96af4bf04cf57b21d0d33828523f1d88bfbeb8f208fa04f6e248c8352f1774786b16827837a00cdf12ff9d99cae45664c2f18d1d8a8be726caabe4b94e11abc31bf2b076ec3cadf5dc",
+            "162c0ebedd5b10ba5cbc041f38b3fa189feed444daf5bb8e3192c57d95a7efa0b49a531fc29cf0726f9c063d0f022f14b55d3fa696dea08f6e6755d6af59924c2123236235b9b8726a44843a35c94b2028f869d2cf0edd757feb40c240a61bb9c96463aa",
+            "0ebed230f09789661274c4244600e1147c16fcb43d2afc8e1e5621558488680f35efc415c24cdfba465f6c619b2ae11377991b8ea6737ce52b81741583cf4b9e58a2effd9046164d30102d44e67c2c2784cabb71277adee2da9c307d8a0a7d73e8dc0b4b",
+            "84e55fa69f3331b8bf00734a2dc3958677e71af41021614bede3fcb0344a9da0589494bb41d4545a364b98c54d6eba8770ec21c572d20ecec93b4a23fa5603493796b825b4a9e44d93b781e9212a9dc1879b50192db92ce643234558d99606db1e9b9279",
+            "3d56b7440d0bb2ef1ce3c4217fad65fece3a8075c563f01d13ad55049364abd6106d444d73aff1f251887ef8fb043116ee254f570fee3bfdf8875fcb361059dba55f09bd8b69e8850d01f187b8885c83b4daad17937e731c7decaa59f62ac17afec34588",
+            "a4f643e88ca630c70326d7d25dd74bd77c478937b06179ac48d3e73dd71c9969fff9b514e031008ff1f73c46882033d8d66f8636ffde924acadf96544005b420408b6be426b8158bae1b388d40a866846babc514bf363ae1fb94c64a343c2576abf0627c",
+            "705997419f8c42af90c6d41c613388f546cb8f6ea0d81ec6bb5901fb6bd5c6362ab607e572ebc07037ae26ccca33a41a2a933d8f0ca128641af243fe71df6e9e0f95216e0b73a4b6cd105ae1098ae82461a5445d79f9acfc4678ba890df14f1c8553514c",
+            "bc7c5f6fd7f57cd3a472631d8d75067f5fc79d7ecd8b3149b48acfb9534e148b4452b5258c35008fb3dbd22941dbdbb59ab2f2317121ec8253e697aa8da0f56db4b3e65b2671225aa3b1e6fb40fa939755c784814f5ab2a33ffaa3941b299f42ab3721d6",
+            "a6eb0a345838462bf1797989c7d8b729a7787f41a6466ff4a8085f7340e8b16834dea3d11fe8c253db8ceb84862f0af26fc8c453c08cbb9ae16a254e5de4315fbdfac2698fcf95e99b189dc50adf8d1de83b6ca2d731b97d78e8b93f581eaf287ba6b0d5",
+            "9a74661c29b50793dca9db902d989aca6af692d085da4959d3e9fb8a4ac706f6f43b37adcda9d467f12fbbea77aee831c402ea6fad4d9242417dab9ebd5c9503cd26c361d5e6b65e81f9183ef1ce5e36e2c482bc921591baf303eb1dc206e424769808f3",
+            "7859972af8f927fe1269cbb00c1681b2cd1dda872780d600b406a03500ad01680d406b005ae37fb3d6f871f4fcf75a4369d06c81febbd6e07712a9ad5e3aa4ad1560c512c8f4e797df56321fc042bcc3504d715577155bca1a61dd2e4de017d03626181e",
+            "8d6ae681a3b813a32d1e157dd41addd5277244100d7af99b6a246c6cc70c7a94d3102aa1e0addcc34d88c21ff28a32f9a9e257508b4fe4ae6f5535e6e3748cd1c354c1118aa48ffd3f4cfa4572b4ea444f4135e8414b8b5b127fa8608691570918cd768c",
+            "c8c5cf3a820fced5f802a74b78e6051a35a1414b45375d951d3ffca835f47489cffa76f84d05b69e14b0b4796f163c0b20150c9f85346d865f7dd41a7b63b820bf688dc8c3c4b05fb406db77ad4177d9cd8564cafbbc7155fa556a779e72ad70bd16258c",
+            "de1339159fbebcb123a5cd77a9d58d71dd5fa1ec85209c9f488eb14df36319f0711468ecc929561d762f1e1c5c5fdf5c5ff75c6f1a79dc0d6ad215aeeb4de2040ef1696c0fca77b0a3eb8910db33b4457567261a0a1b56f061ddb82bf109420c4eb6d55c",
+            "dedbbae96e533ecd59021b83945cab6781603a6b015757c1845156c337fbb6da5eaaac72cc393de5b362aaf1a66124043a411caa8a113f2df599cd26e6bda60b7c2345945abfe4dc3861dbf14e1da18594a881bea3f362f797cb518e7ddc12aaa9878eec",
+            "fc852f3c5f98b3954894cb9458a4466c211c9b9116a83ed1a2aecf91b43969b72edcdd3e0fff98e5bb29414badd22a864b1f6aa42dbd5c68ba98308fe68a0e51a456114debcfbd8c43ea6cdd6a04a1ddffc6690fb675acd65ff478c97343113e8016d27c",
+            "bf18530d55b98689ab0d4f269faebb3a86fa5cf8de7e1d164e753d3c67e7732864cff82c35d64d96d76d212b4f3a3df79c0dd413285f311a9dee44a9aa1494e18b16f04b169cbbdae5b78e19376cd8d774399f2eab04788e2105384e853b3a7a07b2f153",
+            "61a1c663c8435d177244a45f6480f3b196635f99e8fd15705c7f071ca2df01c743f439fa7ffa7fdffbfaea052038fe1b82830f101c80e00004072038feff26387e7c39f9930447e11f121c3fded0fdc65efc298263f3e704c78f5f85bf66e11f098edf1f",
+            "acbfcdc43f2738127e4270987d171cf380e00002080e4070000104c7bf5fa5464573cef8df131c96d6396c08f79e6377df2b353e172797f18368e6392a7d98bd900ea9b16d33ad7bb2192626af74b36c2dc97fedc8b1d1804ec252db139191e4d2bd7e3e",
+            "505b16c69ca049911c2c265d617a4c8a2e34cb25f9d9faec3944fe28c5144a09126c46a24c13636beaddf5c08e706f8f1b012e2c88494370bd7c513875f1804a93d162b0890b1895048179be0e395e49595c2aea62889d924a7c78a5f16489c5671c7ee2",
+            "88368401c3a433c1758f41ac0f60514d7ad0db4ec55507c2351c3c906546a795d672b4bb68f88703458a326005a6132ef6f7234ffb0ea9deb84968e8537dd96b8bd031d93f217e7dfd46517353de5eaf501a646e2eea7e85a70d8dc09abfe20ec3772db2",
+            "80e4aa61829dab227a894cd5058afa08226c25439808bf948f0a11fc28c6e4f06d8a657a1aed40c8f261ae7945ed5dbf595a613f13e554610d392a1d693ebc40e5176b5283e56e0fd5b6225fcd79d6d26adfd4f25cb963923d2a66288288df180eaa2ec3",
+            "0e948c60e1b770979e77259b90fbb3e2deede1e6f72adae27fdd4b71e93c6ca4ca5716a62b0e660f455be678e3459071cd33d05563899c3fb3cabf5ea2f6d96591b6b35670cf2d80a5a4586e289309f1db17c4fdc82eaaabaa880fa778e09f6d715061da",
+            "ab725adc3cf1088f79857344cb639956aeb8ea1f3b35981f3b35f68bafb14f91dcbd2eb831f33bdfc96dd681660f510b57cac8a3b8261d91127c454abe03a1cb45dff0f96af621e1d170a09cdeebee445bf6a0fae4b4506b0d7975dfc08fdd351a69fcb2",
+            "9762d9c7ba186a723e32b3142745c0f257c3b1f03cd4c9304b193f1f41817e76f0ae7b2010959eb4acfc92cfc6c408f98c5dace008a2534097251c31ef9dafcfa71384e0b5cf17f4620b9ff03054cbc961a7a964b15c735e88af0a6bd7831fda2cee6db7",
+            "57879dbf386dc217b8e8b6c44fc316e775f2d515adc031836951424fc37495d57e76feb44b012f10e5cb840d222c3f16c444e56818a9e3eeb5697477d9508427b7e0430f093b0a1f538b13d3006a8c19adeafdf7bd94305528f139f65ff652f0bbe16473",
+            "5ff421901008dbeccbad9366d26610574fe074d610152f6a7b9e864097e8b21a17059e4ec67186112d1addcc76acdbb2560e8fa764879621e35cde1d7a3136811e5179e6da38bae57ed9dfdbb87d1c4cb1bfbfa3e59c72767d4136be76f07e7a7a9c6773",
+            "e7680d718a0772c235e1d86f04817307857d288c70d7f815f4cb7dc2c06bfbcd3136128c106345e30f7dd319031fa54ae5a2aaa71f082f12a2865a21232ebc2ac3de15df21698009ecc07632df65b5c099187b81018803401c7f1471f849698bfee4628a",
+            "f5fce3490a768107be687945641a8f2ffd858966aac35bcfdc29c1700e4d4f2c2097e959c0dda51c5c345c2f09f90a7c300b5e4b6eefc61ddfd7759c92186174a67064715e18058945b4f383af14d7c2c1671ad34dac98d0aee022472adaadd497dd569a",
+            "50bf388eadbb0a9dcfc170284e952f78d712ba5f77715b590e2ce8bc9dce89d9558d277692b429dc09aea8f8482f392e0a8a45e4085dc3c3477dbe90e339ddd796662abee0a3b060e524401c868920d7a775bdf6f47132c5ae387c4329c2056fec19faba",
+            "ce49fff1d0b0aef08d1231893ff310d32be1979ca62dd25e439b61a1303b1c0f29f43b7eaace095f40786467b788f3c661a86ebc3732fc163575b2341c2b631cf81e625d2e64e3637ac887b70c99faa2034dd22cfac9c5708d3738a8de9b72dc49a80ca8",
+            "ad3e0b2c09f2cfcfdc8bad9ab4b5485f46ba386c653e69ba86e07e0a8f819f477c6e64f899e5f65b583e715d15d5f2fb4a566deac2ac2f8d4b0f4c3747f8f343e84c126b57b14895764b05d5887d6b3674bb6b90a99fee05ecb99ebdd17555f493c9261e",
+            "42449339e9f8b63430e7049116c8c011208d79a64316283716e0f62ee8edc763df796533115713e18b302437a4d8ceba0ba3a788c605252f71e3d29c708650751e8819941b18ba3358098e0672cbee4101c801400e0072009003801c00e4002007b09802",
+            "2ca6008b29c0620a0148d955fd378077fcdc7dab44073d76f791cf72d6fa52dea28ee80e65c17e2e3e9b5c93fffa1175ada958f6bc95be001fc244b133c2c90a0cf9761ffaed4b9b43f344473ae973e2a5682e194fae07b213e3141b83039f48dd76aa5e",
+            "1ab6de27d2c868a7ae10a55345bff20e3e9a47de917efa9d7754fd86775099487ce71d347fe11d46df79c7848df8364b21182d87f48b9ecca744212bcf4ddeeb136212bec0211ac741dc00116610440053416a8440f772410d7a7def4aa0429a6a53a056",
+            "98648ae1143db8cd8bdd98f2121b0b2b5c384bae5f3ff196564b5b4da34fe48340ba831028c4ab1c5c545e45c2278bafeed95a779a719b5bd32fe896edb7c49d861db6c49c0eab1db6f89db4ed2fd59c86ed6f3a771771dcb9b82e2e2eed1b175bb9ddbc",
+            "5e9d9f805353bd2294a749629d7bfe76f0c3fddb8718d3d32d07d80010a3a4274d7c9a4486a54cadb2c5d999db2803df79c7e677deb1114e7dfaf14695c0d7d719e376b81311fff8244206c3fd09c03b00de01f08effd9828e1f9e55fe24de51f28778c7",
+            "8f7777bfe6f39fc23b0efed9c594b57fc43b7e7fb0fe3627ff1cefa8f909de11f89d77cc00bc0308c03b00de0104e01dff76bc4338db9e77f4eff38ed55f784720f9f2e28c0b19a52622927ddc9c92d0ec8534bf5a52278a760cdb161bafd28157abcdd3",
+            "91f8f1e03d5c1fb65ab247de61d4be9160a98a614e8a455b9425465b615a4189cc5e9e1eb0f97116dc3f7f945c6da30601152b99ae84a155e3ee7a6043b877cb1f61181244717044834249247ed2804a796c937fa2c4272d2f9244893e4e46594142f8cc",
+            "a82b911266a07be6a3783f955d20429f1d7da76d1f637c50098d6a9e237e34aa22e89d51d79e5184b2d1d6a738c5571f99fb0555c13a7dd0359aed33f3e58c46bf2a90106ba2ac5cc43b772bb74f07e2b5bd796ce898ea932319ce35e994d704a9f940e4",
+            "b1faa83b8ef82bb8c3db5c44cb486693f7b0715f8b3dc494dc82c57b81ff3298523cfecb608ad38a518a4a82845645609a3dacdab4b66921a352a2301f56dca646a5bb09243d2ad685155fadc3c2e913479cfdd9b7a69a38ebee64e1a934a6ea05df0753",
+            "982c2d3831cc2510ba0b642595152b2b0b50b62b2ef78c99a77523549ea05849ce6ad3243cffcb608a11a2269393626998329a801df6602bf3cabd464b8dd7e955411972d1f6adb0414de2f06bd5e1aef89caf3ed9b096e2b172e452e09edfc0390dee85",
+            "5bce6b94ef7dbd4df373f4f85e3b4e385de20980e3f69ad08d7192c0d6b54a5be1cb5ddac39a82d9ac7b28690b68b51f959f78cf78be148d5a037f652bc02a08c65923a7f39ee1c4670246e101ca99e08e1cb946a9580b1ad3cea421f232a654bd61f108",
+            "01fb03174ffa43c80dfcd85ae080e751e085226b33d410cba01c93ab99059e4b5ce8e0886027a4b5d6920cebe226d1f0247427d327dac4fd294ffd5b5388b036b23b6c94402316266d5f7ab18e48043f013c22f4402294c0b7be5c3c385d2c62a90c8e1c",
+            "c25358e29a6e10668b268a9a620b7b8f7b297b7222e88786b9c391d3ec3bdff75262f89e6d6731622358c0d740cc17a5083b1015448071afaeca7943d1b617aef17942b2406bf608ebb3562af4ca4477a7ff823b4462f643f0e75a1f71479c19a9e9c573",
+            "eb620af5ee1a509203ec272dd67ddd5a18fa50e40dc82ff9685fe8a0f4b4843619ac3a838a7517b2b2474f1ed2f1cc66f317bb25cb4df25fedf61f6c46b5485f4f76acda7e1cd9dad11c151a17ec69f6ba5e7e7ed476e39366cae5c236fee6f6aba3a35b",
+            "fe8114c7cd3d1bfbb4b33d1659ced981c8f8ce7684eaf5cdfdd33d3c30330f5167fe0550c73144fb88cad0051da4cc373edceb756f392f16d848d8d8489b660cf68637e61d4b9b097bac1f84ce0745b7b47d45eeb4a973748b967d5846e2b44434c68f76",
+            "f7bc1dbfb28200b803c01d7f1477bceb258adcfd39dcf1d8d0117014778d47bddc16499282e05f929c57e056a0f875ef3011b444076b7688546ef26189017156bc5e90ea4417fe33e35198f1940cd9648ccaf78e0e266972501a491a07f5116d9e6213b1",
+            "bfd90e48910c163c9e9288eec3dfd80ebdffca76cc528be126adca8fc3e81a1ee926e6473d11278283ae69e5fdabed906222396ca3b0ba0c244012860d9ae9d3ba3e7bb41d9312c5e11b8db867aff25ea0af1b9c247fb9a3f77f71c01a158b32c536fe0d",
+            "a36f3ffb8ae52e75232c946a87e5a191deb49bbaa9ff8db775c1ec0d71de1995f905a49b33d9fe0934cc4655b16f09cc35d9ac91617c82e1796abe522c890b9ae599059625cf704642069a12b3b6b2d78e91a604d79748d4ca1114fb14f95ad588c133f5",
+            "f6d1bb8fa4e9479ebcf0ed6090a214cf9aeb198df03cddf914903466c3ad992f365925cc4cbe655d2e0f9ec0f4d69e41a4e5d9bc7a2f88fd4b4b07d7a192076ddbb37d1ec11e556f98f11c427724129b7715ce2119dd9772532d5426b8dddbd81ca69f7d",
+            "35b185c5482eb111c1acbf507d2c9d78773e12b60f417241481e6c73308840482b3b3be4acc872c0914af5e95e4cafc45e3f2c8385e0682fd70ab01d80ed006c07603b00db01d80ec07600b603b01d80ed006c07603b00db01d80ec07600b603b01dfff5",
+            "9bca9f643bfed8f8ca8f5777bfe6cf195fd9fd676dc7ca7fdf761cfe73b6a3f2276c87df77db510bd80e2080ed006c0710c076fcdbd90e9039de80bf6b3bccad8bd910ee5ac6eebf57773c079f380f795f2befa694577f5086b2d30ff15e77c03c5c4c5e",
+            "e9b2f528d1ef3c6a9272be51cea7921b3b23899d71fd76a096f20333bae6e884425aaaaee69ac3d4bad01ddb64eba002d3e807e92a0e634385b3c2fbcf9c77035de5ada9d69827e7234c329820138b8ada62b3d701a386545a958725a62eb09c03c28a92",
+            "ed8a5c989a546c038da85b5594b0c8fa3d05afe5f638c1b5537d46a91384bad748f7a8b4067082564862785bd5512d59b3956629dea022cb788456e59b81ae6691c35c7179efaac55d25443810cd083cb3b20e2eb58470c7f986f81cdd8eeb59edbb7745",
+            "21924c9ad5b1c62096fba2785732157cbd8d081611fa6f309198c1b5d12903a194dbaf88a9b6bc379a7c106fc74dc073994dba02573c90065fbd61fc1a7a662877da9866cf3c55abad9af7526957ad8f2369dd7ffd4ad14977cee25b23c4e8475dedd80a",
+            "73dd797b87b555fc2dacac0df7be6bf921be5ea25b45d64a53dd126a3e0c3e8afa82a475390589912f4be519930bde38a598b2752c6b5e5ffd57645f67d21da396519fcd0a3875ac8bef09b14f12799d94825da2afd63f54bf06b7c462ec435391eaeeef",
+            "4a5539c89e4533b9fb3412e080da8f114bfa8407db87a6ca9948db5183ea81ef13b5821c033e35e76ee34d04c113783f9e90736168d843ba352ad1091a7581395eecab96223a02ba98233a4713e4986496f67474a2dd7c38e8fd4ec14a915431f1b4d8d7",
+            "31782bfe6f6e4b749b350ef232e9df73f837e1596a561fd409542ca35fed5dd1393ff099ddbe7971e9492ea334de48f52ddf0d353cd96cfe267b28655051a413dc3a7d5986b563d3236a0035a8af0345d2d1bcf564d506222cf8a0682b930da5baf09e3f",
+            "a737bf2c2d7322185b90669f70d8d7343211948009d6578c83fee5922ce61c952c967029aef8aaf2078d271e1ae1940d6fe8dc1d02ea3ef745369f30444a43926406b48d10cd9cc7422cf7174bc311159483b8faad7eeac21562abb410244b0f269d7829",
+            "27a8cf58b9482ccdafbe21d28c7bfb90230627b4127184d365dbe5970a13cfdd366fd69d40b0c72bc619e87da45e95c5fdac1202c5545c5e3038500e830365d6c66c963638a733e0f53b83b89b0199da826006aec1a4fd2c77a50d383b6dcdf1bb5d5d9b",
+            "7af59947de7155fdbacbe3e1bcf5c592cf2509cf285b33e728fdb52b77ebabd10bca24af56191966b8b20e36b6c55789833e3c9b7d476b88dd3c9013df228f1365e1d5c5bca9a9b28bdcea4ca2f5b05427f2649575f92b6e928f6d634a7912ac63307308",
+            "733e3e105e0c8a6e68bfbdb9697dadd6b3e10933f749d615cc46c8aba01c6cae6b19b01d80edf8c3b64377b4adf2f1dc40ff87eb2b9ae5298fe728d9018f607d20c85d2e25b7594f515aa8d878cbe1b80e3ea5986c747a6df2c5b231ef86e4ae94d2b3dc",
+            "99959e727db73b5b395817b0bddcd117e11d414823ed28f22a2feebedae15153d8a4eff9b00a0b0897af6c0f6cae057e9d9dc92906e5e2f3717c51da6cad12c62ee7bb4acb4463722b8f595c2732aefcf9039af328546100891c9371888414547bffab76",
+            "7a430a88f5c7f5151e5e6aa6851c4f9581a94513712e1f85055c194bfc3033449bc8f0f3695cf160a4e26971ac0178d8298fe0f71a91a15d646d4eb612e337472f29284a6cf2cf09a26733af5a6e63f3c242a3ecb51f04129dfba99bfacade1e15acb38b",
+            "9d5818901c55f4c5545c3ddd2b1b2893aeeaddce3068098d16aa8235cad88cd16948ec6aa35d7edf7678669b4277c626ee74a5dda08a8ec4b9a024441dfb62313fd672eaeef836fe8de3435af05620de88f7b1f7333df186592e0cbb7d4f77219509ffaa",
+            "c6190f9e94656a8accf5f7dd5eac5b74f8c573c64cc11df6c2c16cecd61383c1eb2d8bc5abc9bec86c5e4170ef73ca52dd5a54d5ed4867fa512ef3d119e903349ad75edce37b8a8e9c42b7d8aa8b1d888219d2e9f105e3c48a10a4379b729ac2507fd1e1",
+            "8a7f536da6c1cbeb20174443117ec29ad3986993c7fa0002780ec073009e03f01c80e7003c07e03980d115607405185df9df35ba126614f01e901b3f7595fafbd115d0b8ffe7465750febd4757147e33ba320e8cae007203901bff0ab9f1e38bc9bf446e",
+            "fc7831f767cb8da57f767465e21fc98ddf1facbfeb15f9e7e446c44fc80d3d406e0001e4062037800072e3df546e4cc9a769fd5db9316fb5c682e04137e285703e1434d115efcf06a3390ad247f8a6490c06e3353d124e7594605cb60554dbbd5b60f481",
+            "86068a556d004dc8faf6f1e7cf4951c3ad16c563af19676de564a46c03a47c27ebc99defd8985b0719d753848b4d3447e4272ccc5e554fddda9eecd16d611164e0fa39bf04c9b47abf295e485a51c2a25d19526b9cadcbbc4fed5f52e053e85e3327fc52",
+            "ad86aa5b51498da59ba838bb8905ca8f37dd87205e22bd5a705db3cb8cd95b54591ee27c1ed57a8e5b2d2ee3898adcd5043339ba1218027cd3fa6e3d147338253c2d9e39c1ce77b7616c41e22e724c84417b714f3cc3c151b45a8f52faba88d1bb16724c",
+            "e41ed902f194167c7e0d2335605d2dbab47ee8cbdb386c8fe8c96d6f665788bfd4724c8b83fcb596037d4b42abaa91af01d232b9bc662c89522a27b7541ca6ec350373cf2fb51c8e521327488fb51cfae30d6cbd57c29810ea63658a7608a7b89e667333",
+            "8ef453f1f861158a92538a95af27a0edebce1e6b39f47ba840a1598df6cbdf49407edf5cf9227ee6fdaa8655b1344c3a5e81110e6d59ed7173a591e78ad022d98fb2a10e899d06dd4e9919a672c3e48e7734a016b59fe2916d0883731a9c08b79cd77daf",
+            "e5287bace580dcedb8eb41780bf57226f45c580cec902ee6916d683eb28daeb247b6717f9930e2d84c0efb8cf08298ef706640767b06f174912d3c66e24280eb1e54ab572e1266ae70521a1ad3ceac21f232a7d4fc7b2d877d9333f703c4d12bd1083cda",
+            "9b66bc3985c5f343b6f99af2ec51057db7e13d7e8b7c5204c8ef6ce36e939b6e02ba93a98d36f1b9792bc37ddd93ee4eacbdad4c36a6eac22ba4ab1656e99ca78874e1517b9ce0fe8e2cc2baabce6b722864b509e76125acb1d717d013d7a30537d17593",
+            "3409bc78d339ef681706783308e860c68cad1f3044c902914604acd90866d24d606a95544a774564f1a05c3bbbbe60c868f829f480b92263c9afcd903b227342ac8a61ba70f05c7f45b8c593aaa2f3d179581aa556512caacfbd426e2a35b278318a16cb",
+            "c406eebe1c1dcec5d30e276bcf184d9020491f921d15da44ecab134d2cddbc1f57e2e875d587b6a17e371e5604d7afa262c5037fce3c5f8a8b96d0d14e2b7314429b48c271d8f8fe61f018ad896e36b87b763138e0647aefea6b70adcaceed8d8763918d",
+            "330ec9979d8b2f1668f70c325ecb78ba77fabca5f0cf648238dba431097b8235b77165593d03b8d7ebf4592f16c849042e312654ad4ebf6e9d5a364e69459dcc7b21361ae59e95b7f92e6a53e7189a7d84b0cca46b4eafcb5f9e9e063d58b506e4062037",
+            "feb0dc4866c023fc39b9a15e3c4fffbc6719ea06aefb28d86ec790420a7e477cd605236c714953444c529f73e6d07460c629237a24954f5b9c005422d8f37a207a8a0e7d329ab5421a336d9c2decb19483c2216d5c9be7b28d4c3c75ab61bd7434729c8a",
+            "edbaeaea9bae07cbc53626884c64a6a634d65123aabe3453661d8c141466ab6237e5e1680db35d1a84161c5f91a1180a4de2aafc7854455504bda4921828279134740d1e019adaa15cabb9c1961513096e1b8555c47b5a04618720b65ee5eb3d90c7520e",
+            "f3d2f08d40b4bd964e46dadeaed5989594a5b1e7f78d92e2d0e6a985ee41062c662d743cfa2fd6f40817a71f1048d31960acabac5738295da4e5b9325ef771527b20d526eadc39cc4e8ac5b3df29080e302d92cee32fa155ebc4ef3bf221a29a560caf5e",
+            "6de9554a55135e49b0eec9eb05de1405f953be17129e35e27e3e6cfdccf87239c9d9f31b28cd53f844fcfcdc8c415f869efb1e157b210ff2c6d045f8eaabc168244a4fb33b27bbfb275556eed2316c9f37638362ce8417534571e79a29cb39df3cd9821f",
+            "fd6231f6612ddd7a6a2af559edcb8ee6179d61610cd32bce013c2178c8f64d01e50b53f29c63fccc41afe5f54436e4828cad1bb4e69024d8302248164a20d111643551f42428f56f07b7e94cd476067900b901c80d406e007203901b80dc00e406203700",
+            "b901c88dff6572e3589ad401901bff8dce0d5ee1ffb273631f7fb50d5d762486ee9be1eaf9cf766e38be5095471c128d7d53908926ca84252973c5f4d58450479598e229aa4fcdf36089887cd49a3cc55d5dea1db44e41b4305f2c1b4644063923aa5d36",
+            "12fb940950741c63c8ffd1ce0d4f9ec6c356ece6e6544f8da6dda1bcc3f49da19cc305c3bda1fac3577b877187178f9d1bcbb84dcb3ce79797f68d7736e36e6e1c7fa473c3d862fac3a2de20850b498fdd00d62f720312ea84fe5b463011203700b901c8",
+            "8dff4fe4c68f2f26ff12b9f1e3c5dcbf9fdcf8fdc1fa2f911bd08480dc0002c80d406e0001e4c6bf9bdc70e3008719fb79b93189b44a4d2cc10f461c8a7f424aa3a3c32761ff59184929a40a07fce608a7ffa34648fbe054855814366e7a12bbc0d5ed40",
+            "7e59186a0c0efae00cb1f10cd36b85a068d608fdb3792611a2f16d144b71b5e080f041e3a9246d5acfbb0d779af5718d20323090642b0bda3833a281dd109262532752b5a94ffdfcbdc99418fd22c5e62439861f0d2427e30cf5f7d59937c2eb8582d629",
+            "30f42a5720248446a74be4d411fa288bbc3d3fae5b7e14290e555831a3ccb84643cdb602d51ba22a4b87921d2f08dd3ead448c1ea27ae326c0a54ff465af2342c764ff4eace2fc4b4132babcbd5ed610c8dc5cf4fdcae39e8a357fc51586ef78a4864415",
+            "ea343b5745f43d99ea1514f5c353e163991cc4c8a9ccb8a73e97624c479f0659e886d09bf42ed577306b2c5bc7d48c8b5e8687385252d5eb6dcc3cd7219fda1ff4db9fcfdd422de198a906fb0bdc20511f69915778841b167f851b75f2922c8a95c12628",
+            "db6fb6a687cdac3ea55343902fd4197a7dd578494e3d82fe0d9a868690e3c8aa400db3b9a47b9338d963efd35d92fbe1c37a759da542d1f6be384a4db294eae2506740ce646a36f38199a2ec5ff7542ec45bcef54b6fa140c7f945ba7c2a2c0aad339603",
+            "9f72458e6ae5b28a631ebb2769f1651f6e438f41ae923b29793c7379e1e17512dd79b23821f03666b317561f3e9c9f47706648440c7bcb142d9fe713cc8e887f66b3da616e26434f3e8ccb4385bd14eb0daa4f4e7a42cf99f6f1a1affd43d96cf9dd48fa",
+            "aec4517ab583134a382e660ad452ac1e370b62655bcad6c78eaf15df3e497c0067f09f81883958b00ee3a17dcb70f2a4193e4480112b85eeaaf37291de4616770efc496417b9340e9ebf6eaa3fdf36141f065c58894a6cc01e6a016cf3e873129bf7e51a",
+            "4f2eeb0e1decbfa80a5f3f77518d2670bbb1c44f7b22ceebe4ab2b5a816306532ba79286e9fa0bdcb0f11640fff2f9249213da92c916074b6a6162a8095fa2ba73fc6ab43c70fba18e389030e8e20867d0562c2f595c8dab6d7e379e0669ee6d742d1ce8",
+            "f2b401b275ac0e1479033b284314420ef189e67a5efd1a04719a81962771f1a2b6fb6908a66a8795b012fc463195138648c3a05375605f97a35ec27b5621f4c57c8ec3c6c5072367a825957dc1b5db7bc18ebee9bd9d47ba317b7e23e05964e39e967bb2",
+            "7371726079dbc374e3e1e5f73502f4c31209178955100ef98b9ea4ba5ed8539070db7d821ed885e02dd2176d6d0c5f261b5e7bd02ed79a1fa0b2bbdcd1e939bdd8b9353f36b9441fd84e9ca36963a68f5de2d518c77b1c543901065500baf1c7e9868a2c",
+            "b610d27ffc6fbcf947742356e27150a5e728ee1a877ad965f319b42a494ae661d6585179a33e64850f43559a5476d172b33ec2ac787d2e15682dd46dca03d7e7dd1d42ac53c8b9a793464ca702e2991b45089671a3193cb6d662c1952534af73d47ab751",
+            "9f7ba879ddd770507930317b93889a48099b9b37323d7d5ecef772ad184ecd5d819226a92bafecc9b8a98e50ab180b1f76c019efcbd1b1b791bb221845d4108169ab64cf4a71f031318de45a0b858c8593d7235688c77b14b66c483805b10589f63f04ca",
+            "13ba5ccb7f10af16f0b5d1cea6585bcf3e0939490fb372bd4923a3a853168e9b12b1a5376981e77916ed7d82b5f3ea3e907e9469e49854037459eea48758a81a8bca3350ead5d394651d5a4d0eee60c29cd68e3be2beb38d05f5c38fc34bf609744d52b8",
+            "434d83678ed5f05b5f0cead31eb2f694082ada6929b3b33e6fb364b5b94eb20ed3811a9f0da7be76fc0607fb06661b3fbbf3eb265f61cecd318454d63ce6c2c1e0cd92fb64ae77741ae68d545aab778159ca28db69cc0b925b8392e81cc43e8ffaf1d506",
+            "b08eca078403199cd46248d42f31a26fb79ec690cde6e10d67573808233b859595c5ac6a7daec84aa8d18f2f55514b7be6e87d53a67fc8d54521ff46b0dc378ccfcafa9b7570c1e02843301cbb286f84be32e4339ce215aaf1381358d3ccfd1c75d9ecc0",
+            "58bf5743a5bb1a9f613e0ff2a97e1eac2b3a3100737dea51e250188b834e7bf6d1abeb9a0ee01e00f700b807c03d00ee01700f807bfcafe61e7557aa61dbfff1f5480bf59f728fefc32b2d78fb387e879a0fc443d13a8d4c52b0fe7090073a1f4368c8b2",
+            "ab0c0c48ec581cc75b3a74ac2b1a179f2b5f70bc7dd5f3ce82ccc674daea408a3a8dc8e3bae52c61a5a29f5d4d4ee92505ff3e2e1b865c546f6cb04bd0b276e714428e3c7214122d04ec4972fc377ad73b4af2afc9e367107998a07ee4024d230d18f38e",
+            "49d426d2fd60aab2a0e99245a9263345f59a6821d1354c09b6566eef182becdac1ad10ba5d4ee9f0d9e51206dac50db410068dc2189bcb2ae9fb634e763444858cb00b94ad32880b6ca1fa05e2e65ec9ab1f35c7540bf6c91b5d83bcb14c32a4cebadc79",
+            "b71f2515cd8d84cf03dff7d5b2a731a7597e5870773ea42c510cef9d8f24b466b620ad3f5c2594a0d4d3ee047e4f944a1bbe80790539594f7eaaf6b6553d4e68a4be3c7e4c79a8a8621a9ff51a761b37bbeafaebfafaeb0ff52d4b1a77f43d8cd18c2d56",
+            "0be90c339b3b01bc50aec728e7517a7e3c90afd7e2413eb31d919b3f970321c92c446270966b6c798d8ecfc7fb81a5e9d3d7f59d7a42f3e9334ef4fdeb36f244b1387e270b7db3f6e9c46cef71495fdbae4d98b3c92aefe5a4094c4a726879e14d79042b",
+            "bdeae6515a5e697e761e569c7382465f4d4351ea33b6e9f7a64159e8528a1f2510c668b19a8cf48f1b4d601da16aa1621ff0d09466e11e203e225240b7b07c98569e5caed018b9aef88413e3f6fa8395ecdcb3ad349dc3761f499ac06f17371fe797b5b3",
+            "a8d44c4d6a0d34184f78f141194b2f0a6d240d4d189577730fb4de3ecf63229228a3731c42389ab636ed8f6767d273dbc55117d314f0736e7dc588ba3ed5cc4fe5a1cc8fd7864e830a73b215d397327a4e7c5192c5f842ed0ef76b69144f929ae783f3cb",
+            "b46ea21ebb77adf601f330c2eadca159af17eeebd6e94194a86a49bc5a3efad7559b6e4f3783d5342e882c7d623fd5ec09717b67fe15cac004168a7b39c4633a05ee3a0699e78273e1cef81d6f8fe3a25122e6e9fdebea545bd2dafa39a302737fe2b60b",
+            "44c40b16e48bfb08da6bb0ffec2721b7c490160948903f2e41744cfe2f09f21f674216fed35d25ae20e7630894f37518cf248b33f344473be97342678953aeab93db8cce8cd970227328bfe7c85a7c566d7c686f922b22a7a94cf2943fbc8f2441fd1226",
+            "f82c10dacc4790b16ddd4f462182f449bc60b48f2c81e84064ddb9891a5f8a781e6e77b415bfa4411b5b1d222b1222b2616df63b05fe8fa2386f466dfad9208530e4c08d793971104711fab69f2659859243d18710f860d445cfd0d47d1b28e6ed3c9d86",
+            "a97fb9192630293928d951b766210cb5dadb4cd51155396a828299c715d077b4faa1cb7fc35d91735d550545768571570e54908470a474edfe4aeae86bc18debb5e755febc4a835dd9bc4c834746e93c7ac35936e774835dbe3a99f2d161e6c3f1ccfcf2",
+            "78e9d4cd81eae5d5488f7e45c9b720d10f264b2644e02cf3b750f732f97d19d3cc184f120da18f211d3c288bf3eaafd4502184debfaed59c760c657ebf1e873d9ca6364ce8d59881fa922d28b0ed41301597c8f3c913bc876f7e6d50208006013408a041",
+            "fe4735c88faf307f920629fe431ae4c7bbbe5f33f0a7681064f89fd2203f7e34fe9a67e8ff4083fcfe70fd6db031ff290db2f6131aa4f6bb0601073408104083001a0408a041feed34c8223189e0c84f6b9058f23ea4556a7ba1bf69903651fbcfc21fe5",
+            "630ff067bc8e645bd6951f6b3ca442d68f8f3f7f7ed1ff5e9bc5c1b0a46e5f685e52cad647ca9755483d6453d7cc3365c3440fb3594faaafa8f68bc259f0e56642b5b617bbe6c7d393164b3c581093ebc27ac522189a62baf826a33bb1f9134865b4d292",
+            "249f2cf78a6b695be50b8921254d5596ee7425c6d144753f595cdf515ab4ec1553f5e7ccd6136882a7211499cb7442d347a3bbab1875c97d3d590242ea4e2036749459e9c28f1ce4f836cb94a4b1fcd301ac4d78b85f39148f4f56e52559db58608e995c",
+            "6fad35fa2e786629cd0efcf7220f52f094080636b860b5e872bfc7228ff3577dfd9c3a2e743ae00f4c98a0a6e16acf089c3304ede0172ccef6ed09283d1be3cada1a0ea98a1df229c70b5e9757c9936b494be1051c24b726450aa0c367fb284135d65aab",
+            "1943b16b8be5acc3b0289a41f22f75c84861cdc375cf21f9212a850c0450a4d7843fc139bcbd561d0c9fe9ab82f0c79abe2de71385fb5ee4916528d47b7843951fdf8d5f5c98e47766cd5dc79320d391a187eba0d98f92a25d0351bcc9a8e574e64834b2",
+            "9b9ec5bc67ae48ffe8419cc1390deec55bf6bf7b90eadf7b902f5ab92a8f1e245d8b37db6ae6af1e04ce25c9dd0b2e9beb7da754540a3b7bb64d7416fea58660f4a78b97c31f91596f40b544e9a8d5580a36be1779c8f7de04e649d4ce962360c365bbb3",
+            "3fbc387a257a79947c37077f50d8726e05a17d49973d2aa06f47965ca52923256871bcb973f0869b7629589e864f12345fa72aed263c3490849eb4acfc92cfc6c448e18cbde26ee19d2d5e175b2f42f853a1b7190dbd95071379b4c19a78118f1ca47b0f",
+            "b520bc79348cc426e7570e1270fddc452b9ae16f1c244797b702c704a6450ebd19d34d36e37180a5b7075488cd4e4390ec6d38e944a51cbf02a7dd1df5a09eca96482b6efbc35a347628fe42ab13d300498c19a9eac953eb62f396205578f1390e7077ed",
+            "98f045b1309c4c51bb277a84a0c236fb72ebf9f56bd7c4522f59bd087ed120c9afd7ac8626401e350876e0ef3588d6fbbf6810b025955bd1b5db0bd18ef5bd8dfd53d1f9508b8b3b5a9e29b686b0f16de79bed6b8e6bfdf8bb169ef6eb1e6fb523a47424",
+            "4c1db2d0c835621439bc7e93687d72dcddf1ce3c1be18a87e86333cd925709d6296a6e42a4e50f42fbb444695eb0b887f77a2fb8551a49ea20bbc7b082cdaff53d704686ee21010b0258903f6a41ee2bcf3efc372c084695182f41b1a5dc04b762516dc4",
+            "dfd3209b27251ca7d0dde28be8b1fe0c2423309a7d2d14dbc3788d3a52c10e4de5ceefddc8b721a83d163c6f2bd84ded2a68bc8944b72df9d4b702b8424a4cf86cb076415ddd15cc73ea3af24c0939315626ebc41ce4907a06446d66c7832353dc301aca",
+            "f2bce543737c96a410c0709c0a966b6d2b18a582ddde84a474d83cf5530623bca88a397cc94f2147e865e56af9ada5a36ed8a20d821dab09a9697c76d0a4f52437977e6e77ce5ff41de9e0c72fc672683636248bdd5ee801348460e563e8c7b0714d3248",
+            "6e7555d1acafafa5674ea1cf765e5ec92943dc35eb6fd00e4eed791f8c19567c6bd26b4396e85fd9d14d33dab145ad8ebecb9a9722a96c7f45a99749bbfd3e4c787e7086ab9538759fc76ef5db3da73d3e76269870f0d160f314d4c317c664bd56e686d9",
+            "462cb7b31402d489db997a748feb2755a69a7cc86846f0b141390e6a83c2c4111b43c512cf94751e0838349ceb467028dbc9e490861149654eced8d20d36e67c8cee3134ddc94872124d3bc80bd7df59b30a673c75f47eb05ab9e722617fb42031616287",
+            "26df2dc83843302ebb186f849d32e93330eb152ad6f07d9a9d4cdc1c7539bdfcd84e82a1345cf7cf549f07b5383f0f36993d5a9020811287d20f29e8afcea6bdba2e000b025810c082001604b0208005012c086041000b025810c082fced273136fa8212",
+            "6805f9a98bd91ff65c46ffe43d172660cfe5ffb077576171a589b7f0710d0e81e0ee165c121c82bbbb132c407027b8bbbbbb7bd0e0eeee047777fd3ae99ee9ee9c3967bacff4ffcc37cfd4ba839bba28ead9bbdefd63ad5ff75c18017b2e0007027020ff",
+            "0e07f2e3f397bfc88114fc2907f2e339dfafe9fb4b1c08d2bfea4020ff9903f9fd85f5b7c1fcd71cc8d21f7020e5df1d481f60cf0510800301381040000ee43fce81604e58f78dfeb956901f19c8afa520718bbf2f05b918c82d08418b7a8b7e38494c36",
+            "cba4ac161858872077be50cc8332b183664ea51a142b3144369da435ecf6b86943b3b1de8c18060154fd38a94e3925183b1527363dfa246053ec13e3130ea7401f8da0b8222254e4d6176f6232d03d5b87d9af661d84d8a747dfa9db26161bf0f1bd7251",
+            "2d7ee4943cf0a35b5fa35bd87474cf1766792e781c4ac109e0ceb7659f9d307925b228b2cefd14859db4bc16b0d65e61416be1b981f1eb1d4b79e620bc636e8ace4487b505199d8ebd807c86ae857244f11ceac1c0f6fb36e752ff5d8170f7f5736bdffe",
+            "aa4002f01dd204cee1bf2b903653bbc69852dec6232a739b5c93897ce3b2b3402a458921205fdda165f1de0c3108cd8e42afb79cf425555ec965d93215e03826cca004c75ff37243cc21f5cca1dbfd4dbbf4c5d0c4048b78fc385bdd14ad89ec1a50d32d",
+            "d7131f992dfbd2cb79b456a9aaab83775cdd05a7c631f4df324fbc7f2a81bcde3e33be891a592f1dc8cf3c87951977e2d2936045c70a55bc462d315e498fe433263ce9209b2538573acbc133dde4868a8fe5a07ce96d20e67affc025b0fa29f88ab05976",
+            "dc63fbfc0004d9965f299c05f15d4dd19e75efc0c67d955276691a0905ccdb03a219583d54880aaff100294fa07b623ad2efa52039e95edf4b41f27e2e0511f95e0af249896e9b7b7d0972f749a34aeb3ee3ed54dc328dd1fe932093d37bb32307b580cb",
+            "49814e088bd465f899f5359cb249e44e545d74f15aebd6d74fe560dd9db0175ce4f04366265c0bb561720b4132e168141fd727df89ac39f7d2be81dcd6d145890cfe8d0209fd9d02f9560aa219f1b30241feae407e2905f9ae407e2d05593c0de7843667",
+            "b2c2c1caf960b8ad196ee4b8b6fbb033c37fe1ae1ea98724707f1d6af8395b76889806efabb9edd04be8435e11353f8f63d3ca0056917250d4254fd45e1282e90a9b8838b450f470eaa1e6359f623bf7d33e2a13dd90c6570aa0d165a58b56d8bbb5b343",
+            "b8a4e80b011aa9cba81a3629bbf5c776cf495fe11cb4aa8842821688e026cae2aa0688cce9cee6ae1bd794d76f18fad6d60fd7f7f76fc2549eee9fa0f6f1404d9ac51c841611391d83b1c96c23b05081135167f943b1ea0bb649d9dbdac4daf76d3fdfa9",
+            "b798cfcc5331b8febe1324e17b2748ecb2b0fa04defebe87dd15a01304e040febc0301c123ca58fd43732e126159df2ea35487eefe1ffd8072f0e473b28e6c0a533a44b31e1bf2da78e423d389536a550fddb54029ab64e91448c275bdf05a430fa72654",
+            "9837708aa384b699e089447960e58435362f664634cad33b1d4b619731e0d89b3db2a4f647d214c9f4104a214ec0a0e737abaf5a3418b604e0021b47abd34fc58c8bd77025d45ecfa8ae0ae26563c60a8c0553d032e3408939237444e7a09633afe5f3dc",
+            "03eb667cc5bd6c54ad3d12955bc34d5ebbb23403d5910ff26f36cb6ebd90168d566e519c576eb1283fb24efec83bfc320d6ca58f59e2b8b52f3bbbbc3b61dc4fd8d06b6be18c31f635add0b8f9a3bdce5ab48a439c0628b7749f5ee4da6eaf28977614a4",
+            "4e15d2b4469c06ae41c40477d0924deca07d127e20191d6f628e55b963e8c4eac09501161d69d4d239e1bdd84c119fae5f63a1bf0f435e5270e565215eea0ab2e4512be3a9cb332826222e3dafb8086b92b31efc5258d94e6083b41d4ae3bed1f9502488",
+            "a89bd983bdf51d4c65a1ebb74197dc68ffac73218d14e1a385666a5ab5ef832e3a1c7bf31f4766a84c25c1d412be2e5fe842748717d9bf69c7eb448056d56c63fd405580639c7e20384851e17546de59c56a4e661e4a7210d2835caa18020b954f0b5341",
+            "92f3fac9c4069da9f4e20e0fa03a00aa03a03a00aa03a03a00aa03a03afeab5507436fcdf9ca4fdf130efed1a04bb1c290c902cff741978165b4c7d98fe644149356609f5ec28864ccd4547f8c3d08532ed1f89c13b78103e3eab5ec44c174610be2183a",
+            "2c5a59127e4177d8359f32f7b8956461d833a643c3a62aa7f19a44ef00cf014326a120b9cf20582b2d671823ab1f3101a59438e4d457f186def18eb870d07762c25a140e044aa5eb6631fee35e83829d247801bcbc0889034c0ef8ebf229b13a4a661247",
+            "033ae8238854d68fe03ac8755072118fd0fef877ba0a1c09c824afcddad818932060892224a462658d2b57796aaefc88f96bb8c7810b2f5984f59ad1df958b1789a26d01596a28a052675def4a2e0688557e531df07d081a74f551ce2578014c36cc1a8c",
+            "6a5cc9023e91b97c09aa2228eb40feaad0b9e8b2cd3105b6bc3e8d7222f2cdfca6ed6d6b7aac010c5d314210a290fdcc2f45c0cca51635b556d4dd9a3f3fd859dbda5adf76e1d2f96bbb4c34809a5a9aefc4f220389de0652441a1796b275f7f34831301",
+            "1bd2ce8fa57090a9e35a880e0ff66e317fe5b95f97179768f6807fa06199e421522dcde1675fa93003339718e93fd1ee019148337238938fec86de8fb19343dcff4a8552a45ec1d8394b8d87e3d5e6c3644b0e6b17ce4103cf4712591dc9338c8ea2eabb",
+            "0f71e1c27566a7f3215dc75935b36f6781c89fdf521706e13c8d7cb8ff72ac23dbb8e01f4db2324b7b7057f415e6c0097911493b0ea63205637d6124ed43abbb77ead14e7a57a055c706681fa8a1e6f1e6851973080e4cc8682379ba89246ce5da96d976",
+            "f0a9db63e49619c9ea2bdb3ccd8a1a063881e0eb7df4dabda7deeef41a4799362a0f3a55e397ebd73d554651b756986c7a162c76bea0981c51962cf6ed5fc7ccb8a4c83457715c774272dd31c487887d40ee3b8cbb745c7669e7421f76975fae2fe7e6ac",
+            "5c708e1e59a781111d3bee384b729cb818b111ea19bdc1f496c4bc6b73614ac6f1339e5dc7e5fae8e1587a5c97351a8990e70bdd9fb0386da296d1821608b6a045fcf503d5d7a3e7dcc87f7cff7bccee2808c01c7fbed8e39027db0627df411631997c99",
+            "efcc9eeab7c51e7688a7abb0e43b7de80f0c5677cce28dec644ec81622a964dca9cf51605329c4b5b5bcbde49b681bb1df3007459043b3a7a2c9f92f98836d539a97263c1f5352128ce9dc98525b24fb1514daa76f132f69866893d294e7af63ab81a123",
+            "48d65785168505f9a2e7023986a196886dbfa4ae8b7f0543d511404a063d341310e027ce22d2af255903f942ee8b81bc2aaa5bb7b146570612d1ab4587da1fcf18204fc5c808b71e5af50ac79fe83a3458a8dbb04ac524360883b43568e6257a6c90cca1",
+            "ffb6860c8fce977c2970c49840e9bab065c9b2bb11bfb211b2e36dba06eb8cc6bc86f374cebadb06ebdc46a906e782c6b74b5cb577acf716f6d78fcd1a4b1f5ab5ae35f11040de400c048505c8076d85b0106a3396fc8c390435bcbe630e77e999bc4ad5",
+            "d494a2a1ac51eb268a055bf399227683d6839bd4aad4774f76dc74fa96e12fbc9e136ea0a1401fd6517cf100a51e00cc01c01cffb398e3c78728ff16ccf1e361dd5f8d3956fed8c4cb8ff789bf66ea9f4dbcfcfec2fabbd7fed7265e32ff00e6b005600e",
+            "4000980380390001608eff50ccf1f01aaf6ce42fc61c8211d838a909ec8c67bb7112725854a4ceb4f3052292e5c6e5b5a8681678b95b752a9f4873c7a8e615ab5fd224254a15b3b6263fde0decaaf6f63813e0c201bdbfffd6e911445d4417579cf118b0",
+            "a30ccb094b8055a84d8957dc1215acf818f97a6a3236a4c28239ba6eeb2541648fb67f97671c35cae668b9a2392f715101c8dd63a4fd236e0945d827d37c176c0ef9c05c507f674deb4b26cf442139a16d8492f08b16883ad64e4616e416ae0728dfa066",
+            "6ee85a2eeca913d9404dea49681e35b571bc07b259c20d0928163c3d4bec485391da350e3f48c5f16762aa678fcd560fa48789f760d9cc26249eabaec8439c9655435513e06573878a0d10870d65d56309851259b9cdfd54a5cacccca0f181ccce55f87e",
+            "b4af1ce01ae1af0ebe540fc37f6c8914ea7a69933ff5c2bbc92f2d91a51627b886048aa8142d8a46811aade4ef951ebbb21eed21a657335f48bcda415c3f9559e618081cdf5315c676e3ef172408fdbdd2c305d75e43082d45cb3f72fafc9569c3e759cb",
+            "ea86bcf712f71031a8a2289ff0b8dae0135a23e91e95a99e79bf544fca54e053abed2ddc5f138020e857a3efc644422ca619a187e7633578567f622bd45048e3d7245d493b24b6f76cef93d99b45d96800cbc2407f9d581f70bc2098ec637503da14ee26",
+            "0fc3f14ba54743f835825a9c4dd50a011ba6c3e5c727c665d770dc158d2b67eeeabc86dda58fb5475a025979dd5ba17531ca7fabf4b079fb61f9549486579cc0ae4dbff10a6b1d414c5bbc89871bb22b234162687b10fa2dd920f4193f361f503b088908",
+            "0cce9cedc785aa80630744209c7ba5e8ee2b98c9eeb1f73d91f56334713c783359a1b48b03c2690423540c840778a0bbd1d2204e1870fc9e87d26ae5210d3b536c9e776ca344b4a1a0d80d50dba17e8b22ef4d0d59449706879bf147cefe36f0f2fe8f5b",
+            "0e5fe53bdab3caf65390c89ccf4a4de15347745c7399a4d3374c59261e6753319cc344ae3476457e5d5d763adf2b3d348c388e1af39e874e209acae622babb0e237c776706e636236ad16f0fee35ac8aad5c12f44f4faf4e2f6d1f7aa89f7f1d7821fae0",
+            "9ff2462834aaa1172e104802e6fbc0cba47554f2ea2ac9d7cb06f55f065e125a9ed02b4c85389e31dfcc3f763138e5daa98d023a3d0096e35fb31c3d92dd88cb7fc872ac0465d123f6ac205cb94339cee49798d3d40489a97cc0830fbdaf3836c6669e24",
+            "8eec341fb07abe0f116d8474a500f719dc71d9e24c48183a17a9d900fd8de510d5d8beb82e9bd1160c38578f6b62c6fce804f12ead4e4a8be59d1e4229f0cf96e3b4458d714b0034b071d426fd54cce0bbe5609c5159ddc4c8568d1518f3a4a0654e8132",
+            "7546e8908f412d67cc544a7f04ab18fd1876a741c4699f4161852069e5bcd3c8833145a04ba7b63b42148d4c326d51c3127bac567c8f3af2199f2c48caf3f820d2f062455f5656795d7c939fb84ae4dcfcf6d50006bad2cf9683bdea84c00fc22d33b287",
+            "b86b3726c6a5dd10a1fda5d2aca586ddd200439e7b25534855dc1c837f1531f4561703ac62553ed4b842b5187a1703cd4b3af75d3b39d1831369b40ae9cdea5ef2850fdd5f1de32c6d9e5302b6efd3463d4f3ca075457de716b1ac31dc5cf89598bc2b93",
+            "6667ac585ad564f9baeea79fe97bcaf0f7bbb799023aa873042e86b16cad081dcdae1bde1c7f814ee616f03b2f2ac5b97669acd8122e8f797534446ea82bfe59a887e841e4213a7d9dd965bd36763ee265a14c672432274518df1be709b8f158e5f66507",
+            "eaafbaccf51e1e7b99886ab2afd6e9ba2d796762969f4001920320390092032039009203203900920320390092032039fedb258764c187923080e4f89f961c484d248ea90f0e4f52c8f2f691b3f3100459d14ae16a1fc3c19373a9d72e61540b8616267a",
+            "23032d85d6a2f9c16b78324dd8d8914607f30a3c48220cf1e5c1c61988695d1315a4f90b067b94c72188056283bdb0ac88d0a0650ca9f6d8886ca226819d43197d50a4bd91042de1abab9090e0228243c3e762fd6181b23074853da8029622835a9b6004",
+            "08dd9ba5c9f58689654b0607998239870d6df043173919305f250d1916a8d0eac63fd06aaaa92bd30ad510a5da0b02fb006771a1f1c853f22d71397136ef71e3b570a535a5b5ee0cfb1ca5ee0d7b1d2d6eed0f271c71ed1ee51c5dd9dccfeead1cb42e2d",
+            "5d5fdbd9363eba2d39bbbe813ac1a0a6e32295a549649df7f718aa7efaf41c657c866e0be70b649800f2c0ab91d66fe26857ca12c637729a6b3653a351b615fd58b9ee3cec847bbbf0d814dec6cbf0e2892c9353e801cc1bf8e914ba0301803900980380",
+            "39fe6731c78f0f51fe22cc91ffa730c78fa775bfa6f72fc11c8bff2ae618ff6798e3f7d7d6dfbdf6ff2bcc01075868010480390098031000e6f88fc31cb72c04a97fa29943832fd9c7f63526be0a5800ab313028ac6aa61e4b64fedf175a3665bf2db4d0",
+            "046eec9c0c0e26448cb49aedf52bbf9eb31a0b16ffe82be1c5ec43ee78cec6d02a4146ce142239969b1df37eb6d7c530e576736d466b78868f6bc8c78101287d57684bb680a5b6b854b932d1ce28d300ee80dabbb8c0b3c0a5ba419141d54eac5bfedb40",
+            "4b8b82dc72bc9ab772aa27c14b58cd727154d721cc1af088e24c981d7bb1653be7ea0636f0d2dcb3020b1982bd97f85b4d6b7b8e40cc210dfe74785804bb4d20ff2be65038e70b94a49e7cf523e6c0fc1173e0b5413d1933818c635623f39f70056ce1d4",
+            "cf6d75dd7a2a1db8516978d51e2aa9ee8b2be4ca8c496e9228156327008b772536ab84bb265d34796a403adb69aba243b2af0867e9c3ce2b99c0f02d778489ffb2cff2ba14350a4e811aed6ffb2c703f630eb52ba591bf630e41f1ed253805b1acb8a95e",
+            "f1f5b93af8c5b4beed27292eac3a7321b4148d004fc52a8aa2858459cbea44b9ea5c8d1018989c802f0869da7e839a7d716ec531cff8daaa3bf9ca88b13497878ff7889f201996832e8444408fe8aaa88427713478e779b0374b0be908e8be5ec7754ab9",
+            "72f740f7b7e30b7c400c9141e600734cdd8f78235c456eede6813e1e06cbeb5cb328c2ab172a8e7ef6a4b39ff8e18a13ace72d5dd876ebea12e4eee99241eb35bf7361d2f25ba3fd2372ccb7cc2c084d145d4efa84ba5eac231679fb3ae79fe24ca07503",
+            "cb6149176a5630dcd541f4d6c0efd8bf3573e8b764b393da09d09f75f8e3b35ae103754a45a0239af1df5767e16361a89491c31da2e5c3658dbd20b1ca53a3fdc455fa0e47a33eae828b5f3356bf77f9e975b8243049ba5f1b62681d91791bcb5ea15c07",
+            "d4de3a4f58bd03f66aaf209bfd9b0ddf8810be990a993d43bb2370c758b2d4e130b7b79dcfefa2b003f197bfcfb3c498501a9f825914a9d50abf87fc659e45a289be0d5eda864cdf531d59279ab825a8c96c8de74d15d335e9bbcaf9c72e3235f9f77052",
+            "8c854ee45a1a9f3bde4ccff47db82caf9fa53d38bbc8dd595b10ef71bdbe687db5fce91a8d73cce1a37ba6cedda593936be6a102d7e3133dfb94834b8afefac4614f5ddd3a77eeedf13d51b1fb8bfc4bdaafafac880e36f436d80a6097f490d32d3ddf6e",
+            "d47f4a72fa1089828d8da2591234b57d66de38ad19b1bbef8ed468987d5ed6b6bea4459da56752076eae4ddefca93e977b7206f870cd02d0cc01d01c7f5a7380c3387e42faf30b2d55df065a8a2b65aea50be6b98eba5f6883ebe973260928b43af7e057",
+            "c67c1451023143b8617d768cbf5c57b1db80ab462aa47bbfe117cd33a24072979bceed7ed08c46d25dd9a29bb297918e4e7f61757e3b71977dd1560d148b9fc10a6e5e8273864fdf04de175c06b1732a5152adff32ae017a30fd93c23ae91cb815062d48",
+            "9f8014195fe9b14e7ec34b6cbb403c920b3bcff73bf1828fb9685e09c6912b5e51e278a15e3d31d888328192b303503902670f39bb3186067e566959d1561fa71dba1cc8aa92c6dcd645604a63646a2e23b0c5132d3a463ca9b51f441b429e69c5a32130",
+            "97bda95639299fe2b377bef607aee8f441ea04510de6886dbf9341bbb0af97a80ddab6d93decd0d8ca39955b33b83fec57cb19600a4c5bd74f2071df31d4802e2e0f0a7c9f0f7b173da65d859bb41de711756b24494dd5ca0fb908c2e14f6ed5ac42696b",
+            "89d7924e61a3e695d47c5fc1da6a2ccb3b149ae2aa9047879f38fd9229f4e1e013b21b9362df9cff46c5a2a3eddca7afb3eefe577290db85fc8237c4b2abeced1b2276b83d51f9666aa383385941fbd90ea88ce6182487f10649358a649e38ab2d58f19c",
+            "5256a1a8d863fbc47a919c984f6a8426d636e299fc92c8a3ebc93122ed5f306ffa6d889cf839f27b7662a377284832c2ac8b20d0cf91ade528833e2728d1a49af1206484d594c6549eb71b3cdd95cd3e800300080080000008008000000800800000c87f",
+            "3300290c617438fbe9e631e01f0db454ff6f065ae0fef940cbeeca7445d2cd8ef0dd45ca798a3532b622fb3baa42515241ff255048224ae40486d708a78de7b398baf22684b2ed39e9049a13c87842745a60399ad64eb5e9f2441e8806fee8aae87a0bb4",
+            "51e043228ef8b094da6451946498b1261fe27c3289698672921752d75f1c24d37fc2f2b64a7d8016969cecaa2c474e4017a87ab52e5e664a1d7ca6efc2812e1bf10ab23066810cba70f1d399744e6dd8e432e7f106b54c6574021790ba9ae12bb11d8d06",
+            "2267fd28fd30b0de11fe8fae0ba71fba340b8c082fcd0595067bfdb2f0a3f8e2c823c432f817413349c1d76109b8fd67cd3eb51f1690937367a27d5db5aac0010fd89025801be7dd3209c36737975c54d7b2a07537a375ff505aca12b732741abc115c96",
+            "643ec266766ec39f0eba74ef3eea95971e864af4f0ba947913998d71d85ee45cdced0b12b8b4462225520748cdd56d83c701d47b6fd28dbb4594bcedc0628d9163f5f27dc82c6d52059890ba9801f289fa6f4b2dfcb2684974834a03206e46b2a6e4c3e4",
+            "c2af12c478eb45eeaf844c79d8a0371f0699b6ef0f5edac510540caeaba7e512f8b2b07a9a4b406533633519eafcbad482fb7da9256381f6a4316df2888550b06d26b778c1d3156ac01942118755605e64bb44ff68dc533cc9fb666b6126494b2bfdebfc",
+            "e8a8595fbde15aaa0088a1ea61cef7a9960a9331bb320f3e8aa1dec8fdf32543ffeb2bacc44a03f88a9abce5ca984966819f7e612ac7fb6189aa7abc4cecbdcc4d668e2ec1930d832373626a672ab30d297fd14a560bf31999dcc0319e54ee84c386c3f0",
+            "e9f6f0e2835f814a9823f9cb3a6e5af641c529888548ee857bbe4515a68bfd65e0798d23228b55ecdb52bdaeb73d3577a00cd5be5ea9165d2dfb12908f7d0178f738474f8c79457a8d1f18f3e01cdd8b5524d951d44a6a616c9bf191a9f1a0db9729758e",
+            "9ff9b356fee1876328570813d0ee0168f7f8ff59bb4723a0dd0300420020e4df01427e7c10f36f69f7f8f1c0efaf6ef740fc63532d3fde3afe1a887f36d5f2fb0beb6f43f4af4db56cfd0110f2f93b088105801040002004004200018090ff3810b23a94",
+            "a534f487414834b996371bacc618501fa17093082c86323d324e5584404ca61964db93b35fe5e6b77a0f164b819fb75a18af76e3cc15544d4b5509f6132424cbcd4f39e27cf2f10cafea1c7d496ba74c14d18ba399d3e6a49a6a7eaef7102aec71a6c0a3",
+            "01ca5f48681e6f80c6ce1b526ad23d0c307380e3142ba0ccd529c44dae9549463b0cb4d688090d3aed2d88cf3fc4e14b0f6d0b1fc8e975243c2f5dab59fe44aec90077b110f37e1eb8a43fec5351bcd30166f44021b0bfb30ccce3a4d7bc620ce436428d",
+            "fc410b585d5d675d2d0c17d10d1906ee91258a996b7d21f2e7c812f53d140f3bbb6cee1ba972fede244433eeee5536e23df29697a47e908a2617228a59a0d33be0c1ab694244f8259a54c060c751ef9f3e2599a6a5d00af659d88fd7284fb818c4f4c91b",
+            "ab9198daaa420d0525bcf52d583c61852d34cd948c2edfd759c159189ee31d56eaa7bc89b4cd49f50a87bc4938d49de99855f6a46f97b556601cd253311dfdba5c9636a51e8653464cbed8b0e56ecb67454e3d8a7e0323150b79d0d2aceb64605b983c67",
+            "557e33ed790f7b39f948f152678258bcaacb6750e573fc79a14a6f09cfbeb32f4b7189f4703a13d2cd6bc259a220a533839fc75a364929e1bd0ddeb95e3f7d1b6b818188d0343668bb77fc081cd0a0632a8ce59f35ab74c9be6170f6e818a9ed8e2cc118",
+            "3daeef9d2f268b2a3981e8f8c4f6b119cc9940d2dd03dd047523d2d6a926ceb32d790ef51b098934f7c3f1f49244a5bbe65e7fc463586fec29bfee7030495c2e594dba12643234313f16d0e81d1a14ea04b7485d96647ddc4a21bf80e964ea4215b7336d",
+            "b53a2d07e9eec44bb296c6f69d1b74bbea25be9ad0f764587be7df6d1c4cc80d8d941c4a1469802bf2981a711e28bba2f949955bd5560b993577137967dd9069ccc71e2d9e73d291f7ee00ae8787833ddae395530745dbd1a4f24949cb7b5b6ecf3bb051",
+            "22543fbd37395079a9613bfa7b99d097eaa8139d128f5689d948a358a24feeef235d91c03aae43753eeb8a8ea00de07d5dd84ba4239af68cb483075e99d1270a47bef2201c12f6254fd04515240a7c20067d1b412cf978e0536ce57edbf792d9ea6e2279",
+            "17be7f46fe0337c220e34219eecbb8461fd76f4b2d9629f1f5c7523f2fb59c1185542d10c1ad97c59d7f5b6a19bfbd6e3c505e3f61106d5f3fecd8df3f0973bcbbb7f4390f03b65d2679436013f87682b6299e9063b8fb7da40e9ea38db85e9a1045db7a",
+            "9c775c92cbe36797c6c957a8af5a9fd02a2c84489f21decc3e7756aa965eab8d42dc8def0760ddb902ba3d001ae4ff4e830c2b52ac23ff210d22f14d83f81ec7dce151afdcbef80407a362cedab8874ba9f0d8c06908448541b430475c78b7c2c942a846",
+            "116783a4ed5c9ee668f4c6d0d53df2ad23b8b9372665a2f76b127a4b85a08c929d11bc91361c92eeca0cc366ccf44c23fa0bb7f3d38ebbfc8b651ba0587c1d7ab4c3629c01728626d03ef17c218c13b1ac6afd977e0d2183f99fa6dc220eb29842cf8519",
+            "5e8f0648efa961141a83f995ac41427ba5e0633a19cab4ee76be374cdca85b259eb8efc0b02479277020407730c74f11d1e4620c993357da532f25d2cdc66edc24e7f2b20acba2f58c187ca63fbfdb5738947468e66b59a642e78d8f0dceb3443c711053",
+            "134cdd278bfc0bd7c8c84d9f9896b697c7de9be8f16271b40899a53bc73d2e9f663ae4a4f5e734c2d1c21c4fc2df6cf2ca520731b9ab53d719dff97d98aef982632783042721c85df2be5ae57eed9664f5fdd32eca80dd4a06e407601ce2e8faf9458a1a",
+            "7b14ad51d4c69cb1a97923ad242de6820c1dbf6537b99e11fcf961452689f6a9486437fa6f1c44bf75c9c075d9f3abb2bb3f3c23e476e13bc11bd25f38c8d9a1cc646dd14e3f4e565551f66450c24b071135c339c392a9086df07a4722eb6d0a9a084f1a",
+            "a7147df18fcd5f5b493259def510736c1003bf1d5649200e2ef6a113afd3a5cff6eb7ea7249d9917dd49705582a93108be659847bd65886beb5009fcb693e0c8362b3a0592f63ccebd6b8b0e08c041001c04c041001c04c041001c04c041001c04c04100",
+            "1c04c041fe970f471124c43d80830038c8ffcf38481d80830038088083fc3b38c88f8f61fe220e92fba738c88f277ebfa6fb2fe120f0ff2a0701fb671ce4f717d6df86e05fe3201b7f8083d47de720a180b11740001c04c04100017090ff380e322fe321",
+            "3df67fe220a616596ca88f2de34f909df6e8582fc0266dc080ab63e665a60ce73528c67b81f34e636730a3b20bb75a8f991d2f2b540d38b148586acbc2469aafd5a3cee9920a9914d5ed320b7a48d93b72dbf69b28041ed9585a2518991842242b1ab40d",
+            "e4ce2b6e0739cf07baca5a93cbb06e992c12c94081f63e98d1c698f00fec9d919429db4f5737f9c6081251e56a93e39594c624a32d455a2bc4c486541829884f6ebd2488ced3660af2e9751cdf70ed32ad018f68d2ffd6103266e75c4dc90d5eaafbad21",
+            "64599e8667509062f21cc804530157936b3a44ff1c797119716656f8c6e9840803d3d91d99da95ad10f9b3598361c630d0fc7ce4d32a77db4b020bbef25b0caf89f07c925bd11d6c5c6591e3a8e226d0587b30a29bbc312861d35151a8b67be244e755c3",
+            "24f46d5899b3fb121bb8e95a2d951c468544a13e8e98977ca7ba6677f466d30f43de070bf5e824c51cb335ae130d6cbdb74298e05ae52df2728867b86e66f3b376f4d3b1f8c1f9f2ead3e2a7227254a35f87cbd2a6163ddeaab0a45baec73e4fc1f66594",
+            "f368ad52555323cc3535ea98185f54622745595e95805e1b9d7d7e961bccac9588d7ad2a2235da34eb2fb29b3603531d7aa55a55cac7ee352eb0eaf7ae9cdfb06c63806bbadf1d917ec0569e1a6a20f6eeead6d5ff0be8ab2341a7ac6ce091b83e34e2bd",
+            "d0127c73fc505da5a9b8f0b8b1ebb8ceab379837affacd168450f52043ca5132be64c808e89991d9dd8136856bc6b3162b0da4a0326dcd66875f2388cd98556911b01d085abd79063fe612be3e4e7c9c47382c68b93802d7b27f37b69351e188683b56dc",
+            "434ac8e270fe60578ffb124f2023163f17488e7e6ef8b1bb6b1d19036566e63e9d8da9aae236128c16a31bb83d609b20510805d551df7b8d8924c29453533f0c42689a4ab4e31266d27739df2fb27e4289f693b3fa3547c30935bfab6f13756f78f3234b",
+            "b8243c497a631b3dfe2c7c35f84a7e9124dcdb7c29a0b77c561beb1e84c91cb499595f8488f666dff311bc2e4d23353ed87bd899e1bf71578fe447f2fe3ef7a22f2b413290b66a6e3b80fe7a9fe797b9970acec00a505463210601110f196c67d4cf225b",
+            "f55c22a40549387d26d7e8694d9942d3e5498c53fcb77bfd38dd191faa960e743e56a4cc6eee4a8cf9d40584de7fb8fede1042c23dc6d6c83d6679f64b4308c7e353788a09b6468f884d83ab8d33d6e36b09f7153c9d473d9e127b682928b8f228a15e2b",
+            "525419eef331f20eda8ff95264b421729e8f7aed03b62d77ea2de6268768ec8e8f74baf6af761f4c4f2cafd10776eae769da98e9a39779d427f0f6f63dec4e590105210012f2a749c8f2020fcdc04fef791de83f9d7b315df836f702798fe7bd6cae62e7",
+            "c6442069bcef7ba9435f6b771ce8522b48dd27fc318afeaaf5f820dc263c4eba9cc77edab5c5be6162ef295ded0c7e98caf463ffba3732fd786cff24bbabf392807df40dbe3885aa297edebb930bb7c7cb01138ba56156a04ff86d37c92c043662dd4d66",
+            "3cb0780bf02f9e0a8a2708d3774db6382133b1bd6c06c689135ed3446790b58f2fb5972be410a32a5e618ab3f16257136a3fb5c8a4704f543781e7f92c5c6a10971c21562894c0f4208906c40ec4cd2b93d5d24cbbaea210f4b57d8d5beb1f66c87a1615",
+            "a1da2dae53f08f189464d78a6bd58625ddf0b1d17896c0e0d2815f9e1afd82207ff739fae6a25d945b7b8e4ca70ad6ac9eb6ee402161829b5133fbcd40ee985c43bc60544fa3df8ed579b2d0b9d170d0905ca479e5019d4699a80f0e6e21217c61329765",
+            "ff749195831bd5ecfdf315b1ff21dd7b5e081e60c93efa243553fb8e36741b127ef2c6c0a5e0aadb8e0864cab1baaf794beea00aac04791461e872a2fac75e534664913d7674037ac09a6b0f041ca9ea67940288e49301982db04a54eb22b0530eef2503",
+            "3823a230aedbecf877b0496a59d23be74c4e3e01c1f321afc7284cfb56bd46b574fcb8ef0eb01c00cb01b01c00cb01b01c00cb01b01cffd596237c4035e6f34f5f0904ffd1b64bb6fc6fb65d626250076a42b2a57b90c064c9897d3467c6fb352bb90d6b",
+            "2437633523edc92fe09cf6734647675e6fb07350ddbe23cda1e913e4e4e4bcdb4aba3564e52ac8e1611d94572f02837cc72524bed9b06a12bb6aaf94c0fa25bf521e4dfe7d1772932e1a9788568b3f5523f2c1c7e17841a08c42b091128d60a88233f6a8",
+            "6a8e71d8dcd5ec492159583546a2a9767a55f923320ae19d7b57420aa57a418cbe07771e62e699019f38d3cfe9b1529f57eda6b47588cfc76ec58df9f340f2a779c3b6f2e1ef48056ae6488d9bc2ce8453b13476c7718169c70cfaacafe28fc25f400f5d",
+            "0b7b3c3065e313ba39483b9ba7fa4f12f92e5992e149aecb52a965a8d3c580bffe946fdab6a3ba8b4069fd6e784e28c7ea1269491a3815288a69b8661442251c9e63c60135a638c4a1be556be54979e5497d65a9c4a2b5f124529456f1d06a07bb336799",
+            "1a2dd99ac04e802f0e05dbf845a08aa13c0456754599226c6fbe76bd6a3ce911de1823bf122f86ad1bbe443b53aa89dc17fa63b572db9c0aed1cf04cdf91ad0f354ec02b05b52fc1a4d63d271214e5eb6555c353803737c4fdc5584f8e07400f1a044c28",
+            "188d4782c03aa6ac246613a57bbbbf0dba741c67d6cc8ef80ada3afa23f8e3cc4366dbef4644b1b521acb4703ddc8174547ee29920418f2de2468418cc5caefb620fa36cbf90b87550c94306a3389e53aed4d801767cc85abc2af6ea2873f90ccb1ccbff",
+            "a79f61f3e447edd995cde92831e894c7c64fc0dc39b05a3125872b47b16ed63fcd701a46b00677a3d0eda584924599edf83ded6e0fa7b8778758a4e633f93632158235c11aca1de4760e34d3b5a54888b526c8a42f6d72bdb87fda273f693e984568d24c",
+            "836fe27d663bab2487227b5cbea1eecf84bfde09a0f392f24c77d5c3be7dafff59dfb3a84451cda7411311bad69dc2d32c06fffe9afb11ee1ffd8d07c4b367070148c61f39231d10057d8de173ed794cafcf3da4cea31f1f9abe26ca5b9e590fdb678193",
+            "dcf742a4da4e4915158c7749149d90b6c9c3b3b46975a073cf343e615a752ca65eeca324d7b07ba4a5099944b13922c3b003da673448952fc6ddba9a65999bf3c96f03a80ba08c88fbd8e46550881303bb7bf812219950cac92bb1bd0379557d3b0d78ce",
+            "29e7a52911e8636d406509a9badb42ea5303a2c9abd06c93511a44f63cdef6247ca1206ff727ac079abf0df7871016f2eb75112326f19079019dfd25a6f3435797962638614cab26790c92116691e10743cc4e1c03c67974bf239c570821214259e32703",
+            "df488612fa565cbfcc613cba860c8f4cef7b1e70c49800e1bad065c932a7bf930cd70ccebc86c7f485baae06d75c4ea906eb024e8d258e5aa7ef24a3b95963c9a459cb5e0b0f81ef0d0855a094bf3cec56c8b49ef6c4d0cf24c340e3f11bc9f048d79ac9",
+            "ab5c1b199cde92de605ff63e6ca8dd9fc2e63e49f9723e13d8bb7284ee738130ce7bc28dc20d2ce3efeed2be030a10190091011019ffa322e3c727217f91c828fc5322e3c703b75fd3ff97888c813fb6d8f2e30de0af69fb678b2dbfbfaefe3639ffda62",
+            "8bd11f10191cdf45c61780c8000420320022031080c8f88f1319fc5259e823ff2791616cb1ce82f8a899fecc3b6a2f942d90e25f351a0021fc92774d42f5cb17cfd81de590d2ef832dcfcb192e9be430ac6a1da4821f6f6e0cb7e036cfe9921ac615d52f",
+            "0c16c46d3efada86b03aaa450fad0b3cb30c85e79936eb4bb415d67e45794cb8be8b0bd27267d7aa5b335eae95c204627a14d0129d03f71ddb16d3ac7a2a3e7400a50a529c146f977e83e94ac6467547b25d59fa0245af275f656e47cd9b27d9738cf6a5",
+            "c170140b9ec9722f8dff2a5a144fab56ac46ebbba273b95513d2545ff84df325e0cea662d1db379e7baa299071611254b3df275ba659405ae01fa07cbb17d3c0c4f0420b07d4ab5d1bc38d80cccd44dc4fd2b4bdc25909665d82db8c8527115d140ab171",
+            "95a1b7a38a934163adff0632264581be810cd755c33df4eda0cab56bb55d93e2fd964a5583c2f19ac04b061ad1bea080a3f6728d735614dd9dcc8c62eda9f6daddbdee2ede61563eaa1b4fb89864cff0eb1394a5ce5c9f8a4a301def988d4c9dc81e7322",
+            "5e3fce5637456b22bb2633deaff334cfa6e4e07edf375b462bdf689f3ff9f6e5b0f89b64f6b41da8211c8d749e9f18b1c336d2ea440e95ce272b54519435aa34528c990c8f265e32f7bf8a2605e1c6f6a4617026d1baaa507cf2f25029cdd4e551ae9dac",
+            "1b39e607c3f5d7a61bc7a2607268112fc597b137033706b5426d2c6cf16e7258d112a76b6b31d0d137b2f27fbfe3d75bb584d1354b0c9664285cbc03e940908c6f31871fc749413e182049708c175b3a67d8ca67491fdd75fa80de748f3fd56a7a65ca1d",
+            "9db737de4877dbc01d28045733c43f877ae89449a4ebc93a62e1b76f759a41bd81dcb9a10743baf079c5e1b61eacbbd36e8a8b1cbecb2cb3351bf74a16d9899c59034be620bef79a104b90cb56762033238a0748fe404b06b34c299de54a9531b633a5e1",
+            "23f4e27aa1d2988f11523e63a701af90f72f22a3616cd44ff8bedfd3624381ae07775209e42d9fd58e6e1a61b22acfc8b9c486cc80c06b89c149bb09e210b318bc4b27a8a730b18fd49edacfcb32d471e2bd05dab7284d251f6e0975df921bef239eb84a",
+            "b0543643a9f1441812f347df600846f047a4e8c71e46124b1e1e082b7e6ebdd940db7cb5fe61780368b388d21e1bb270c8aecaafafcb4e372e8f55107d9194f2a871e9d9d0017259e94160fde049a0e366fff2e24e60a1c8e6ee9180738aad2934f2c4e6",
+            "fee48ae5412ff1a985bbfda6c703f3183915714f8f0a2ec2a00b5586d53a224e074b6532a742222b5afb3afec424a58c2bce220ad359b0bbec59f0809628c61d1cf7e049d7f86d5c23493d44f7385600d59d9e2bce282da0a203e031febcc7c06d8e8bdb",
+            "ffe93d27fc67151d51bfade8687321c1422c174d1258e2cf51683d0a7df505a6bbd78e4545e1f118c7bf57b19f44039a78e4cb1bc6322352f73745a14d1e15b2d7e0708f1ec83b3ea5fa2ba817db612975999d1ccb4a4d136f512fd0a85da9b9dd7aa5e6",
+            "b1cd6057a1909dd446a73f13e80d06be44ad6bc14defa1ab6109e46492e838d0f650920bdf53460513cbad3fd8f5094f70c66828cdf10879f90ebcb991e785cda2ce636d8c578ab1e8a297dc2276a81759352662455c8a4d194a343249655eee8cef31e7",
+            "a42b3c0a6defdc2aca57ac1163d2670952129f31c599e1770c8d932e54dc0614eb6ba20d53eee8a4e2f19fd0d9594ee0d09acbb22dad0c042dca6f52ca37d15834e3fa422b29778e1d3e2f83efebef1fae0d0d8b65b29d8c3389346dea366a94ad4dd955",
+            "3c3df8c53a9254746451eaa6d3eee4455732a4f96ec779473d6e8b63afb8fbc17b838a23ca320c6f69ee77dcaca33478be8e5eea3cca9d7361c9f64cc4e3bc96486bf13053551a25bf980027597b9fa25885d227d758b5670baab8fa40302f556a6b5ebf",
+            "6ef0e122409b4a6e31e9535810928143dc331c8df56b5d69165e21360a9e8be2f548d3553897cddc8866129c49b9b708d1f141fe5f7aaa263a9437410be74cfd4c0c8bba34c006116f6653544d59b1d63534ea1a1f60015e03e035005e03e035005e03e0",
+            "35005ee3bfd96b84b4370d0ffdf49521e21f7a0d85219345faef5e83cffe5d6dd5f2116d2d3f2b167fba0f9fec8e82e90016d223864a92939a93c872c628eb4e491c1fbf9611c1c8584433373cc5a3086dd198f037afd15d752a4304dea09bbba54ac2c6",
+            "76f25a9772065c2908acf5ed481392504d4e613a1f55ec2a5ad1a9ccdd838afa428cb6117ab00a1862a1e4894fcd94773847ab76e43464832e8ca4a839714d3933acac92ef58a65d58367ec6314240b6fa57781dc27377e08849755a2aba99caccd8916f",
+            "5e435787f8bc6f97cf987f1b249fa5cd632b1fda975420640ec2b81961ed9bd7d81fc705fad96b841fc507ffec35d8be7b0dbaebee37c8c63c2f1ad724b992bb73146b853e6b52c2ea82c82879f6e58c1f2b6c85265735c6745f42da08823b80888fb3cd",
+            "f061e9f372e4abefcbc8571e752f1d1ededddddfddf5dc6d19ba3e0e69d0156ce84ee1f80df3aaef0cc976b0a3ebbe23b679dd16d19d1e6f206450ce8b75efa2c02b003e34d5567dfdf4d1596787122a6b19741c427cfd330b38d3790b989a1226aca22a",
+            "bec9cd5a7b89a2d209e7ccb4e7aab1ba65c368204c9c286425237e4a32b4d516e6938623422345846abff8fc0461dbc96e3da19984b0be9e9dc352f7d7eb318e03dc62aae9e78eccdcc5afdc5f99331548144b155824463f82db35232f527da145db9827",
+            "69b3d76a5d7c7c78115297e1b525464badd42a824b1f64a825b95260bc14b7f0d2091dbc50b53c92d6e7ed0a0ea98345ab21b856bfa5fd3e5ceb78ad8ff0c9b2dba63c822f2d84e94111a62a9a6235d39b363ca95cbaeeaa28ea0ba1279b0d3878958d90",
+            "acddc120889e89396aacfb0cf7870256ee54fab7f3569020905e2234daddf1129549a823572d60d72c388fb52b9fecd2eed9b0efe8b2be5c57f2739f40f0739c097574f40e64e227c3414e449107392d66bd937c9506c6cb5a867dfb5ef76f84e3ee3be1",
+            "10fe4e389e232fd081008603603800860360380086036038feb786e3c767277f91e1c8ff5386e3c743ba5fd3fb97188edd3f66387ebc29fc352bfff78663e65f331c097fc070987d371cb300c30108c070000c072000c3f11f67386e9ac9de8dfd09c381",
+            "f3728dda2613385230dc21ea257db9363187615611aa0127d455ab3d39dee7c0f6a1e97291086cae960447fedb8b81dcd260b4b8e6f749052292e5c627b9efc5c6de880f59546183e78e514d47179b607131a73958b8b1df5fc64dd852e11d2f5c8d0179",
+            "e4a6258ae5348c56dee9f6994ea755e358681b8cf5275260f443161d131b19b46ea84fc518e81da830a3847c1684da7c8d71a84b00935adb257d2e64ce4b5c160f72f7286bf3885b421bfaa928c1059b43beda1612f13a1379cf188c39a4016a042f51b1",
+            "f21ee61f946abcf431bbb7cb90fcb15463fdc7528d6b10a113a92ca4f0e9fc1844cf6b11a6eb2f432c2392e8996b756abb98df0d8751214348e0252595cfdae6e485ce6ce96d1234bbcd293ea5b26db9e97daead5df8790c93688b367f8e21fec6db87c9",
+            "ea8a43ed621a5e0c999c7ab3f8359105f25f4a35fc53a8d5a4ebad869e31bd37a495d3e94ed05415bd0f5a5a754d8c5f5426268ab03d4f7bdd5bdf323d506cc9cce48857dc0aaa959b70addbb25ab082941cbd52ad6a1102ff5ba9c6d6df4b35a86c7e2c",
+            "d5c8c9061ed9de0527def3fd5eaaf151696a3b3c6ef5de3af5161a2e123a50978c7772e0354c64e73b961c992d898f64d7a4dc5f60777d0407206a164578f52425601c9fcb6dfa58eed13c3b78a3e9b6b9d79720779f34aab4ee33de4ec52d97acee3f09",
+            "3239bd373b1290abdd2f08f0875b7ed38c53dad3c5295348e26fec49116fb6edb6bea6031d1cb0bfef2a8d9d3837e972b5485cfe7644b0020fcc5f774530623db7f7f4f18d75131314b6b3be7e73269366198ff9418821750096eb26727d8f6d5916ec08",
+            "c3a451ef7964f0dc8205e82eaa344803161c19d8028a791beb5ea6921ec21e0a4f9834f6ad031fd23036fa98b66e9607078be87b13a3d2b41c955f6b35f4fe5eab31444c85fbd5dc7608fdf53eefdf6a35b03a67810399c8d833f53dbfd76a181fd57389",
+            "440d0e69f5fe5cab0162ba38948099ee62bb19ba2e5d77fbe18afef3ace4c1d945ee4efbbe7c8f6bddfdca0b8b2ff78178c6c92bb8c6f12ecdc91ab8c6ce11432d2b9b3d98efe2ac30712cf034b4deb90f56ae5cbf537ec690ded76897e3239bed23dc60",
+            "83169c1c7145dd981584bf345e1b67239a751771a8a1554c1ba8932869268c9a7926b48b8b186e8540b077af084e2d5a425607d5db0de9647eac68817f6fe40e0a501c00c5f16715c799d6dde8de4feff911e83f571cf37f571c283d9fbe7842155552ef",
+            "e15296dcd9b20e1357f81ff6b2c0e6efb91fb341d522a357cb721d886c25d8773306f5641df562b19515535048318a7e1156a39888be98199138e309406897cfac8210750291c28b4be3a6819f3e74814584420ea633c6e2e3361a1c78597d5270d8b61a",
+            "37cf4103f241a3c3e59847de2bea4839d50025d787e1423cbed119a3b634c6bb26c6198e3499009e0349bad542e1988e89e6b8cdf8abdd3d5784e2b5ff6ca1a4cf04508ec0c0ad985e31ca02fc39d75945f8c6ce49ff29ae46fb8bab24615511a3e612fe",
+            "407dbb6997a4a7e0a1f870a571f3277b9d9b787607b953a01599db1ee2d3b5fefe159d2c8476522565eab8a4630585716e41c513978eb428bf3e87d86032acd4e254454706d735adb3268c92a0cb73ad0675791829364341ec49120dabfed8a00c47372a",
+            "b69be76962ff43841d1e882f40c991b3df5a354e7bd0990cc662966e3ef82ebbd8667baa1e349e2ce1b6789acc4b8f27e75579227fbe6edb0b42eaebb01a299ac06cea7ce2b7e108b534e694f796ca441b467a2915b47ec2954f594d92d2f59aa34b12f3",
+            "4cdbc88f775c15ec93bf26d38944bdd02b298e7cc8ab6864fb97d139f5f0b5614879f966a6a0948d07aac9545f9efa648b6dcccdebcd74976744349e400188038038008803803800880380380088e3bf1971d4ac88b1acfff48d61ed1f228e98ef032a3d",
+            "c790ce9019ce4ab5584622e51a89b9beed105e76e56a5db128322a0c95e3ec588dc62b3ae5acb34b1f20a89c53f8d2f4ded546d5579bd61d91c68666a73d6df3937de5d580b269b3e98a092eafdbd6edd42f64a0454772b38f65230aa6e43710f289a46e",
+            "3755fcea75b31954ce60da261917fc0a0c4a45d0c1589c9d205b34ae387d2a9532c13b467dd713337e0fbc4074e8bde21cbf0f7ecb3ebc08efe74e1a1dd96c77508a7c2ead18c9c2c0484cae6dcf24db8ef67c613232d802a614d8705567d0c4cc792c13",
+            "bc29276b11bd667ba936b99f3eef496f579163b6df185c6f86f6c58fdabc03393b17d6e4517f0e3dae712335e6616a5c65716583b72691f091ad89246de782aa21884f16bbe425b58366583c0cecd8236a4807a1c625b58aa7cc606208e7f057d78ba8d6",
+            "3e0c5dd8df4f1ac0638de3b6282dfd40dbba70c84e53af5c37d0c28ce86c4b95ee87cbe5c335991cd8e3015707428f9eb9ad62eacf4f0edc512dae8d66bb5e650b4d2b9c3fad884efdf6b373c6eefcb9d732f0b83a869f750ea3034e52fcfc494d2e1b2a",
+            "35ebeae7ada09c474c85f663f557a068a87eaff260490aca2be69277205625fbbdd96ae8765cddfc34b6854b03b3e9c954bcbfd2cce77ff05d156635733cec3cbbaf8e5deab8c3bf5da9c81fae7be04eb9e259e9c8accd43a211aba8ad995150c8429bbc",
+            "e4b3240352530a2f69855a71bb77badf8795ff480639a4a48e418b67891bafd20c9b675a656c46f51ea4b9193c33b122b9d49b7d8156c881d5ad83a18572f5d4a671f90cd60053c0db7e7d86655f536ea598a58c2adff52633660be9c9e68d2b732a0e59",
+            "0be3c73c22a3f21110236c7123497ab6c461c3bed9cba5ac9166df0bbcc3fcddb4706d0bfa0230269a25f68500eea539c2c5a4eab32427c839d7433df71d5c88d47de2fbd2ed17be361bc1bef79fa2c052b9b1e0737b78912faa2147ccd4684f9b6a8155",
+            "4fdb3a4f3ca169593fcfebe75bf810b75d2091f592a2e85f6fa33effc3ff8420e5bf5a032ca6fca1c35629b10e7a8cbf2fa60864dba0c9bfa1809244b520705c0a34578ddc5934372387f274424320c47d00857192f5d322956cf53566dd16905aa3e93b",
+            "dfe839e712a16f8eea9c66817a95d3e4b918e945bdca648054a6302a6abb9cca172befcd889c874d990f8d2ce1b7ae073ce49208a38c6c0cc127884fc3bf369ea7023e15d3ef124c52c2cfa7dfc7568fc42a1b8168509be9cbc8c72a0257becd16c5062c",
+            "882103b6cdc389853c06d4b78398601e500f441f48e00b561f394bf3f966a08887f86c06d687614d9c706a7050dcab3ecb4ce87e6db499282ba362ec7d34e626a16fdff15a4d97cfa6ae3ce79aa312aa3406fd9e1cb0400ee16449565dd5bee6f5498df3",
+            "99db69e6425c8375ee4258836b5cd9c276c37931a7528375a15a8fe2b1ddf3e153465d5d915ac975d2c44c9e1750d897b3353dc2a94cc7ac10a859f173bc1bee04527719257728ed588a2fc7339705c5b146db85e7e417d816e3761a0b97859273749c2d",
+            "ac153f2fa664bb87bff0042ca6006c07c076fc3fb31d3f3e53f9b7f473fc7874f757f773ecfd31dbf1e3bde2af59fd67b6e3f717d6dfe6e85fb31d157fc076787fb71d8b00db0108c076006c072000dbf11f673be037af28ffcc620af0a44da79c5a018e",
+            "8279ee520c6188ba2566ad878a5ea4fcd4c3753369588b629199515667f7d5e5e9e7eb54d38f77061393dd81032dc88793c464b34c0e6afe952678b95b752aa12e133b68a6628a41b1524364cb495ac36e8f9b36341bebcd88611040d58f93ea94533eb1",
+            "53e862cbe54f02364d3e313ee17072f4d1088a2b22c3fd6e7d9f4d4c06ba67ab30156bbe0da6f468fb7765523a5006667c2d99f714d66404bfb83798ba74aece658328d539b3da91264884c73f2a6a909522ca37661274781a85e93b32b574e657d723fa",
+            "badf16a6fdfee051a4fce26b7e2e65f64e175f0a50750dc9639bbb270ddfb2b7f6f96b881e0219b133851c6b076d9266a9ca3378e565588c36ee10211ed52c453ea865b2b14550d685379c1af2ccad4ba233da1ad731cc1c7235c693c54a2a2a149a9243",
+            "d02fba125b13c2f9d11114e08ae0ed0e038c5370365c484222e966a58b5e41392270339b9b7162988a210ac953d1aae53a10aa82732cde5e5625625544e500f960cd3c94654462c3c05e80b7f00d04862f5d2b89d384f04ecb31426faf3859bad3a6f972",
+            "17394eda52c899b911c0288e1835ed6ee9ca654cbde5379d66cdd7964e847a3881b2eb7d887199eb51bd450031f4090d04d799935de16a454072c0ef68162e8b665abd7dd3ec21b0548e960dd729735478877db6e6ee3eecba30e04ac7c36429fb5e3df0",
+            "213e97fcb4008b5805b99ef7e9db608a32144bfea6240ca6b5896cefbd5f8e58ed5c192236bcc2edc727c665d7f0a315e6fb1abc7939d7dd254597a5567f218490218da958ddb7cc48156d4979751d97f50e4a3126d0ba30f4e051878b164d4eca207a6b",
+            "92175ce4f04366265c461171ef229232c97359325fa5e2af84bc15f0ecb485f626241cebed7512346ed2fc343f8b75a88ccc7ad74f6219b6aff90e3dd5207f247c9be45555dd0ac438453a980d2b2604d8c2a7da552cdbb1a20ac84b856fb443c292e71b",
+            "ed90e12e8f90c2c12261aa61b48ffce3b463bfe717da41fc853cf46de02293fd22b448d4204e573549d19296cb59e0598915ab9189c7d9540c6728ffd256e35cc7862e67c5c04452266c991ccef5d2913b6313f0b1a95bb6959b73b6ced9e5473bc7ec43",
+            "41967bb7383c536c8d6e639b26571b579cc7d7036ebf4ea640c3954709f65a2107ee10fbadf555046173640488ad07aff60571ecdb56fc329992d0f4845ed1186cf3c4ec507f1f6470a17e18bb8a892166415cba1b7669cbc3798f05b01d00dbf1676d07",
+            "bd23f3fdfe9fb71d642af860488a0655f9cef9d57b334b6c519d84b5440bd4e985cfcdebf8b3a2eaa3a2b7e5640946cbaf46a8f1c20ac92cb453981ab28d93a54154e355f76ab35bdd3e64b2930c5b6b9c2fbf27df85c67655777daa7e83d1688de34126",
+            "3c5a9a9d72dde1f99a8c437ab1cb1028440b530fedbabe86c6da0b5c334cb2d0482572307e4d76825147e758273e37028492e80aa69a9b9ffa6231cb6da6af4de3fdf7868ea32b7ee2604cc48a98e68b3c24d100e4a03845ac81bab75baee264eae1595d",
+            "541df75f910dab5704646595d7c5d7f588abaab6162e6015e9694bb3171e8edbb3510cbf4af882babc33c08b8a962c2b3ec0b93ae19d3d8081ddac0c6a2e16bb3352cd316e712ccd7c307e4295d84aa2a464d9a7ee4f9b10e1b88f1c0972798c2b8dade9",
+            "4481574182951099a13028da9c7dd34a82bde86eba767b057981ff46db233a7234494dcfee6b0f3a1349db37dcd1bdec5293edeb7becfcbc84dde269c6a9354e1d124441a27bdc24834e14d9b3ae39990793fce589dfe60db4a58ed337dc41fc0d779cae",
+            "df70f5cedb93d0b463a4f09185389657759017aca512e9aed2b8acd7c6cc47e02646a4c8e98e784662cc2cbf20d00dedafedceaa1c28edf80c729046dc2dcada7d3340bae19a3239c50d04c01d00dc01c01d00dc01c01d00dc01c01d00dc01c01d00dc01",
+            "c01d04407e135f61c200b8e30f9db68a75d063ff1d77c8ff0677dc7206fd0677c4e008bcb90181713a036f154f76839bf8301ca0096621924ac69dfa1c0526c7296266ee152ed34fd54bc3de0b2229f7f254159c4669fb40445f44908dc8aa3fc313137f",
+            "4c9e8d03797430afc04330c2105f1e6c9c8198d6355161d4573621ac221b2b1c518501fe43e7a53cb1404249fed7e0510959d003f66130491e2421d436f6d1610881c9770c1c3c866a84b440c1bafe04c0a5c47662b44f679488010f977c192fd8a38499",
+            "1918e5b88fe893c652d92c8f7bdf6b17cfece7387df6d7396b74b0d5712bc0980a75584603478508be9307922980b23ddf39bc28bc77b9b97339737bca54436f702d544368b04d2a53336a78cc5e886b58faff76f16cf2eaeacdffcbcaefdfbd7df5ecb3",
+            "dfa5cfbf7e5438e0bc61cf8f191e5b13ee65d83299ddfdc1fecf7fd9c9f82b57a59966a4727da82eadd5d27e3af3e62b192edbe3b337c45e2fdbbb2af8dbe9bef7bd6b9f4edc7ff73cf74b5995bf0fea95faf805ed19131bea6b0e7d183dbb63747dc7e8",
+            "fa0edaaeef409f571990f51de8c377d45edff19ad2f51d0f09adef40ad5b91c17bcad6776c25627d4707787d0700504b030414000000080000002100d98d4c89d00100005c700000170000006e61746976653230302f65787065637465642e6a736f6eed",
+            "dbc14b836018c7f17f65ec542063ef3bdd642f1e6cbed6405ca8b94374f0d02188166ed1c53f3e83b243cc19435df5dd650cf6badf0e1f9f079ec7db61b04c7571a1fd55a48bd077dce7dd663b08b33cdfbcaa3076acb9106ab12edfed913951eba5975c",
+            "951f4c5bc589e708314ff2977b95bac18d7effae9c98d67466972784746c7332ae5e6aa183c049b3fc217bda9d9d1be5058d8fe385f696496f3f1e276ee8b9911769d7eb2b848aabebc7dfce15b19bea138d16e9d5b50e4f33db65b45ad727937224cc2a",
+            "9a90e3cf6c7ef6b8dd174e4a61d6a593d2a8ae50976f680cc0073ef0810f7ce0031ff8c0073ef0810f7ce0031ff8c0073ef0810f7ce0031ff83ac1276415733a1dcdac2641cbff33ae0b2abe823610d87682e60c5b4e72b4c55ef33501d96bc0c32afb8c",
+            "f7cb50eeb9b5d60568726ffda9c83663b4551a3b08774471ec20dd6188bd6543210a5188421a541a541a544a23a591d2486944210a51f8e71432c36086c10c0381084420237cf0810f7ce0031ff8c0073ef0810f7ce0031ff8c0073ef0810f7ce0031ff8",
+            "c0073ef0810f7c2c63b38ccd3236cbd8ac81b206ca1a280a51884214d2a0d2a0d2a0521a298d94464a230a5188429e556286c10c8319060211f80f05debd01504b03041400000008000000210023c0d4e95e000000510b0000160000006e617469766532",
+            "30302f7265636f7264732e6a736f6eedce3b0a80400c84e10b0d4bb2ba3ece1252586865e7fd4111c6c21b88d37d21cbe68ff0560cdbb21f2b2261a53644f88dcc84f63fda871b3ae39cefe7884a74444f34622046622266e2ba433d7f7b5594a214a528",
+            "45294a518afa60549e504b030414000000080000002100e58c7b329105000028d20100170000006e61746976653230312f65787065637465642e6a736f6eeddd4b4f1b571880e1bf52452c2d34178f2f582cec62d448c68e0ca48ba60b5aa552a5ac52b1",
+            "e3c7d71edf6acfb83888099333cf86201f8299bc84e3477cf6f9eddde4fdc7f1d3687c3d9b8f9fa6d7979f1e3b9fd3dea7c734faa39dbfed2edffe992edf3efc3598de5e6617713cb8fd65f967efbc9b0d8693c9f6fddbbbabcb38beb8fbfaf879707f3b",
+            "beba3c1b9ec58379bcf980d67ab1955d4483795272f3eaf3ccd392a5b47bbe586997ac649df364b194952c2d3f59a7e4f67e9adf4fb7ec4b8893e51df5ca96d238bfa77ed95ab6b8a4382a5be9ac2e2a8e4b2f38bfacb8ec1f2389f20b1b2597d145fe85",
+            "b59ec933ea9ff8914ff3d9af723727f7cd707a3f9c7c6bf12459e75ebcb36e7dfdf0e59f42ec24696d9676a9f76f4ce26de8fd8576bac9bc7f7b27db46de5fe8755789f76f8da3deb6f0c14a1a6dfa1e2c64c9b6eec14ab7bd6e7b707b3fdb953dbcbe5d",
+            "d78395b45f55d59f6793fb9ba9aa6155fd307b3fbd1335aca8b7c38fe32b51c38a3a1fcf3e8cfdfc0dacea7436bf194ed2e4d4ae69b2ea9ac5bbc7c7abf7ffaf6efe1125810bb767bbc685b538da762eae65bbd685c5245af72eae64bbe485c534de562f",
+            "ae7576e10b8bed78d3beb8d4f94ffe92abdf7d0714173b7bdf046972ea37c1b31ff9aef5131993b1dc646c0f2763558395f1e82c113534198b4ac6aa92311993312a91b1dc646c0faf4ec623555f50b5d31a7efdfbe1cb2edefa868a9c2bd12b26aa46ad",
+            "12bd62a24a0caad1ab36aa549423a2ac4c944793f2211fcacd877cc8871e35f1211f4ac4871af1211ff2211f56913b91bb393e34d915e264adaa013ee754d4009f732aaac95a554dd672aec95a542263b9c9d81e4ec6642c2a198b4ac6aa92311993312a",
+            "91b1dc644cc6d5cc14ab5afb9962896a3f532c91996233c5668acd14f3211ff2211fda5ff9d0a3263ee44389f8900ff9900ff9900fbfc18749b4b8a01373f78fc4eee67fa53476e7fc58eed5fff9f2dced63b193fc9eca63c779b5d2dcdd28bfb323b9fb",
+            "4763e717b68d9dd26180bb6b6aae565573b50d8b6aae36c0a815cdd5aafaa6555faa5c5ddfb2ab5159d4455dd4455dd455157545455d51515755d4455dd4455dd4455d3fbc1b4a5dd38a667ecdfc4ad484995f8d6a30f3abd277ac047cc0077cc0077cc0",
+            "6783053ee09308f834023ee0033ee093dbebfa78edf6f04f445135c01351440df04414519d88a2aa1351bc3e91135150898ce526637b381993b1dffb3459c6a292b1aa644cc6648c4a642c3719dbc3ab1c1356b5f663c212d57e4c582267c1181376168c",
+            "b36080810fe5e643fb2b1f7ad4c4877c28111ff2211ff22130f0a1dc7c687f3559abaae79c8aea39a7266b5535596bb2d6642d2a91b1dc646c0f2763556bfa9cd3bea8e13de754543256958cc9988c51898ce526637bb8996233c51299293653ac919962",
+            "a234530c0c7c28371ff2211ff2a1447cc8871af1211ff22130fc203eeccbdd1c1f9aec0a71b256d5009f732a6a80cf3915d564adaa266b39d7642d2a91b1dc646c0f27633216958c45256355c9988cc91895c8586e3226e36a668a55adfd4cb144b59f29",
+            "96c84cb1996233c5668af9900ff9900fedaf7ce851131ff2a1447cc8877cc8877cc8878df061122dde3d2d7737caffd691dcfda3b1bbcbaff105b1533a0c5087a9b9da265635571b605473b50146ad68ae56d537adfa52e5eafafa5d4f1f957db62beaa2",
+            "2eeaa2ae4d197555455d51515754d4455dd4455dd4455dd4455d3fbcc3a4ae694533bf667e256ac2ccaf463598f955e93b56023ee0033ee0033ee0b3c1021ff049047c1a011ff0011ff0c9ed757dbc767bf827a2a81ae08928a20678228aa84e4451d589",
+            "285e9fc88928a844c67293b13d9c8cc9d8ef7d9a2c6351c9585532266332462532969b8cede1558e09ab5afb3161896a3f262c91b3608c093b0bc65930c0c08772f3a1fd950f3d6ae2433e94880ff9900f7f741ffefe2f504b0304140000000800000021",
+            "00feb226864b00000085040000160000006e61746976653230312f7265636f7264732e6a736f6e8b8e3632d4b334d529292a4dd5898ed531d0330152b13a28c2d1463a086e2c5411501048c7a2abc56104154c1e554bb5d8a05d84e2b2d0129b8596d448",
+            "4124983caa966ab141cd088d0500504b030414000000080000002100986b60f9df040000eac30000170000006e61746976653230322f65787065637465642e6a736f6eed9dd16adb3014865fa5945e9a50db4d3b627291b4ce56c89c91b4853176918dc2",
+            "02858eb465bbc8c3cf56d22536b1a423d99664ff37a32c96623edaf3e9e8c7f2b7d3e9ed43bc19c793d93cde2493e187c1e8f7ebf3cb49b25caf9fff44c962d81ff87e948c87be3f982c9f5e1ea3e476fff3e253f6793f1a4da7437f90dc4fa7d1e2eee6",
+            "fdc7fb457c333c1b9f0583f49f30ba2e4eefb1b9e73e9bc34b27bd5bbf3da6ff791e8dfde1f9c03b72b5f7fed5ff7f88e6413a3e08f69fb03b1a07e997fd959d222cde4278d9bb4a2709e527d94c66c9dd16e1f5f269f563bddad20b2e2ba4b79bd963d3",
+            "f2c01d5e4867261a9de10ac394503931fe149bc5e821be012d495af378f6254e1470b1afd52256bc711d68dbbbd1e2d6eff7e4b125b3f9e7d1340c76856dbd5a3e6db18541b5d8d8d41e9b57006d7fa51232fef00cd8c579af9c176ff8a9770219342683",
+            "6c6653d58d5da05adc0a83156a5b6e06b108404a5a02c75135e900213081022498f10d904726164035c854eb3f15177734abfe7e2f902dffb9e1a8fea65a01f61b68626dcbbe587569bb1dacb3b2cd2ea7b5019d26456b01f6a88c740065c0641b807266",
+            "92eb7f868cb6fc5747a6bdfa97c4c51dadbaf6cfae45f137b4f46fbaa2bd2b5fa5a0e5c76aac66e50a3f28bd1197fc666abe0896e4825fb5e2e7709196fbcdd77b222ade6062b53f1c8c625f4fb1a723ecf6e6ec8101808e86ee500b60676926601d36ae",
+            "2ff813c0195d7486659bb9ce08c3326eeed8c2b9f4a09dcc48a2408a80dec2ae6d5ff71a0b3bb839d855b89833b487995a43813da8aef713366c153bd74cd800cdbd4ec28d54a28dc0949a08b8c1263710106e3ff0769fd70c4f66b353979b961fba0c4e",
+            "cf115d26a7ec897aa0111f54f0f5d288222f3ca8004154f6d77a648f137e30c3ad1b7aa8015c7bed204e202007c8a1fea5dcbe77851ccc70eb58ef501db80eb40ea53b4b9003e450fb420e6e308cad5b7d03cca0c20a628018903920730039e801990304",
+            "81cc01dc9039c00ec81c2007640ee086de013b4bc81c2007640ec00635207340e6d046317c7d3bf9f8fcfa6bf573c7afca170afc9fdb6313f3e0e52fa593138fcfb0057ddeaf9f688e4331009b3cb6433110b965dfac49ae70f37aecd8fde8d1bbb8ea05",
+            "147aca7a20b22b1ed357ca8d6a883c33f22b190abce0087b1c51c1bb06b46a1de97d03c2e12a95aef4c82520934326e386e3cc9a5583909bc80c6272423154f3b28666b440e4457e5303d70a3864c992c641f128ea6a16c032e7510b876b2d7f8b476700",
+            "991c326ac3b06766a85f28e326dd2e949293ef16b4dee1d070af20c78bfa0207b94e018766186d144cd437ca1b0a44a37596bcb23e002e9a0b8ef232d31fa89a40484dba3bd079b543b3bd818a0584918254630007d894346393572f72063fcdec19001b",
+            "4b19ac64c75788680e88a49b22b16f4bd8218bd807cf2585b89846b4161cd51e4827200f0bb78e5d6c41ac81e764ffe1686ad12a70caad07b6b0d07958b2d9ec60db610939177b0e67128e9652536d37200c3c5d57d5030178c2ce18ba763e65d70cbbf6",
+            "3c69a7946be0693b88a2c6bf581ce16411b9ae6802c738e9e28224200903cb3a1cd7619e5ce77a091cdaa1880b9280249a5fd4c111c6c175ad8f8021d468411010043209641260074d209380289049801c32095802990424814c02e420096412c8242009",
+            "6c10239380229049589e497cff07504b030414000000080000002100f87835c37500000041070000160000006e61746976653230322f7265636f7264732e6a736f6e8b8e3634d533d0494bcc294ed5898e36d23132d4b334d529292a4d8dd58936d63136",
+            "d633378548c7c6ea18e89982150169b02c88060a0f2b339054a11b326435e10e17901e23744d46a3ba06ab2e903223533d4432ce2bcdc9012b0231c0d260c6f03405a10e333487ba367c296554db60d5160b00504b030414000000080000002100e9bb0b",
+            "e27f060000a8650200170000006e61746976653230342f65787065637465642e6a736f6eeddd416f1a4718c6f1af524539128bdd65c118710081db4ac8ae20cda5e9c1ad1c29524e897cf3870f2c35b41ae4c48dd73bb3fbbba4116b855aff779e79df47",
+            "fbccfcf16af5ebbbe5fdea7ab6582ede6c66ef968bfb2cbb78fbf9eef67ebebcbc5e2fab0fdf5cae663f1f1eec7fecea72fafe6e785b9cbfbf2bfa7f0daa3f47bb3fff2e767fde7c985c6da6e545964d36bf6cff9be793d96ab5ffcbe6ed62bafdc72e6f",
+            "3e7db99dfcbe592ea6af67afb3c93aab1ef71e1ef5ca8bfe649d071fe6d9d9a89cac8be0c1a038db7e3e083e1f9667f9f641193c381f4dd6c3e0d3ac7f5e7dc1287c52f477df701e3e28f3ea2bc6e193d160fb8bf5c3cfc765f5255976e2f71bedbe253b",
+            "f19b17e3ddd7ccf369ff62f76f64bd6f20988fbff7272ba8d307c4ebe5f56fcb2b8c5bccf855efa74716fff57cb35c5be62d5fe6249ec463dc51893fb5f8abffc3a7adfe22df574659e1dc17c7feef8fd547f513274a24f8bc3c5649f02ceb1f2a257c56",
+            "1eab257898f7ffa998f049792c9ae061911dea267c363c964ef070903d544ff868f8af023af1db1f6b287c38fc4f1915f9f796d1b77ff247a44241b4bd20b48eda07bb07b1b07b2888e7de3d8ca446528cb98e4a80eb883d89c798ebf8c898a0329ebf32",
+            "621b05314e88b106cf26cf1b6405f1061544d2dee0dc9ef23ff694616ff6f9e3cda7e3d6f1f0c10b8c8188d547ac91b60ed01a97203125a6884528a64d4c4f73cd726dcd723dcb18deb4f06aa0bad040d1693a0d6f7b75dad06468428c030528070a4962",
+            "ca81d2fa9a6ce0e54011710e94854ca7e16d9103e5bd5ae1198ce52395807c24f6241e63f94895211f89b17ca40d403e92b1231fa9209c9d664f313862cc1b5402bc41ec493cc6bc41be116f10630d9e0d8037c80ae20d2a0867a7d95384ad84ad042f24",
+            "579124a688c59e5cc53995958998360750f952d6837c29bc4e38a3de461b0d14a07c2224892931e513599988697300e5133112f844f0a6750e594ebd9facde456241148ce361dcd0abe84a20a2654ee2493cc61d95f897ce1aaa8c1a2b2392ac21c6f130",
+            "d6e0d9e4693c8dc7b8ab1a6fbc33de61ccc153021c3cec493cc61c3c9dbfe90e630e9e12e0e0814fe331e6e01ddec85418a9c58b106b598801d0b664359124a688c598d5c439b5ac2662da1c401bc96a42494d114bf1e42d980d20886973b839481253c4",
+            "b839389b3fb43936476e0e94d414b194cec772baa18bda318ee5a276573577f5aa66124fe231ee80c4bba7ddb5dcee695710c9e4f66c2d91b78e760f6261f75010099de9654f319262cc7554025c47ec493cc62d3bd34b653cb932621b05314e88b106cf",
+            "26cf1b6405f1061544e2a785d953528b4421e6ca7340a3cc9722494c118bf5bd3c97d5377e597d9db310bc8de3d54049ae5ac8741ade9475dad06468428c030528070a4962ca81d2fa9a6ce0e54011710e94854ca7e16d9103e5bd5ae1198ce52395807c",
+            "24f6241e63a7b269fa6567148453d96c2d9297c4c2eea120242fed2946528cb98e4a80eb883d89c7d8a96c2ac3a96c183b954d09f0065941bc4105c11bf43eb918176232b180cac41253c46462857164ade0958925e232b116329d86d7a96c8626c43850",
+            "8072a09024a6c4d46463b231d970a0883807ca42a6d3f03a958d7a0bcf602c1fa904e423b127f118cb47cacec947622c1f6903908f64ecc8472a0867a7d9530c8e18f30695006f107b128f316f906fc41bc458836703e00db28278830ac2d969f614612b",
+            "612bc10bc95524892962312757714e656522a6cd0154be94f5205f0aaf13cea8b7d1460305289f0849624a4cf944562662da1c40f9448c043e11bc699d4336a6de35bea35a441144c1381ec60dbd8aae04225ae6249ec463dc51897fe9aca1caa8318756",
+            "efeac73841c61a3c9b3c8da7f1187755e38d77c63b8c39784a8083873d89c79883a7f337dd61ccc153021c3cf0693cc61cbcc31b990a23b57811622d0b3100da96ac2692c414b118b39a38a796d5444c9b036823594d28a92962299ebc05b30104316d0e",
+            "370749628a18370767f38736c7e6c8cd81929a2296d2f9584e3774513bc6b15cd4eeaae6ae5ed54ce2493cc61d9078f7b4bb96db3ded0ae2b9ef69d73a76b575b47b100bbb878248e84c2f7b8a911463aea312e03a624fe2314ecb7554194d9e05f232a3",
+            "20c60931d6e0d9e47983ac20dea08248da1b74df727a9128c45c790e6894f95224892962b1be97e7b2fac62fabaf731682b771bc1a28c9550b994ec39bb24e1b9a0c4d8871a000e54021494c39505a5f930dbc1c2822ce81b290e934bc3facd37f7e0550",
+            "4b03041400000008000000210021ec470194000000c90e0000160000006e61746976653230342f7265636f7264732e6a736f6eed55d10a80200cfca1212945ec5b648ffd40d4ff372291c2a29552a24fc3e3388fc379d61aadb083699c07b0048d6a7910",
+            "9cc19d56bd87b56a2e6199f61e8eab9dd2f7736d6bc01f6993649027ddf4719458ef61902765e5e2dbf7f15c5b92de1bae8b3436b7fa2ddb6ffdf34bd22eb06331b463286a370cad138a3af6172eb2ed58417a6fb82ed2d8dceab76cbff5cf4fad4d0b50",
+            "4b030414000000080000002100d4edf8ca270300008ab70000170000006e61746976653230352f65787065637465642e6a736f6eed9c516b9b501886ffca28bd34c1734ed418f142d16c038943b3405977918d0c06bdeac85d7efca2a971cad96206116d",
+            "9f9bb4f885d8f47d7dbfefc1e3f972977cdcc487240da2389ae4c1268e0e422cd6cffbdd210df338db548727cb24787fae85f132cde2b2722e2cb74fbf7687d367ac96fee3dedea9f9e35e99df66e5ab53bc7e57c5ebf687b7ca7d6ba1a4977f38feb4c4",
+            "d4b1bc2049cebfe7ebc8af3ed3fb9cc7917f1fdc0b2f13d53b8caa6a580bd3cba4eef8e9a332a5ab09534d8fb599b6665953792c5abaa2341d2fb3b5156b5e9ecfd11595308bf3cdb5355b96e77375c599981dbfb6a92dd956794221f4dfde29ce28f4ff",
+            "1adb2d4e194adf5c147f81342ee815ba5ddf593ac0af9c92c5e9a778852130c4c91077c6bb7f644e21ec245d250f87425d2208c7114118a2d7085aa5933285f275b08ebb9a46889369a47c71ccf197865d4a9348a97148f3a0acedd12cccced6681eb76b",
+            "5b340bf3174b348f0ab3f643aba2ce666815acda09ad8a53d9a075dcfdc303edef571ba055510df585e8aafec577d246480dda0886e8b58df498397f6d3a2d73d17ebab79fa1c5081a8f486318975ec4708221605c1ad02b645c6611e64d341ecdbc4932",
+            "e01a9281648044010f48144340a2342048142b306fa231248a6b4806348644010f48144340a2902824cabcc9bc89c690681fc910e29aff6812b6113cffdc3ed5bda03ad0c3758e62b753ac33258603a4c41028b81914dcf68a47de71c80bc18d39ea99ba",
+            "98ba506c745317572d572d8ac14a0cd3b012f2c24ab012ac84b04c5d4c5dc35ee128f1c0d51e5023bbe38cc6c3d1f88a158e92a0c04404054101998d5ffd71ad432408087b341e4ad8b34299d5abac506685324fc471838727e230044fc4d18078220e2b",
+            "306fa231248a6b4806348644010f48144340a2902824cabcc9bc89c69028c94032a031240a89021e902886804421514894598479138dd92514d7f00c363bdfb0f30d5ba3b0f30d3bdf4070ec7c430f67ea42317609c5035cb55cb5b012c334ac84bcb012",
+            "ac440f67ea42b1b7ba4ba88b076e7737f2f2ae42bddc7146e3e1687cc50a4797a0c0440405410199bd8275886a4ceb100902c21e8d7b0cfbafbf01504b03041400000008000000210005562d0e5e000000a8040000160000006e61746976653230352f72",
+            "65636f7264732e6a736f6e8b8e3635d43337d529292a4dd5898ed531d4330052b13a240a1b19ea5952ac1a5938da4807c18d852a020a02e958224d2664c4005a479520a269381be899c4d24b2d753c6289cd424b92629080110368dd204a30385c8d3511",
+            "504d6d2c00504b03041400000008000000210014c7edd37b08000012610100170000006e61746976653230362f65787065637465642e6a736f6eed9d5d6fdb361486ff4a51f4323544529f0972e12cce56204d06a7ed2ed65d6443070c28d0215db15de4",
+            "c7cfd6071552b42bc7124339cf4d9a1e52157c9eca7c79fcf2f8d797976f3e2ceecf1617d7cbc5fdd5c5e9fcef7fbe7c7d71757b77f7e5df93ab9bd3e45888939b9fd67f2627f3cbcbea979b77e7a7421cbfbbfbf6e9e4fdcde2fcf4d5d92b79b214e5e8",
+            "513d72941c47274b69c756972f951d54ab99b11d8c5733133b98ae66a676305bcdccec60b19a9977ee1eada6169da85ccd155127ac569385e8be82f5ecee0b4b939333799a1fffb7fe8b38325279569c46c7ddf8fdc59be5cdbbd7cbeb5fc64b7e3afb7e",
+            "fac52c710148674e04e5ec2e847276174339db01a29cee4051ce77c1282f70e1a8ae7000595fd1225147f3bbbf6e3f6f647136bf3abfd9ce414633d9a0a87edf42a39cd0056287ab7fa784620fc551c3c51e49a35956b3b1877251c1b1e32212e58d32d7",
+            "98d4943a43b1286f55b8c65259a3ea8ce4b2bc9910ce572c35b1ce9894ebdbb5d4529b5a1db87f3bbf7a3fbf84d75478ddcc3f2ccec135155ccbc5f5cf8b2b784d85d7d5f5f2edfcf2f58f9bb54402b4c0a0bd3c7a81000f4180ff707df9fe2d6f769379",
+            "b3f324d5adbdd3165aabcd49b6015792b9596559f9afb97015d96c132c91953772d252f90654495e0171d2caf2d92658a2c8cbbbb9698962dbe6cab74c87d5feac3c497450ed8fca973c87d5feacbc4a7380ed0d0c594e5d9cbaf82e7571a56a0eab5fb6",
+            "7050aacbc188ad2e2f2918c134ad1818c1a2a8081841a16405c08ca675fecd689157e937a252892af966348debd49be122ab136fbd88e63930c3a96a932eedad8ddc452f93eec1d2dd43f292edc1b2dd47b592eec1d2dd5b7892f3a1728e769c504997ff",
+            "f683bdd58c2b122db1eecc775c3462dd08e7b211eb661e45d2a875331ee73367de73add7cd648ab8d1eb663cceb45e3707f248eb7533d14269bd6e0ec4dbf5ba2fe908843e10c6159430e8c360649909843e107c884f48f42081247d06e5cc6efddc95ff",
+            "a4aca9771024d587045d0a892ef71bf13cd26e02934535bf8b4354173888246d95df1c89a3d6446071a9afe9a2c9ca6b1e3e111fbfa59f54fef19b8a7e8fcb9fd9fae71f6afdf3f6cf27b702afed153ded20728319446a741d33889c259bec20a5d16283",
+            "1d446d3283280db16b0651b38d1fd6e4aafa40c66d0789379a416213e6d31b81a135002d5f3660600d00cb9b09185a03d0f26b0106d9fec890e618803100876b0006d74eb8faefb738c477602039dd77181c39f6772020390f784034d92750c2a7843f74",
+            "091ffb0fae655ccb641bd732ae655ccbe84b5ccbb89687cc76e7c0ad2be189d282def4a7a55ad05b06b5422b7a7320915ad25b16b556d35b1eb55c6b7a732011ada6b75c6a71abe92d9b5ad66a7a732479aca6f7252f013514a87185299c86e234b2a405",
+            "d450a07c8861680d440b194de3081a47d050f9801b2acb06966c485ddc7efeda45258f9aa107a08ca0acd2a03a03b1d2908c78fd5146d219c8b31a90111551de1a05cd11156938e640bd3415dd91acd9945af122796010b45e5fd64231475431a0591a22",
+            "3e89f4f24780c42792fe4e07b878e48218c6db8c0ea3b9f1b36f6eccaa33c2aaa390cc532182640e0e099239482e4866eac7d48fb1f0066be16539186139d8cbe60b11af44d0b2c12141cb06c9052d8ba5184b31ad47436d84cc6ae0a3b281940d960852",
+            "36382448d920b92065e9be40f7051a283feb06caac38187f31fe8204e32f5c30fe62fcc5f84b53639a353ebea9314bd228159c31fa16832a085428f0e9b0429a4f0b189a9d1237256e1a0ce34e662dc19d8c3b1924b8937127a3777127e34ea69164980d",
+            "8f59319eb474820e9e1e2a04f27458a19ca705ac97a45e49a89259dc308be5369111cbaec830626b57a7b283795ca1328242a61527339ae61527232a45543132a389ac0099d122aee01851a5d29a8d19cef29a8bf52a1a4d678653d90251d22dabadf8f7",
+            "cac80300b0cea039112479f3bc98e98ea2e6109a198fb5d5d68ce7717308cd4cba4c9ba7c58ca7797308cdccbb88b4bdd61c48a43e84660e14b17e524c286afb21349bc716c53d000b97cbb903a3b6383b68c4faddcbc2916ac96df1c8b5e43613af222d",
+            "b9cd81ac7dfbb290c4ade4b698a4ade4b6a0e4ade436a9c4d1006667803c01902df2191e4fc0639b4606c81300f9ae105e690da878a682da0d48ed6e2b22c3e0b10c1e6554667f31f2fec2979085c2beed8681e00bc2c892150ac334151e40a78262b03e",
+            "c208234ab19462876361f6607391c89c1c44e6a29014ae8721122e02b172e53f77665f66cedca785f36110c299f7646fcb2ef91e3edfe34a51d2bd8397807c0f9f6f1ff292a4f3993e55ce67c5e0515e59a4fbc8d25d52e50c890255ce002050e50c8102",
+            "55ce5050204e9f49951373ca06734a6f8fb66753aad595d7cd4bcddc7be928d19dc52c5ed5b7033b7815da546ff112fafb842d5e4ab714b378d5d67907afac35d55bbc8af67b842d5ea267e7b7b14da900d911c8c8a65478ecc8636c532a407604e2c594",
+            "0a95dda8a08829d7624a650f12e41e8413589323c5d1ac8980e2ccd6544871986b4ab810d494987964022c3163d4c26c8bd916b32df9c66c8bd916b149f516b32df27e44792fa9de4e8d14d5db8980a27a3b1552546fa7840b414d1b04fcf274a43d808e",
+            "b4f438f7f90df67da43344bc12e9a39141e215496f310c179f5c50bd94913101b3cf08bb332d6bc2385fda83a09d0811046d704810b4417241d052c6455e61b00ddf60cbbae0f33bdc11b5c11141d4068704511b2417442d555accbe6c23c2eeaccb9ae0",
+            "a3d081a00d96088236382408da20b920686995803f9d6ebccfa41b2f8b0b865c0cb928630cb970c1904ba917432e5d790fbe2b2febc638159511faf2822a0c54c8e4e9b0423f4f0b18c29a9233328feebc98875954300f631e0609e661ccc3085f2aca98",
+            "87d96a4ca25330ebc693565250c3d343854c9e0e2bf4f3b480bdfced7f504b030414000000080000002100b354974ab40000007b050000160000006e61746976653230362f7265636f7264732e6a736f6eb5923b0e03210c442f6421303651ce825ca448",
+            "aa54f9dc3f3fb259cc8a00abad10f8693c3613235a830ca7c3f97a8428608d8718f1758a08e4e5e7bb0b265d650e23bf69ef8d9d6b11a73a95f5526ca2939aee8dceec969a534997e54e6b33b5dc5b6ae6cc9ee176b94fced2551656d8c47e67aec2da74",
+            "23dda4ed0706a4ed3c7fa409abbf1238dbb4a255bc825a87a27f01c869e2f5da3ab9616c4a5aeffb8f76fd73d4ba1be1a6f485ae948c6a6f0777fb9007504b0102140014000000080000002100fc4d97dd7a110100c23a04000600000000000000000000",
+            "00800100000000696e70757473504b0102140014000000080000002100d98d4c89d00100005c70000017000000000000000000000080019e1101006e61746976653230302f65787065637465642e6a736f6e504b010214001400000008000000210023c0",
+            "d4e95e000000510b00001600000000000000000000008001a31301006e61746976653230302f7265636f7264732e6a736f6e504b0102140014000000080000002100e58c7b329105000028d201001700000000000000000000008001351401006e617469",
+            "76653230312f65787065637465642e6a736f6e504b0102140014000000080000002100feb226864b000000850400001600000000000000000000008001fb1901006e61746976653230312f7265636f7264732e6a736f6e504b0102140014000000080000",
+            "002100986b60f9df040000eac3000017000000000000000000000080017a1a01006e61746976653230322f65787065637465642e6a736f6e504b0102140014000000080000002100f87835c3750000004107000016000000000000000000000080018e1f",
+            "01006e61746976653230322f7265636f7264732e6a736f6e504b0102140014000000080000002100e9bb0be27f060000a86502001700000000000000000000008001372001006e61746976653230342f65787065637465642e6a736f6e504b0102140014",
+            "00000008000000210021ec470194000000c90e00001600000000000000000000008001eb2601006e61746976653230342f7265636f7264732e6a736f6e504b0102140014000000080000002100d4edf8ca270300008ab700001700000000000000000000",
+            "008001b32701006e61746976653230352f65787065637465642e6a736f6e504b010214001400000008000000210005562d0e5e000000a804000016000000000000000000000080010f2b01006e61746976653230352f7265636f7264732e6a736f6e504b",
+            "010214001400000008000000210014c7edd37b080000126101001700000000000000000000008001a12b01006e61746976653230362f65787065637465642e6a736f6e504b0102140014000000080000002100b354974ab40000007b0500001600000000",
+            "000000000000008001513401006e61746976653230362f7265636f7264732e6a736f6e504b0506000000000d000d006a030000393501000000"
+        );
+        let bytes = (0..PACKED.len()).step_by(2)
+            .map(|at| u8::from_str_radix(&PACKED[at..at + 2], 16).unwrap()).collect::<Vec<_>>();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut raw = Vec::new();
+        archive.by_name(name).unwrap().read_to_end(&mut raw).unwrap();
+        raw
+    }
+
+    fn cold_cache_native_input_packages() -> Vec<Vec<u8>> {
+        let raw = cold_cache_native_fixture_file("inputs");
+        let mut at = 0;
+        let mut packages = Vec::new();
+        for _ in 0..32 {
+            let size = u32::from_le_bytes(raw[at..at + 4].try_into().unwrap()) as usize;
+            at += 4;
+            packages.push(raw[at..at + size].to_vec());
+            at += size;
+        }
+        assert_eq!(at, raw.len());
+        packages
+    }
+
+
+
+    #[test]
+    fn native_cold_resave_observer_histories_match_excel() {
+        use std::io::Read;
+        type Records = (f32, bool, Vec<(u32, Option<f32>, bool)>, Option<f64>, Vec<(u32, Option<f64>)>);
+        fn records(bytes: &[u8]) -> Records {
+            let book = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+            let sheet = &book.sheets[0];
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut xml = String::new();
+            archive.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+            let mut reader = quick_xml::NsReader::from_str(&xml);
+            let mut default = None;
+            let mut rows = Vec::new();
+            loop {
+                let (namespace, event) = reader.read_resolved_event().unwrap();
+                match event {
+                    quick_xml::events::Event::Start(tag) | quick_xml::events::Event::Empty(tag) => {
+                        if !matches!(namespace, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.openxmlformats.org/spreadsheetml/2006/main") { continue; }
+                        let mut descent = None;
+                        for attribute in tag.attributes() {
+                            let attribute = attribute.unwrap();
+                            let (ns, local) = reader.resolve_attribute(attribute.key);
+                            if local.as_ref() == b"dyDescent" && matches!(ns, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac") {
+                                assert!(descent.is_none());
+                                descent = Some(attribute.unescape_value().unwrap().parse::<f64>().unwrap());
+                            }
+                        }
+                        if tag.local_name().as_ref() == b"sheetFormatPr" { default = descent; }
+                        else if tag.local_name().as_ref() == b"row" {
+                            let row = tag.try_get_attribute("r").unwrap().unwrap().unescape_value().unwrap().parse::<u32>().unwrap();
+                            rows.push((row, descent));
+                        }
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            (sheet.default_row_height, sheet.default_row_custom,
+             sheet.rows.iter().filter(|row| row.height.is_some() || row.custom_height)
+                 .map(|row| (row.index, row.height, row.custom_height)).collect(), default, rows)
+        }
+        let original = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        const CODE: &str = r######"Attribute VB_Name = "DrawingIdentityProbe"
+Option Explicit
+Private Function H(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  H = H & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+Private Function V(ByVal item As Variant) As String
+ If IsNull(item) Then
+  V = CStr(VarType(item)) & ":NULL"
+ Else
+  V = CStr(VarType(item)) & ":" & CStr(item)
+ End If
+End Function
+Private Function State(ByVal ws As Worksheet) As String
+ Dim i As Long, text As String
+ text = "NF=" & ws.Parent.Styles("Normal").Font.Name & ";NS=" & V(ws.Parent.Styles("Normal").Font.Size)
+ text = text & ";SH=" & V(ws.StandardHeight) & ";ALL=" & V(ws.Rows.RowHeight) & ";STD=" & V(ws.Rows.UseStandardHeight)
+ text = text & ";USED=" & ws.UsedRange.Address
+ For i = 1 To 12
+  text = text & ";R" & CStr(i) & "=" & V(ws.Rows(i).RowHeight) & "," & V(ws.Rows(i).UseStandardHeight) & "," & V(ws.Rows(i).Top)
+ Next i
+ text = text & ";B2=" & V(ws.Range("B2").Value2) & "," & V(ws.Range("B2").Font.Size) & "," & ws.Range("B2").Font.Name
+ text = text & ";B9=" & V(ws.Range("B9").Value2) & "," & V(ws.Range("B9").Font.Size) & "," & ws.Range("B9").Font.Name
+ State = text
+End Function
+Public Function Measure(ByVal inputPath As String, ByVal outputPath As String, ByVal unused1 As String, ByVal unused2 As String, ByVal mode As Long) As String
+ Dim wb As Workbook, ws As Worksheet, text As String, action As Long
+ On Error GoTo Failed
+ action = mode Mod 4
+ Set wb = Workbooks.Open(inputPath, UpdateLinks:=0)
+ Set ws = wb.Worksheets(1)
+ text = "LIVE|LOADED-SAVED|" & V(wb.Saved)
+ If action = 1 Or action = 3 Then
+  text = text & "|OBSERVED|" & State(ws) & ";SAVED=" & V(wb.Saved)
+ End If
+ If action >= 2 Then wb.Styles("Normal").Font.Size = 32
+ text = text & "|BEFORE-SAVE-FLAG|" & V(wb.Saved)
+ wb.SaveAs outputPath, 51
+ text = text & "|SAVED|" & State(ws) & ";SAVED=" & V(wb.Saved)
+ Set ws = Nothing
+ wb.Close False
+ Set wb = Workbooks.Open(outputPath, UpdateLinks:=0)
+ Set ws = wb.Worksheets(1)
+ text = text & "|REOPEN|" & State(ws) & ";SAVED=" & V(wb.Saved)
+ Set ws = Nothing
+ wb.Close False
+ Measure = H(text)
+ Exit Function
+Failed:
+ text = text & "|ERROR|" & CStr(Err.Number) & "|" & Err.Description
+ On Error Resume Next
+ If Not wb Is Nothing Then wb.Close False
+ Measure = H(text)
+End Function
+"######;
+        let expected: Vec<String> = serde_json::from_slice(&cold_cache_native_fixture_file("native204/expected.json")).unwrap();
+        let saved_records: Vec<Records> = serde_json::from_slice(&cold_cache_native_fixture_file("native204/records.json")).unwrap();
+        assert_eq!(expected.len(), 128);
+        assert_eq!(saved_records.len(), 128);
+        let packages = cold_cache_native_input_packages();
+        let input_indices: [usize; 128] = [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8, 8, 9, 9, 9, 9, 10, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 15, 16, 16, 16, 16, 17, 17, 17, 17, 18, 18, 18, 18, 19, 19, 19, 19, 20, 20, 20, 20, 21, 21, 21, 21, 22, 22, 22, 22, 23, 23, 23, 23, 24, 24, 24, 24, 25, 25, 25, 25, 26, 26, 26, 26, 27, 27, 27, 27, 28, 28, 28, 28, 29, 29, 29, 29, 30, 30, 30, 30, 31, 31, 31, 31];
+        let mut failures = Vec::new();
+        for mode in 0..128 {
+            let input = &packages[input_indices[mode]];
+            let mut context = failure_context();
+            context.file_name = Some("source.xlsm".into());
+            context.application_state = Some(VbaApplicationState { standard_font_startup: Some(VbaStandardFontStartup {
+                profile_utf16: Some(vec![28216,12468,12471,12483,12463,44,49,49]) }), ..Default::default() });
+            context.file_context = Some(file_io::FileContext {
+                full_name: Some(r"C:\probe\source.xlsm".into()), package_bytes: Some(original.to_vec()), read_only: Some(true),
+                folders: vec![r"C:\probe".into()], files: vec![file_io::ProducedFile { path: r"C:\probe\input.xlsx".into(), bytes: input.clone() }],
+                ..Default::default() });
+            let out = execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(original).unwrap(), CODE,
+                Some("DrawingIdentityProbe.Measure"), vec![Value::String(r"C:\probe\input.xlsx".into()),
+                    Value::String(r"C:\probe\result.xlsx".into()), Value::String(String::new()), Value::String(String::new()),
+                    Value::Integer(mode as i64)], 0, context, &mut None).unwrap();
+            if let Some(error) = &out.error { failures.push(format!("probe 204/{mode}: {}", error.message)); continue; }
+            let wire = serde_json::to_value(&out.result).unwrap();
+            let hex = wire["value"].as_str().unwrap();
+            let units = (0..hex.len()).step_by(4).map(|at| u16::from_str_radix(&hex[at..at + 4], 16).unwrap()).collect::<Vec<_>>();
+            let actual = String::from_utf16(&units).unwrap();
+            if actual != expected[mode] {
+                let offset = actual.chars().zip(expected[mode].chars()).position(|(a,b)| a != b).unwrap_or_else(|| actual.chars().count().min(expected[mode].chars().count()));
+                let fragment = |text: &str| text.chars().skip(offset.saturating_sub(50)).take(180).collect::<String>();
+                failures.push(format!("probe 204/{mode}: actual {:?}; expected {:?}", fragment(&actual), fragment(&expected[mode])));
+            }
+            let saved = out.files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\probe\result.xlsx"))
+                .expect("the complete positive Native program saves its output");
+            let actual_records = records(&saved.bytes);
+            if actual_records != saved_records[mode] {
+                failures.push(format!("probe 204/{mode} saved records: {:?} != {:?}", actual_records, saved_records[mode]));
+            }
+        }
+        assert!(failures.is_empty(), "{} full Native conditions or saved records differ:\\n{}", failures.len(), failures.join("\\n"));
+    }
+
+
+    #[test]
+    fn native_used_range_observer_controls_match_excel() {
+        use std::io::Read;
+        type Records = (f32, bool, Vec<(u32, Option<f32>, bool)>, Option<f64>, Vec<(u32, Option<f64>)>);
+        fn records(bytes: &[u8]) -> Records {
+            let book = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+            let sheet = &book.sheets[0];
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut xml = String::new();
+            archive.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+            let mut reader = quick_xml::NsReader::from_str(&xml);
+            let mut default = None;
+            let mut rows = Vec::new();
+            loop {
+                let (namespace, event) = reader.read_resolved_event().unwrap();
+                match event {
+                    quick_xml::events::Event::Start(tag) | quick_xml::events::Event::Empty(tag) => {
+                        if !matches!(namespace, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.openxmlformats.org/spreadsheetml/2006/main") { continue; }
+                        let mut descent = None;
+                        for attribute in tag.attributes() {
+                            let attribute = attribute.unwrap();
+                            let (ns, local) = reader.resolve_attribute(attribute.key);
+                            if local.as_ref() == b"dyDescent" && matches!(ns, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac") {
+                                assert!(descent.is_none());
+                                descent = Some(attribute.unescape_value().unwrap().parse::<f64>().unwrap());
+                            }
+                        }
+                        if tag.local_name().as_ref() == b"sheetFormatPr" { default = descent; }
+                        else if tag.local_name().as_ref() == b"row" {
+                            let row = tag.try_get_attribute("r").unwrap().unwrap().unescape_value().unwrap().parse::<u32>().unwrap();
+                            rows.push((row, descent));
+                        }
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            (sheet.default_row_height, sheet.default_row_custom,
+             sheet.rows.iter().filter(|row| row.height.is_some() || row.custom_height)
+                 .map(|row| (row.index, row.height, row.custom_height)).collect(), default, rows)
+        }
+        let original = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        const CODE: &str = r######"Attribute VB_Name = "DrawingIdentityProbe"
+Option Explicit
+Private Function H(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  H = H & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+Private Function V(ByVal item As Variant) As String
+ If IsNull(item) Then
+  V = CStr(VarType(item)) & ":NULL"
+ Else
+  V = CStr(VarType(item)) & ":" & CStr(item)
+ End If
+End Function
+Private Function State(ByVal ws As Worksheet) As String
+ Dim i As Long, text As String
+ text = "NF=" & ws.Parent.Styles("Normal").Font.Name & ";NS=" & V(ws.Parent.Styles("Normal").Font.Size)
+ text = text & ";SH=" & V(ws.StandardHeight) & ";ALL=" & V(ws.Rows.RowHeight) & ";STD=" & V(ws.Rows.UseStandardHeight)
+ text = text & ";USED=" & ws.UsedRange.Address
+ For i = 1 To 12
+  text = text & ";R" & CStr(i) & "=" & V(ws.Rows(i).RowHeight) & "," & V(ws.Rows(i).UseStandardHeight) & "," & V(ws.Rows(i).Top)
+ Next i
+ text = text & ";B2=" & V(ws.Range("B2").Value2) & "," & V(ws.Range("B2").Font.Size) & "," & ws.Range("B2").Font.Name
+ text = text & ";B9=" & V(ws.Range("B9").Value2) & "," & V(ws.Range("B9").Font.Size) & "," & ws.Range("B9").Font.Name
+ State = text
+End Function
+Private Function StateWithoutUsedRange(ByVal ws As Worksheet) As String
+ Dim i As Long, text As String
+ text = "NF=" & ws.Parent.Styles("Normal").Font.Name & ";NS=" & V(ws.Parent.Styles("Normal").Font.Size)
+ text = text & ";SH=" & V(ws.StandardHeight) & ";ALL=" & V(ws.Rows.RowHeight) & ";STD=" & V(ws.Rows.UseStandardHeight)
+ For i = 1 To 12
+  text = text & ";R" & CStr(i) & "=" & V(ws.Rows(i).RowHeight) & "," & V(ws.Rows(i).UseStandardHeight) & "," & V(ws.Rows(i).Top)
+ Next i
+ text = text & ";B2=" & V(ws.Range("B2").Value2) & "," & V(ws.Range("B2").Font.Size) & "," & ws.Range("B2").Font.Name
+ text = text & ";B9=" & V(ws.Range("B9").Value2) & "," & V(ws.Range("B9").Font.Size) & "," & ws.Range("B9").Font.Name
+ StateWithoutUsedRange = text
+End Function
+Public Function Measure(ByVal inputPath As String, ByVal outputPath As String, ByVal unused1 As String, ByVal unused2 As String, ByVal mode As Long) As String
+ Dim wb As Workbook, ws As Worksheet, text As String, action As Long
+ On Error GoTo Failed
+ action = mode Mod 3
+ Set wb = Workbooks.Open(inputPath, UpdateLinks:=0)
+ Set ws = wb.Worksheets(1)
+ text = "LIVE|LOADED-SAVED|" & V(wb.Saved)
+ If action = 1 Then text = text & "|USED-ONLY|" & ws.UsedRange.Address
+ If action = 2 Then text = text & "|NO-USED-STATE|" & StateWithoutUsedRange(ws)
+ text = text & "|OBSERVED-SAVED-FLAG|" & V(wb.Saved)
+ wb.Styles("Normal").Font.Size = 32
+ text = text & "|BEFORE-SAVE-FLAG|" & V(wb.Saved)
+ wb.SaveAs outputPath, 51
+ text = text & "|SAVED|" & State(ws) & ";SAVED=" & V(wb.Saved)
+ Set ws = Nothing
+ wb.Close False
+ Set wb = Workbooks.Open(outputPath, UpdateLinks:=0)
+ Set ws = wb.Worksheets(1)
+ text = text & "|REOPEN|" & State(ws) & ";SAVED=" & V(wb.Saved)
+ Set ws = Nothing
+ wb.Close False
+ Measure = H(text)
+ Exit Function
+Failed:
+ text = text & "|ERROR|" & CStr(Err.Number) & "|" & Err.Description
+ On Error Resume Next
+ If Not wb Is Nothing Then wb.Close False
+ Measure = H(text)
+End Function
+"######;
+        let expected: Vec<String> = serde_json::from_slice(&cold_cache_native_fixture_file("native205/expected.json")).unwrap();
+        let saved_records: Vec<Records> = serde_json::from_slice(&cold_cache_native_fixture_file("native205/records.json")).unwrap();
+        assert_eq!(expected.len(), 39);
+        assert_eq!(saved_records.len(), 39);
+        let packages = cold_cache_native_input_packages();
+        let input_indices: [usize; 39] = [0, 0, 0, 1, 1, 1, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 17, 17, 17, 20, 20, 20, 21, 21, 21, 22, 22, 22, 23, 23, 23, 24, 24, 24];
+        let mut failures = Vec::new();
+        for mode in 0..39 {
+            let input = &packages[input_indices[mode]];
+            let mut context = failure_context();
+            context.file_name = Some("source.xlsm".into());
+            context.application_state = Some(VbaApplicationState { standard_font_startup: Some(VbaStandardFontStartup {
+                profile_utf16: Some(vec![28216,12468,12471,12483,12463,44,49,49]) }), ..Default::default() });
+            context.file_context = Some(file_io::FileContext {
+                full_name: Some(r"C:\probe\source.xlsm".into()), package_bytes: Some(original.to_vec()), read_only: Some(true),
+                folders: vec![r"C:\probe".into()], files: vec![file_io::ProducedFile { path: r"C:\probe\input.xlsx".into(), bytes: input.clone() }],
+                ..Default::default() });
+            let out = execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(original).unwrap(), CODE,
+                Some("DrawingIdentityProbe.Measure"), vec![Value::String(r"C:\probe\input.xlsx".into()),
+                    Value::String(r"C:\probe\result.xlsx".into()), Value::String(String::new()), Value::String(String::new()),
+                    Value::Integer(mode as i64)], 0, context, &mut None).unwrap();
+            if let Some(error) = &out.error { failures.push(format!("probe 205/{mode}: {}", error.message)); continue; }
+            let wire = serde_json::to_value(&out.result).unwrap();
+            let hex = wire["value"].as_str().unwrap();
+            let units = (0..hex.len()).step_by(4).map(|at| u16::from_str_radix(&hex[at..at + 4], 16).unwrap()).collect::<Vec<_>>();
+            let actual = String::from_utf16(&units).unwrap();
+            if actual != expected[mode] {
+                let offset = actual.chars().zip(expected[mode].chars()).position(|(a,b)| a != b).unwrap_or_else(|| actual.chars().count().min(expected[mode].chars().count()));
+                let fragment = |text: &str| text.chars().skip(offset.saturating_sub(50)).take(180).collect::<String>();
+                failures.push(format!("probe 205/{mode}: actual {:?}; expected {:?}", fragment(&actual), fragment(&expected[mode])));
+            }
+            let saved = out.files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\probe\result.xlsx"))
+                .expect("the complete positive Native program saves its output");
+            let actual_records = records(&saved.bytes);
+            if actual_records != saved_records[mode] {
+                failures.push(format!("probe 205/{mode} saved records: {:?} != {:?}", actual_records, saved_records[mode]));
+            }
+        }
+        assert!(failures.is_empty(), "{} full Native conditions or saved records differ:\\n{}", failures.len(), failures.join("\\n"));
+    }
+
+
+    #[test]
+    fn native_row_column_cache_ownership_controls_match_excel() {
+        use std::io::Read;
+        type Records = (f32, bool, Vec<(u32, Option<f32>, bool)>, Option<f64>, Vec<(u32, Option<f64>)>);
+        fn records(bytes: &[u8]) -> Records {
+            let book = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+            let sheet = &book.sheets[0];
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut xml = String::new();
+            archive.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+            let mut reader = quick_xml::NsReader::from_str(&xml);
+            let mut default = None;
+            let mut rows = Vec::new();
+            loop {
+                let (namespace, event) = reader.read_resolved_event().unwrap();
+                match event {
+                    quick_xml::events::Event::Start(tag) | quick_xml::events::Event::Empty(tag) => {
+                        if !matches!(namespace, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.openxmlformats.org/spreadsheetml/2006/main") { continue; }
+                        let mut descent = None;
+                        for attribute in tag.attributes() {
+                            let attribute = attribute.unwrap();
+                            let (ns, local) = reader.resolve_attribute(attribute.key);
+                            if local.as_ref() == b"dyDescent" && matches!(ns, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac") {
+                                assert!(descent.is_none());
+                                descent = Some(attribute.unescape_value().unwrap().parse::<f64>().unwrap());
+                            }
+                        }
+                        if tag.local_name().as_ref() == b"sheetFormatPr" { default = descent; }
+                        else if tag.local_name().as_ref() == b"row" {
+                            let row = tag.try_get_attribute("r").unwrap().unwrap().unescape_value().unwrap().parse::<u32>().unwrap();
+                            rows.push((row, descent));
+                        }
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            (sheet.default_row_height, sheet.default_row_custom,
+             sheet.rows.iter().filter(|row| row.height.is_some() || row.custom_height)
+                 .map(|row| (row.index, row.height, row.custom_height)).collect(), default, rows)
+        }
+        let original = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        const CODE: &str = r######"Attribute VB_Name = "DrawingIdentityProbe"
+Option Explicit
+Private Function H(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  H = H & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+Private Function V(ByVal item As Variant) As String
+ If IsNull(item) Then
+  V = CStr(VarType(item)) & ":NULL"
+ Else
+  V = CStr(VarType(item)) & ":" & CStr(item)
+ End If
+End Function
+Private Function State(ByVal ws As Worksheet) As String
+ Dim i As Long, text As String
+ text = "NF=" & ws.Parent.Styles("Normal").Font.Name & ";NS=" & V(ws.Parent.Styles("Normal").Font.Size)
+ text = text & ";SH=" & V(ws.StandardHeight) & ";ALL=" & V(ws.Rows.RowHeight) & ";STD=" & V(ws.Rows.UseStandardHeight)
+ text = text & ";USED=" & ws.UsedRange.Address
+ For i = 1 To 12
+  text = text & ";R" & CStr(i) & "=" & V(ws.Rows(i).RowHeight) & "," & V(ws.Rows(i).UseStandardHeight) & "," & V(ws.Rows(i).Top)
+ Next i
+ text = text & ";B2=" & V(ws.Range("B2").Value2) & "," & V(ws.Range("B2").Font.Size) & "," & ws.Range("B2").Font.Name
+ text = text & ";B9=" & V(ws.Range("B9").Value2) & "," & V(ws.Range("B9").Font.Size) & "," & ws.Range("B9").Font.Name
+ State = text
+End Function
+Private Sub RowFont(ByVal ws As Worksheet, ByVal face As String)
+ ws.Rows(2).Font.Name = face
+ ws.Rows(2).Font.Size = 13
+End Sub
+Private Sub ColumnFont(ByVal ws As Worksheet, ByVal points As Long)
+ ws.Columns("B").Font.Name = "Arial"
+ ws.Columns("B").Font.Size = points
+End Sub
+Public Function Measure(ByVal inputPath As String, ByVal outputPath As String, ByVal unused1 As String, ByVal unused2 As String, ByVal mode As Long) As String
+ Dim sourceBook As Workbook, wb As Workbook, ws As Worksheet, text As String
+ Dim normalSize As Long, columnSize As Long, face As String
+ On Error GoTo Failed
+ Set sourceBook = Workbooks.Open(inputPath, UpdateLinks:=0)
+ Set wb = Workbooks.Add
+ wb.Styles("Normal").Font.Name = "Aptos Narrow"
+ normalSize = 11
+ If mode >= 16 Then normalSize = 32
+ wb.Styles("Normal").Font.Size = normalSize
+ Set ws = wb.Worksheets(1)
+ ws.Range("B2").Value2 = "x"
+ face = "Arial"
+ If (mode Mod 8) >= 4 Then face = ChrW(28216) & ChrW(12468) & ChrW(12471) & ChrW(12483) & ChrW(12463)
+ columnSize = 16
+ If (mode Mod 4) >= 2 Then columnSize = 26
+ text = "LIVE|BEFORE|" & State(ws)
+ If (mode Mod 2) = 0 Then
+  RowFont ws, face
+  text = text & "|FIRST-ROW|" & State(ws)
+  ColumnFont ws, columnSize
+ Else
+  ColumnFont ws, columnSize
+  text = text & "|FIRST-COLUMN|" & State(ws)
+  RowFont ws, face
+ End If
+ text = text & "|BANDS|" & State(ws)
+ If (mode Mod 16) >= 8 Then ws.Rows.RowHeight = 22
+ text = text & "|MANUAL|" & State(ws)
+ wb.SaveAs outputPath, 51
+ text = text & "|SAVED|" & State(ws)
+ Set ws = Nothing
+ sourceBook.Close False
+ Set sourceBook = Nothing
+ wb.Close False
+ Set wb = Workbooks.Open(outputPath, UpdateLinks:=0)
+ Set ws = wb.Worksheets(1)
+ text = text & "|REOPEN|" & State(ws)
+ wb.Styles("Normal").Font.Size = normalSize + 4
+ text = text & "|NORMAL-GROW|" & State(ws)
+ Set ws = Nothing
+ wb.Close False
+ Measure = H(text)
+ Exit Function
+Failed:
+ text = text & "|ERROR|" & CStr(Err.Number) & "|" & Err.Description
+ On Error Resume Next
+ If Not wb Is Nothing Then wb.Close False
+ If Not sourceBook Is Nothing Then sourceBook.Close False
+ Measure = H(text)
+End Function
+"######;
+        let expected: Vec<String> = serde_json::from_slice(&cold_cache_native_fixture_file("native206/expected.json")).unwrap();
+        let saved_records: Vec<Records> = serde_json::from_slice(&cold_cache_native_fixture_file("native206/records.json")).unwrap();
+        assert_eq!(expected.len(), 32);
+        assert_eq!(saved_records.len(), 32);
+        let mut failures = Vec::new();
+        for mode in 0..32 {
+            let mut context = failure_context();
+            context.file_name = Some("source.xlsm".into());
+            context.application_state = Some(VbaApplicationState { standard_font_startup: Some(VbaStandardFontStartup {
+                profile_utf16: Some(vec![28216,12468,12471,12483,12463,44,49,49]) }), ..Default::default() });
+            context.file_context = Some(file_io::FileContext {
+                full_name: Some(r"C:\probe\source.xlsm".into()), package_bytes: Some(original.to_vec()), read_only: Some(true),
+                folders: vec![r"C:\probe".into()], files: vec![file_io::ProducedFile { path: r"C:\probe\input.xlsm".into(), bytes: original.to_vec() }],
+                ..Default::default() });
+            let out = execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(original).unwrap(), CODE,
+                Some("DrawingIdentityProbe.Measure"), vec![Value::String(r"C:\probe\input.xlsm".into()),
+                    Value::String(r"C:\probe\result.xlsx".into()), Value::String(String::new()), Value::String(String::new()),
+                    Value::Integer(mode as i64)], 0, context, &mut None).unwrap();
+            if let Some(error) = &out.error { failures.push(format!("probe 206/{mode}: {}", error.message)); continue; }
+            let wire = serde_json::to_value(&out.result).unwrap();
+            let hex = wire["value"].as_str().unwrap();
+            let units = (0..hex.len()).step_by(4).map(|at| u16::from_str_radix(&hex[at..at + 4], 16).unwrap()).collect::<Vec<_>>();
+            let actual = String::from_utf16(&units).unwrap();
+            if actual != expected[mode] {
+                let offset = actual.chars().zip(expected[mode].chars()).position(|(a,b)| a != b).unwrap_or_else(|| actual.chars().count().min(expected[mode].chars().count()));
+                let fragment = |text: &str| text.chars().skip(offset.saturating_sub(50)).take(180).collect::<String>();
+                failures.push(format!("probe 206/{mode}: actual {:?}; expected {:?}", fragment(&actual), fragment(&expected[mode])));
+            }
+            let saved = out.files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\probe\result.xlsx"))
+                .expect("the complete positive Native program saves its output");
+            let actual_records = records(&saved.bytes);
+            if actual_records != saved_records[mode] {
+                failures.push(format!("probe 206/{mode} saved records: {:?} != {:?}", actual_records, saved_records[mode]));
+            }
+        }
+        assert!(failures.is_empty(), "{} full Native conditions or saved records differ:\\n{}", failures.len(), failures.join("\\n"));
+    }
+
+
+    #[test]
+    fn used_range_cache_cleanup_preserves_opaque_allocations() {
+        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac" xmlns:q="urn:opaque"><sheetData><row r="2" ht="21.95" customHeight="1" s="1" customFormat="1" ac:dyDescent="0.4"><c r="B2" s="2"/></row><row r="3" ht="21.95" customHeight="1" q:keep="a&amp;b"><c r="B3" s="2"/></row><row r="4" ht="21.95" customHeight="1"><c r="B4" s="2" q:keep="a&amp;b"/></row><row r="5" ht="21.95" customHeight="1"><q:payload/></row></sheetData></worksheet>"#;
+        let cells = ["B2", "B3", "B4", "B6"].into_iter().map(str::to_string).collect();
+        let rows = [2, 3, 4, 5, 6].into_iter().collect();
+        let (allowed_cells, allowed_rows) = file_io::WorkbookFiles::cached_allocations_xml(xml, &cells, &rows).unwrap();
+        assert_eq!(allowed_cells, ["B2", "B3", "B6"].into_iter().map(str::to_string).collect());
+        assert_eq!(allowed_rows, [2, 6].into_iter().collect());
+    }
+
+
+
+    #[test]
+    fn native_column_width_history_controls_match_excel() {
+        use std::io::Read;
+        type Records = (f32, bool, Vec<(u32, Option<f32>, bool)>, Option<f64>, Vec<(u32, Option<f64>)>);
+        fn records(bytes: &[u8]) -> Records {
+            let book = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+            let sheet = &book.sheets[0];
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut xml = String::new();
+            archive.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+            let mut reader = quick_xml::NsReader::from_str(&xml);
+            let mut default = None;
+            let mut rows = Vec::new();
+            loop {
+                let (namespace, event) = reader.read_resolved_event().unwrap();
+                match event {
+                    quick_xml::events::Event::Start(tag) | quick_xml::events::Event::Empty(tag) => {
+                        if !matches!(namespace, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.openxmlformats.org/spreadsheetml/2006/main") { continue; }
+                        let mut descent = None;
+                        for attribute in tag.attributes() {
+                            let attribute = attribute.unwrap();
+                            let (ns, local) = reader.resolve_attribute(attribute.key);
+                            if local.as_ref() == b"dyDescent" && matches!(ns, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac") {
+                                assert!(descent.is_none());
+                                descent = Some(attribute.unescape_value().unwrap().parse::<f64>().unwrap());
+                            }
+                        }
+                        if tag.local_name().as_ref() == b"sheetFormatPr" { default = descent; }
+                        else if tag.local_name().as_ref() == b"row" {
+                            let row = tag.try_get_attribute("r").unwrap().unwrap().unescape_value().unwrap().parse::<u32>().unwrap();
+                            rows.push((row, descent));
+                        }
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            (sheet.default_row_height, sheet.default_row_custom,
+             sheet.rows.iter().filter(|row| row.height.is_some() || row.custom_height)
+                 .map(|row| (row.index, row.height, row.custom_height)).collect(), default, rows)
+        }
+        let original = include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
+        const CODE: &str = r######"Attribute VB_Name = "DrawingIdentityProbe"
+Option Explicit
+Private Function H(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  H = H & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+Private Function V(ByVal item As Variant) As String
+ If IsNull(item) Then
+  V = CStr(VarType(item)) & ":NULL"
+ ElseIf IsError(item) Then
+  V = CStr(VarType(item)) & ":ERROR"
+ Else
+  V = CStr(VarType(item)) & ":" & CStr(item)
+ End If
+End Function
+Private Function State(ByVal ws As Worksheet, ByVal readStandard As Boolean) As String
+ Dim text As String, answer As Variant, i As Long
+ text = "NF=" & ws.Parent.Styles("Normal").Font.Name & ";NS=" & V(ws.Parent.Styles("Normal").Font.Size)
+ text = text & ";CW=" & V(ws.Columns("D").ColumnWidth) & ";WIDTH=" & V(ws.Columns("D").Width)
+ text = text & ";STD=" & V(ws.Columns("D").UseStandardWidth) & ";VALUE=" & V(ws.Range("D1").Value2)
+ text = text & ";CW12=" & CStr(ws.Columns("D").ColumnWidth * 1000000000000#)
+ answer = ws.Evaluate("CELL(""width"",D1)")
+ text = text & ";CELL=" & TypeName(answer)
+ If IsArray(answer) Then
+  For i = LBound(answer) To UBound(answer)
+   text = text & "," & V(answer(i))
+  Next i
+ Else
+  text = text & "," & V(answer)
+ End If
+ If readStandard Then
+  text = text & ";SW=" & V(ws.StandardWidth) & ";SW12=" & CStr(ws.StandardWidth * 1000000000000#)
+ End If
+ State = text
+End Function
+Public Function Measure(ByVal inputPath As String, ByVal outputPath As String, ByVal unused1 As String, ByVal unused2 As String, ByVal mode As Long) As String
+ Dim sourceBook As Workbook, wb As Workbook, ws As Worksheet, text As String, scenario As Long
+ On Error GoTo Failed
+ Set sourceBook = Workbooks.Open(inputPath, UpdateLinks:=0)
+ If mode >= 16 Then
+  Set wb = sourceBook
+ Else
+  Set wb = Workbooks.Add
+  wb.Styles("Normal").Font.Name = "Aptos Narrow"
+  wb.Styles("Normal").Font.Size = 11
+ End If
+ Set ws = wb.Worksheets(1)
+ ws.Range("D1").Value2 = 12345678
+ If (mode Mod 16) >= 8 Then ws.Columns("D").ColumnWidth = 12
+ scenario = mode Mod 8
+ text = "LIVE|BEFORE|" & State(ws, False)
+ Select Case scenario
+ Case 1
+  ws.Columns("D").ColumnWidth = 8.43
+ Case 2
+  ws.Columns("D").ColumnWidth = ws.StandardWidth
+ Case 3
+  ws.Columns("D").ColumnWidth = ws.Columns("D").ColumnWidth
+ Case 4
+  ws.Columns("D").ColumnWidth = 8.42578125
+ Case 5
+  ws.Columns("D").ColumnWidth = 8.4296875
+ Case 6
+  ws.Columns("D").UseStandardWidth = True
+  ws.Columns("D").ColumnWidth = ws.StandardWidth
+ Case 7
+  ws.Columns("D").ColumnWidth = 8.43
+  ws.Columns("D").UseStandardWidth = True
+ End Select
+ text = text & "|EDIT|" & State(ws, False)
+ text = text & "|STANDARDREAD|" & State(ws, True)
+ wb.SaveAs outputPath, 51
+ text = text & "|SAVED|" & State(ws, True)
+ Set ws = Nothing
+ If Not (wb Is sourceBook) Then sourceBook.Close False
+ Set sourceBook = Nothing
+ wb.Close False
+ Set wb = Workbooks.Open(outputPath, UpdateLinks:=0)
+ Set ws = wb.Worksheets(1)
+ text = text & "|REOPEN|" & State(ws, True)
+ ws.Range("D1").Font.Size = 26
+ text = text & "|GROW|" & State(ws, True)
+ Set ws = Nothing
+ wb.Close False
+ Measure = H(text)
+ Exit Function
+Failed:
+ text = text & "|ERROR|" & CStr(Err.Number) & "|" & Err.Description
+ On Error Resume Next
+ If Not wb Is Nothing Then wb.Close False
+ If Not sourceBook Is Nothing Then sourceBook.Close False
+ Measure = H(text)
+End Function
+"######;
+        let expected: Vec<String> = serde_json::from_slice(&cold_cache_native_fixture_file("native200/expected.json")).unwrap();
+        let saved_records: Vec<Records> = serde_json::from_slice(&cold_cache_native_fixture_file("native200/records.json")).unwrap();
+        assert_eq!(expected.len(), 32);
+        assert_eq!(saved_records.len(), 32);
+        let mut failures = Vec::new();
+        for mode in 0..32 {
+            let mut context = failure_context();
+            context.file_name = Some("source.xlsm".into());
+            context.application_state = Some(VbaApplicationState { standard_font_startup: Some(VbaStandardFontStartup {
+                profile_utf16: Some(vec![28216,12468,12471,12483,12463,44,49,49]) }), ..Default::default() });
+            context.file_context = Some(file_io::FileContext {
+                full_name: Some(r"C:\probe\source.xlsm".into()), package_bytes: Some(original.to_vec()), read_only: Some(true),
+                folders: vec![r"C:\probe".into()], files: vec![file_io::ProducedFile { path: r"C:\probe\input.xlsm".into(), bytes: original.to_vec() }],
+                ..Default::default() });
+            let out = execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(original).unwrap(), CODE,
+                Some("DrawingIdentityProbe.Measure"), vec![Value::String(r"C:\probe\input.xlsm".into()),
+                    Value::String(r"C:\probe\result.xlsx".into()), Value::String(String::new()), Value::String(String::new()),
+                    Value::Integer(mode as i64)], 0, context, &mut None).unwrap();
+            if let Some(error) = &out.error { failures.push(format!("probe 200/{mode}: {}", error.message)); continue; }
+            let wire = serde_json::to_value(&out.result).unwrap();
+            let hex = wire["value"].as_str().unwrap();
+            let units = (0..hex.len()).step_by(4).map(|at| u16::from_str_radix(&hex[at..at + 4], 16).unwrap()).collect::<Vec<_>>();
+            let actual = String::from_utf16(&units).unwrap();
+            if actual != expected[mode] {
+                let offset = actual.chars().zip(expected[mode].chars()).position(|(a,b)| a != b).unwrap_or_else(|| actual.chars().count().min(expected[mode].chars().count()));
+                let fragment = |text: &str| text.chars().skip(offset.saturating_sub(50)).take(180).collect::<String>();
+                failures.push(format!("probe 200/{mode}: actual {:?}; expected {:?}", fragment(&actual), fragment(&expected[mode])));
+            }
+            let saved = out.files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\probe\result.xlsx"))
+                .expect("the complete positive Native program saves its output");
+            let actual_records = records(&saved.bytes);
+            if actual_records != saved_records[mode] {
+                failures.push(format!("probe 200/{mode} saved records: {:?} != {:?}", actual_records, saved_records[mode]));
+            }
+        }
+        assert!(failures.is_empty(), "{} full Native conditions or saved records differ:\\n{}", failures.len(), failures.join("\\n"));
+    }
+
+
+    #[test]
+    fn native_cold_band_intent_controls_match_excel() {
+        use std::io::Read;
+        type Records = (f32, bool, Vec<(u32, Option<f32>, bool)>, Option<f64>, Vec<(u32, Option<f64>)>);
+        fn records(bytes: &[u8]) -> Records {
+            let book = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+            let sheet = &book.sheets[0];
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut xml = String::new();
+            archive.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+            let mut reader = quick_xml::NsReader::from_str(&xml);
+            let mut default = None;
+            let mut rows = Vec::new();
+            loop {
+                let (namespace, event) = reader.read_resolved_event().unwrap();
+                match event {
+                    quick_xml::events::Event::Start(tag) | quick_xml::events::Event::Empty(tag) => {
+                        if !matches!(namespace, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.openxmlformats.org/spreadsheetml/2006/main") { continue; }
+                        let mut descent = None;
+                        for attribute in tag.attributes() {
+                            let attribute = attribute.unwrap();
+                            let (ns, local) = reader.resolve_attribute(attribute.key);
+                            if local.as_ref() == b"dyDescent" && matches!(ns, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac") {
+                                assert!(descent.is_none());
+                                descent = Some(attribute.unescape_value().unwrap().parse::<f64>().unwrap());
+                            }
+                        }
+                        if tag.local_name().as_ref() == b"sheetFormatPr" { default = descent; }
+                        else if tag.local_name().as_ref() == b"row" {
+                            let row = tag.try_get_attribute("r").unwrap().unwrap().unescape_value().unwrap().parse::<u32>().unwrap();
+                            rows.push((row, descent));
+                        }
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            (sheet.default_row_height, sheet.default_row_custom,
+             sheet.rows.iter().filter(|row| row.height.is_some() || row.custom_height)
+                 .map(|row| (row.index, row.height, row.custom_height)).collect(), default, rows)
+        }
+        let original = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        const CODE: &str = r######"Attribute VB_Name = "DrawingIdentityProbe"
+Option Explicit
+Private Function H(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  H = H & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+Private Function V(ByVal item As Variant) As String
+ If IsNull(item) Then
+  V = CStr(VarType(item)) & ":NULL"
+ Else
+  V = CStr(VarType(item)) & ":" & CStr(item)
+ End If
+End Function
+Private Function State(ByVal ws As Worksheet) As String
+ Dim i As Long, text As String
+ text = "NF=" & ws.Parent.Styles("Normal").Font.Name & ";NS=" & V(ws.Parent.Styles("Normal").Font.Size)
+ text = text & ";SH=" & V(ws.StandardHeight) & ";ALL=" & V(ws.Rows.RowHeight) & ";STD=" & V(ws.Rows.UseStandardHeight)
+ text = text & ";USED=" & ws.UsedRange.Address
+ For i = 1 To 12
+  text = text & ";R" & CStr(i) & "=" & V(ws.Rows(i).RowHeight) & "," & V(ws.Rows(i).UseStandardHeight) & "," & V(ws.Rows(i).Top)
+ Next i
+ text = text & ";B2=" & V(ws.Range("B2").Value2) & "," & V(ws.Range("B2").Font.Size) & "," & ws.Range("B2").Font.Name
+ text = text & ";B9=" & V(ws.Range("B9").Value2) & "," & V(ws.Range("B9").Font.Size) & "," & ws.Range("B9").Font.Name
+ State = text
+End Function
+Public Function Measure(ByVal inputPath As String, ByVal outputPath As String, ByVal unused1 As String, ByVal unused2 As String, ByVal mode As Long) As String
+ Dim sourceBook As Workbook, wb As Workbook, ws As Worksheet, text As String
+ Dim targetRow As Long, rowKind As Long
+ On Error GoTo Failed
+ Set sourceBook = Workbooks.Open(inputPath, UpdateLinks:=0)
+ Set wb = Workbooks.Add
+ Set ws = wb.Worksheets(1)
+ targetRow = 2
+ If mode >= 16 Then targetRow = 9
+ rowKind = (mode Mod 16) \ 4
+ text = "LIVE|BEFORE|" & State(ws)
+ Select Case rowKind
+ Case 1
+  ws.Rows(targetRow).Font.Size = wb.Styles("Normal").Font.Size
+ Case 2
+  ws.Rows(targetRow).Font.Size = 13
+ Case 3
+  ws.Rows(targetRow).Style = "Normal"
+ End Select
+ text = text & "|ROW|" & State(ws)
+ ws.Rows.RowHeight = 22
+ text = text & "|MANUAL|" & State(ws)
+ If (mode Mod 4) >= 2 Then
+  ws.Columns("B").Font.Name = "Arial"
+  ws.Columns("B").Font.Size = 16
+ End If
+ text = text & "|COLUMN|" & State(ws)
+ If (mode Mod 2) = 1 Then ws.Cells(targetRow, 2).Font.Size = ws.Cells(targetRow, 2).Font.Size
+ text = text & "|POINT|" & State(ws)
+ wb.SaveAs outputPath, 51
+ text = text & "|SAVED|" & State(ws)
+ Set ws = Nothing
+ If Not (wb Is sourceBook) Then sourceBook.Close False
+ Set sourceBook = Nothing
+ wb.Close False
+ Set wb = Workbooks.Open(outputPath, UpdateLinks:=0)
+ Set ws = wb.Worksheets(1)
+ text = text & "|REOPEN|" & State(ws)
+ wb.Styles("Normal").Font.Size = 32
+ text = text & "|NORMAL32|" & State(ws)
+ Set ws = Nothing
+ wb.Close False
+ Measure = H(text)
+ Exit Function
+Failed:
+ text = text & "|ERROR|" & CStr(Err.Number) & "|" & Err.Description
+ On Error Resume Next
+ If Not wb Is Nothing Then wb.Close False
+ If Not sourceBook Is Nothing Then sourceBook.Close False
+ Measure = H(text)
+End Function
+"######;
+        let expected: Vec<String> = serde_json::from_slice(&cold_cache_native_fixture_file("native201/expected.json")).unwrap();
+        let saved_records: Vec<Records> = serde_json::from_slice(&cold_cache_native_fixture_file("native201/records.json")).unwrap();
+        assert_eq!(expected.len(), 32);
+        assert_eq!(saved_records.len(), 32);
+        let mut failures = Vec::new();
+        for mode in 0..32 {
+            let mut context = failure_context();
+            context.file_name = Some("source.xlsm".into());
+            context.application_state = Some(VbaApplicationState { standard_font_startup: Some(VbaStandardFontStartup {
+                profile_utf16: Some(vec![28216,12468,12471,12483,12463,44,49,49]) }), ..Default::default() });
+            context.file_context = Some(file_io::FileContext {
+                full_name: Some(r"C:\probe\source.xlsm".into()), package_bytes: Some(original.to_vec()), read_only: Some(true),
+                folders: vec![r"C:\probe".into()], files: vec![file_io::ProducedFile { path: r"C:\probe\input.xlsm".into(), bytes: original.to_vec() }],
+                ..Default::default() });
+            let out = execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(original).unwrap(), CODE,
+                Some("DrawingIdentityProbe.Measure"), vec![Value::String(r"C:\probe\input.xlsm".into()),
+                    Value::String(r"C:\probe\result.xlsx".into()), Value::String(String::new()), Value::String(String::new()),
+                    Value::Integer(mode as i64)], 0, context, &mut None).unwrap();
+            if let Some(error) = &out.error { failures.push(format!("probe 201/{mode}: {}", error.message)); continue; }
+            let wire = serde_json::to_value(&out.result).unwrap();
+            let hex = wire["value"].as_str().unwrap();
+            let units = (0..hex.len()).step_by(4).map(|at| u16::from_str_radix(&hex[at..at + 4], 16).unwrap()).collect::<Vec<_>>();
+            let actual = String::from_utf16(&units).unwrap();
+            if actual != expected[mode] {
+                let offset = actual.chars().zip(expected[mode].chars()).position(|(a,b)| a != b).unwrap_or_else(|| actual.chars().count().min(expected[mode].chars().count()));
+                let fragment = |text: &str| text.chars().skip(offset.saturating_sub(50)).take(180).collect::<String>();
+                failures.push(format!("probe 201/{mode}: actual {:?}; expected {:?}", fragment(&actual), fragment(&expected[mode])));
+            }
+            let saved = out.files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\probe\result.xlsx"))
+                .expect("the complete positive Native program saves its output");
+            let actual_records = records(&saved.bytes);
+            if actual_records != saved_records[mode] {
+                failures.push(format!("probe 201/{mode} saved records: {:?} != {:?}", actual_records, saved_records[mode]));
+            }
+        }
+        assert!(failures.is_empty(), "{} full Native conditions or saved records differ:\\n{}", failures.len(), failures.join("\\n"));
+    }
+
+
+    #[test]
+    fn native_saved_font_cache_controls_match_excel() {
+        use std::io::Read;
+        type Records = (f32, bool, Vec<(u32, Option<f32>, bool)>, Option<f64>, Vec<(u32, Option<f64>)>);
+        fn records(bytes: &[u8]) -> Records {
+            let book = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+            let sheet = &book.sheets[0];
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut xml = String::new();
+            archive.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+            let mut reader = quick_xml::NsReader::from_str(&xml);
+            let mut default = None;
+            let mut rows = Vec::new();
+            loop {
+                let (namespace, event) = reader.read_resolved_event().unwrap();
+                match event {
+                    quick_xml::events::Event::Start(tag) | quick_xml::events::Event::Empty(tag) => {
+                        if !matches!(namespace, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.openxmlformats.org/spreadsheetml/2006/main") { continue; }
+                        let mut descent = None;
+                        for attribute in tag.attributes() {
+                            let attribute = attribute.unwrap();
+                            let (ns, local) = reader.resolve_attribute(attribute.key);
+                            if local.as_ref() == b"dyDescent" && matches!(ns, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac") {
+                                assert!(descent.is_none());
+                                descent = Some(attribute.unescape_value().unwrap().parse::<f64>().unwrap());
+                            }
+                        }
+                        if tag.local_name().as_ref() == b"sheetFormatPr" { default = descent; }
+                        else if tag.local_name().as_ref() == b"row" {
+                            let row = tag.try_get_attribute("r").unwrap().unwrap().unescape_value().unwrap().parse::<u32>().unwrap();
+                            rows.push((row, descent));
+                        }
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            (sheet.default_row_height, sheet.default_row_custom,
+             sheet.rows.iter().filter(|row| row.height.is_some() || row.custom_height)
+                 .map(|row| (row.index, row.height, row.custom_height)).collect(), default, rows)
+        }
+        let original = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        const CODE: &str = r######"Attribute VB_Name = "DrawingIdentityProbe"
+Option Explicit
+Private Function H(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  H = H & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+Private Function V(ByVal item As Variant) As String
+ If IsNull(item) Then
+  V = CStr(VarType(item)) & ":NULL"
+ Else
+  V = CStr(VarType(item)) & ":" & CStr(item)
+ End If
+End Function
+Private Function State(ByVal ws As Worksheet) As String
+ Dim i As Long, text As String
+ text = "NF=" & V(ws.Parent.Styles("Normal").Font.Name) & ";NS=" & V(ws.Parent.Styles("Normal").Font.Size)
+ text = text & ";NB=" & V(ws.Parent.Styles("Normal").Font.Bold) & ";NI=" & V(ws.Parent.Styles("Normal").Font.Italic)
+ text = text & ";SH=" & V(ws.StandardHeight) & ";ALL=" & V(ws.Rows.RowHeight) & ";STD=" & V(ws.Rows.UseStandardHeight)
+ text = text & ";USED=" & ws.UsedRange.Address
+ text = text & ";CF=" & V(ws.Columns("B").Font.Name) & "," & V(ws.Columns("B").Font.Size)
+ For i = 1 To 3
+  text = text & ";R" & CStr(i) & "=" & V(ws.Rows(i).RowHeight) & "," & V(ws.Rows(i).UseStandardHeight) & "," & V(ws.Rows(i).Top)
+  text = text & ";B" & CStr(i) & "=" & V(ws.Cells(i, 2).Value2) & "," & V(ws.Cells(i, 2).Font.Name) & "," & V(ws.Cells(i, 2).Font.Size)
+  text = text & "," & V(ws.Cells(i, 2).Font.Bold) & "," & V(ws.Cells(i, 2).Font.Italic)
+ Next i
+ State = text
+End Function
+Public Function Measure(ByVal inputPath As String, ByVal outputPath As String, ByVal unused1 As String, ByVal unused2 As String, ByVal mode As Long) As String
+ Dim sourceBook As Workbook, wb As Workbook, ws As Worksheet, text As String
+ Dim face As String, points As Double, kind As Long, targetFont As Object
+ On Error GoTo Failed
+ Set sourceBook = Workbooks.Open(inputPath, UpdateLinks:=0)
+ Set wb = Workbooks.Add
+ Set ws = wb.Worksheets(1)
+ wb.Styles("Normal").Font.Name = "Aptos Narrow"
+ wb.Styles("Normal").Font.Size = 11
+ wb.Styles("Normal").Font.Bold = False
+ wb.Styles("Normal").Font.Italic = False
+ ws.Range("B2").Value2 = "x"
+ ws.Range("B3").Value2 = "x"
+ ws.Rows(2).RowHeight = 22
+ face = "Calibri"
+ points = 26
+ If mode >= 16 Then
+  face = "Yu Gothic"
+  points = 16
+ End If
+ kind = (mode Mod 16) \ 4
+ Select Case kind
+ Case 0: Set targetFont = wb.Styles("Normal").Font
+ Case 1: Set targetFont = ws.Columns("B").Font
+ Case 2: Set targetFont = ws.Rows(2).Font
+ Case 3: Set targetFont = ws.Range("B2").Font
+ End Select
+ text = "LIVE|BEFORE|" & State(ws)
+ targetFont.Name = face
+ targetFont.Size = points
+ targetFont.Bold = ((mode Mod 2) = 1)
+ targetFont.Italic = ((mode Mod 4) >= 2)
+ text = text & "|FONT|" & State(ws)
+ wb.SaveAs outputPath, 51
+ text = text & "|SAVED|" & State(ws)
+ Set targetFont = Nothing
+ Set ws = Nothing
+ If Not (wb Is sourceBook) Then sourceBook.Close False
+ Set sourceBook = Nothing
+ wb.Close False
+ Set wb = Workbooks.Open(outputPath, UpdateLinks:=0)
+ Set ws = wb.Worksheets(1)
+ text = text & "|REOPEN|" & State(ws)
+ wb.Styles("Normal").Font.Name = "Arial"
+ wb.Styles("Normal").Font.Size = 32
+ text = text & "|NORMAL32|" & State(ws)
+ Set ws = Nothing
+ wb.Close False
+ Measure = H(text)
+ Exit Function
+Failed:
+ text = text & "|ERROR|" & CStr(Err.Number) & "|" & Err.Description
+ On Error Resume Next
+ If Not wb Is Nothing Then wb.Close False
+ If Not sourceBook Is Nothing Then sourceBook.Close False
+ Measure = H(text)
+End Function
+"######;
+        let expected: Vec<String> = serde_json::from_slice(&cold_cache_native_fixture_file("native202/expected.json")).unwrap();
+        let saved_records: Vec<Records> = serde_json::from_slice(&cold_cache_native_fixture_file("native202/records.json")).unwrap();
+        assert_eq!(expected.len(), 32);
+        assert_eq!(saved_records.len(), 32);
+        let mut failures = Vec::new();
+        for mode in 0..32 {
+            let mut context = failure_context();
+            context.file_name = Some("source.xlsm".into());
+            context.application_state = Some(VbaApplicationState { standard_font_startup: Some(VbaStandardFontStartup {
+                profile_utf16: Some(vec![28216,12468,12471,12483,12463,44,49,49]) }), ..Default::default() });
+            context.file_context = Some(file_io::FileContext {
+                full_name: Some(r"C:\probe\source.xlsm".into()), package_bytes: Some(original.to_vec()), read_only: Some(true),
+                folders: vec![r"C:\probe".into()], files: vec![file_io::ProducedFile { path: r"C:\probe\input.xlsm".into(), bytes: original.to_vec() }],
+                ..Default::default() });
+            let out = execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(original).unwrap(), CODE,
+                Some("DrawingIdentityProbe.Measure"), vec![Value::String(r"C:\probe\input.xlsm".into()),
+                    Value::String(r"C:\probe\result.xlsx".into()), Value::String(String::new()), Value::String(String::new()),
+                    Value::Integer(mode as i64)], 0, context, &mut None).unwrap();
+            if let Some(error) = &out.error { failures.push(format!("probe 202/{mode}: {}", error.message)); continue; }
+            let wire = serde_json::to_value(&out.result).unwrap();
+            let hex = wire["value"].as_str().unwrap();
+            let units = (0..hex.len()).step_by(4).map(|at| u16::from_str_radix(&hex[at..at + 4], 16).unwrap()).collect::<Vec<_>>();
+            let actual = String::from_utf16(&units).unwrap();
+            if actual != expected[mode] {
+                let offset = actual.chars().zip(expected[mode].chars()).position(|(a,b)| a != b).unwrap_or_else(|| actual.chars().count().min(expected[mode].chars().count()));
+                let fragment = |text: &str| text.chars().skip(offset.saturating_sub(50)).take(180).collect::<String>();
+                failures.push(format!("probe 202/{mode}: actual {:?}; expected {:?}", fragment(&actual), fragment(&expected[mode])));
+            }
+            let saved = out.files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\probe\result.xlsx"))
+                .expect("the complete positive Native program saves its output");
+            let actual_records = records(&saved.bytes);
+            if actual_records != saved_records[mode] {
+                failures.push(format!("probe 202/{mode} saved records: {:?} != {:?}", actual_records, saved_records[mode]));
+            }
+        }
+        assert!(failures.is_empty(), "{} full Native conditions or saved records differ:\\n{}", failures.len(), failures.join("\\n"));
+    }
+
+
 
     #[test]
     fn byte_string_host_boundaries_match_excel() {
@@ -53214,6 +55084,231 @@ End Function
         }
     }
 
+
+    #[test]
+    fn first_physical_row_and_manual_copy_history_match_native_excel() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        const CODE:&str=r####"Attribute VB_Name = "DrawingIdentityProbe"
+Option Explicit
+Private Function H(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  H = H & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+Private Function State(ByVal sourceWs As Worksheet, ByVal targetWs As Worksheet) As String
+ Dim index As Variant, address As Variant, edge As Variant, cell As Range
+ State = "SOURCESTD=" & CStr(sourceWs.StandardHeight) & ";TARGETSTD=" & CStr(targetWs.StandardHeight)
+ For Each index In Array(1, 2, 3, 5, 6, 9, 12)
+  State = State & ";R" & CStr(index) & "=" & CStr(targetWs.Rows(index).RowHeight) & "," & CStr(targetWs.Rows(index).Top) & "," & CStr(targetWs.Rows(index).UseStandardHeight) & "," & CStr(targetWs.Rows(index).Hidden)
+ Next index
+ For Each address In Array("A1", "A2", "B2", "A5", "B5", "A9", "B9", "A12", "B12", "C5", "XFD5")
+  Set cell = targetWs.Range(address)
+  State = State & ";" & CStr(address) & "=" & CStr(cell.Value2) & "," & cell.Font.Name & "," & CStr(cell.Font.Size) & "," & CStr(cell.Interior.Color) & "," & CStr(cell.NumberFormat) & "," & CStr(cell.WrapText) & "," & CStr(cell.Locked) & "," & CStr(cell.Style)
+  For Each edge In Array(7, 8, 9, 10)
+   State = State & ":" & CStr(edge) & "=" & CStr(cell.Borders(edge).LineStyle) & "," & CStr(cell.Borders(edge).Weight)
+  Next edge
+ Next address
+End Function
+Public Function Measure(ByVal inputPath As String, ByVal outputPath As String, ByVal unused1 As String, ByVal unused2 As String, ByVal mode As Long) As String
+ Dim wb As Workbook, sourceWs As Worksheet, targetWs As Worksheet, text As String, baseHeight As Double, sourceRow As Long, scenario As Long
+ On Error GoTo Failed
+ Set wb = Workbooks.Add
+ If mode < 8 Then wb.Styles("Normal").Font.Name = "Aptos Narrow" Else wb.Styles("Normal").Font.Name = "Arial"
+ Set sourceWs = wb.Worksheets(1)
+ sourceWs.Name = "Source"
+ Set targetWs = sourceWs
+ sourceRow = 2
+ If (mode \ 4) Mod 2 = 1 Then sourceRow = 9
+ scenario = mode Mod 4
+ sourceWs.Rows(sourceRow).AutoFit
+ baseHeight = sourceWs.Rows(sourceRow).RowHeight
+ sourceWs.Rows.RowHeight = baseHeight
+ sourceWs.Rows(sourceRow).AutoFit
+ If scenario = 3 Then sourceWs.Rows(1).AutoFit
+ text = "LIVE|BEFORE|" & State(sourceWs, targetWs)
+ If scenario = 1 Then sourceWs.Rows(sourceRow).Copy Destination:=sourceWs.Rows(sourceRow + 3)
+ If scenario = 2 Then sourceWs.Rows(sourceRow).Copy Destination:=sourceWs.Rows(1)
+ text = text & "|COPY|" & State(sourceWs, targetWs)
+ wb.SaveAs outputPath, 51
+ text = text & "|SAVED|" & State(sourceWs, targetWs)
+ Set sourceWs = Nothing
+ Set targetWs = Nothing
+ wb.Close False
+ Set wb = Workbooks.Open(outputPath, UpdateLinks:=0)
+ Set sourceWs = wb.Worksheets("Source")
+ Set targetWs = sourceWs
+ text = text & "|REOPEN|" & State(sourceWs, targetWs)
+ wb.Styles("Normal").Font.Size = 32
+ text = text & "|NORMAL32|" & State(sourceWs, targetWs)
+ Set sourceWs = Nothing
+ Set targetWs = Nothing
+ wb.Close False
+ Measure = H(text)
+ Exit Function
+Failed:
+ text = text & "|ERROR|" & CStr(Err.Number) & "|" & Err.Description
+ On Error Resume Next
+ If Not wb Is Nothing Then wb.Close False
+ Measure = H(text)
+End Function
+"####;
+        let expected:Vec<(i64,String)>=serde_json::from_str(r####"[[0, "LIVE|BEFORE|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [1, "LIVE|BEFORE|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,True,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,True,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=42,60,True,False;R6=15,102,False,False;R9=15,147,False,False;R12=15,192,False,False;A1=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [2, "LIVE|BEFORE|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=15;TARGETSTD=15;R1=15,0,True,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=15;TARGETSTD=15;R1=15,0,True,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=42,15,True,False;R3=15,57,False,False;R5=15,87,False,False;R6=15,102,False,False;R9=15,147,False,False;R12=15,192,False,False;A1=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [3, "LIVE|BEFORE|SOURCESTD=15;TARGETSTD=15;R1=15,0,True,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=15;TARGETSTD=15;R1=15,0,True,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=15;TARGETSTD=15;R1=15,0,True,False;R2=15,15,True,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=42,15,True,False;R3=15,57,False,False;R5=15,87,False,False;R6=15,102,False,False;R9=15,147,False,False;R12=15,192,False,False;A1=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [4, "LIVE|BEFORE|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [5, "LIVE|BEFORE|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,True,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,True,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=42,165,True,False;A1=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [6, "LIVE|BEFORE|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=15;TARGETSTD=15;R1=15,0,True,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=15;TARGETSTD=15;R1=15,0,True,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=42,120,True,False;R12=15,192,False,False;A1=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [7, "LIVE|BEFORE|SOURCESTD=15;TARGETSTD=15;R1=15,0,True,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=15;TARGETSTD=15;R1=15,0,True,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=15;TARGETSTD=15;R1=15,0,True,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,True,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=15,120,False,False;R12=15,165,False,False;A1=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=15;TARGETSTD=15;R1=15,0,False,False;R2=15,15,False,False;R3=15,30,False,False;R5=15,60,False,False;R6=15,75,False,False;R9=42,120,True,False;R12=15,192,False,False;A1=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Aptos Narrow,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [8, "LIVE|BEFORE|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [9, "LIVE|BEFORE|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,True,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,True,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=40.5,57,True,False;R6=14.25,97.5,False,False;R9=14.25,140.25,False,False;R12=14.25,183,False,False;A1=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [10, "LIVE|BEFORE|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,True,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,True,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=40.5,14.25,True,False;R3=14.25,54.75,False,False;R5=14.25,83.25,False,False;R6=14.25,97.5,False,False;R9=14.25,140.25,False,False;R12=14.25,183,False,False;A1=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [11, "LIVE|BEFORE|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,True,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,True,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,True,False;R2=14.25,14.25,True,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=40.5,14.25,True,False;R3=14.25,54.75,False,False;R5=14.25,83.25,False,False;R6=14.25,97.5,False,False;R9=14.25,140.25,False,False;R12=14.25,183,False,False;A1=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [12, "LIVE|BEFORE|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [13, "LIVE|BEFORE|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,True,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,True,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=40.5,156.75,True,False;A1=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [14, "LIVE|BEFORE|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,True,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,True,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=40.5,114,True,False;R12=14.25,183,False,False;A1=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"], [15, "LIVE|BEFORE|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,True,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|COPY|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,True,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|SAVED|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,True,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,True,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|REOPEN|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=14.25,114,False,False;R12=14.25,156.75,False,False;A1=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,11,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2|NORMAL32|SOURCESTD=14.25;TARGETSTD=14.25;R1=14.25,0,False,False;R2=14.25,14.25,False,False;R3=14.25,28.5,False,False;R5=14.25,57,False,False;R6=14.25,71.25,False,False;R9=40.5,114,True,False;R12=14.25,183,False,False;A1=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B2=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B9=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;A12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;B12=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;C5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2;XFD5=,Arial,32,16777215,General,False,True,Normal:7=-4142,2:8=-4142,2:9=-4142,2:10=-4142,2"]]"####).unwrap();
+        assert_eq!(expected.len(), 16);
+        let mut failures=Vec::<String>::new();
+        for (mode,expected) in expected {
+            let mut context=failure_context();context.file_name=Some("source.xlsm".into());
+            context.application_state=Some(VbaApplicationState {standard_font_startup:Some(VbaStandardFontStartup {
+                profile_utf16:Some(vec![28216,12468,12471,12483,12463,44,49,49])}),..Default::default()});
+            context.file_context=Some(file_io::FileContext {
+                full_name:Some(r"C:\probe\source.xlsm".into()),package_bytes:Some(original.to_vec()),read_only:Some(true),
+                folders:vec![r"C:\probe".into()],files:vec![file_io::ProducedFile {path:r"C:\probe\input.xlsm".into(),bytes:original.to_vec()}],
+                ..Default::default()});
+            let out=execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(original).unwrap(),
+                CODE,Some("DrawingIdentityProbe.Measure"),vec![Value::String(r"C:\probe\input.xlsm".into()),
+                Value::String(r"C:\probe\result.xlsx".into()),Value::String(String::new()),Value::String(String::new()),
+                Value::Integer(mode)],0,context,&mut None).unwrap();
+            if let Some(error)=out.error.as_ref() {failures.push(format!("probe 198/{mode}: {}",error.message));continue;}
+            assert!(out.files.iter().any(|file|file.path.eq_ignore_ascii_case(r"C:\probe\result.xlsx")),
+                "the complete positive Native program must save its output");
+            let wire=serde_json::to_value(&out.result).unwrap();let hex=wire["value"].as_str().unwrap();
+            let units=(0..hex.len()).step_by(4).map(|at|u16::from_str_radix(&hex[at..at+4],16).unwrap()).collect::<Vec<_>>();
+            let actual=String::from_utf16(&units).unwrap();
+            if actual!=expected {
+                let offset=actual.chars().zip(expected.chars()).position(|(a,b)|a!=b).unwrap_or_else(||actual.chars().count().min(expected.chars().count()));
+                let fragment=|s:&str|s.chars().skip(offset.saturating_sub(50)).take(180).collect::<String>();
+                failures.push(format!("probe 198/{mode}: actual {:?}; expected {:?}",fragment(&actual),fragment(&expected)));
+            }
+        }
+        assert!(failures.is_empty(),"{} full Native conditions differ:\n{}",failures.len(),failures.join("\n"));
+    }
+
+    #[test]
+    fn manual_row_height_records_and_normal_edits_match_native_excel() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        const CODE:&str=r####"Attribute VB_Name = "DrawingIdentityProbe"
+Option Explicit
+Private Function H(ByVal text As String) As String
+ Dim i As Long
+ For i = 1 To Len(text)
+  H = H & Right$("0000" & Hex$(AscW(Mid$(text, i, 1)) And &HFFFF&), 4)
+ Next i
+End Function
+Private Function V(ByVal item As Variant) As String
+ If IsNull(item) Then
+  V = CStr(VarType(item)) & ":NULL"
+ Else
+  V = CStr(VarType(item)) & ":" & CStr(item)
+ End If
+End Function
+Private Function State(ByVal ws As Worksheet) As String
+ Dim i As Long, text As String
+ text = "NF=" & ws.Parent.Styles("Normal").Font.Name & ";NS=" & V(ws.Parent.Styles("Normal").Font.Size)
+ text = text & ";SH=" & V(ws.StandardHeight) & ";ALL=" & V(ws.Rows.RowHeight) & ";STD=" & V(ws.Rows.UseStandardHeight)
+ text = text & ";USED=" & ws.UsedRange.Address
+ For i = 1 To 12
+  text = text & ";R" & CStr(i) & "=" & V(ws.Rows(i).RowHeight) & "," & V(ws.Rows(i).UseStandardHeight) & "," & V(ws.Rows(i).Top)
+ Next i
+ text = text & ";B2=" & V(ws.Range("B2").Value2) & "," & V(ws.Range("B2").Font.Size) & "," & ws.Range("B2").Font.Name
+ State = text
+End Function
+Public Function Measure(ByVal inputPath As String, ByVal outputPath As String, ByVal unused1 As String, ByVal unused2 As String, ByVal mode As Long) As String
+ Dim sourceBook As Workbook, wb As Workbook, ws As Worksheet, text As String, scenario As Long, manualFirst As Boolean
+ On Error GoTo Failed
+ Set sourceBook = Workbooks.Open(inputPath, UpdateLinks:=0)
+ If mode >= 16 Then
+  Set wb = sourceBook
+ Else
+  Set wb = Workbooks.Add
+ End If
+ Set ws = wb.Worksheets(1)
+ scenario = mode Mod 8
+ manualFirst = ((mode Mod 16) >= 8)
+ text = "LIVE|BEFORE|" & State(ws)
+ If manualFirst Then ws.Rows.RowHeight = 22
+ Select Case scenario
+ Case 1
+  ws.Range("A1").Value2 = "first"
+  ws.Range("B4").Value2 = 4
+ Case 2
+  ws.Range("B2").NumberFormat = "@"
+ Case 3
+  ws.Rows(2).Font.Size = 11
+ Case 4
+  ws.Range("B2").Value2 = "cell"
+ Case 5
+  ws.Range("B2").Value2 = Empty
+ Case 6
+  ws.Range("B2").Formula = "=1+1"
+ Case 7
+  ws.Rows(2).AutoFit
+ End Select
+ If Not manualFirst Then ws.Rows.RowHeight = 22
+ text = text & "|MANUAL|" & State(ws)
+ ws.Columns("B").Font.Name = "Arial"
+ text = text & "|NAME|" & State(ws)
+ ws.Columns("B").Font.Size = 16
+ text = text & "|SIZE|" & State(ws)
+ wb.SaveAs outputPath, 51
+ text = text & "|SAVED|" & State(ws)
+ Set ws = Nothing
+ If Not (wb Is sourceBook) Then sourceBook.Close False
+ Set sourceBook = Nothing
+ wb.Close False
+ Set wb = Workbooks.Open(outputPath, UpdateLinks:=0)
+ Set ws = wb.Worksheets(1)
+ text = text & "|REOPEN|" & State(ws)
+ wb.Styles("Normal").Font.Size = 32
+ text = text & "|NORMAL32|" & State(ws)
+ Set ws = Nothing
+ wb.Close False
+ Measure = H(text)
+ Exit Function
+Failed:
+ text = text & "|ERROR|" & CStr(Err.Number) & "|" & Err.Description
+ On Error Resume Next
+ If Not wb Is Nothing Then wb.Close False
+ If Not sourceBook Is Nothing Then sourceBook.Close False
+ Measure = H(text)
+End Function
+"####;
+        let expected:Vec<(i64,String)>=serde_json::from_str(r####"[[0, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:51.75;ALL=5:51.75;STD=11:False;USED=$B$1;R1=5:51.75,11:False,5:0;R2=5:51.75,11:False,5:51.75;R3=5:51.75,11:False,5:103.5;R4=5:51.75,11:False,5:155.25;R5=5:51.75,11:False,5:207;R6=5:51.75,11:False,5:258.75;R7=5:51.75,11:False,5:310.5;R8=5:51.75,11:False,5:362.25;R9=5:51.75,11:False,5:414;R10=5:51.75,11:False,5:465.75;R11=5:51.75,11:False,5:517.5;R12=5:51.75,11:False,5:569.25;B2=0:,5:16,Arial"], [1, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial"], [2, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial"], [3, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:51.75;ALL=5:51.75;STD=11:False;USED=$B$1;R1=5:51.75,11:False,5:0;R2=5:51.75,11:False,5:51.75;R3=5:51.75,11:False,5:103.5;R4=5:51.75,11:False,5:155.25;R5=5:51.75,11:False,5:207;R6=5:51.75,11:False,5:258.75;R7=5:51.75,11:False,5:310.5;R8=5:51.75,11:False,5:362.25;R9=5:51.75,11:False,5:414;R10=5:51.75,11:False,5:465.75;R11=5:51.75,11:False,5:517.5;R12=5:51.75,11:False,5:569.25;B2=0:,5:16,Arial"], [4, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial"], [5, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:51.75;ALL=5:51.75;STD=11:False;USED=$B$1;R1=5:51.75,11:False,5:0;R2=5:51.75,11:False,5:51.75;R3=5:51.75,11:False,5:103.5;R4=5:51.75,11:False,5:155.25;R5=5:51.75,11:False,5:207;R6=5:51.75,11:False,5:258.75;R7=5:51.75,11:False,5:310.5;R8=5:51.75,11:False,5:362.25;R9=5:51.75,11:False,5:414;R10=5:51.75,11:False,5:465.75;R11=5:51.75,11:False,5:517.5;R12=5:51.75,11:False,5:569.25;B2=0:,5:16,Arial"], [6, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial"], [7, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:51.75;ALL=5:51.75;STD=11:False;USED=$B$1;R1=5:51.75,11:False,5:0;R2=5:51.75,11:False,5:51.75;R3=5:51.75,11:False,5:103.5;R4=5:51.75,11:False,5:155.25;R5=5:51.75,11:False,5:207;R6=5:51.75,11:False,5:258.75;R7=5:51.75,11:False,5:310.5;R8=5:51.75,11:False,5:362.25;R9=5:51.75,11:False,5:414;R10=5:51.75,11:False,5:465.75;R11=5:51.75,11:False,5:517.5;R12=5:51.75,11:False,5:569.25;B2=0:,5:16,Arial"], [8, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:51.75;ALL=5:51.75;STD=11:False;USED=$B$1;R1=5:51.75,11:False,5:0;R2=5:51.75,11:False,5:51.75;R3=5:51.75,11:False,5:103.5;R4=5:51.75,11:False,5:155.25;R5=5:51.75,11:False,5:207;R6=5:51.75,11:False,5:258.75;R7=5:51.75,11:False,5:310.5;R8=5:51.75,11:False,5:362.25;R9=5:51.75,11:False,5:414;R10=5:51.75,11:False,5:465.75;R11=5:51.75,11:False,5:517.5;R12=5:51.75,11:False,5:569.25;B2=0:,5:16,Arial"], [9, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$B$4;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial"], [10, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial"], [11, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:51.75;ALL=5:51.75;STD=11:False;USED=$B$1;R1=5:51.75,11:False,5:0;R2=5:51.75,11:False,5:51.75;R3=5:51.75,11:False,5:103.5;R4=5:51.75,11:False,5:155.25;R5=5:51.75,11:False,5:207;R6=5:51.75,11:False,5:258.75;R7=5:51.75,11:False,5:310.5;R8=5:51.75,11:False,5:362.25;R9=5:51.75,11:False,5:414;R10=5:51.75,11:False,5:465.75;R11=5:51.75,11:False,5:517.5;R12=5:51.75,11:False,5:569.25;B2=0:,5:16,Arial"], [12, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial"], [13, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$1;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:51.75;ALL=5:51.75;STD=11:False;USED=$B$1;R1=5:51.75,11:False,5:0;R2=5:51.75,11:False,5:51.75;R3=5:51.75,11:False,5:103.5;R4=5:51.75,11:False,5:155.25;R5=5:51.75,11:False,5:207;R6=5:51.75,11:False,5:258.75;R7=5:51.75,11:False,5:310.5;R8=5:51.75,11:False,5:362.25;R9=5:51.75,11:False,5:414;R10=5:51.75,11:False,5:465.75;R11=5:51.75,11:False,5:517.5;R12=5:51.75,11:False,5:569.25;B2=0:,5:16,Arial"], [14, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial"], [15, "LIVE|BEFORE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:18.75;ALL=5:18.75;STD=11:True;USED=$A$1;R1=5:18.75,11:True,5:0;R2=5:18.75,11:True,5:18.75;R3=5:18.75,11:True,5:37.5;R4=5:18.75,11:True,5:56.25;R5=5:18.75,11:True,5:75;R6=5:18.75,11:True,5:93.75;R7=5:18.75,11:True,5:112.5;R8=5:18.75,11:True,5:131.25;R9=5:18.75,11:True,5:150;R10=5:18.75,11:True,5:168.75;R11=5:18.75,11:True,5:187.5;R12=5:18.75,11:True,5:206.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|MANUAL|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$2;R1=5:22,11:False,5:0;R2=5:18.75,11:True,5:21.75;R3=5:22,11:False,5:40.5;R4=5:22,11:False,5:62.25;R5=5:22,11:False,5:84;R6=5:22,11:False,5:105.75;R7=5:22,11:False,5:127.5;R8=5:22,11:False,5:149.25;R9=5:22,11:False,5:171;R10=5:22,11:False,5:192.75;R11=5:22,11:False,5:214.5;R12=5:22,11:False,5:236.25;B2=0:,5:11,\u6e38\u30b4\u30b7\u30c3\u30af|NAME|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:18.75,11:True,5:21.75;R3=5:22,11:False,5:40.5;R4=5:22,11:False,5:62.25;R5=5:22,11:False,5:84;R6=5:22,11:False,5:105.75;R7=5:22,11:False,5:127.5;R8=5:22,11:False,5:149.25;R9=5:22,11:False,5:171;R10=5:22,11:False,5:192.75;R11=5:22,11:False,5:214.5;R12=5:22,11:False,5:236.25;B2=0:,5:11,Arial|SIZE|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:21.75,11:True,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:21.75,11:True,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:21.75,11:True,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=\u6e38\u30b4\u30b7\u30c3\u30af;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$B$2;R1=5:22,11:False,5:0;R2=5:51.75,11:True,5:21.75;R3=5:22,11:False,5:73.5;R4=5:22,11:False,5:95.25;R5=5:22,11:False,5:117;R6=5:22,11:False,5:138.75;R7=5:22,11:False,5:160.5;R8=5:22,11:False,5:182.25;R9=5:22,11:False,5:204;R10=5:22,11:False,5:225.75;R11=5:22,11:False,5:247.5;R12=5:22,11:False,5:269.25;B2=0:,5:16,Arial"], [16, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial"], [17, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial"], [18, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial"], [19, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial"], [20, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial"], [21, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial"], [22, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial"], [23, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial"], [24, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial"], [25, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial"], [26, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial"], [27, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:0,5:16,Arial"], [28, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=8:cell,5:16,Arial"], [29, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=0:,5:16,Arial"], [30, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=5:22;STD=11:False;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:22,11:False,5:21.75;R3=5:22,11:False,5:43.5;R4=5:22,11:False,5:65.25;R5=5:22,11:False,5:87;R6=5:22,11:False,5:108.75;R7=5:22,11:False,5:130.5;R8=5:22,11:False,5:152.25;R9=5:22,11:False,5:174;R10=5:22,11:False,5:195.75;R11=5:22,11:False,5:217.5;R12=5:22,11:False,5:239.25;B2=5:2,5:16,Arial"], [31, "LIVE|BEFORE|NF=Aptos Narrow;NS=5:11;SH=5:15;ALL=1:NULL;STD=11:True;USED=$A$1:$G$12;R1=5:15,11:True,5:0;R2=5:15,11:True,5:15;R3=5:15,11:True,5:30;R4=5:15,11:True,5:45;R5=5:15,11:True,5:60;R6=5:15,11:True,5:75;R7=5:15,11:True,5:90;R8=5:15,11:True,5:105;R9=5:15,11:True,5:120;R10=5:30,11:True,5:135;R11=5:15,11:True,5:165;R12=5:15,11:True,5:180;B2=5:0,5:11,Aptos Narrow|MANUAL|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=1:NULL;STD=1:NULL;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:15,11:True,5:21.75;R3=5:22,11:False,5:36.75;R4=5:22,11:False,5:58.5;R5=5:22,11:False,5:80.25;R6=5:22,11:False,5:102;R7=5:22,11:False,5:123.75;R8=5:22,11:False,5:145.5;R9=5:22,11:False,5:167.25;R10=5:22,11:False,5:189;R11=5:22,11:False,5:210.75;R12=5:22,11:False,5:232.5;B2=5:0,5:11,Aptos Narrow|NAME|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=1:NULL;STD=1:NULL;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:15,11:True,5:21.75;R3=5:22,11:False,5:36.75;R4=5:22,11:False,5:58.5;R5=5:22,11:False,5:80.25;R6=5:22,11:False,5:102;R7=5:22,11:False,5:123.75;R8=5:22,11:False,5:145.5;R9=5:22,11:False,5:167.25;R10=5:22,11:False,5:189;R11=5:22,11:False,5:210.75;R12=5:22,11:False,5:232.5;B2=5:0,5:11,Arial|SIZE|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=1:NULL;STD=1:NULL;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:20.25,11:True,5:21.75;R3=5:22,11:False,5:42;R4=5:22,11:False,5:63.75;R5=5:22,11:False,5:85.5;R6=5:22,11:False,5:107.25;R7=5:22,11:False,5:129;R8=5:22,11:False,5:150.75;R9=5:22,11:False,5:172.5;R10=5:22,11:False,5:194.25;R11=5:22,11:False,5:216;R12=5:22,11:False,5:237.75;B2=5:0,5:16,Arial|SAVED|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=1:NULL;STD=1:NULL;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:20.25,11:True,5:21.75;R3=5:22,11:False,5:42;R4=5:22,11:False,5:63.75;R5=5:22,11:False,5:85.5;R6=5:22,11:False,5:107.25;R7=5:22,11:False,5:129;R8=5:22,11:False,5:150.75;R9=5:22,11:False,5:172.5;R10=5:22,11:False,5:194.25;R11=5:22,11:False,5:216;R12=5:22,11:False,5:237.75;B2=5:0,5:16,Arial|REOPEN|NF=Aptos Narrow;NS=5:11;SH=5:22;ALL=1:NULL;STD=1:NULL;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:20.25,11:True,5:21.75;R3=5:22,11:False,5:42;R4=5:22,11:False,5:63.75;R5=5:22,11:False,5:85.5;R6=5:22,11:False,5:107.25;R7=5:22,11:False,5:129;R8=5:22,11:False,5:150.75;R9=5:22,11:False,5:172.5;R10=5:22,11:False,5:194.25;R11=5:22,11:False,5:216;R12=5:22,11:False,5:237.75;B2=5:0,5:16,Arial|NORMAL32|NF=Aptos Narrow;NS=5:32;SH=5:22;ALL=1:NULL;STD=1:NULL;USED=$A$1:$G$12;R1=5:22,11:False,5:0;R2=5:42,11:True,5:21.75;R3=5:22,11:False,5:63.75;R4=5:22,11:False,5:85.5;R5=5:22,11:False,5:107.25;R6=5:22,11:False,5:129;R7=5:22,11:False,5:150.75;R8=5:22,11:False,5:172.5;R9=5:22,11:False,5:194.25;R10=5:22,11:False,5:216;R11=5:22,11:False,5:237.75;R12=5:22,11:False,5:259.5;B2=5:0,5:16,Arial"]]"####).unwrap();
+        assert_eq!(expected.len(), 32);
+        let mut failures=Vec::<String>::new();
+        for (mode,expected) in expected {
+            let mut context=failure_context();context.file_name=Some("source.xlsm".into());
+            context.application_state=Some(VbaApplicationState {standard_font_startup:Some(VbaStandardFontStartup {
+                profile_utf16:Some(vec![28216,12468,12471,12483,12463,44,49,49])}),..Default::default()});
+            context.file_context=Some(file_io::FileContext {
+                full_name:Some(r"C:\probe\source.xlsm".into()),package_bytes:Some(original.to_vec()),read_only:Some(true),
+                folders:vec![r"C:\probe".into()],files:vec![file_io::ProducedFile {path:r"C:\probe\input.xlsm".into(),bytes:original.to_vec()}],
+                ..Default::default()});
+            let out=execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(original).unwrap(),
+                CODE,Some("DrawingIdentityProbe.Measure"),vec![Value::String(r"C:\probe\input.xlsm".into()),
+                Value::String(r"C:\probe\result.xlsx".into()),Value::String(String::new()),Value::String(String::new()),
+                Value::Integer(mode)],0,context,&mut None).unwrap();
+            if let Some(error)=out.error.as_ref() {failures.push(format!("probe 199/{mode}: {}",error.message));continue;}
+            assert!(out.files.iter().any(|file|file.path.eq_ignore_ascii_case(r"C:\probe\result.xlsx")),
+                "the complete positive Native program must save its output");
+            let wire=serde_json::to_value(&out.result).unwrap();let hex=wire["value"].as_str().unwrap();
+            let units=(0..hex.len()).step_by(4).map(|at|u16::from_str_radix(&hex[at..at+4],16).unwrap()).collect::<Vec<_>>();
+            let actual=String::from_utf16(&units).unwrap();
+            if let Some(path) = std::env::var_os("OXI_VBA_MANUAL_ROW_DIAGNOSTIC") {
+                use std::io::Write;
+                let saved = out.files.iter().find(|file|file.path.eq_ignore_ascii_case(r"C:\probe\result.xlsx"));
+                let record = serde_json::json!({"mode":mode,"actual":actual,"expected":expected,
+                    "saved_bytes":saved.map(|file| &file.bytes)});
+                let mut stream = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+                writeln!(stream,"{}",record).unwrap();
+            }
+            if actual!=expected {
+                let offset=actual.chars().zip(expected.chars()).position(|(a,b)|a!=b).unwrap_or_else(||actual.chars().count().min(expected.chars().count()));
+                let fragment=|s:&str|s.chars().skip(offset.saturating_sub(50)).take(180).collect::<String>();
+                failures.push(format!("probe 199/{mode}: actual {:?}; expected {:?}",fragment(&actual),fragment(&expected)));
+            }
+        }
+        assert!(failures.is_empty(),"{} full Native conditions differ:\n{}",failures.len(),failures.join("\n"));
+    }
     #[test]
     fn row_dimension_bounds_and_hidden_width_match_native() {
         let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
@@ -53329,6 +55424,66 @@ End Function
                 Value::String(r"C:\probe\result.xlsx".into()),Value::String(String::new()),Value::String(String::new()),
                 Value::Integer(*mode)],0,context,&mut None).unwrap();
             if let Some(error)=out.error.as_ref() {failures.push(format!("probe 96/{mode}: {}",error.message));continue;}
+            // Exact independently saved Excel row/default records, including
+            // explicit manual rows equal to a manual sheet default.
+            let saved=out.files.iter().find(|file|file.path.eq_ignore_ascii_case(r"C:\probe\result.xlsx"))
+                .expect("the complete positive Native program saves its output");
+            let book=oxicells_core::parse_xlsx_preserving_values(&saved.bytes).unwrap();
+            let sheet=&book.sheets[0];
+            type Geometry=(f32,bool,Vec<(u32,Option<f32>,bool)>);
+            let actual_geometry:Geometry=(sheet.default_row_height,sheet.default_row_custom,
+                sheet.rows.iter().filter(|row|row.height.is_some()||row.custom_height)
+                    .map(|row|(row.index,row.height,row.custom_height)).collect());
+            let expected_geometry:Vec<Geometry>=serde_json::from_str(r###"[[15.0,false,[[10,30.0,false]]],[21.0,false,[[10,42.0,false]]],[20.25,false,[[10,40.5,false]]],[20.25,false,[[10,40.5,false]]],[15.0,false,[[10,30.0,false]]],[15.0,false,[[10,30.0,false]]],[15.0,false,[[10,30.0,false]]],[15.0,false,[[10,30.0,false]]],[21.0,false,[[10,42.0,false]]],[15.0,false,[[1,21.0,false],[10,30.0,false]]],[20.25,false,[[1,21.95,true],[2,30.0,true],[10,40.5,false]]],[21.95,true,[[1,21.95,true],[2,21.95,true],[3,21.95,true],[4,21.95,true],[5,21.95,true],[6,21.95,true],[7,21.95,true],[8,21.95,true],[9,21.95,true],[10,21.95,true],[11,21.95,true],[12,21.95,true]]],[20.25,false,[[10,40.5,false]]],[25.5,false,[[10,51.0,false]]],[33.0,false,[[10,66.0,false]]],[20.25,false,[[10,40.5,false]]],[20.25,false,[[10,40.5,false]]],[15.0,false,[[1,20.25,false],[2,20.25,false],[3,20.25,false],[4,20.25,false],[5,20.25,false],[6,20.25,false],[7,20.25,false],[8,20.25,false],[9,20.25,false],[10,40.5,false],[11,20.25,false],[12,20.25,false],[13,20.25,false],[14,20.25,false],[15,20.25,false],[16,20.25,false],[17,20.25,false],[18,20.25,false],[19,20.25,false],[20,20.25,false],[21,20.25,false],[22,20.25,false],[23,20.25,false],[24,20.25,false],[25,20.25,false],[26,20.25,false],[27,20.25,false],[28,20.25,false],[29,20.25,false],[30,20.25,false],[31,20.25,false],[32,20.25,false],[33,20.25,false],[34,20.25,false],[35,20.25,false],[36,20.25,false],[37,20.25,false],[38,20.25,false],[39,20.25,false],[40,20.25,false],[41,20.25,false],[42,20.25,false],[43,20.25,false],[44,20.25,false],[45,20.25,false],[46,20.25,false],[47,20.25,false],[48,20.25,false],[49,20.25,false],[50,20.25,false],[51,20.25,false],[52,20.25,false],[53,20.25,false],[54,20.25,false],[55,20.25,false],[56,20.25,false],[57,20.25,false],[58,20.25,false],[59,20.25,false],[60,20.25,false],[61,20.25,false],[62,20.25,false],[63,20.25,false],[64,20.25,false],[65,20.25,false],[66,20.25,false],[67,20.25,false],[68,20.25,false],[69,20.25,false],[70,20.25,false],[71,20.25,false],[72,20.25,false],[73,20.25,false],[74,20.25,false],[75,20.25,false],[76,20.25,false],[77,20.25,false],[78,20.25,false],[79,20.25,false],[80,20.25,false],[81,20.25,false],[82,20.25,false],[83,20.25,false],[84,20.25,false],[85,20.25,false],[86,20.25,false],[87,20.25,false],[88,20.25,false],[89,20.25,false],[90,20.25,false],[91,20.25,false],[92,20.25,false],[93,20.25,false],[94,20.25,false],[95,20.25,false],[96,20.25,false],[97,20.25,false],[98,20.25,false],[99,20.25,false],[100,20.25,false]]],[18.75,false,[]],[25.5,false,[]],[21.75,false,[]],[21.75,false,[]],[18.75,false,[]],[18.75,false,[]],[18.75,false,[]],[18.75,false,[]],[25.5,false,[]],[18.75,false,[[1,25.5,false]]],[21.75,false,[[1,21.95,true],[2,30.0,true]]],[21.95,true,[]],[21.75,false,[]],[25.5,false,[]],[33.0,false,[]],[21.75,false,[]],[21.75,false,[]],[18.75,false,[[1,21.75,false],[2,21.75,false],[3,21.75,false],[4,21.75,false],[5,21.75,false],[6,21.75,false],[7,21.75,false],[8,21.75,false],[9,21.75,false],[10,21.75,false],[11,21.75,false],[12,21.75,false],[13,21.75,false],[14,21.75,false],[15,21.75,false],[16,21.75,false],[17,21.75,false],[18,21.75,false],[19,21.75,false],[20,21.75,false],[21,21.75,false],[22,21.75,false],[23,21.75,false],[24,21.75,false],[25,21.75,false],[26,21.75,false],[27,21.75,false],[28,21.75,false],[29,21.75,false],[30,21.75,false],[31,21.75,false],[32,21.75,false],[33,21.75,false],[34,21.75,false],[35,21.75,false],[36,21.75,false],[37,21.75,false],[38,21.75,false],[39,21.75,false],[40,21.75,false],[41,21.75,false],[42,21.75,false],[43,21.75,false],[44,21.75,false],[45,21.75,false],[46,21.75,false],[47,21.75,false],[48,21.75,false],[49,21.75,false],[50,21.75,false],[51,21.75,false],[52,21.75,false],[53,21.75,false],[54,21.75,false],[55,21.75,false],[56,21.75,false],[57,21.75,false],[58,21.75,false],[59,21.75,false],[60,21.75,false],[61,21.75,false],[62,21.75,false],[63,21.75,false],[64,21.75,false],[65,21.75,false],[66,21.75,false],[67,21.75,false],[68,21.75,false],[69,21.75,false],[70,21.75,false],[71,21.75,false],[72,21.75,false],[73,21.75,false],[74,21.75,false],[75,21.75,false],[76,21.75,false],[77,21.75,false],[78,21.75,false],[79,21.75,false],[80,21.75,false],[81,21.75,false],[82,21.75,false],[83,21.75,false],[84,21.75,false],[85,21.75,false],[86,21.75,false],[87,21.75,false],[88,21.75,false],[89,21.75,false],[90,21.75,false],[91,21.75,false],[92,21.75,false],[93,21.75,false],[94,21.75,false],[95,21.75,false],[96,21.75,false],[97,21.75,false],[98,21.75,false],[99,21.75,false],[100,21.75,false]]]]"###).unwrap();
+            if actual_geometry!=expected_geometry[*mode as usize] {
+                failures.push(format!("probe 96/{mode} saved row geometry: {:?} != {:?}",actual_geometry,expected_geometry[*mode as usize]));
+            }
+
+            fn font_descent_attribute(reader:&quick_xml::NsReader<&[u8]>,tag:&quick_xml::events::BytesStart<'_>)->Option<f64> {
+                let mut found=None;
+                for attribute in tag.attributes() {
+                    let attribute=attribute.unwrap();
+                    let (namespace,local)=reader.resolve_attribute(attribute.key);
+                    if local.as_ref()==b"dyDescent" && matches!(namespace,quick_xml::name::ResolveResult::Bound(uri)
+                        if uri.as_ref()==b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac") {
+                        assert!(found.is_none(),"duplicate native font-descent attribute");
+                        found=Some(attribute.unescape_value().unwrap().parse::<f64>().unwrap());
+                    }
+                }
+                found
+            }
+            let mut archive=oxidocs_common::archive::OoxmlArchive::new(&saved.bytes).unwrap();
+            let xml=archive.read_part("xl/worksheets/sheet1.xml").unwrap();
+            let mut reader=quick_xml::NsReader::from_str(&xml);
+            let mut default_descent=None;let mut rows=Vec::new();let mut in_data=false;let mut saw_format=false;
+            loop {
+                let (namespace,event)=reader.read_resolved_event().unwrap();
+                let main=matches!(namespace,quick_xml::name::ResolveResult::Bound(uri)
+                    if uri.as_ref()==b"http://schemas.openxmlformats.org/spreadsheetml/2006/main");
+                match event {
+                    quick_xml::events::Event::Start(tag)|quick_xml::events::Event::Empty(tag)
+                        if main && tag.local_name().as_ref()==b"sheetFormatPr" => {
+                            saw_format=true;default_descent=font_descent_attribute(&reader,&tag);
+                        },
+                    quick_xml::events::Event::Start(tag) if main && tag.local_name().as_ref()==b"sheetData"=>in_data=true,
+                    quick_xml::events::Event::End(tag) if main && tag.local_name().as_ref()==b"sheetData"=>in_data=false,
+                    quick_xml::events::Event::Start(tag)|quick_xml::events::Event::Empty(tag)
+                        if main && in_data && tag.local_name().as_ref()==b"row" => {
+                            let index=oxidocs_common::xml_utils::get_attr(&tag,"r").unwrap().parse::<u32>().unwrap();
+                            rows.push((index,font_descent_attribute(&reader,&tag)));
+                        },
+                    quick_xml::events::Event::Eof=>break,
+                    _=>{},
+                }
+            }
+            assert!(saw_format,"the saved worksheet retains its sheet format");
+            type Descent=(Option<f64>,Vec<(u32,Option<f64>)>);
+            let actual_descent:Descent=(default_descent,rows);
+            let expected_descent:Vec<Descent>=serde_json::from_str(r###"[[0.25,[[1,0.25],[2,0.25],[3,0.25],[4,0.25],[5,0.25],[6,0.25],[7,0.25],[8,0.25],[9,0.25],[10,0.25],[11,0.25],[12,0.25]]],[0.35,[[1,0.35],[2,0.35],[3,0.35],[4,0.35],[5,0.35],[6,0.35],[7,0.35],[8,0.35],[9,0.35],[10,0.35],[11,0.35],[12,0.35]]],[0.3,[[1,0.3],[2,0.3],[3,0.3],[4,0.3],[5,0.3],[6,0.3],[7,0.3],[8,0.3],[9,0.3],[10,0.3],[11,0.3],[12,0.3]]],[0.3,[[1,0.3],[2,0.3],[3,0.3],[4,0.3],[5,0.3],[6,0.3],[7,0.3],[8,0.3],[9,0.3],[10,0.3],[11,0.3],[12,0.3]]],[0.25,[[1,0.25],[2,0.25],[3,0.25],[4,0.25],[5,0.25],[6,0.25],[7,0.25],[8,0.25],[9,0.25],[10,0.25],[11,0.25],[12,0.25]]],[0.25,[[1,0.25],[2,0.25],[3,0.25],[4,0.25],[5,0.25],[6,0.25],[7,0.25],[8,0.25],[9,0.25],[10,0.25],[11,0.25],[12,0.25]]],[0.25,[[1,0.25],[2,0.25],[3,0.25],[4,0.25],[5,0.25],[6,0.25],[7,0.25],[8,0.25],[9,0.25],[10,0.25],[11,0.25],[12,0.25]]],[0.25,[[1,0.25],[2,0.25],[3,0.25],[4,0.25],[5,0.25],[6,0.25],[7,0.25],[8,0.25],[9,0.25],[10,0.25],[11,0.25],[12,0.25]]],[0.35,[[1,0.35],[2,0.35],[3,0.35],[4,0.35],[5,0.35],[6,0.35],[7,0.35],[8,0.35],[9,0.35],[10,0.35],[11,0.35],[12,0.35]]],[0.25,[[1,0.35],[2,0.25],[3,0.25],[4,0.25],[5,0.25],[6,0.25],[7,0.25],[8,0.25],[9,0.25],[10,0.25],[11,0.25],[12,0.25]]],[0.3,[[1,0.3],[2,0.3],[3,0.3],[4,0.3],[5,0.3],[6,0.3],[7,0.3],[8,0.3],[9,0.3],[10,0.3],[11,0.3],[12,0.3]]],[0.3,[[1,0.3],[2,0.3],[3,0.3],[4,0.3],[5,0.3],[6,0.3],[7,0.3],[8,0.3],[9,0.3],[10,0.3],[11,0.3],[12,0.3]]],[0.3,[[1,0.3],[2,0.3],[3,0.3],[4,0.3],[5,0.3],[6,0.3],[7,0.3],[8,0.3],[9,0.3],[10,0.3],[11,0.3],[12,0.3]]],[null,[[1,null],[2,null],[3,null],[4,null],[5,null],[6,null],[7,null],[8,null],[9,null],[10,null],[11,null],[12,null]]],[0.45,[[1,0.45],[2,0.45],[3,0.45],[4,0.45],[5,0.45],[6,0.45],[7,0.45],[8,0.45],[9,0.45],[10,0.45],[11,0.45],[12,0.45]]],[0.3,[[1,0.3],[2,0.3],[3,0.3],[4,0.3],[5,0.3],[6,0.3],[7,0.3],[8,0.3],[9,0.3],[10,0.3],[11,0.3],[12,0.3]]],[0.3,[[1,0.3],[2,0.3],[3,0.3],[4,0.3],[5,0.3],[6,0.3],[7,0.3],[8,0.3],[9,0.3],[10,0.3],[11,0.3],[12,0.3]]],[0.25,[[1,0.3],[2,0.3],[3,0.3],[4,0.3],[5,0.3],[6,0.3],[7,0.3],[8,0.3],[9,0.3],[10,0.3],[11,0.3],[12,0.3],[13,0.3],[14,0.3],[15,0.3],[16,0.3],[17,0.3],[18,0.3],[19,0.3],[20,0.3],[21,0.3],[22,0.3],[23,0.3],[24,0.3],[25,0.3],[26,0.3],[27,0.3],[28,0.3],[29,0.3],[30,0.3],[31,0.3],[32,0.3],[33,0.3],[34,0.3],[35,0.3],[36,0.3],[37,0.3],[38,0.3],[39,0.3],[40,0.3],[41,0.3],[42,0.3],[43,0.3],[44,0.3],[45,0.3],[46,0.3],[47,0.3],[48,0.3],[49,0.3],[50,0.3],[51,0.3],[52,0.3],[53,0.3],[54,0.3],[55,0.3],[56,0.3],[57,0.3],[58,0.3],[59,0.3],[60,0.3],[61,0.3],[62,0.3],[63,0.3],[64,0.3],[65,0.3],[66,0.3],[67,0.3],[68,0.3],[69,0.3],[70,0.3],[71,0.3],[72,0.3],[73,0.3],[74,0.3],[75,0.3],[76,0.3],[77,0.3],[78,0.3],[79,0.3],[80,0.3],[81,0.3],[82,0.3],[83,0.3],[84,0.3],[85,0.3],[86,0.3],[87,0.3],[88,0.3],[89,0.3],[90,0.3],[91,0.3],[92,0.3],[93,0.3],[94,0.3],[95,0.3],[96,0.3],[97,0.3],[98,0.3],[99,0.3],[100,0.3]]],[0.4,[]],[0.5,[]],[0.4,[]],[0.4,[]],[0.4,[]],[0.4,[]],[0.4,[]],[0.4,[]],[0.5,[]],[0.4,[[1,0.5]]],[0.4,[[1,0.4],[2,0.4]]],[0.4,[]],[0.4,[]],[null,[]],[0.45,[]],[0.4,[]],[0.4,[]],[0.4,[[1,0.4],[2,0.4],[3,0.4],[4,0.4],[5,0.4],[6,0.4],[7,0.4],[8,0.4],[9,0.4],[10,0.4],[11,0.4],[12,0.4],[13,0.4],[14,0.4],[15,0.4],[16,0.4],[17,0.4],[18,0.4],[19,0.4],[20,0.4],[21,0.4],[22,0.4],[23,0.4],[24,0.4],[25,0.4],[26,0.4],[27,0.4],[28,0.4],[29,0.4],[30,0.4],[31,0.4],[32,0.4],[33,0.4],[34,0.4],[35,0.4],[36,0.4],[37,0.4],[38,0.4],[39,0.4],[40,0.4],[41,0.4],[42,0.4],[43,0.4],[44,0.4],[45,0.4],[46,0.4],[47,0.4],[48,0.4],[49,0.4],[50,0.4],[51,0.4],[52,0.4],[53,0.4],[54,0.4],[55,0.4],[56,0.4],[57,0.4],[58,0.4],[59,0.4],[60,0.4],[61,0.4],[62,0.4],[63,0.4],[64,0.4],[65,0.4],[66,0.4],[67,0.4],[68,0.4],[69,0.4],[70,0.4],[71,0.4],[72,0.4],[73,0.4],[74,0.4],[75,0.4],[76,0.4],[77,0.4],[78,0.4],[79,0.4],[80,0.4],[81,0.4],[82,0.4],[83,0.4],[84,0.4],[85,0.4],[86,0.4],[87,0.4],[88,0.4],[89,0.4],[90,0.4],[91,0.4],[92,0.4],[93,0.4],[94,0.4],[95,0.4],[96,0.4],[97,0.4],[98,0.4],[99,0.4],[100,0.4]]]]"###).unwrap();
+            if actual_descent!=expected_descent[*mode as usize] {
+                failures.push(format!("probe 96/{mode} saved font-descent/row records: {:?} != {:?}",actual_descent,expected_descent[*mode as usize]));
+            }
+
             let wire=serde_json::to_value(&out.result).unwrap();let hex=wire["value"].as_str().unwrap();
             let units=(0..hex.len()).step_by(4).map(|at|u16::from_str_radix(&hex[at..at+4],16).unwrap()).collect::<Vec<_>>();
             let actual=String::from_utf16(&units).unwrap();
@@ -54123,6 +56278,66 @@ End Function
                 Value::String(r"C:\probe\result.xlsx".into()),Value::String(String::new()),Value::String(String::new()),
                 Value::Integer(*mode)],0,context,&mut None).unwrap();
             if let Some(error)=out.error.as_ref() {failures.push(format!("probe 123/{mode}: {}",error.message));continue;}
+            // Exact independently saved Excel row/default records, including
+            // explicit manual rows equal to a manual sheet default.
+            let saved=out.files.iter().find(|file|file.path.eq_ignore_ascii_case(r"C:\probe\result.xlsx"))
+                .expect("the complete positive Native program saves its output");
+            let book=oxicells_core::parse_xlsx_preserving_values(&saved.bytes).unwrap();
+            let sheet=&book.sheets[0];
+            type Geometry=(f32,bool,Vec<(u32,Option<f32>,bool)>);
+            let actual_geometry:Geometry=(sheet.default_row_height,sheet.default_row_custom,
+                sheet.rows.iter().filter(|row|row.height.is_some()||row.custom_height)
+                    .map(|row|(row.index,row.height,row.custom_height)).collect());
+            let expected_geometry:Vec<Geometry>=serde_json::from_str(r###"[[15.0,false,[[1,21.0,false]]],[15.0,false,[[1,21.0,false]]],[14.25,false,[[1,21.0,false]]],[21.0,false,[]],[21.0,false,[]],[20.25,false,[[1,21.0,false]]],[34.5,false,[]],[33.75,false,[]],[33.0,false,[]]]"###).unwrap();
+            if actual_geometry!=expected_geometry[*mode as usize] {
+                failures.push(format!("probe 123/{mode} saved row geometry: {:?} != {:?}",actual_geometry,expected_geometry[*mode as usize]));
+            }
+
+            fn font_descent_attribute(reader:&quick_xml::NsReader<&[u8]>,tag:&quick_xml::events::BytesStart<'_>)->Option<f64> {
+                let mut found=None;
+                for attribute in tag.attributes() {
+                    let attribute=attribute.unwrap();
+                    let (namespace,local)=reader.resolve_attribute(attribute.key);
+                    if local.as_ref()==b"dyDescent" && matches!(namespace,quick_xml::name::ResolveResult::Bound(uri)
+                        if uri.as_ref()==b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac") {
+                        assert!(found.is_none(),"duplicate native font-descent attribute");
+                        found=Some(attribute.unescape_value().unwrap().parse::<f64>().unwrap());
+                    }
+                }
+                found
+            }
+            let mut archive=oxidocs_common::archive::OoxmlArchive::new(&saved.bytes).unwrap();
+            let xml=archive.read_part("xl/worksheets/sheet1.xml").unwrap();
+            let mut reader=quick_xml::NsReader::from_str(&xml);
+            let mut default_descent=None;let mut rows=Vec::new();let mut in_data=false;let mut saw_format=false;
+            loop {
+                let (namespace,event)=reader.read_resolved_event().unwrap();
+                let main=matches!(namespace,quick_xml::name::ResolveResult::Bound(uri)
+                    if uri.as_ref()==b"http://schemas.openxmlformats.org/spreadsheetml/2006/main");
+                match event {
+                    quick_xml::events::Event::Start(tag)|quick_xml::events::Event::Empty(tag)
+                        if main && tag.local_name().as_ref()==b"sheetFormatPr" => {
+                            saw_format=true;default_descent=font_descent_attribute(&reader,&tag);
+                        },
+                    quick_xml::events::Event::Start(tag) if main && tag.local_name().as_ref()==b"sheetData"=>in_data=true,
+                    quick_xml::events::Event::End(tag) if main && tag.local_name().as_ref()==b"sheetData"=>in_data=false,
+                    quick_xml::events::Event::Start(tag)|quick_xml::events::Event::Empty(tag)
+                        if main && in_data && tag.local_name().as_ref()==b"row" => {
+                            let index=oxidocs_common::xml_utils::get_attr(&tag,"r").unwrap().parse::<u32>().unwrap();
+                            rows.push((index,font_descent_attribute(&reader,&tag)));
+                        },
+                    quick_xml::events::Event::Eof=>break,
+                    _=>{},
+                }
+            }
+            assert!(saw_format,"the saved worksheet retains its sheet format");
+            type Descent=(Option<f64>,Vec<(u32,Option<f64>)>);
+            let actual_descent:Descent=(default_descent,rows);
+            let expected_descent:Vec<Descent>=serde_json::from_str(r###"[[0.25,[[1,0.35]]],[0.25,[[1,0.35]]],[0.2,[[1,0.35]]],[0.35,[[1,0.35]]],[0.35,[[1,0.35]]],[0.3,[[1,0.35]]],[0.55,[[1,0.55]]],[0.5,[[1,0.5]]],[0.45,[[1,0.45]]]]"###).unwrap();
+            if actual_descent!=expected_descent[*mode as usize] {
+                failures.push(format!("probe 123/{mode} saved font-descent/row records: {:?} != {:?}",actual_descent,expected_descent[*mode as usize]));
+            }
+
             let wire=serde_json::to_value(&out.result).unwrap();let hex=wire["value"].as_str().unwrap();
             let units=(0..hex.len()).step_by(4).map(|at|u16::from_str_radix(&hex[at..at+4],16).unwrap()).collect::<Vec<_>>();
             let actual=String::from_utf16(&units).unwrap();
