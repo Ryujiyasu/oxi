@@ -15,6 +15,7 @@ use oxipdf_core::ir::*;
 mod fontidx;
 mod vba;
 mod emf;
+mod raster;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -27,6 +28,29 @@ fn main() {
             let input = paths.first().expect(usage);
             let output = paths.get(1).expect(usage);
             docx_to_pdf(input, output, strict);
+        }
+        Some("docx-to-png") => {
+            let usage = "Usage: oxi docx-to-png [--strict] [--page N] [--width PX] [--height PX] <input.docx> <output.png>";
+            let mut strict = false;
+            let mut page = 1usize;
+            let mut size = raster::Size { width: None, height: None };
+            let mut paths = Vec::new();
+            let mut rest = args[2..].iter();
+            while let Some(arg) = rest.next() {
+                let mut number = || rest.next().and_then(|v| v.parse::<u32>().ok()).filter(|n| *n > 0).expect(usage);
+                match arg.as_str() {
+                    "--strict" => strict = true,
+                    "--page" => page = number() as usize,
+                    "--width" => size.width = Some(number()),
+                    "--height" => size.height = Some(number()),
+                    _ => paths.push(arg.as_str()),
+                }
+            }
+            let (Some(input), Some(output)) = (paths.first(), paths.get(1)) else {
+                eprintln!("{usage}");
+                std::process::exit(1);
+            };
+            finish(input, output, convert_png(input, output, strict, page, size));
         }
         Some("serve") => {
             let threads = args[2..]
@@ -140,8 +164,11 @@ fn main() {
             eprintln!();
             eprintln!("Usage:");
             eprintln!("  oxi docx-to-pdf [--strict] <input.docx> <output.pdf>");
+            eprintln!("  oxi docx-to-png [--strict] [--page N] [--width PX] [--height PX] <input.docx> <output.png>");
+            eprintln!("      page N (default 1), fitted inside the given width and/or height (default 96 dpi)");
             eprintln!("  oxi serve [--threads N]");
             eprintln!("      one JSON request per stdin line, {{\"input\", \"output\", \"strict\", \"id\"}};");
+            eprintln!("      an output ending in .png draws one page: add \"page\", \"width\", \"height\"");
             eprintln!("      one JSON answer per stdout line, in completion order");
             eprintln!("      --strict: write nothing and exit {EXIT_UNSUPPORTED} when the document holds");
             eprintln!("                content Oxi does not draw (listed as JSON on stderr)");
@@ -181,6 +208,41 @@ struct Converted {
 /// Convert `input` to the PDF at `output`. Shared by `docx-to-pdf` and every
 /// request `serve` handles, so neither exits the process on a bad document.
 fn convert(input: &str, output: &str, strict: bool) -> Result<Converted, ConvertError> {
+    let pdf_doc = lay_out(input, strict)?;
+    let pdf_bytes = oxipdf_core::write_pdf(&pdf_doc);
+
+    fs::write(output, &pdf_bytes).map_err(|e| ConvertError::Failed(format!("write {output}: {e}")))?;
+    Ok(Converted { bytes: pdf_bytes.len(), pages: pdf_doc.pages.len() })
+}
+
+/// Draw page `page` (1-based) of `input` to the PNG at `output`, from the same
+/// pages `convert` writes as PDF: a thumbnail shows what the PDF shows.
+fn convert_png(input: &str, output: &str, strict: bool, page: usize, size: raster::Size) -> Result<Converted, ConvertError> {
+    let pdf_doc = lay_out(input, strict)?;
+    let pages = pdf_doc.pages.len();
+    if page == 0 || page > pages {
+        return Err(ConvertError::Failed(format!("{input} has {pages} page(s), no page {page}")));
+    }
+    let stand_in = stand_in_face_bytes();
+    let pixmap = raster::render_page(&pdf_doc, page - 1, size, stand_in.as_deref())
+        .ok_or_else(|| ConvertError::Failed(format!("cannot draw page {page} of {input} at {size:?}")))?;
+    let png = raster::encode_png(&pixmap).map_err(|e| ConvertError::Failed(format!("encode {output}: {e}")))?;
+    fs::write(output, &png).map_err(|e| ConvertError::Failed(format!("write {output}: {e}")))?;
+    Ok(Converted { bytes: png.len(), pages })
+}
+
+/// A sans face for text the writer left unembedded (the PDF names a standard
+/// font there and a viewer substitutes; the rasteriser needs real outlines).
+fn stand_in_face_bytes() -> Option<Vec<u8>> {
+    ["Liberation Sans", "Arial", "Carlito", "DejaVu Sans"]
+        .iter()
+        .find_map(|family| resolve_face_path(family, false, false))
+        .and_then(|path| fs::read(path).ok())
+}
+
+/// Parse and lay out `input` into the pages `write_pdf` writes, refusing it
+/// under `strict` when it holds content Oxi does not draw.
+fn lay_out(input: &str, strict: bool) -> Result<PdfDocument, ConvertError> {
     let data = fs::read(input).map_err(|e| ConvertError::Failed(format!("read {input}: {e}")))?;
     let doc = oxidocs_core::parse_docx(&data).map_err(|e| ConvertError::Failed(format!("parse {input}: {e}")))?;
 
@@ -215,10 +277,7 @@ fn convert(input: &str, output: &str, strict: bool) -> Result<Converted, Convert
         }
     }
 
-    let pdf_bytes = oxipdf_core::write_pdf(&pdf_doc);
-
-    fs::write(output, &pdf_bytes).map_err(|e| ConvertError::Failed(format!("write {output}: {e}")))?;
-    Ok(Converted { bytes: pdf_bytes.len(), pages: pdf_doc.pages.len() })
+    Ok(pdf_doc)
 }
 
 /// Below this share of its own text drawn, `--strict` refuses a document.
@@ -467,7 +526,12 @@ fn unescape_xml(text: &str) -> String {
 }
 
 fn docx_to_pdf(input: &str, output: &str, strict: bool) {
-    match convert(input, output, strict) {
+    finish(input, output, convert(input, output, strict));
+}
+
+/// Report a one-shot conversion and exit with its status.
+fn finish(input: &str, output: &str, result: Result<Converted, ConvertError>) {
+    match result {
         Ok(c) => println!("Converted {} -> {} ({} bytes, {} pages)", input, output, c.bytes, c.pages),
         Err(ConvertError::Unsupported(u)) => {
             eprintln!("{}", serde_json::json!({ "unsupported": u }));
@@ -534,8 +598,18 @@ fn serve_one(line: &str) -> serde_json::Value {
         return json!({ "id": id, "ok": false, "exit": EXIT_FAILED, "error": "request needs input and output" });
     };
     let strict = req["strict"].as_bool().unwrap_or(false);
+    let png = output.to_ascii_lowercase().ends_with(".png");
+    let number = |key: &str| req[key].as_u64().filter(|n| *n > 0 && *n <= u32::MAX as u64).map(|n| n as u32);
+    let page = number("page").unwrap_or(1) as usize;
+    let size = raster::Size { width: number("width"), height: number("height") };
     let start = std::time::Instant::now();
-    let result = std::panic::catch_unwind(|| convert(input, output, strict));
+    let result = std::panic::catch_unwind(|| {
+        if png {
+            convert_png(input, output, strict, page, size)
+        } else {
+            convert(input, output, strict)
+        }
+    });
     let ms = start.elapsed().as_secs_f64() * 1000.0;
     match result {
         Ok(Ok(c)) => json!({ "id": id, "ok": true, "pages": c.pages, "bytes": c.bytes, "ms": ms }),
@@ -4801,6 +4875,7 @@ fn extract_cff_from_otf(data: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod serve_tests {
     use super::*;
+    use serde_json::json;
 
     /// A bad request, a missing file and a document the strict check refuses
     /// each answer with the status `docx-to-pdf` would exit with, and carry
@@ -4817,6 +4892,25 @@ mod serve_tests {
         let no_output = serve_one(r#"{"id": "a", "input": "x.docx"}"#);
         assert_eq!(no_output["id"], "a");
         assert_eq!(no_output["ok"].as_bool(), Some(false));
+    }
+
+    /// An output ending in .png draws the asked page fitted inside the box,
+    /// and a page past the end fails like a bad document.
+    #[test]
+    fn a_png_request_draws_one_page_inside_the_box() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/table_default_docx.docx");
+        let dir = std::env::temp_dir().join(format!("oxi-png-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let output = dir.join("thumb.PNG");
+        let request = json!({ "id": 1, "input": input, "output": output, "width": 200, "height": 200 });
+        let answer = serve_one(&request.to_string());
+        assert_eq!(answer["ok"].as_bool(), Some(true), "{answer}");
+        let png = image::open(&output).unwrap();
+        assert!(png.width() <= 200 && png.height() == 200, "{}x{}", png.width(), png.height());
+
+        let past_end = json!({ "input": input, "output": output, "page": 99 });
+        assert_eq!(serve_one(&past_end.to_string())["exit"].as_i64(), Some(EXIT_FAILED as i64));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// One conversion's font plan must not reach the next one on the same
