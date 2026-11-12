@@ -1,0 +1,85 @@
+name: Python wheels
+
+# Builds the oxidocs Python package (crates/oxidocs-python: the oxidocs binary
+# plus a thin Python API) for Linux, macOS and Windows and tests each wheel on
+# its own platform, on pull requests that touch it and by hand. Only a manual
+# run with "publish" ticked uploads them to PyPI.
+# Publishing uses PyPI trusted publishing (no token): the PyPI project
+# "oxidocs" must list this repository and workflow as a trusted publisher.
+
+on:
+  # A pull request that touches the package builds and tests every wheel.
+  pull_request:
+    paths:
+      - "crates/oxidocs-python/**"
+      - ".github/workflows/python-wheels.yml"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload the wheels to PyPI after they pass"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: wheel (${{ matrix.os }} ${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: "2_28", test: true }
+          - { os: ubuntu-latest, target: aarch64, manylinux: "2_28", test: false }
+          - { os: macos-14, target: aarch64, test: true }
+          - { os: macos-13, target: x86_64, test: true }
+          - { os: windows-latest, target: x64, test: true }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/oxidocs-python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --out dist
+
+      - uses: actions/setup-python@v5
+        if: ${{ matrix.test }}
+        with:
+          python-version: "3.12"
+
+      - name: Test the wheel
+        if: ${{ matrix.test }}
+        shell: bash
+        working-directory: crates/oxidocs-python
+        run: |
+          python -m pip install pytest
+          python -m pip install --no-index --find-links dist oxidocs
+          python -m pytest -q tests
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.target }}
+          path: crates/oxidocs-python/dist/*.whl
+
+  publish:
+    needs: wheels
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
