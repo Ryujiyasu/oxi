@@ -5600,7 +5600,26 @@ fn parse_paragraph_with_inline_images_impl(
                     .or_else(|| style.default_run_style.as_ref().and_then(|r| r.character_spacing))
                     .unwrap_or(0.0);
                 let unit = size * ur.and_then(|r| r.text_scale).unwrap_or(100.0) / 100.0 + 2.0 * track;
-                if (t - c / 100.0 * unit).abs() <= 0.25 * unit {
+                // OXI_FLC_NORMAL_UNIT (2026-11-13, default ON, opt-out _DISABLE): a cache
+                // that is exactly chars x the NORMAL style's size is Word's own (written
+                // when the paragraph still had Normal's size) and is drawn as stored,
+                // however far it is from chars x the paragraph's unit.
+                // `_flc_normal_unit_census.py` (every JA corpus paragraph of that shape
+                // with a Word PDF, body, jc not centred): six documents, all drawn at
+                // the cache -- 199f652e 60.02 (5 x 12; unit 10.5 -> 52.5), 009bbe8a
+                // 231.1 (22 x 10.5; unit 11 -> 242), 04043b25 33.04 (3 x 11; unit 10),
+                // 1e0c0a5b 105.04 (10 x 10.5; unit 28 -> 280), 26bbe4f5 21.0 (2 x 10.5;
+                // unit 18), blind-J reports__7a8daf36 383.32 (36.5 x 10.5; unit 12 ->
+                // 438, which wrapped «2023.09.20 n= 64» and moved every chart 17.5pt).
+                let normal_size = styles.default_paragraph_style_id.as_ref()
+                    .and_then(|id| styles.styles.get(id))
+                    .and_then(|d| d.paragraph.default_run_style.as_ref())
+                    .and_then(|r| r.font_size)
+                    .or_else(|| styles.doc_default_run_style.as_ref().and_then(|r| r.font_size))
+                    .unwrap_or(10.5);
+                let normal_cache = std::env::var_os("OXI_FLC_NORMAL_UNIT_DISABLE").is_none()
+                    && (t - c / 100.0 * normal_size).abs() <= 0.06;
+                if (t - c / 100.0 * unit).abs() <= 0.25 * unit || normal_cache {
                     style.indent_first_line_chars = None;
                 } else {
                     style.indent_first_line = None;
