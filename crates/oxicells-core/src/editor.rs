@@ -484,11 +484,11 @@ impl XlsxEditor {
                     let name = &source;
                     let was_ungrouped = original_drawings.iter()
                         .find(|original| original.name.as_ref() == Some(name))
-                        .is_some_and(|original| !original.grouped);
+                        .is_none_or(|original| !original.grouped);
                     was_ungrouped.then_some((name.clone(), member.group_child_transform?))
                 }).collect::<Vec<_>>();
                 if members.len() > 1 {
-                    new_groups.push(DrawingGroupAddition { name: group_name.clone(), from, to, transform, members });
+                    new_groups.push(DrawingGroupAddition { name: group_name.clone(), non_visual_id: drawing.group_non_visual_id, from, to, transform, members });
                 }
             }
             if !new_groups.is_empty() {
@@ -3165,6 +3165,7 @@ struct PictureStyleEdit {
 #[derive(Debug, Clone)]
 struct DrawingGroupAddition {
     name: String,
+    non_visual_id: Option<u32>,
     from: crate::ir::Anchor,
     to: crate::ir::Anchor,
     transform: crate::ir::GroupTransform,
@@ -3460,7 +3461,9 @@ fn drawing_addition_package(
     let ole_parts: HashMap<String, usize> = ole_additions.iter().filter_map(|(sheet, _)| {
         existing_parts.get(sheet).map(|part| (part.clone(), *sheet))
     }).collect();
-    let groups_by_part: HashMap<String, Vec<DrawingGroupAddition>> = group_additions.iter().filter_map(|(sheet, groups)| existing_parts.get(sheet).map(|part| (part.clone(), groups.clone()))).collect();
+    let groups_by_part: HashMap<String, Vec<DrawingGroupAddition>> = group_additions.iter()
+        .filter_map(|(sheet, groups)| existing_parts.get(sheet).or_else(|| created_drawing_parts.get(sheet))
+            .map(|part| (part.clone(), groups.clone()))).collect();
     for part in part_additions.keys().chain(edits_by_part.keys()).chain(fills_by_part.keys()).chain(text_by_part.keys()).chain(pictures_by_part.keys()).chain(geometry_by_part.keys()).chain(deletions_by_part.keys()).chain(ole_parts.keys()).chain(groups_by_part.keys()).chain(fresh_ole_parts.values()).chain(identity_edits.keys()).cloned().collect::<std::collections::HashSet<_>>() {
         let mut xml = plan.parts.remove(&part)
             .or_else(|| plan.new_parts.iter().find(|(path, _)| path == &part).map(|(_, xml)| xml.clone()));
@@ -3824,7 +3827,9 @@ fn patch_drawing_group_addition(xml: &str, group: &DrawingGroupAddition) -> Resu
         child_shapes.push(shape);
         selected.push((start, end));
     }
-    let id = max_drawing_shape_id(xml)?.checked_add(1).ok_or_else(|| XlsxError::InvalidData("group shape id overflow".into()))?;
+    let id = if let Some(id) = group.non_visual_id { id } else {
+        max_drawing_shape_id(xml)?.checked_add(1).ok_or_else(|| XlsxError::InvalidData("group shape id overflow".into()))?
+    };
     let transform = group.transform;
     let from = group_anchor(group.from);
     let to = format!("<xdr:to><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:to>", group.to.col, group.to.col_off, group.to.row, group.to.row_off);
@@ -15026,6 +15031,7 @@ mod tests {
             frame: None,
             grouped: false,
             group_name: None,
+            group_non_visual_id: None,
             group_rotation: 0,
             group_transform: None,
             group_child_transform: None,
@@ -15173,6 +15179,7 @@ mod tests {
             frame: None,
             grouped: false,
             group_name: None,
+            group_non_visual_id: None,
             group_rotation: 0,
             group_transform: None,
             group_child_transform: None,
@@ -15344,6 +15351,7 @@ mod tests {
             frame: None,
             grouped: false,
             group_name: None,
+            group_non_visual_id: None,
             group_rotation: 0,
             group_transform: None,
             group_child_transform: None,
@@ -15482,6 +15490,45 @@ mod tests {
         package.by_name("[Content_Types].xml").unwrap().read_to_string(&mut types).unwrap();
         assert!(types.contains("application/vnd.openxmlformats-officedocument.drawing+xml"));
         assert!(package.file_names().any(|name| name == "xl/drawings/drawing1.xml"));
+    }
+
+    #[test]
+    fn newly_created_group_keeps_parent_identity_before_its_children_after_save() {
+        let source = workbook_without_drawings();
+        let mut editor = XlsxEditor::new(&source).unwrap();
+        let mut edited = editor.workbook().clone();
+        for index in 0..2 {
+            let mut child = simple_added_shape(&format!("Child {index}"));
+            child.non_visual_id = Some(3 + index);
+            child.grouped = true;
+            child.group_name = Some("Copied group".into());
+            child.group_non_visual_id = Some(2);
+            child.group_transform = Some(crate::ir::GroupTransform {
+                offset: (0, 0), extent: (1_000_000, 1_000_000),
+                child_offset: (0, 0), child_extent: (1_000_000, 1_000_000),
+            });
+            child.group_child_transform = Some((i64::from(index) * 200_000, 0, 100_000, 100_000));
+            child.metadata = Some(crate::ir::DrawingMetadata {
+                title: Some(format!("Child title {index}")), ..Default::default()
+            });
+            edited.sheets[0].drawings.push(child);
+        }
+        // The browser can copy this IR through JSON before sending it to save.
+        let edited = serde_json::from_value(serde_json::to_value(edited).unwrap()).unwrap();
+        editor.apply_workbook(&edited).unwrap();
+        let saved = editor.save().unwrap();
+        let reopened = crate::parse_xlsx(&saved).unwrap();
+        let children = &reopened.sheets[0].drawings;
+        assert_eq!(children.len(), 2);
+        for (index, child) in children.iter().enumerate() {
+            assert!(child.grouped);
+            assert_eq!(child.group_non_visual_id, Some(2));
+            assert_eq!(child.non_visual_id, Some(3 + index as u32));
+            assert_eq!(child.group_name.as_deref(), Some("Copied group"));
+            assert_eq!(child.metadata.as_ref().unwrap().title, Some(format!("Child title {index}")));
+        }
+        let untouched = XlsxEditor::new(&saved).unwrap().save().unwrap();
+        assert_eq!(untouched, saved);
     }
 
     #[test]

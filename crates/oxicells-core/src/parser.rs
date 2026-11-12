@@ -2785,6 +2785,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
     let mut drawing_id: Option<u32> = None;
     let mut drawing_metadata: Option<crate::ir::DrawingMetadata> = None;
     let mut group_name: Option<String> = None;
+    let mut group_non_visual_id: Option<u32> = None;
     let mut reader = quick_xml::reader::NsReader::from_str(xml);
     let mut buf = Vec::new();
     let mut found: Vec<(Drawing, DrawingImageRelationships)> = Vec::new();
@@ -2957,6 +2958,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
                         // Excel exposes nested group leaves through the outer
                         // group's flat GroupItems collection and ParentGroup.
                         group_name = name.clone();
+                        group_non_visual_id = drawing_id;
                     }
                     drawing_name = name;
                 }
@@ -2969,6 +2971,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
                     frame_to = None;
                     drawing_metadata = None;
                     group_name = None;
+                    group_non_visual_id = None;
                     group_rotation = 0;
                     parent_groups.clear();
                     parent_group_rotations.clear();
@@ -3884,6 +3887,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
                                     }),
                                     grouped: true,
                                     group_name: group_name.clone(),
+                                    group_non_visual_id,
                                     group_rotation,
                                     group_transform: Some(crate::ir::GroupTransform {
                                         offset: root.0,
@@ -3963,6 +3967,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
                                     frame: held,
                                     grouped: false,
                                     group_name: None,
+                                    group_non_visual_id: None,
                                     group_rotation: 0,
                                     group_transform: None,
                                     group_child_transform: None,
