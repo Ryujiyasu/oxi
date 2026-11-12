@@ -119,9 +119,10 @@ for (const item of shiftCases.filter(({args}) => [0, 1, 5, 6, 8, 9].includes(arg
 const persisted = [];
 for (const [name, changes, expected] of [
     ['custom', [[1, 12.5]], '0|Variant():False|A1:1:2|5:13|11:False'],
-    ['explicit-standard-size', [[3, 0]], '0|Variant():False|A1:1:2|5:8|11:False'],
+    ['explicit-standard-size', [[3, 0]], '0|Variant():False|A1:1:2|5:8|11:True'],
     ['new-standard', [[2, 10.5], [0, 0]], '0|Variant():False|A1:1:2|5:11|11:True'],
     ['reset-standard', [[1, 12.5], [0, 0]], '0|Variant():False|A1:1:2|5:8|11:True'],
+    ['custom-then-standard-size', [[1, 12], [3, 0]], '0|Variant():False|A1:1:2|5:8|11:False'],
 ]) {
     let book = seed(1);
     for (const args of changes) {
