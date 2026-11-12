@@ -52,6 +52,27 @@ for (const custom of [new Map([[3, true]]), {'3': true}]) {
     assert.equal(Object.hasOwn(reopened.defined_name_attributes, '__proto__'), true);
     verify(wasm.run_spreadsheet_vba_with_outcome(reopened, source, item.method, item.args, 0, 'arrays.xlsx', options), item, 'workbook metadata save/reopen');
 }
+// A partially updated client can hold Maps and JSON objects in one workbook.
+// Both orders must retain each sheet's explicit column-width provenance.
+for (const forms of [['Map', 'Map'], ['object', 'object'], ['Map', 'object'], ['object', 'Map']]) {
+    const book = seed(1);
+    book.sheets = [book.sheets[0], structuredClone(book.sheets[0])];
+    book.sheets[1].name = 'MixedInput';
+    for (let index = 0; index < 2; index++) {
+        book.sheets[index].col_widths[3] = 9.140625;
+        book.sheets[index].col_custom_widths = forms[index] === 'Map' ? new Map([[3, true]]) : {'3': true};
+    }
+    const item = {method: 'WidthProbeRoot', args: ['CELL("width",D1)', 'application'],
+        expected: '0|Variant():False|A1:1:2|5:8|11:False'};
+    const outcome = wasm.run_spreadsheet_vba_with_outcome(book, source, item.method, item.args, 0, 'arrays.xlsx', options);
+    const returned = verify(outcome, item, 'mixed workbook metadata ' + forms.join('/'));
+    assert.equal(outcome.status_bar, undefined, 'absent execution state keeps its protocol representation');
+    assert.deepEqual(JSON.parse(JSON.stringify(returned)), returned);
+    assert.deepEqual(returned.sheets.map(sheet => sheet.col_custom_widths['3']), [true, true]);
+    const reopened = wasm.parse_spreadsheet(wasm.edit_xlsx_from_workbook(original, returned));
+    assert.deepEqual(reopened.sheets.map(sheet => sheet.col_custom_widths['3']), [true, true], 'both sheets retain column intent after save/reopen');
+    verify(wasm.run_spreadsheet_vba_with_outcome(reopened, source, item.method, item.args, 0, 'arrays.xlsx', options), item, 'mixed metadata save/reopen');
+}
 for (const version of [1]) {
     let book = seed(version);
     for (const item of cases.filter(c => c.version === version)) {

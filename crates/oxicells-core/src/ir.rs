@@ -2292,6 +2292,7 @@ pub struct CellStyle {
     /// out. 154 of the fonts in the 285 conformance workbooks ask for one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub strikethrough: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<f32>,
     /// The typeface a cell asks for, when it names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2305,14 +2306,20 @@ pub struct CellStyle {
     /// from these two and not from the name, so both have to survive as far
     /// as the renderer (`cell_face_in_place`).
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font_charset: Option<i32>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font_family: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bg_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern_fill: Option<Box<CellFill>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub number_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub horizontal_align: Option<String>,
     /// How many levels the text is pushed in from the edge it is aligned to.
     /// 71 of the conformance corpus's 285 workbooks use one.
@@ -2350,9 +2357,13 @@ pub struct CellStyle {
     /// `Range.PrefixCharacter` answers as `'`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quote_prefix: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub border_top: Option<BorderLine>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub border_bottom: Option<BorderLine>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub border_left: Option<BorderLine>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub border_right: Option<BorderLine>,
     /// The rule drawn corner to corner, which a Japanese form uses to strike
     /// a cell out. The border says how it is drawn; the two flags say which

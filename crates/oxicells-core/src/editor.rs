@@ -12370,7 +12370,7 @@ fn patch_sheet_defaults(xml: &str, width: Option<f32>, row: Option<(f32, bool)>)
                     let key = attribute.key.as_ref();
                     if !(width.is_some() && key == b"defaultColWidth"
                         || row.is_some() && matches!(key, b"defaultRowHeight" | b"customHeight"))
-                    { changed.push_attribute(attribute); }
+                    { push_preserved_xml_attribute(&mut changed, attribute); }
                 }
                 if let Some(width) = width { changed.push_attribute(("defaultColWidth", width_text(width).as_str())); }
                 if let Some((height, custom)) = row {
@@ -12841,8 +12841,7 @@ fn write_col(
             {
                 continue;
             }
-            let value = String::from_utf8_lossy(&attribute.value).into_owned();
-            span.push_attribute((key.as_str(), value.as_str()));
+            push_preserved_xml_attribute(&mut span, attribute);
         }
     }
     if face.style_changed {
@@ -12967,6 +12966,22 @@ fn close_cols(writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<(), XlsxError> {
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
 }
 
+// Imported attribute values already contain XML entity references. Copy them
+// without escaping those references again. Generated start tags use double
+// quotes, so a literal double quote from a single-quoted input needs escaping.
+fn push_preserved_xml_attribute(target: &mut BytesStart<'_>, mut attribute: quick_xml::events::attributes::Attribute<'_>) {
+    if attribute.value.contains(&b'"') {
+        let mut value = Vec::with_capacity(attribute.value.len() + 5);
+        for &byte in attribute.value.iter() {
+            if byte == b'"' { value.extend_from_slice(b"&quot;"); }
+            else { value.push(byte); }
+        }
+        attribute.value = std::borrow::Cow::Owned(value);
+    }
+    target.push_attribute(attribute);
+}
+
+
 /// Copies a start tag, pointing it at a different entry in the style sheet.
 /// Copies a row's start tag with whatever `want` decides applied to it.
 ///
@@ -13001,8 +13016,7 @@ fn row_as_wanted(start: &BytesStart<'_>, want: &RowWant) -> BytesStart<'static> 
             || (want.thickness.is_some() && matches!(key.as_str(), "thickTop" | "thickBot")) {
             continue;
         }
-        let value = String::from_utf8_lossy(&attribute.value).into_owned();
-        rebuilt.push_attribute((key.as_str(), value.as_str()));
+        push_preserved_xml_attribute(&mut rebuilt, attribute);
     }
     if let Some((points, pinned)) = &height {
         rebuilt.push_attribute(("ht", points.as_str()));
@@ -13034,8 +13048,7 @@ fn with_style(start: &BytesStart<'_>, style: u32) -> BytesStart<'static> {
         if key == "s" {
             continue;
         }
-        let value = String::from_utf8_lossy(&attribute.value).into_owned();
-        rewritten.push_attribute((key.as_str(), value.as_str()));
+        push_preserved_xml_attribute(&mut rewritten, attribute);
     }
     if style != 0 { rewritten.push_attribute(("s", style.to_string().as_str())); }
     rewritten
@@ -13508,7 +13521,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                                 if key == "t" || (key == "s" && restyle.is_some()) {
                                     continue;
                                 }
-                                new_start.push_attribute((key, std::str::from_utf8(&attr.value).unwrap_or("")));
+                                push_preserved_xml_attribute(&mut new_start, attr);
                             }
                             if let Some(style) = restyle.filter(|style| *style != 0) {
                                 new_start.push_attribute(("s", style.to_string().as_str()));
@@ -13787,7 +13800,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                         for attr in e.attributes().flatten() {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             if key == "t" || (key == "s" && restyle.is_some()) { continue; }
-                            new_start.push_attribute((key, std::str::from_utf8(&attr.value).unwrap_or("")));
+                            push_preserved_xml_attribute(&mut new_start, attr);
                         }
                         if let Some(style) = restyle.copied().filter(|style| *style != 0) {
                             new_start.push_attribute(("s", style.to_string().as_str()));
@@ -13819,7 +13832,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                         let mut restyled = BytesStart::new("c");
                         for attr in e.attributes().flatten() {
                             if attr.key.as_ref() != b"s" {
-                                restyled.push_attribute(attr);
+                                push_preserved_xml_attribute(&mut restyled, attr);
                             }
                         }
                         if *style != 0 { restyled.push_attribute(("s", style.to_string().as_str())); }
@@ -18195,4 +18208,55 @@ xmlns:f="urn:oxi:foreign-style-probe" xmlns:mc="http://schemas.openxmlformats.or
                         <v>first value</v></c></row></sheetData>";
         assert!(patched.contains(expected));
     }
+    #[test]
+    fn workbook_edits_preserve_opaque_attribute_values_across_repeated_saves() {
+        let original = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let worksheet = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:oxitest="urn:oxi:row-opacity" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="oxitest"><sheetFormatPr defaultRowHeight="15" oxitest:note='a"b&amp;c&apos;d'/><cols><col min="1" max="1" width="8.43" customWidth="1" oxitest:note='a"b&amp;c&apos;d'/></cols><sheetData><row r="1" oxitest:note='a"b&amp;c&apos;d'><c r="A1" s="0" oxitest:note='a"b&amp;c&apos;d'><v>1</v></c><c r="B1" s="0" oxitest:note='a"b&amp;c&apos;d'/></row></sheetData></worksheet>"#;
+        let mut data = replace_package_parts(original, BTreeMap::from([
+            ("xl/worksheets/sheet1.xml".to_string(), worksheet.as_bytes().to_vec()),
+        ])).unwrap();
+        for (height, edit_values) in [(22.0, false), (23.0, false), (24.0, true), (25.0, true)] {
+            let mut editor = XlsxEditor::new(&data).unwrap();
+            let mut book = editor.workbook().clone();
+            let sheet = &mut book.sheets[0];
+            sheet.default_row_height = height;
+            sheet.default_row_custom = true;
+            sheet.col_widths[0] = height;
+            sheet.rows[0].height = Some(height + 1.0);
+            sheet.rows[0].custom_height = true;
+            if !sheet.rows[0].cells.iter().any(|cell| cell.col == 1) {
+                let mut cell = sheet.rows[0].cells[0].clone();
+                cell.col = 1;
+                cell.value = crate::ir::CellValue::Empty;
+                sheet.rows[0].cells.push(cell);
+            }
+            for cell in &mut sheet.rows[0].cells {
+                cell.style.bold = true;
+                cell.style.font_size = Some(height);
+                if edit_values { cell.value = crate::ir::CellValue::Number(f64::from(height)); }
+            }
+            editor.apply_workbook(&book).unwrap();
+            data = editor.save().unwrap();
+            let mut archive = ZipArchive::new(Cursor::new(&data)).unwrap();
+            let mut xml = String::new();
+            archive.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+            let mut reader = Reader::from_str(&xml);
+            let mut values = 0;
+            loop {
+                match reader.read_event().unwrap() {
+                    Event::Start(tag) | Event::Empty(tag) => {
+                        if let Some(attribute) = tag.try_get_attribute("oxitest:note").unwrap() {
+                            assert_eq!(attribute.decode_and_unescape_value(reader.decoder()).unwrap().as_ref(), "a\"b&c'd");
+                            values += 1;
+                        }
+                    }
+                    Event::Eof => break,
+                    _ => {}
+                }
+            }
+            assert_eq!(values, 5, "sheet defaults, column, row and both nonempty/empty cells retain their opaque attributes");
+        }
+    }
+
+
 }

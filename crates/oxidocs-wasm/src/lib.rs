@@ -324,7 +324,10 @@ pub fn parse_document(data: &[u8]) -> Result<JsValue, JsError> {
 // Workbook metadata crosses worker and JSON boundaries as ordinary data.
 #[cfg(feature = "suite")]
 pub(crate) fn spreadsheet_value_to_js<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
-    let json = serde_json::to_string(value).map_err(|error| JsError::new(&error.to_string()))?;
+    // Value widens f32 values to the exact f64 represented by JavaScript.
+    // Serializing f32 directly would shorten 20.100000381469727 to 20.1.
+    let value = serde_json::to_value(value).map_err(|error| JsError::new(&error.to_string()))?;
+    let json = serde_json::to_string(&value).map_err(|error| JsError::new(&error.to_string()))?;
     js_sys::JSON::parse(&json).map_err(|error| JsError::new(&format!("invalid serialized workbook: {error:?}")))
 }
 
@@ -335,9 +338,21 @@ pub(crate) fn spreadsheet_workbook_from_js(value: JsValue) -> Result<oxicells_co
     match serde_wasm_bindgen::from_value(value.clone()) {
         Ok(workbook) => Ok(workbook),
         Err(original) => {
-            let json: serde_json::Value = serde_wasm_bindgen::from_value(value)
+            use wasm_bindgen::JsCast;
+            // A workbook can contain both older Maps and JSON objects. Normalize
+            // Maps recursively before serde_json reads numeric object keys.
+            let replacer = Closure::<dyn FnMut(JsValue, JsValue) -> Result<JsValue, JsValue>>::new(
+                |_, entry: JsValue| {
+                    if entry.is_instance_of::<js_sys::Map>() {
+                        js_sys::Object::from_entries(&entry).map(JsValue::from)
+                    } else {
+                        Ok(entry)
+                    }
+                },
+            );
+            let json = js_sys::JSON::stringify_with_replacer(&value, replacer.as_ref())
                 .map_err(|_| original.to_string())?;
-            serde_json::from_value(json).map_err(|error| error.to_string())
+            serde_json::from_str(&String::from(json)).map_err(|error| error.to_string())
         }
     }
 }
