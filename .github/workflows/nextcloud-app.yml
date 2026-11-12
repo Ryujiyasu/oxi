@@ -150,7 +150,7 @@ jobs:
           case "$tarball" in *"-$version.tar.gz") ;; *) echo "::error::$tarball is not version $version"; exit 1;; esac
           tag="nextcloud-app-v$version"
           openssl dgst -sha512 -sign "$RUNNER_TEMP/app.key" "$tarball" | openssl base64 -A > "$tarball.sig"
-          gh release create "$tag" "$tarball" --target "$GITHUB_SHA" \
+          gh release create "$tag" "$tarball" --target "$GITHUB_SHA" --latest=false \
             --title "Oxi Word Previews for Nextcloud $version" \
             --notes "The oxidocs_preview Nextcloud app: thumbnails of Word documents without LibreOffice. Unpack into custom_apps and run \`occ app:enable oxidocs_preview\`, or install it from the Nextcloud App Store. See integrations/nextcloud/README.md."
           echo "TARBALL=$tarball" >> "$GITHUB_ENV"
