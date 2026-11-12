@@ -1,0 +1,80 @@
+name: Static binaries
+
+# Builds oxidocs as a static Linux binary (musl) for x86_64 and arm64 and
+# attaches both to a GitHub release, so a Dockerfile or an installer can
+# download one file that runs on any Linux, Alpine included:
+#
+#   https://github.com/Ryujiyasu/oxi/releases/download/<tag>/oxidocs-<arch>-unknown-linux-musl.tar.gz
+#
+# Run by hand with the tag to create, for example oxidocs-v0.9.0-static.1.
+# The release is made from the commit the workflow runs on.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (for example oxidocs-v0.9.0-static.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  binary:
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: x86_64 }
+          - { os: ubuntu-24.04-arm, arch: aarch64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build oxidocs (static, musl)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src -e CARGO_TARGET_DIR=/src/target/musl rust:1-alpine \
+            sh -c 'apk add -q musl-dev && cargo build --release -p oxidocs-cli --locked && strip target/musl/release/oxidocs'
+          sudo chown -R "$(id -u):$(id -g)" target/musl
+          file target/musl/release/oxidocs | grep -q 'static' || { echo "::error::not a static binary"; exit 1; }
+      - name: Smoke test
+        run: |
+          target/musl/release/oxidocs docx-to-pdf tests/fixtures/comprehensive_test.docx smoke.pdf
+          target/musl/release/oxidocs docx-to-png --width 256 tests/fixtures/comprehensive_test.docx smoke.png
+          # The same binary on Alpine, with nothing else installed.
+          docker run --rm -v "$PWD:/w" -w /w alpine:3 \
+            target/musl/release/oxidocs docx-to-pdf tests/fixtures/comprehensive_test.docx smoke-alpine.pdf
+      - name: Package
+        run: |
+          name="oxidocs-${{ matrix.arch }}-unknown-linux-musl"
+          mkdir "$name"
+          cp target/musl/release/oxidocs LICENSE "$name/"
+          tar --owner=0 --group=0 -czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxidocs-${{ matrix.arch }}-unknown-linux-musl
+          path: |
+            oxidocs-${{ matrix.arch }}-unknown-linux-musl.tar.gz
+            oxidocs-${{ matrix.arch }}-unknown-linux-musl.tar.gz.sha256
+
+  release:
+    needs: binary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: oxidocs-*-unknown-linux-musl
+          merge-multiple: true
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          cat *.sha256
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "oxidocs static Linux binaries ($TAG)" \
+            --notes "oxidocs built statically against musl for Linux x86_64 and arm64, from commit $GITHUB_SHA. One file, fonts included; runs on any Linux, Alpine included. Commands: \`oxidocs docx-to-pdf\`, \`oxidocs docx-to-png\`, \`oxidocs serve\`. License: MPL-2.0." \
+            oxidocs-*-unknown-linux-musl.tar.gz oxidocs-*-unknown-linux-musl.tar.gz.sha256
