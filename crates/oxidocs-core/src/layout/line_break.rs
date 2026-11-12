@@ -815,12 +815,24 @@ impl<'a> LineBreaker<'a> {
         let gap_view = |text: &str, st: &crate::ir::RunStyle| -> Vec<char> {
             if note_ref_gapless && st.note_reference { text.chars().map(|_| '\u{FFFC}').collect() } else { text.chars().collect() }
         };
+        // OXI_S1585_AUTOSPACE_GATE (2026-11-12, default ON, opt-out _DISABLE): a CJK/Latin
+        // joint is a gap only where the paragraph's auto-space puts one (autoSpaceDE for
+        // letters, autoSpaceDN for digits) -- S1499 and the legacy squeeze already ask.
+        // `_pb_autospace_cap_gen.py` (blind-J ja/reference__6c5dcb56 slice, HG丸ｺﾞｼｯｸM-PRO 12,
+        // «亜» + «R亜亜» x j + «亜» x k, auto-space off): Word wraps exactly at natural width
+        // (j=1/2/3 fit through w:right 73/138/200, wrap from 77/142/204); Oxi still took
+        // S1585's gap credit for gaps that were not there and kept a whole extra character
+        // (fits 117 / >=186 / >=252).
+        let s1585_gate = !crate::env_flag!("OXI_S1585_AUTOSPACE_GATE_DISABLE");
+        let s1585_de = !s1585_gate || (para_style.auto_space_de && self.doc_autospace());
+        let s1585_dn = !s1585_gate || (para_style.auto_space_dn && self.doc_autospace());
+        let s1585_lat = move |c: char| (c.is_ascii_alphabetic() && s1585_de) || (c.is_ascii_digit() && s1585_dn);
         let s1585_counts = |chars: &[char]| -> (usize, usize) {
             let solid = |c: char| kinsoku::is_cjk(c) && c != '\u{3000}';
             let mut gaps = 0usize;
             for w in chars.windows(2) {
                 let (a, b) = (w[0], w[1]);
-                if (solid(a) && b.is_ascii_alphanumeric()) || (a.is_ascii_alphanumeric() && solid(b)) {
+                if (solid(a) && s1585_lat(b)) || (s1585_lat(a) && solid(b)) {
                     gaps += 1;
                 }
             }
@@ -968,7 +980,8 @@ impl<'a> LineBreaker<'a> {
                         let fs = $style.font_size.unwrap_or(self.default_font_size);
                         let line_chars: Vec<char> = current_line.fragments.iter().flat_map(|f| gap_view(&f.text, &f.style)).collect();
                         let (g0, mid_sp) = s1585_counts(&line_chars);
-                        let gap_before = line_chars.last().map_or(false, |&c| kinsoku::is_cjk(c) && c != '\u{3000}');
+                        let gap_before = line_chars.last().map_or(false, |&c| kinsoku::is_cjk(c) && c != '\u{3000}')
+                            && word.chars().next().is_some_and(s1585_lat);
                         let g = g0 + gap_before as usize;
                         // OXI_JSHRINK_MID_OWN_GAP (2026-10-25, default ON, opt-out _DISABLE): the
                         // S1585 sweeps were one-line paragraphs, so every justified line they
@@ -6220,7 +6233,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     if overflow_tw > 0 && s1585_on && kinsoku::is_cjk(ch) && ch != '\u{3000}' {
                         let line_chars: Vec<char> = current_line.fragments.iter().flat_map(|f| gap_view(&f.text, &f.style)).collect();
                         let (g0, _) = s1585_counts(&line_chars);
-                        let gap_before = line_chars.last().map_or(false, |c| c.is_ascii_alphanumeric());
+                        let gap_before = line_chars.last().map_or(false, |&c| s1585_lat(c));
                         overflow_tw -= pt_to_tw(s1585_gap_part(g0 + gap_before as usize, font_size));
                     }
                     // S1499 (2026-09-20, default ON, opt-out OXI_S1499_DISABLE): a
