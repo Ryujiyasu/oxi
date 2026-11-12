@@ -1,0 +1,38 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "oxidocs"
+description = "Convert .docx to PDF without LibreOffice or Microsoft Word: the Oxi engine, as a Python package."
+readme = "README.md"
+requires-python = ">=3.9"
+# The bundled oxidocs binary is MPL-2.0; this package's Python code is MIT OR Apache-2.0.
+license = "MPL-2.0 AND (MIT OR Apache-2.0)"
+dynamic = ["version"]
+keywords = ["docx", "pdf", "word", "office", "converter", "libreoffice"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Office/Business :: Office Suites",
+    "Topic :: Text Processing",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ryujiyasu/oxi"
+Source = "https://github.com/Ryujiyasu/oxi/tree/main/crates/oxidocs-python"
+Issues = "https://github.com/Ryujiyasu/oxi/issues"
+
+[tool.maturin]
+# Ship the oxidocs command-line binary itself (installed as the `oxidocs`
+# script) together with the thin Python API in python/oxidocs.
+bindings = "bin"
+manifest-path = "../oxidocs-cli/Cargo.toml"
+python-source = "python"
+python-packages = ["oxidocs"]
+strip = true

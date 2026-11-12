@@ -17,7 +17,6 @@ test_*.pdf
 test_*.docx
 word_*.pdf
 debug_*.txt
-crates/oxidocs-python/
 tools/font-metrics-gen/output/
 
 # Font metrics (generated from user's local fonts via tools/font-metrics-gen)
