@@ -17,6 +17,10 @@ mod vba;
 mod emf;
 mod raster;
 
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
