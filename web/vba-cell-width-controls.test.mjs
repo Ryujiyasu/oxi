@@ -38,13 +38,18 @@ for (const custom of [new Map([[3, true]]), {'3': true}]) {
     const book = seed(1);
     book.sheets[0].col_widths[3] = 9.140625;
     book.sheets[0].col_custom_widths = custom;
+    book.defined_names = [...(book.defined_names || []), ['__proto__', '1']];
+    book.defined_name_attributes = new Map([['__proto__', new Map([['comment', 'preserve']])]]);
     const item = {method: 'WidthProbeRoot', args: ['CELL("width",D1)', 'application'],
         expected: '0|Variant():False|A1:1:2|5:8|11:False'};
     const returned = verify(wasm.run_spreadsheet_vba_with_outcome(book, source, item.method, item.args, 0, 'arrays.xlsx', options), item, 'workbook metadata input');
     assert.deepEqual(JSON.parse(JSON.stringify(returned)), returned, 'JSON copying preserves the complete workbook');
+    assert.equal(Object.hasOwn(returned.defined_name_attributes, '__proto__'), true);
+    assert.equal(returned.defined_name_attributes.__proto__.comment, 'preserve', 'workbook names remain ordinary metadata keys');
     const saved = wasm.edit_xlsx_from_workbook(original, returned);
     const reopened = wasm.parse_spreadsheet(saved);
     assert.deepEqual(JSON.parse(JSON.stringify(reopened)), reopened, 'parsed workbooks preserve JSON metadata');
+    assert.equal(Object.hasOwn(reopened.defined_name_attributes, '__proto__'), true);
     verify(wasm.run_spreadsheet_vba_with_outcome(reopened, source, item.method, item.args, 0, 'arrays.xlsx', options), item, 'workbook metadata save/reopen');
 }
 for (const version of [1]) {

@@ -324,9 +324,8 @@ pub fn parse_document(data: &[u8]) -> Result<JsValue, JsError> {
 // Workbook metadata crosses worker and JSON boundaries as ordinary data.
 #[cfg(feature = "suite")]
 pub(crate) fn spreadsheet_value_to_js<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
-    let json = serde_json::to_value(value).map_err(|error| JsError::new(&error.to_string()))?;
-    json.serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
-        .map_err(|error| JsError::new(&error.to_string()))
+    let json = serde_json::to_string(value).map_err(|error| JsError::new(&error.to_string()))?;
+    js_sys::JSON::parse(&json).map_err(|error| JsError::new(&format!("invalid serialized workbook: {error:?}")))
 }
 
 #[cfg(feature = "suite")]
