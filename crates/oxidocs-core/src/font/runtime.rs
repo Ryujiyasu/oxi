@@ -93,7 +93,22 @@ fn candidate_files(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Does this face's own `name` table say it is the family/style we want?
+/// OXI_FACE_LEGACY_FAMILY_FIRST (2026-11-11, default ON, opt-out _DISABLE): the passes
+/// a search makes -- first the legacy family name (nameID 1) alone, then the
+/// typographic one (nameID 16) too. Every Yu Gothic file names its typographic family
+/// «Yu Gothic», so a first-match walk answered a regular request with YuGothL.ttc
+/// (subfamily «Light», no bold, no italic) before YuGothR.ttc; Word draws
+/// YuGothic-Regular (`_pb_cjk_glyph_fallback2_gen.py`). The legacy family of the Light
+/// file is «Yu Gothic Light», so a legacy-only pass reaches the Regular one.
+fn family_passes() -> &'static [bool] {
+    if crate::env_flag!("OXI_FACE_LEGACY_FAMILY_FIRST_DISABLE") { &[false] } else { &[true, false] }
+}
+
 fn face_matches(font: &skrifa::FontRef, family: &str, bold: bool, italic: bool) -> bool {
+    face_matches_in(font, family, bold, italic, false)
+}
+
+fn face_matches_in(font: &skrifa::FontRef, family: &str, bold: bool, italic: bool, legacy_only: bool) -> bool {
     use skrifa::MetadataProvider;
     let want = family.trim().to_ascii_lowercase();
     let mut fam_ok = false;
@@ -105,7 +120,7 @@ fn face_matches(font: &skrifa::FontRef, family: &str, bold: bool, italic: bool) 
     }
     // TYPOGRAPHIC_FAMILY_NAME carries the real family when the legacy field was
     // split into 4-style groups ("Gill Sans Nova Cond Lt" and friends).
-    if !fam_ok {
+    if !fam_ok && !legacy_only {
         for rec in font.localized_strings(skrifa::string::StringId::TYPOGRAPHIC_FAMILY_NAME) {
             if rec.to_string().trim().to_ascii_lowercase() == want {
                 fam_ok = true;
@@ -212,6 +227,7 @@ pub(super) fn metrics_from(font: &skrifa::FontRef, family: &str) -> Option<FontM
 }
 
 fn load_from_disk(family: &str, bold: bool, italic: bool) -> Option<&'static FontMetrics> {
+    for &legacy_only in family_passes() {
     for root in search_roots() {
         for path in candidate_files(&root) {
             let Ok(data) = std::fs::read(&path) else {
@@ -241,7 +257,7 @@ fn load_from_disk(family: &str, bold: bool, italic: bool) -> Option<&'static Fon
                 Err(_) => continue,
             };
             for font in faces {
-                if !face_matches(&font, family, bold, italic) {
+                if !face_matches_in(&font, family, bold, italic, legacy_only) {
                     continue;
                 }
                 if let Some(m) = metrics_from(&font, family) {
@@ -259,6 +275,7 @@ fn load_from_disk(family: &str, bold: bool, italic: bool) -> Option<&'static Fon
             }
         }
     }
+    }
     None
 }
 
@@ -266,6 +283,7 @@ fn load_from_disk(family: &str, bold: bool, italic: bool) -> Option<&'static Fon
 /// same search `resolve` uses, S1272's collection walk included), for writers that
 /// embed the face itself. `None` when the machine does not have it.
 pub fn face_file(family: &str, bold: bool, italic: bool) -> Option<(PathBuf, u32)> {
+    for &legacy_only in family_passes() {
     for root in search_roots() {
         for path in candidate_files(&root) {
             let Ok(data) = std::fs::read(&path) else { continue };
@@ -277,11 +295,12 @@ pub fn face_file(family: &str, bold: bool, italic: bool) -> Option<(PathBuf, u32
                 Err(_) => continue,
             };
             for (index, font) in faces {
-                if face_matches(&font, family, bold, italic) {
+                if face_matches_in(&font, family, bold, italic, legacy_only) {
                     return Some((path.clone(), index));
                 }
             }
         }
+    }
     }
     None
 }
@@ -323,7 +342,8 @@ pub(crate) fn font_file_for(
         return hit;
     }
     let mut found: Option<(&'static [u8], u32)> = None;
-    'outer: for root in search_roots() {
+    'outer: for &legacy_only in family_passes() {
+    for root in search_roots() {
         for path in candidate_files(&root) {
             let Ok(data) = std::fs::read(&path) else {
                 continue;
@@ -331,11 +351,11 @@ pub(crate) fn font_file_for(
             // Match without leaking: find the face index this file offers, if any.
             let matched: Option<u32> = match skrifa::raw::FileRef::new(&data) {
                 Ok(skrifa::raw::FileRef::Font(f)) => {
-                    face_matches(&f, family, bold, italic).then_some(0)
+                    face_matches_in(&f, family, bold, italic, legacy_only).then_some(0)
                 }
                 Ok(skrifa::raw::FileRef::Collection(c)) => (0..c.len()).find(|&i| {
                     c.get(i)
-                        .map(|f| face_matches(&f, family, bold, italic))
+                        .map(|f| face_matches_in(&f, family, bold, italic, legacy_only))
                         .unwrap_or(false)
                 }),
                 Err(_) => None,
@@ -346,6 +366,7 @@ pub(crate) fn font_file_for(
                 break 'outer;
             }
         }
+    }
     }
     if let Ok(mut c) = cache.write() {
         c.insert(key, found);
