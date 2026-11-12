@@ -1243,7 +1243,19 @@ impl FontMetricsRegistry {
             // Also store under base family name (without "Bold", "Regular", etc.)
             // so lookup by "Calibri" finds "Calibri" even if only "Calibri Bold" was stored
             let base = base_family_name(&raw.family);
-            if base != raw.family {
+            // OXI_WEIGHT_FACE_NO_BASE_ALIAS (2026-11-13, default ON, opt-out _DISABLE):
+            // a WEIGHT face ("Microsoft JhengHei Light") is not its family's regular
+            // face (S1610), so it does not answer for the bare family name. The only
+            // JhengHei table shipped is the Light one; registered under «Microsoft
+            // JhengHei» it gave every Regular run Light advances -- blind-J
+            // ja/reports__75ebb654's footnote (Kaiti TC -> charset-88 substitute
+            // Microsoft JhengHei): «Reichheld» 43.88 against Word's 46.36 (msjh.ttc),
+            // one character more per line («…推薦給朋友»). The installed Regular face is
+            // read instead (微軟正黑體 already resolved there: 46.37).
+            let weight_face = !crate::env_flag!("OXI_WEIGHT_FACE_NO_BASE_ALIAS_DISABLE")
+                && [" Light", " Thin"]
+                    .iter().any(|w| raw.family.ends_with(w));
+            if base != raw.family && !weight_face {
                 fonts.entry(base).or_insert(metrics);
             }
         }
