@@ -3075,13 +3075,20 @@ pub fn is_zero_width_char(c: char) -> bool {
 }
 
 /// S1416: JIS X 0208 rows 6/7 (Greek, Cyrillic) and the multiply / divide signs.
+/// OXI_QUOTE_FONT_HINT (2026-11-12): and the curly quotes of row 1, which reach the
+/// eastAsia face only under an eastAsia hint (`is_hinted_quote`).
 pub fn s1416_jis_fullwidth(c: char) -> bool {
     matches!(
         c,
         '\u{0391}'..='\u{03A9}' | '\u{03B1}'..='\u{03C9}'
             | '\u{0401}' | '\u{0410}'..='\u{044F}' | '\u{0451}'
             | '\u{00D7}' | '\u{00F7}'
-    )
+    ) || (is_curly_quote(c) && !crate::env_flag!("OXI_QUOTE_FONT_HINT_DISABLE"))
+}
+
+/// The curly quotes U+2018 / U+2019 / U+201C / U+201D.
+pub fn is_curly_quote(c: char) -> bool {
+    matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
 }
 
 pub fn is_fullwidth(ch: char) -> bool {

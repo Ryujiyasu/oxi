@@ -5533,6 +5533,16 @@ impl LayoutEngine {
         let punctuation = crate::env_flag!("OXI_PUNCT_FONT_HINT")
             && matches!(ch, '\u{2013}' | '\u{2014}' | '\u{2018}' | '\u{2019}'
                 | '\u{201C}' | '\u{201D}' | '\u{2026}' | '\u{2022}');
+        // OXI_QUOTE_FONT_HINT (2026-11-12, default ON, opt-out _DISABLE): a curly quote
+        // takes the eastAsia face only under an eastAsia hint, and is then full width
+        // there (S1416's list). `_pb_quote_hint_width_gen.py` (quotes in their own runs,
+        // 16pt, TNR + SimSun, docDefaults eastAsia zh-CN): no hint or hint=default ->
+        // the ascii face (7.08 = TNR's 0.444em), hint=eastAsia -> 15.96 (1em), whatever
+        // w:lang says; Oxi drew all 18 arms in the eastAsia face at the 0.5em table
+        // fallback (8.0). zh dev correspondence__015abfaf's «“» held two characters off
+        // its line.
+        let punctuation = punctuation
+            || (crate::font::is_curly_quote(ch) && !crate::env_flag!("OXI_QUOTE_FONT_HINT_DISABLE"));
         // S1419 (2026-09-15, default ON, opt-out OXI_SCRIPT_FONT_HINT_DISABLE):
         // the checkpoint's opt-in promoted for the JIS full-width faces. A
         // Greek / Cyrillic letter under an eastAsia hint is set in the eastAsia
