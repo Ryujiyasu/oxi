@@ -6667,15 +6667,22 @@ impl<'a> TableFitLayouter<'a> {
                                                         if kinsoku::cell_yaku_type_b(c.ch) {
                                                             saw_mark = true;
                                                             last_a = false;
-                                                            // S1197 (opt-in `OXI_S1197`): a
+                                                            // S1197 (default ON since 2026-11-12,
+                                                            // opt-out `OXI_S1197_DISABLE`): a
                                                             // LINE-INITIAL opening bracket has
                                                             // nothing left to give -- JIS X 4051
                                                             // line-start processing already removed
                                                             // its left aki (the S757 principle).
-                                                            // Held opt-in: S1198 subsumes the cases
-                                                            // it was written for.
+                                                            // `_pb_cell_bracket_fit_gen.py` (SimSun
+                                                            // 14pt «权利人（标准起草单位）», one cell
+                                                            // per width, zh-CN / ja-JP x compat 14 /
+                                                            // 15): Word ends line 2 at «（标准»
+                                                            // through 1325tw in every arm; without
+                                                            // this the compat-14 pool kept «（标准起»
+                                                            // from 1200tw (zh dev forms__00243d36's
+                                                            // header cells, centred a line low).
                                                             if i == 0
-                                                                && crate::env_flag!("OXI_S1197")
+                                                                && !crate::env_flag!("OXI_S1197_DISABLE")
                                                             {
                                                                 continue;
                                                             }
