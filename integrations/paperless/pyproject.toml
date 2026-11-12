@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "paperless-ngx-oxidocs"
+version = "0.1.0"
+description = "Paperless-ngx parser plugin: .docx converted locally with the Oxi engine, without Tika or Gotenberg."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
+dependencies = ["oxidocs>=0.9.0"]
+keywords = ["paperless-ngx", "docx", "pdf", "parser", "plugin"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Django",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ryujiyasu/oxi/tree/main/integrations/paperless"
+Issues = "https://github.com/Ryujiyasu/oxi/issues"
+
+# Paperless-ngx v3 discovers third-party parsers through this entry point.
+[project.entry-points."paperless_ngx.parsers"]
+oxidocs = "paperless_oxidocs.parser:OxiDocxParser"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/paperless_oxidocs"]
