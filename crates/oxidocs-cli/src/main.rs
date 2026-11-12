@@ -25,6 +25,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     match args.get(1).map(|s| s.as_str()) {
+        Some("--version") | Some("-V") | Some("version") => {
+            println!("oxidocs {}", env!("CARGO_PKG_VERSION"));
+        }
         Some("docx-to-pdf") => {
             let usage = "Usage: oxi docx-to-pdf [--strict] <input.docx> <output.pdf>";
             let strict = args[2..].iter().any(|a| a == "--strict");
@@ -176,6 +179,7 @@ fn main() {
             eprintln!("      one JSON answer per stdout line, in completion order");
             eprintln!("      --strict: write nothing and exit {EXIT_UNSUPPORTED} when the document holds");
             eprintln!("                content Oxi does not draw (listed as JSON on stderr)");
+            eprintln!("  oxi --version");
             eprintln!("  oxi vba-analyze <input.xlsm>");
             eprintln!("  oxi vba-safety <input.xlsm>");
             eprintln!("  oxi vba-seal <input.xlsm> <key.pk8> [note]");
