@@ -34,8 +34,10 @@ jobs:
         include:
           - { os: ubuntu-latest, target: x86_64, manylinux: "2_28", test: true }
           - { os: ubuntu-latest, target: aarch64, manylinux: "2_28", test: false }
-          - { os: macos-14, target: aarch64, test: true }
-          - { os: macos-13, target: x86_64, test: true }
+          # The versioned macOS images (macos-13, macos-14) are retired; Intel
+          # wheels are cross-built on the Apple Silicon runner and not run.
+          - { os: macos-latest, target: aarch64, test: true }
+          - { os: macos-latest, target: x86_64, test: false }
           - { os: windows-latest, target: x64, test: true }
     steps:
       - uses: actions/checkout@v4
