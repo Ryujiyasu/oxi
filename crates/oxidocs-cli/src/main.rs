@@ -3801,11 +3801,36 @@ fn build_embedded_fonts(
         }
     }
 
+    // OXI_PDF_EMF_CJK (2026-11-12, default ON, opt-out _DISABLE): the text a
+    // metafile draws, as (face, bold, italic, text). Its East Asian faces and
+    // characters were never embedded -- the families and the subset came from
+    // the layout's text runs only -- so a WMF set in ＭＳ Ｐゴシック went out
+    // under a bare MS-PGothic no viewer can draw: blind-K
+    // ja/creative__9bf674f6, a school plan whose right column is one WMF.
+    let metafile_runs: Vec<(String, bool, bool, String)> = if std::env::var_os("OXI_PDF_EMF_CJK_DISABLE").is_some() {
+        Vec::new()
+    } else {
+        layout
+            .pages
+            .iter()
+            .flat_map(|page| &page.elements)
+            .flat_map(|elem| match &elem.content {
+                oxidocs_core::layout::LayoutContent::Image { data, .. } => {
+                    emf::text_runs(data).into_iter().chain(emf::wmf_text_runs(data)).collect()
+                }
+                _ => Vec::new(),
+            })
+            .collect()
+    };
+
     // Every character the pages draw. The IR's body blocks miss whatever the
     // layout produces or pulls in itself -- page numbers and other field
     // results, list labels, headers, footers, footnotes, shape text -- and a
     // character missing from the subset is drawn as .notdef.
     let mut drawn_chars: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    for (_, _, _, text) in &metafile_runs {
+        drawn_chars.extend(text.chars());
+    }
     for page in &layout.pages {
         for elem in &page.elements {
             if let oxidocs_core::layout::LayoutContent::Text { text, font_family, bold, italic, .. } = &elem.content {
@@ -3837,7 +3862,7 @@ fn build_embedded_fonts(
     let east_asian_runs = layout.pages.iter().flat_map(|page| &page.elements).any(|elem| {
         matches!(&elem.content, oxidocs_core::layout::LayoutContent::Text { text, font_family: Some(family), .. }
             if is_cjk_family(family) && !text.trim().is_empty())
-    });
+    }) || metafile_runs.iter().any(|(face, _, _, text)| is_cjk_family(face) && !text.trim().is_empty());
     if east_asian_runs || drawn_chars.iter().any(|c| is_cjk_char(*c)) {
         needs_cjk_font = true;
     }
@@ -3872,6 +3897,11 @@ fn build_embedded_fonts(
             }
         }
     }
+    for (face, _, _, _) in &metafile_runs {
+        if is_cjk_family(face) && !font_names_used.contains(face) {
+            font_names_used.push(face.clone());
+        }
+    }
 
     if cjk_bold_face_enabled() {
         let mut bold_families: Vec<String> = Vec::new();
@@ -3882,6 +3912,11 @@ fn build_embedded_fonts(
                         bold_families.push(family.clone());
                     }
                 }
+            }
+        }
+        for (face, bold, _, _) in &metafile_runs {
+            if *bold && is_cjk_family(face) && !bold_families.contains(face) {
+                bold_families.push(face.clone());
             }
         }
         for name in &bold_families {
