@@ -15,7 +15,7 @@ The thumbnails are drawn by the bundled [Oxi](https://github.com/Ryujiyasu/oxi) 
 Oxi lays documents out to match Microsoft Word, and on documents scored against Word's own PDFs it is closer than LibreOffice. A thumbnail shows the first page as Oxi's PDF output would.
 
 This app was written with AI assistance (Claude). It is not part of Nextcloud: report problems at the Oxi repository.]]></description>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
     <licence>MIT</licence>
     <licence>Apache-2.0</licence>
     <licence>MPL-2.0</licence>

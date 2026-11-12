@@ -8,9 +8,9 @@ name: Nextcloud app
 # A manual run can also release it:
 # - "register" (once): registers the app on apps.nextcloud.com with the
 #   certificate in integrations/nextcloud/oxidocs_preview.crt.
-# - "publish": signs the tarball with the app's key, attaches it to a GitHub
-#   release tagged nextcloud-app-v<version>, and submits that release to the
-#   App Store.
+# - "publish": signs the app's code (appinfo/signature.json) and the tarball
+#   with the app's key, attaches it to a GitHub release tagged
+#   nextcloud-app-v<version>, and submits that release to the App Store.
 # Secrets: NEXTCLOUD_APP_KEY (the app's private key, PEM) and
 # NEXTCLOUD_APPSTORE_TOKEN (the App Store account's API token).
 
@@ -140,6 +140,22 @@ jobs:
             -H "Authorization: Token $TOKEN" -H 'Content-Type: application/json' --data @"$RUNNER_TEMP/register.json")
           cat "$RUNNER_TEMP/register.out"; echo
           case "$code" in 200|201|204) echo "registered (HTTP $code)";; *) echo "::error::register: HTTP $code"; exit 1;; esac
+      - name: Sign the code
+        if: inputs.publish
+        # appinfo/signature.json lets Nextcloud's integrity check cover the
+        # app's files; without it the check skips the app. occ's sign-app
+        # works without an installed Nextcloud.
+        run: |
+          tarball="$(ls dist/oxidocs_preview-*.tar.gz)"
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage" && tar -C "$stage" -xzf "$tarball"
+          cp "$CERT" "$RUNNER_TEMP/app.crt"
+          docker run --rm --entrypoint sh -v "$stage/oxidocs_preview:/app" -v "$RUNNER_TEMP:/keys:ro" nextcloud:35-apache \
+            -c "cd /usr/src/nextcloud && php occ integrity:sign-app --path=/app --privateKey=/keys/app.key --certificate=/keys/app.crt && chown -R $(id -u):$(id -g) /app"
+          jq -e '.hashes["bin/oxidocs-linux-x86_64"] and .hashes["lib/Engine.php"]' "$stage/oxidocs_preview/appinfo/signature.json" >/dev/null \
+            || { echo "::error::signature.json is missing or incomplete"; exit 1; }
+          tar -C "$stage" --owner=0 --group=0 -czf "$tarball" oxidocs_preview
+          tar -tzvf "$tarball" | head -n 20
       - name: GitHub release
         if: inputs.publish
         env:
