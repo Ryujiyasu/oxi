@@ -324,7 +324,10 @@ pub fn parse_document(data: &[u8]) -> Result<JsValue, JsError> {
 // Workbook metadata crosses worker and JSON boundaries as ordinary data.
 #[cfg(feature = "suite")]
 pub(crate) fn spreadsheet_value_to_js<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
-    let json = serde_json::to_string(value).map_err(|error| JsError::new(&error.to_string()))?;
+    // Value widens f32 values to the exact f64 represented by JavaScript.
+    // Serializing f32 directly would shorten 20.100000381469727 to 20.1.
+    let value = serde_json::to_value(value).map_err(|error| JsError::new(&error.to_string()))?;
+    let json = serde_json::to_string(&value).map_err(|error| JsError::new(&error.to_string()))?;
     js_sys::JSON::parse(&json).map_err(|error| JsError::new(&format!("invalid serialized workbook: {error:?}")))
 }
 
