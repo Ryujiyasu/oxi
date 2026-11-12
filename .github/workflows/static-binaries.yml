@@ -74,7 +74,7 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           cat *.sha256
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
             --title "oxidocs static Linux binaries ($TAG)" \
             --notes "oxidocs built statically against musl for Linux x86_64 and arm64, from commit $GITHUB_SHA. One file, fonts included; runs on any Linux, Alpine included. Commands: \`oxidocs docx-to-pdf\`, \`oxidocs docx-to-png\`, \`oxidocs serve\`. License: MPL-2.0." \
             oxidocs-*-unknown-linux-musl.tar.gz oxidocs-*-unknown-linux-musl.tar.gz.sha256
