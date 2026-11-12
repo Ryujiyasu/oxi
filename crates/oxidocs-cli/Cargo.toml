@@ -25,3 +25,8 @@ ovba = "0.7.1"
 oxihanko = { version = "0.9.0", path = "../oxihanko", features = ["ring"] }
 ring = "0.17.14"
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+
+# musl's allocator is slow enough to cost the static Linux build ~40% of its
+# speed; the glibc builds keep the system allocator.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false }

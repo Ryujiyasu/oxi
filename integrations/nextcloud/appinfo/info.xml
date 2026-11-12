@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+    <id>oxidocs_preview</id>
+    <name>Oxi Word Previews</name>
+    <summary>Thumbnails of .docx files, drawn on your server without LibreOffice</summary>
+    <description><![CDATA[Nextcloud ships its Word-document previews switched off: they start LibreOffice once for every file. This app shows thumbnails of `.docx`, `.docm` and `.dotx` files in Files without LibreOffice, Collabora or ONLYOFFICE.
+
+The thumbnails are drawn by the bundled [Oxi](https://github.com/Ryujiyasu/oxi) engine, a single Rust program that runs on the server itself. The document never leaves your server, and the app makes no network requests.
+
+- Nothing to configure: enable the app and Word documents get thumbnails.
+- Bundled for Linux x86_64 and arm64 (static, so Alpine-based installs work too).
+- About 0.1 s for a typical document.
+
+Oxi lays documents out to match Microsoft Word, and on documents scored against Word's own PDFs it is closer than LibreOffice. A thumbnail shows the first page as Oxi's PDF output would.
+
+This app was written with AI assistance (Claude). It is not part of Nextcloud: report problems at the Oxi repository.]]></description>
+    <version>0.1.0</version>
+    <licence>MIT</licence>
+    <licence>Apache-2.0</licence>
+    <licence>MPL-2.0</licence>
+    <author homepage="https://github.com/Ryujiyasu/oxi">Oxi contributors</author>
+    <namespace>OxiDocsPreview</namespace>
+    <category>files</category>
+    <category>office</category>
+    <website>https://github.com/Ryujiyasu/oxi/tree/main/integrations/nextcloud</website>
+    <bugs>https://github.com/Ryujiyasu/oxi/issues</bugs>
+    <repository type="git">https://github.com/Ryujiyasu/oxi.git</repository>
+    <dependencies>
+        <nextcloud min-version="32" max-version="35"/>
+    </dependencies>
+</info>

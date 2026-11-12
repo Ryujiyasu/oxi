@@ -1,0 +1,86 @@
+name: Nextcloud app
+
+# integrations/nextcloud: the oxidocs_preview app (Word thumbnails without
+# LibreOffice). Builds oxidocs statically for Linux x86_64 and arm64, checks
+# the app end to end in Nextcloud 32 and 35, and packages the App Store
+# tarball as an artifact.
+
+on:
+  pull_request:
+    paths:
+      - "integrations/nextcloud/**"
+      - "crates/oxidocs-cli/**"
+      - ".github/workflows/nextcloud-app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  binary:
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: x86_64 }
+          - { os: ubuntu-24.04-arm, arch: aarch64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      # A static build against musl, made in Alpine, so the app also runs on
+      # Alpine-based Nextcloud images.
+      - name: Build oxidocs (static, musl)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src -e CARGO_TARGET_DIR=/src/target/musl rust:1-alpine \
+            sh -c 'apk add -q musl-dev && cargo build --release -p oxidocs-cli --locked && strip target/musl/release/oxidocs'
+          sudo chown -R "$(id -u):$(id -g)" target/musl
+          cp target/musl/release/oxidocs oxidocs-linux-${{ matrix.arch }}
+          file oxidocs-linux-${{ matrix.arch }}
+          ./oxidocs-linux-${{ matrix.arch }} docx-to-png --width 256 tests/fixtures/comprehensive_test.docx smoke.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxidocs-linux-${{ matrix.arch }}
+          path: oxidocs-linux-${{ matrix.arch }}
+
+  e2e:
+    needs: binary
+    strategy:
+      fail-fast: false
+      matrix:
+        nextcloud: ["32", "35"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: oxidocs-linux-x86_64
+          path: integrations/nextcloud/bin
+      - name: End-to-end in Nextcloud ${{ matrix.nextcloud }}
+        env:
+          NEXTCLOUD_VERSION: ${{ matrix.nextcloud }}
+        run: |
+          chmod +x integrations/nextcloud/bin/oxidocs-linux-x86_64
+          python3 -m pip install --quiet pillow
+          bash integrations/nextcloud/e2e/run.sh
+
+  package:
+    needs: [binary, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: oxidocs-linux-*
+          path: integrations/nextcloud/bin
+          merge-multiple: true
+      - name: Package
+        working-directory: integrations/nextcloud
+        run: |
+          tarball="$(bash package.sh)"
+          tar -tzvf "$tarball" | head -n 30
+          ls -l "$tarball"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxidocs_preview
+          path: integrations/nextcloud/build/oxidocs_preview-*.tar.gz
