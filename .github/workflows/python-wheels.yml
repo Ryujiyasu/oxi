@@ -1,12 +1,18 @@
 name: Python wheels
 
 # Builds the oxidocs Python package (crates/oxidocs-python: the oxidocs binary
-# plus a thin Python API) for Linux, macOS and Windows, tests each wheel on its
-# own platform, and uploads them to PyPI only when run with "publish" ticked.
+# plus a thin Python API) for Linux, macOS and Windows and tests each wheel on
+# its own platform, on pull requests that touch it and by hand. Only a manual
+# run with "publish" ticked uploads them to PyPI.
 # Publishing uses PyPI trusted publishing (no token): the PyPI project
 # "oxidocs" must list this repository and workflow as a trusted publisher.
 
 on:
+  # A pull request that touches the package builds and tests every wheel.
+  pull_request:
+    paths:
+      - "crates/oxidocs-python/**"
+      - ".github/workflows/python-wheels.yml"
   workflow_dispatch:
     inputs:
       publish:
