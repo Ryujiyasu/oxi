@@ -261,6 +261,8 @@ pub(super) struct ShapeRecord {
     pub group_name: Option<String>,
     pub group_parent_id: Option<u64>,
     pub group_children: Vec<u64>,
+    /// OLEObjects.Group retains its legacy English naming channel.
+    pub group_legacy: bool,
     pub group_bounds: Option<(f64, f64, f64, f64)>,
     pub group_transform: Option<GroupTransform>,
     pub group_nested: bool,
@@ -1028,11 +1030,21 @@ impl<'a> WorkbookHost<'a> {
             group_drawing.grouped = false;
             group_drawing.frame = None;
             group_drawing.group_name = None;
+            group_drawing.group_non_visual_id = None;
             group_drawing.group_rotation = 0;
             let bounds = self.points_of_drawing(sheet, &group_drawing);
             let id = self.next_shape_id;
             self.next_shape_id += 1;
             let mut group = ShapeRecord::blank(id, sheet, name, ShapeKind::Other);
+            group.non_visual_id = first_child.original.as_ref().and_then(|drawing| drawing.group_non_visual_id)
+                .unwrap_or_else(|| self.shapes.iter().filter(|shape| shape.sheet == sheet)
+                    .map(|shape| shape.non_visual_id).max().unwrap_or(1).saturating_add(1));
+            group.name_is_automatic = group.name == generated_group_name(group.non_visual_id.saturating_sub(1), true);
+            if group.name_is_automatic {
+                group.name = generated_group_name(group.non_visual_id.saturating_sub(1), false);
+            }
+            let counter = self.shape_counters.entry(sheet).or_insert(0);
+            *counter = (*counter).max(group.non_visual_id.saturating_sub(1));
             group.left = bounds.0;
             group.top = bounds.1;
             group.width = bounds.2;
@@ -1636,7 +1648,10 @@ impl<'a> WorkbookHost<'a> {
             kind,
             frame: grouped.then(|| record.original.as_ref().and_then(|drawing| drawing.frame)).flatten(),
             grouped,
-            group_name: record.group_parent_id.and_then(|id| self.shape(id).ok().map(|group| group.name.clone())),
+            group_name: parent.map(|group| if group.name_is_automatic && !group.group_legacy {
+                generated_group_name(group.non_visual_id.saturating_sub(1), true)
+            } else { group.name.clone() }),
+            group_non_visual_id: parent.map(|group| group.non_visual_id),
             group_rotation: if grouped { original.map_or(0, |drawing| drawing.group_rotation) } else { 0 },
             group_transform: parent.and_then(|group| group.group_transform),
             group_child_transform: grouped.then_some((
@@ -2060,6 +2075,7 @@ impl ShapeRecord {
             group_name: None,
             group_parent_id: None,
             group_children: Vec::new(),
+            group_legacy: false,
             group_bounds: None,
             group_transform: None,
             group_nested: false,
@@ -2387,6 +2403,10 @@ pub(super) fn generated_shape_bases(kind: &ShapeKind) -> Option<(&'static str, &
         _ => return None,
     };
     Some((english, localized))
+}
+
+pub(super) fn generated_group_name(number: u32, localized: bool) -> String {
+    format!("{} {number}", if localized { "\u{30b0}\u{30eb}\u{30fc}\u{30d7}\u{5316}" } else { "Group" })
 }
 
 pub(super) fn generated_shape_name(kind: &ShapeKind, number: u32, localized: bool) -> Option<String> {

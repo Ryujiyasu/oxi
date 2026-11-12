@@ -850,14 +850,13 @@ impl<'a> WorkbookHost<'a> {
             });
         }
         let bounds = bounds.ok_or_else(|| host_error(1004, "There are no shapes to group."))?;
-        let mut number = 1usize;
-        while self.shapes.iter().any(|shape| shape.sheet == sheet && shape.name.eq_ignore_ascii_case(&format!("Group {number}"))) {
-            number += 1;
-        }
+        self.reserve_drawing_identity_group(sheet);
+        let number = self.next_shape_number(sheet);
         let name = format!("Group {number}");
         let id = self.next_shape_id;
         self.next_shape_id += 1;
         let mut group = ShapeRecord::blank(id, sheet, name.clone(), ShapeKind::Other);
+        group.non_visual_id = number.saturating_add(1);
         group.left = bounds.0;
         group.top = bounds.1;
         group.width = bounds.2;
@@ -1103,6 +1102,7 @@ impl<'a> WorkbookHost<'a> {
             frame: None,
             grouped: false,
             group_name: None,
+            group_non_visual_id: None,
             group_rotation: 0,
             group_transform: None,
             group_child_transform: None,
@@ -1169,6 +1169,7 @@ impl<'a> WorkbookHost<'a> {
             frame: None,
             grouped: false,
             group_name: None,
+            group_non_visual_id: None,
             group_rotation: 0,
             group_transform: None,
             group_child_transform: None,
@@ -1255,6 +1256,7 @@ impl<'a> WorkbookHost<'a> {
             frame: None,
             grouped: false,
             group_name: None,
+            group_non_visual_id: None,
             group_rotation: 0,
             group_transform: None,
             group_child_transform: None,
@@ -3556,11 +3558,14 @@ impl<'a> WorkbookHost<'a> {
                             let Value::String(named) = &value else {
                                 return Err("Shape.Name takes text".to_string());
                             };
-                            let generated = (shape.comment_at.is_none()
+                            let generated = if !shape.group_children.is_empty() && !shape.group_legacy {
+                                (named == &generated_group_name(shape.non_visual_id.saturating_sub(1), true))
+                                    .then(|| generated_group_name(shape.non_visual_id.saturating_sub(1), false))
+                            } else { (shape.comment_at.is_none()
                                 && !shape.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some())
                                 && generated_shape_name(&shape.kind,
                                 shape.non_visual_id.saturating_sub(1), true).as_ref() == Some(named))
-                                .then(||generated_shape_name(&shape.kind, shape.non_visual_id.saturating_sub(1), false)).flatten();
+                                .then(||generated_shape_name(&shape.kind, shape.non_visual_id.saturating_sub(1), false)).flatten() };
                             let keeps_generated_note = shape.comment_at.is_some() && shape.name_is_automatic && shape.name == *named;
                             shape.name_is_automatic = generated.is_some() || keeps_generated_note;
                             shape.name = generated.unwrap_or_else(||named.clone());
@@ -4517,6 +4522,8 @@ impl<'a> WorkbookHost<'a> {
                 }
                 "group" => {
                     let id = self.group_shapes(sheet, self.ole_objects_for_part(part))?;
+                    self.shape_mut(id)?.group_legacy = true;
+                    self.mirror_drawings(sheet);
                     Ok(Some(self.part(DrawingPart::GroupObject(id))))
                 }
                 "delete" => {

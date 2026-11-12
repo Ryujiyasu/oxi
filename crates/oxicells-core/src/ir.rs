@@ -1170,6 +1170,9 @@ pub struct Drawing {
     /// Name of the parent DrawingML group when this is one of its children.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_name: Option<String>,
+    /// Part-local identity of the parent group, independent of a child's id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_non_visual_id: Option<u32>,
     /// Rotation of the parent DrawingML group, in sixtieth-thousandths of a degree.
     #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub group_rotation: i32,
