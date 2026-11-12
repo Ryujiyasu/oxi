@@ -406,6 +406,7 @@ const layout = layout_document(bytes); // positioned elements for canvas renderi
 
 ```bash
 npm install @oxidocs/wasm             # published Word-focused browser bindings
+pip install oxidocs                  # .docx -> PDF from Python, engine binary bundled
 cargo install oxidocs-cli            # the command-line tool
 ```
 
