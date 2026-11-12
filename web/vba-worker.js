@@ -1,5 +1,17 @@
 import init, { SpreadsheetVbaSession, spreadsheet_vba_project_name, spreadsheet_vba_source } from './oxidocs_wasm.js';
 
+import {openVbaStandardFontPreferenceStore} from './vba-editor-settings.js';
+
+let preferenceStore;
+let activePreferenceStore;
+self.__oxiVbaReadStandardFontPreference = () => activePreferenceStore?.read();
+self.__oxiVbaWriteStandardFontPreference = units => {
+    if (!activePreferenceStore) return;
+    const profile = Array.from(units);
+    activePreferenceStore.write(profile);
+    self.postMessage({kind: 'vba-font-preference', profileUtf16: profile});
+};
+
 const ready = init();
 const project = ready.then(() => new SpreadsheetVbaSession());
 
@@ -16,6 +28,21 @@ self.addEventListener('message', async event => {
             return;
         }
         const { projectNameCodePage, projectSourceCodePage, ...runtimeOptions } = options || {};
+        activePreferenceStore = null;
+        if (event.data.fontPreferenceContext?.enabled && action !== 'compile') {
+            preferenceStore ??= openVbaStandardFontPreferenceStore();
+            activePreferenceStore = await preferenceStore;
+            const pending = activePreferenceStore.read();
+            const state = {...runtimeOptions.applicationState};
+            if (pending === null) {
+                delete state.pendingStandardFontProfileUtf16;
+                state.standardFontPreferencePresent = false;
+            } else {
+                state.pendingStandardFontProfileUtf16 = pending;
+                delete state.standardFontPreferencePresent;
+            }
+            runtimeOptions.applicationState = state;
+        }
         const inputPackage = packageBytes ?? runtimeOptions.fileContext?.packageBytes;
         if (projectSourceCodePage != null && (!Number.isInteger(projectSourceCodePage) || projectSourceCodePage < 1 || projectSourceCodePage > 65535)) {
             throw new Error('Invalid VBA source code page.');

@@ -517,7 +517,7 @@ fn legacy_array_lifted_callbacks_resume_through_the_core_bridge() {
             formula_utf16: None, runs: Vec::new(), spill: Spill::Scalar,
         };
         held.sheets[0].rows.push(Row {
-            index: row, height: None, custom_height: false, style_font: None,
+            index: row, height: None, custom_height: false, format_recorded: None, style_font: None,
             thick_top: false, thick_bottom: false, hidden: false,
             cells: vec![
                 cell(3, CellValue::Number(row as f64), None, None),
@@ -1016,7 +1016,7 @@ fn conditional_legacy_array_cycles_resume_through_the_core_bridge() {
                         formula_utf16: None, runs: Vec::new(), spill: Spill::Scalar });
                     wanted.push(("S".to_string(), (12 + col, row - 1)));
                 }}
-                held.sheets[0].rows.push(Row { index: row, height: None, custom_height: false, style_font: None,
+                held.sheets[0].rows.push(Row { index: row, height: None, custom_height: false, format_recorded: None, style_font: None,
                     thick_top: false, thick_bottom: false, hidden: false, cells });
             }
             let mut calls = 0u32;

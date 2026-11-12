@@ -185,7 +185,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
             cells,
             height: None,
             custom_height: false,
-            style_font: None,
+            format_recorded: None, style_font: None,
             thick_top: false,
             thick_bottom: false,
             hidden: false,
@@ -199,6 +199,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         col_count: 10,
         col_widths: vec![],
         col_custom_widths: Default::default(),
+        best_fit_cols: Default::default(),
         cached_spills: None,
         pending_used_bounds: None,
         column_width_font: None,
@@ -228,6 +229,8 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         validations: Vec::new(),
         conditional_rules: Vec::new(),
         tab_color: None,
+        drawing_id_blocks: Vec::new(),
+        header_footer: None,
         origin_id: None,
     }
 }

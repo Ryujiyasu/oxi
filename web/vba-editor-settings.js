@@ -89,3 +89,87 @@ export function bindVbaEditorSettings({ hostCodePage, errorLanguage, helpFile,
         },
     };
 }
+
+// Standard-font preferences are shared by the editor and its execution worker.
+// Keep this module synchronous so the worker can register its first-message listener.
+const VBA_FONT_PREFERENCE_FILE = 'oxi-vba-standard-font.bin';
+const VBA_FONT_PREFERENCE_BYTES = 4096;
+
+function vbaFontPreferenceChecksum(bytes) {
+    let crc = 0xffffffff;
+    for (let at = 0; at < bytes.length; at++) {
+        crc ^= at >= 8 && at < 12 ? 0 : bytes[at];
+        for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+}
+
+function encodeVbaFontPreference(profile) {
+    if (profile !== null && (!Array.isArray(profile)
+        || profile.length > (VBA_FONT_PREFERENCE_BYTES - 12) / 2
+        || !profile.every(unit => Number.isInteger(unit) && unit >= 0 && unit <= 65535))) {
+        throw new TypeError('Invalid standard-font preference.');
+    }
+    const bytes = new Uint8Array(VBA_FONT_PREFERENCE_BYTES), view = new DataView(bytes.buffer);
+    view.setUint32(0, 0x5046584f, true);
+    view.setUint32(4, profile === null ? 0xffffffff : profile.length, true);
+    profile?.forEach((unit, index) => view.setUint16(12 + index * 2, unit, true));
+    view.setUint32(8, vbaFontPreferenceChecksum(bytes), true);
+    return bytes;
+}
+
+function decodeVbaFontPreference(bytes) {
+    if (bytes.byteLength !== VBA_FONT_PREFERENCE_BYTES) return undefined;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (view.getUint32(0, true) !== 0x5046584f || view.getUint32(8, true) !== vbaFontPreferenceChecksum(bytes)) return undefined;
+    const length = view.getUint32(4, true);
+    if (length === 0xffffffff) return null;
+    if (length > (VBA_FONT_PREFERENCE_BYTES - 12) / 2) return undefined;
+    return Array.from({length}, (_, index) => view.getUint16(12 + index * 2, true));
+}
+
+export async function readVbaStandardFontPreference() {
+    if (!globalThis.navigator?.storage?.getDirectory) return {supported: false, profileUtf16: null};
+    try {
+        const root = await navigator.storage.getDirectory();
+        try {
+            const file = await root.getFileHandle(VBA_FONT_PREFERENCE_FILE);
+            const bytes = new Uint8Array(await (await file.getFile()).arrayBuffer());
+            return {supported: true, profileUtf16: decodeVbaFontPreference(bytes) ?? null};
+        } catch (error) {
+            if (error.name === 'NotFoundError') return {supported: true, profileUtf16: null};
+            throw error;
+        }
+    } catch {
+        return {supported: false, profileUtf16: null};
+    }
+}
+
+export async function openVbaStandardFontPreferenceStore() {
+    const root = await navigator.storage.getDirectory();
+    const file = await root.getFileHandle(VBA_FONT_PREFERENCE_FILE, {create: true});
+    let access;
+    try { access = await file.createSyncAccessHandle({mode: 'readwrite-unsafe'}); }
+    catch (error) {
+        if (error.name !== 'TypeError') throw error;
+        access = await file.createSyncAccessHandle();
+    }
+    return {
+        read() {
+            if (access.getSize() === 0) return null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                const bytes = new Uint8Array(VBA_FONT_PREFERENCE_BYTES);
+                const read = access.read(bytes, {at: 0});
+                const value = read === bytes.length ? decodeVbaFontPreference(bytes) : undefined;
+                if (value !== undefined) return value;
+            }
+            return null;
+        },
+        write(profile) {
+            const bytes = encodeVbaFontPreference(profile);
+            if (access.write(bytes, {at: 0}) !== bytes.length) throw new Error('The standard-font preference could not be saved.');
+            access.flush();
+        },
+        close() { access.close(); },
+    };
+}

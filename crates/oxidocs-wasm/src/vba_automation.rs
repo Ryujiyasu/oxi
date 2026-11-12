@@ -353,6 +353,52 @@ pub(crate) fn workbook_name_matches(own_name: &str, request: &[u16]) -> bool {
     weights.matches(&own_name, request)
 }
 
+/// A persisted application font preference, separate from the font cached by
+/// the current application. UTF-16 also preserves names with lone surrogates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StandardFontProfile(pub Vec<u16>);
+
+impl StandardFontProfile {
+    /// Read the profile as the measured setter/startup parser does: a single
+    /// comma, a nonempty face, and a positive integer prefix for the size.
+    /// A setter can persist a fractional size that is normalized on reread.
+    pub fn parsed(&self) -> Option<(&[u16], u16)> {
+        let comma = self.0.iter().position(|unit| *unit == u16::from(b','))?;
+        let (face, suffix) = self.0.split_at(comma);
+        if face.is_empty() || face.len() > 31 || suffix[1..].contains(&u16::from(b',')) {
+            return None;
+        }
+        let mut size = 0u16;
+        let mut digits = 0;
+        for &unit in &suffix[1..] {
+            if !(u16::from(b'0')..=u16::from(b'9')).contains(&unit) { break; }
+            size = size.checked_mul(10)?.checked_add(unit - u16::from(b'0'))?;
+            digits += 1;
+        }
+        (digits != 0 && (1..=409).contains(&size)).then_some((face, size))
+    }
+
+    pub fn with_face(&self, face: &[u16], fallback_size: u16) -> Option<Self> {
+        let face = &face[..face.iter().position(|unit| *unit == 0).unwrap_or(face.len())];
+        if face.len() > 31 { return None; }
+        let size = self.parsed().map_or(fallback_size, |(_, size)| size);
+        let mut raw = face.to_vec();
+        raw.push(u16::from(b','));
+        raw.extend(size.to_string().encode_utf16());
+        Some(Self(raw))
+    }
+
+    pub fn with_size(&self, points: f64, fallback_face: &[u16]) -> Option<Self> {
+        let twips = (points * 20.0 + 0.5).floor();
+        if !points.is_finite() || !(20.0..=8191.0).contains(&twips) { return None; }
+        let face = self.parsed().map_or(fallback_face, |(face, _)| face);
+        let mut raw = face.to_vec();
+        raw.push(u16::from(b','));
+        raw.extend(oxivba_core::runtime::vba_number_text(points).encode_utf16());
+        Some(Self(raw))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,5 +452,45 @@ mod tests {
         assert!(!japanese.names_equal("K", "K"));
         assert!(!japanese.names_equal("ReadText", "ReadText😀"));
         assert!(AnsiCodePage::from_id(0).is_err());
+    }
+}
+
+
+#[cfg(test)]
+mod standard_font_profile_tests {
+    use super::StandardFontProfile;
+    fn profile(text: &str) -> StandardFontProfile { StandardFontProfile(text.encode_utf16().collect()) }
+    fn units(text: &str) -> Vec<u16> { text.encode_utf16().collect() }
+
+    #[test]
+    fn pending_font_values_follow_native_profile_sequences() {
+        let body = units("本文のフォント");
+        let base = profile("游ゴシック,11");
+        assert_eq!(base.with_face(&units("Arial"), 11).unwrap(), profile("Arial,11"));
+        assert_eq!(profile("Arial,13.75").with_face(&units("Tahoma"), 11).unwrap(), profile("Tahoma,13"));
+        assert_eq!(profile("Arial,409.55").with_face(&units("Tahoma"), 11).unwrap(), profile("Tahoma,409"));
+        assert_eq!(profile("Arial,0.975").with_face(&units("Tahoma"), 11).unwrap(), profile("Tahoma,11"));
+        assert_eq!(profile(",13").with_size(14.0, &body).unwrap(), profile("本文のフォント,14"));
+        assert_eq!(profile("Arial,13,11").with_size(14.0, &body).unwrap(), profile("本文のフォント,14"));
+        assert_eq!(profile("Arial,13.75").with_size(14.25, &body).unwrap(), profile("Arial,14.25"));
+        assert_eq!(profile(" Arial ,11").with_size(13.0, &body).unwrap(), profile(" Arial ,13"));
+        assert_eq!(base.with_face(&[0xd800], 11).unwrap().0, [vec![0xd800], units(",11")].concat());
+        assert_eq!(base.with_face(&units("Arial\0TAIL"), 11).unwrap(), profile("Arial,11"));
+        assert!(base.with_face(&[65; 31], 11).is_some());
+        assert!(base.with_face(&[65; 32], 11).is_none());
+    }
+
+    #[test]
+    fn pending_font_size_validation_and_startup_read_are_distinct() {
+        let base = profile("Arial,11");
+        let body = units("本文のフォント");
+        for (input, accepted) in [(0.974999, false), (0.975, true), (409.574999, true), (409.575, false)] {
+            assert_eq!(base.with_size(input, &body).is_some(), accepted);
+        }
+        assert_eq!(profile("Arial,13.75").parsed(), Some((units("Arial").as_slice(), 13)));
+        assert_eq!(profile("Arial,409.55").parsed(), Some((units("Arial").as_slice(), 409)));
+        assert!(profile("Arial,0.975").parsed().is_none());
+        assert!(profile(",13").parsed().is_none());
+        assert!(profile("Arial,13,11").parsed().is_none());
     }
 }

@@ -58,8 +58,8 @@ fn colours_borders_and_alignment_are_saved() {
             font_color: Some("FF0000".to_string()),
             bg_color: Some("FFFF00".to_string()),
             horizontal_align: Some("center".to_string()),
-            border_top: Some(BorderLine { style: "thin".to_string(), color: None }),
-            border_bottom: Some(BorderLine { style: "medium".to_string(), color: None }),
+            border_top: Some(BorderLine { style: "thin".to_string(), color: None, color_reference: None }),
+            border_bottom: Some(BorderLine { style: "medium".to_string(), color: None, color_reference: None }),
             ..CellStyle::default()
         },
     );

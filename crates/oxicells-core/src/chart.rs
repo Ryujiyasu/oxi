@@ -102,6 +102,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
     let mut in_layout = false;
     let mut layout_inner = true;
     let mut label_offset: Option<(f64, f64)> = None;
+    let mut foreign_depth = 0usize;
 
     loop {
         let event = reader.read_resolved_event_into(&mut buf);
@@ -110,6 +111,23 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                 | b"http://purl.oclc.org/ooxml/drawingml/chart"));
         let extension = matches!(&event, Ok((quick_xml::name::ResolveResult::Bound(ns), _))
             if ns.as_ref() == b"http://schemas.microsoft.com/office/drawing/2012/chart");
+        let drawing = matches!(&event, Ok((quick_xml::name::ResolveResult::Bound(ns), _))
+            if matches!(ns.as_ref(), b"http://schemas.openxmlformats.org/drawingml/2006/main"
+                | b"http://purl.oclc.org/ooxml/drawingml/main"));
+        // A foreign spPr/solidFill must neither reset our paint accumulator
+        // nor provide the chart's RGB. Its entire subtree is opaque, even
+        // when a descendant happens to reuse a DrawingML namespace.
+        let foreign = match &event {
+            Ok((_, Event::Start(_))) => {
+                if foreign_depth > 0 || !(native || drawing || extension) {
+                    foreign_depth += 1; true
+                } else { false }
+            }
+            Ok((_, Event::Empty(_))) => foreign_depth > 0 || !(native || drawing || extension),
+            Ok((_, Event::End(_))) if foreign_depth > 0 => { foreign_depth -= 1; true }
+            Ok((_, Event::Text(_) | Event::CData(_))) => foreign_depth > 0,
+            _ => false,
+        };
         let direct_series = parents.last().is_some_and(|(name, native, _)| *native && name == "ser");
         let xy = parents.iter().rev().find(|(name, native, _)| *native && name.ends_with("Chart"))
             .is_some_and(|(name, _, _)| matches!(name.as_str(), "scatterChart" | "bubbleChart"));
@@ -124,6 +142,7 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
             Ok((_, Event::End(_))) => { parents.pop(); }
             _ => {}
         }
+        if foreign { buf.clear(); continue; }
         match event.map(|(_, event)| event) {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 let name = local_name(e.name().as_ref());
@@ -495,12 +514,16 @@ pub(crate) fn parse_chart_xml(xml: &str, theme: &Theme) -> Option<Chart> {
                             }
                         }
                         Some(Whose::Plot) => {
-                            if !paint.no_fill && chart.plot_fill.is_none() {
+                            if name == "spPr" && native && !paint.no_fill
+                                && parents.last().is_some_and(|(parent, chart, _)| *chart && parent == "plotArea") {
                                 chart.plot_fill = paint.fill.take();
                             }
                         }
                         Some(Whose::Space) | None => {
-                            if !paint.no_fill && chart.fill.is_none() {
+                            // Title/text properties also contain solidFill.
+                            // Only the chart space's own spPr is its background.
+                            if name == "spPr" && native && !paint.no_fill
+                                && parents.last().is_some_and(|(parent, chart, _)| *chart && parent == "chartSpace") {
                                 chart.fill = paint.fill.take();
                             }
                         }

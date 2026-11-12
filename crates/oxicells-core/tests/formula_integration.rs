@@ -42,7 +42,7 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         .push(cell(0, CellValue::Empty, Some(formula)));
     let rows: Vec<Row> = rows_map
         .into_iter()
-        .map(|(index, cells)| Row { index, cells, height: None, custom_height: false, style_font: None, thick_top: false, thick_bottom: false, hidden: false })
+        .map(|(index, cells)| Row { index, cells, height: None, custom_height: false, format_recorded: None, style_font: None, thick_top: false, thick_bottom: false, hidden: false })
         .collect();
     let mut sheet = Sheet {
         kind: Default::default(),
@@ -52,6 +52,7 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         col_count: 10,
         col_widths: vec![],
         col_custom_widths: Default::default(),
+        best_fit_cols: Default::default(),
         cached_spills: None,
         pending_used_bounds: None,
         column_width_font: None,
@@ -81,6 +82,8 @@ fn eval(formula: &str, inputs: &[(u32, u32, CellValue)]) -> CellValue {
         validations: Vec::new(),
         conditional_rules: Vec::new(),
         tab_color: None,
+        drawing_id_blocks: Vec::new(),
+        header_footer: None,
         origin_id: None,
     };
     evaluate_sheet_formulas(&mut sheet);

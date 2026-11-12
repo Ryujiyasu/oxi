@@ -23,6 +23,7 @@ fn a_sheet(name: &str) -> Sheet {
         col_count: 4,
         col_widths: vec![8.0, 9.0, 10.0, 11.0],
         col_custom_widths: Default::default(),
+        best_fit_cols: Default::default(),
         cached_spills: None,
         pending_used_bounds: None,
         column_width_font: None,
@@ -52,6 +53,8 @@ fn a_sheet(name: &str) -> Sheet {
         validations: Vec::new(),
         conditional_rules: Vec::new(),
         tab_color: None,
+        drawing_id_blocks: Vec::new(),
+        header_footer: None,
         origin_id: None,
     };
     for index in 1..=4u32 {
@@ -81,7 +84,7 @@ fn a_sheet(name: &str) -> Sheet {
             ],
             height: Some(15.0 + index as f32),
             custom_height: true,
-            style_font: None,
+            format_recorded: None, style_font: None,
             thick_top: false,
             thick_bottom: false,
             hidden: false,

@@ -185,7 +185,7 @@ await init({ module_or_path: await readFile(${JSON.stringify(path.join(pkg, 'oxi
 export { SpreadsheetVbaSession, run_spreadsheet_vba_with_options, run_spreadsheet_vba_with_outcome, prepare_spreadsheet_vba_save, spreadsheet_vba_project_name, spreadsheet_vba_source };
 export default function ready() { return Promise.resolve(); }`;
 const shimUrl = 'data:text/javascript;base64,' + Buffer.from(shim).toString('base64');
-const workerSource = (await readFile(path.join(root, 'web/vba-worker.js'), 'utf8')).replace("'./oxidocs_wasm.js'", JSON.stringify(shimUrl));
+const workerSource = (await readFile(path.join(root, 'web/vba-worker.js'), 'utf8')).replace("'./vba-editor-settings.js'", JSON.stringify(new URL('./vba-editor-settings.js', import.meta.url).href)).replace("'./oxidocs_wasm.js'", JSON.stringify(shimUrl));
 const bridgeSource = `import { parentPort, workerData } from 'node:worker_threads';
 const queued = [];
 let listener;

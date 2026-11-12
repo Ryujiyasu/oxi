@@ -1,5 +1,13 @@
+import {readVbaStandardFontPreference} from './vba-editor-settings.js';
+export {readVbaStandardFontPreference, openVbaStandardFontPreferenceStore} from './vba-editor-settings.js';
+
 let activeExecution = null;
-let applicationState;
+const initialVbaFontPreference = await readVbaStandardFontPreference();
+let applicationState = initialVbaFontPreference.supported
+    ? {standardFontStartup: {profileUtf16: initialVbaFontPreference.profileUtf16}} : undefined;
+// Explicit application state selects a caller-owned execution environment.
+// Keep it for later macros, just as its cached application state is retained.
+let applicationStateIsExternal = false;
 let fileSystemState;
 let projectWorker;
 let projectWorkerType;
@@ -19,7 +27,10 @@ const fileKey = path => path.trim().replaceAll('/', '\\').toLowerCase();
 function copyApplicationState(state) {
     if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
     const directory = state.directoryState;
-    return {...state, ...(directory && typeof directory === 'object' && !Array.isArray(directory) ? {directoryState: {
+    return {...state,
+        ...(Array.isArray(state.pendingStandardFontProfileUtf16)
+            ? {pendingStandardFontProfileUtf16: [...state.pendingStandardFontProfileUtf16]} : {}),
+        ...(directory && typeof directory === 'object' && !Array.isArray(directory) ? {directoryState: {
         ...directory, directories: Array.isArray(directory.directories) ? [...directory.directories] : directory.directories,
     }} : {})};
 }
@@ -107,9 +118,18 @@ function getProjectWorker(action = 'run') {
     worker.addEventListener('message', event => {
         const execution = activeExecution;
         if (!execution || execution.worker !== worker) return;
+        if (event.data?.kind === 'vba-font-preference') {
+            const profile = event.data.profileUtf16;
+            if (Array.isArray(profile) && profile.every(unit => Number.isInteger(unit) && unit >= 0 && unit <= 65535)) {
+                applicationState = {...applicationState, pendingStandardFontProfileUtf16: [...profile]};
+                delete applicationState.standardFontPreferencePresent;
+            }
+            return;
+        }
         activeExecution = null;
         if (event.data?.execution?.application_state) {
             applicationState = copyApplicationState(event.data.execution.application_state);
+            applicationStateIsExternal ||= execution.explicitApplicationState;
         }
         if (event.data?.execution) {
             if (event.data.execution.file_system_state) fileSystemState = copyFileSystemState(event.data.execution.file_system_state);
@@ -421,7 +441,7 @@ function startVbaWorker(action, workbook, source, procedure, args, activeSheet, 
     }
     return new Promise((resolve, reject) => {
         const worker = getProjectWorker(action);
-        const execution = { worker, resolve, reject, source, action };
+        const execution = { worker, resolve, reject, source, action, explicitApplicationState: action !== 'compile' && options.applicationState != null };
         activeExecution = execution;
         const errorLanguage = globalThis.navigator?.language?.toLowerCase().startsWith('ja') ? 'ja-JP' : 'en-US';
         try {
@@ -438,6 +458,7 @@ function startVbaWorker(action, workbook, source, procedure, args, activeSheet, 
                     ...(namespace != null ? {fileSystemState: namespace} : {}),
                     ...(fileContext ? { fileContext } : {}) },
                 packageBytes, ...actionData,
+                fontPreferenceContext: {enabled: action !== 'compile' && initialVbaFontPreference.supported && !applicationStateIsExternal && options.applicationState == null},
             });
         } catch (error) {
             activeExecution = null;

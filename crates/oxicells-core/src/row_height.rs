@@ -42,7 +42,7 @@ fn stored_quarter_pixels(points: f32) -> u64 {
 /// The logical point height exposed by Range.RowHeight.
 pub fn logical_points(stored: f32) -> f64 {
     let quarters = stored_quarter_pixels(stored);
-    (quarters.saturating_mul(3).saturating_add(2) / 4) as f64 / 4.0
+    ((quarters.saturating_mul(3).saturating_add(2) / 4) as f64 / 4.0).min(409.5)
 }
 
 /// Whole display pixels occupied by an explicitly visible row.
@@ -102,5 +102,16 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 95);
+    }
+}
+
+#[cfg(test)]
+mod native_default_height_tests {
+    use super::*;
+    #[test]
+    fn native_saved_maximum_default_height_keeps_file_precision() {
+        assert_eq!(logical_points(409.6), 409.5);
+        assert_eq!(pixels(409.6), 546.0);
+        assert_eq!(file_points(409.6), 409.6);
     }
 }

@@ -76,6 +76,9 @@ pub struct XlsxEditor {
     /// (sheet_idx, 1-based row) -> its height in points, or `None` to put the
     /// row back on the sheet's automatic one, and whether it was chosen.
     row_height: HashMap<(usize, u32), (Option<f32>, bool)>,
+    /// Cached top/bottom border padding, independent of a manually fixed height.
+    row_thickness: HashMap<(usize, u32), (bool, bool)>,
+    row_format_recorded: HashMap<(usize, u32), bool>,
     /// (sheet_idx, 0-based column) -> hidden
     col_hidden: HashMap<(usize, u32), bool>,
     /// sheet_idx -> how many rows to hold at the top and columns at the left.
@@ -87,7 +90,15 @@ pub struct XlsxEditor {
     /// the one a person types into Excel: typing 10 stores 10.625.
     col_width: HashMap<(usize, u32), f32>,
     col_custom_width: HashMap<(usize, u32), bool>,
+    col_best_fit: HashMap<(usize, u32), bool>,
     default_col_width: HashMap<usize, f32>,
+    default_row: HashMap<usize, (f32, bool)>,
+    /// Explicit automatic/manual caches for newly added sheets, keyed by the
+    /// edited sheet position rather than an original worksheet part.
+    added_default_row: HashMap<usize, (f32, bool)>,
+    /// Width used only when a changed column style creates a widthless band.
+    column_style_default_width: HashMap<usize, f32>,
+    added_column_style_default_width: HashMap<usize, f32>,
     /// Sheets whose merged cells are being replaced wholesale. A merge is not
     /// edited in place, so the whole list travels together.
     merges: HashMap<usize, Vec<MergeCell>>,
@@ -96,6 +107,11 @@ pub struct XlsxEditor {
     /// Whole-row and whole-column styles, including styles of blank cells.
     row_band_styles: HashMap<(usize, u32), Option<CellStyle>>,
     column_band_styles: HashMap<(usize, u32), Option<CellStyle>>,
+    /// Named-style font changes, retaining the original style-XF identity.
+    /// A named style can share a font record without sharing future edits.
+    named_style_fonts: BTreeMap<u32, (CellStyle, CellStyle)>,
+    /// Explicit named-definition changes, including otherwise unused styles.
+    named_style_plan: Option<Vec<crate::ir::NamedCellStyle>>,
     /// Sheets whose filter is being replaced. `None` takes the filter away.
     filters: HashMap<usize, Option<AutoFilter>>,
     /// Complete validation rules for sheets whose rules changed.
@@ -108,6 +124,7 @@ pub struct XlsxEditor {
     /// Sheets whose tab colour is being set. `Some(hex)` paints it, `None`
     /// takes any colour away. Keyed by the sheet's origin index.
     tab_colors: HashMap<usize, Option<String>>,
+    header_footers: HashMap<usize, Option<crate::ir::HeaderFooter>>,
     /// Changed worksheet protection, keyed by the original sheet identity.
     sheet_protection: HashMap<usize, (bool, Option<crate::ir::SheetProtection>)>,
     /// What the workbook's sheets should end up as, when they are changing.
@@ -136,6 +153,10 @@ pub struct XlsxEditor {
     drawing_order_edits: HashMap<usize, Vec<String>>,
     /// Current shape geometry for package edits that flatten nested groups.
     drawing_states: HashMap<(usize, String), crate::ir::Drawing>,
+    // Internal names distinguish equal user-visible names during the XML
+    // edit pipeline. They are restored by physical ID before serialization.
+    drawing_source_aliases: HashMap<(usize, u32), String>,
+    drawing_restore_names: HashMap<(usize, u32), String>,
     /// Existing preset shapes removed by a VBA Shapes.Delete call.
     drawing_deletions: HashMap<usize, std::collections::HashSet<String>>,
     /// Shapes a run added to sheets that already existed in the source package.
@@ -152,11 +173,14 @@ pub struct XlsxEditor {
     threaded_comment_resolved: HashMap<(usize, String), bool>,
     /// Replacement legacy notes for original sheets whose comments changed.
     legacy_comments: HashMap<usize, Vec<crate::ir::Comment>>,
+    legacy_comment_id_blocks: HashMap<usize, Vec<u32>>,
     /// Final sheet-order table definitions, when VBA changed a table.
     table_plan: Option<Vec<Option<Vec<crate::ir::Table>>>>,
     /// Final sheet-order dynamic-array owners, including one-cell and blocked
     /// arrays. Their extents are independent of adjacent spill members.
     dynamic_plan: Option<Vec<Vec<crate::ir::CachedSpill>>>,
+    copy_instance_sources: HashMap<u32, usize>,
+    source_copies_materialized: bool,
 }
 
 /// One sheet of a rearranged workbook: either one the file already holds, or a
@@ -192,24 +216,36 @@ impl XlsxEditor {
         Ok(Self {
             original_data: data.to_vec(),
             dynamic_plan: None,
+            copy_instance_sources: HashMap::new(),
+            source_copies_materialized: false,
             workbook,
             edits: HashMap::new(),
             row_hidden: HashMap::new(),
             row_height: HashMap::new(),
+            row_thickness: HashMap::new(),
+            row_format_recorded: HashMap::new(),
             col_hidden: HashMap::new(),
             col_width: HashMap::new(),
             col_custom_width: HashMap::new(),
+            col_best_fit: HashMap::new(),
             default_col_width: HashMap::new(),
+            default_row: HashMap::new(),
+            added_default_row: HashMap::new(),
+            column_style_default_width: HashMap::new(),
+            added_column_style_default_width: HashMap::new(),
             panes: HashMap::new(),
             merges: HashMap::new(),
             styles: HashMap::new(),
             row_band_styles: HashMap::new(),
             column_band_styles: HashMap::new(),
+            named_style_fonts: BTreeMap::new(),
+            named_style_plan: None,
             filters: HashMap::new(),
             validations: HashMap::new(),
             conditional_rules: HashMap::new(),
             hyperlinks: HashMap::new(),
             tab_colors: HashMap::new(),
+            header_footers: HashMap::new(),
             sheet_protection: HashMap::new(),
             sheet_plan: None,
             name_plan: None,
@@ -224,6 +260,8 @@ impl XlsxEditor {
             drawing_geometry_edits: HashMap::new(),
             drawing_order_edits: HashMap::new(),
             drawing_states: HashMap::new(),
+            drawing_source_aliases: HashMap::new(),
+            drawing_restore_names: HashMap::new(),
             drawing_deletions: HashMap::new(),
             drawing_additions: HashMap::new(),
             drawing_group_additions: HashMap::new(),
@@ -232,6 +270,7 @@ impl XlsxEditor {
             threaded_comment_deletions: HashMap::new(),
             threaded_comment_resolved: HashMap::new(),
             legacy_comments: HashMap::new(),
+            legacy_comment_id_blocks: HashMap::new(),
             table_plan: None,
         })
     }
@@ -276,6 +315,29 @@ impl XlsxEditor {
     /// validation, charts, drawings  Erides along in the original XML
     /// untouched, except for line paint changes on existing named shapes.
     pub fn apply_workbook(&mut self, edited: &Workbook) -> Result<(), XlsxError> {
+        self.apply_workbook_with_drawing_sources(edited, &HashMap::new())
+    }
+
+    /// Apply changes while retaining the original XML of renamed drawings.
+    /// The map pairs an edited sheet index and new name with its source name.
+    pub fn apply_workbook_with_drawing_sources(&mut self, edited: &Workbook,
+        sources: &HashMap<(usize, String), String>) -> Result<(), XlsxError> {
+        self.apply_workbook_with_drawing_identity_sources(edited, sources, &HashMap::new())
+    }
+
+    /// Physical source identities for edited drawings. None marks a new
+    /// object; Some(id) identifies its source before worksheet-copy rebasing.
+    pub fn apply_workbook_with_drawing_id_sources(&mut self, edited: &Workbook,
+        sources: &HashMap<(usize, u32), Option<u32>>) -> Result<(), XlsxError> {
+        self.apply_workbook_with_drawing_identity_sources(edited, &HashMap::new(), sources)
+    }
+
+    fn apply_workbook_with_drawing_identity_sources(&mut self, edited: &Workbook,
+        sources: &HashMap<(usize, String), String>,
+        source_ids: &HashMap<(usize, u32), Option<u32>>) -> Result<(), XlsxError> {
+        if let Some(rebased) = self.expand_copied_sheet_sources(edited)? {
+            return self.apply_workbook_with_drawing_identity_sources(&rebased, sources, source_ids);
+        }
         if edited.sheets.is_empty() {
             return Err(XlsxError::InvalidData(
                 "a workbook must keep at least one sheet".to_string(),
@@ -294,14 +356,18 @@ impl XlsxEditor {
         self.drawing_geometry_edits.clear();
         self.drawing_order_edits.clear();
         self.drawing_states.clear();
+        self.drawing_source_aliases.clear();
+        self.drawing_restore_names.clear();
         self.drawing_deletions.clear();
         self.drawing_additions.clear();
         self.drawing_group_additions.clear();
-        for chart in edited.sheets.iter().flat_map(|sheet|&sheet.drawings).filter_map(|drawing|match &drawing.kind {crate::ir::DrawingKind::Chart(chart)=>Some(chart),_=>None}) {
+        for chart in edited.sheets.iter().enumerate().flat_map(|(sheet, data)| data.drawings.iter()
+            .filter(move |drawing| !drawing.non_visual_id.is_some_and(|id| source_ids.get(&(sheet,id)) == Some(&None)))
+            .filter_map(|drawing|match &drawing.kind {crate::ir::DrawingKind::Chart(chart)=>Some(chart),_=>None})) {
             if let Some(origin)=chart.origin_id {
                 let before=originals.get(&origin).ok_or_else(||XlsxError::InvalidData("chart source identity is not in this workbook".into()))?;
-                if before.title!=chart.title || crate::chart_edit::legend_position(before)!=crate::chart_edit::legend_position(chart) || crate::chart_edit::series_data_changed(before,chart) || crate::chart_edit::plot_options_changed(before,chart) {
-                    if self.chart_edits.get(&origin).is_some_and(|(_,prior)|prior.title!=chart.title || crate::chart_edit::legend_position(prior)!=crate::chart_edit::legend_position(chart) || crate::chart_edit::series_data_changed(prior,chart) || crate::chart_edit::plot_options_changed(prior,chart)) {
+                if before.title!=chart.title || before.fill!=chart.fill || before.plot_fill!=chart.plot_fill || crate::chart_edit::legend_position(before)!=crate::chart_edit::legend_position(chart) || crate::chart_edit::series_data_changed(before,chart) || crate::chart_edit::plot_options_changed(before,chart) {
+                    if self.chart_edits.get(&origin).is_some_and(|(_,prior)|prior.title!=chart.title || prior.fill!=chart.fill || prior.plot_fill!=chart.plot_fill || crate::chart_edit::legend_position(prior)!=crate::chart_edit::legend_position(chart) || crate::chart_edit::series_data_changed(prior,chart) || crate::chart_edit::plot_options_changed(prior,chart)) {
                         return Err(XlsxError::InvalidData("conflicting edits for a shared chart source".into()));
                     }
                     self.chart_edits.insert(origin,((*before).clone(),chart.clone()));
@@ -317,23 +383,106 @@ impl XlsxEditor {
                 None => edited_index,
             };
             let Some(original_sheet) = self.workbook.sheets.get(original_index) else { continue };
+            // An unchanged drawing part remains byte-identical, including
+            // valid equal names and unsupported XML. No aliases are needed.
+            if original_sheet.drawings == edited_sheet.drawings { continue; }
+            let mut original_drawings = std::borrow::Cow::Borrowed(original_sheet.drawings.as_slice());
+            let mut edited_drawings = std::borrow::Cow::Borrowed(edited_sheet.drawings.as_slice());
+            let count_names = |drawings: &[crate::ir::Drawing]| {
+                let mut counts = HashMap::<String,usize>::new();
+                for drawing in drawings { if let Some(name)=&drawing.name { *counts.entry(name.clone()).or_default() += 1; } }
+                counts
+            };
+            let before_names=count_names(&original_drawings);
+            let after_names=count_names(&edited_drawings);
+            let mut ambiguous_names=std::collections::HashSet::<String>::new();
+            for (name,count) in before_names.iter().chain(after_names.iter()) {
+                if *count>1 { ambiguous_names.insert(name.clone()); }
+            }
+            for drawing in edited_drawings.iter() {
+                let (Some(id),Some(name))=(drawing.non_visual_id,drawing.name.as_ref()) else { continue };
+                if let Some(origin)=source_ids.get(&(edited_index,id)) {
+                    if original_sheet.drawings.iter().any(|old|old.name.as_ref()==Some(name)
+                        && (origin.is_none() || old.non_visual_id!=*origin)) { ambiguous_names.insert(name.clone()); }
+                    if origin.is_some_and(|source|!original_sheet.drawings.iter().any(|old|old.non_visual_id==Some(source))) {
+                        return Err(XlsxError::InvalidData("drawing source identity is missing".into()));
+                    }
+                }
+            }
+            let ambiguous=|name: &str| ambiguous_names.contains(name);
+            let mut prefix="__oxi_drawing_source_".to_string();
+            while original_drawings.iter().chain(edited_drawings.iter())
+                .any(|drawing| drawing.name.as_ref().is_some_and(|name|name.starts_with(&prefix))) { prefix.push('_'); }
+            let mut aliases=HashMap::<u32,String>::new();
+            for index in 0..original_drawings.len() {
+                let drawing=&original_drawings[index];
+                if drawing.ole_prog_id.is_some() { continue; }
+                let Some(name)=drawing.name.as_ref().filter(|name|ambiguous(name)) else { continue };
+                let Some(id)=drawing.non_visual_id else { continue };
+                let _=name;
+                let alias=format!("{prefix}{original_index}_old_{id}");
+                aliases.insert(id,alias.clone());
+                self.drawing_source_aliases.insert((original_index,id),alias.clone());
+                original_drawings.to_mut()[index].name=Some(alias);
+            }
+            for index in 0..edited_drawings.len() {
+                let drawing=&edited_drawings[index];
+                if drawing.ole_prog_id.is_some() { continue; }
+                let Some(name)=drawing.name.as_ref().filter(|name|ambiguous(name)).cloned() else { continue };
+                let Some(id)=drawing.non_visual_id else {
+                    return Err(XlsxError::InvalidData("equal drawing names require physical identities".into()));
+                };
+                let source=source_ids.get(&(edited_index,id)).copied().unwrap_or(Some(id));
+                let alias=source.and_then(|source|aliases.get(&source).cloned())
+                    .unwrap_or_else(||format!("{prefix}{original_index}_new_{id}"));
+                self.drawing_restore_names.insert((original_index,id),name);
+                edited_drawings.to_mut()[index].name=Some(alias);
+            }
+            let source_name = |drawing: &crate::ir::Drawing| -> Option<String> {
+                let name=drawing.name.as_ref()?;
+                if drawing.ole_source_name.is_some() || (drawing.ole_prog_id.is_some() && drawing.ole_embedded_package.is_some()) {
+                    return Some(name.clone());
+                }
+                if let Some(id)=drawing.non_visual_id {
+                    match source_ids.get(&(edited_index,id)) {
+                        Some(None) => return Some(name.clone()),
+                        Some(Some(source)) => return original_drawings.iter()
+                            .find(|old|old.non_visual_id==Some(*source)).and_then(|old|old.name.clone()),
+                        None => {},
+                    }
+                }
+                if let Some(source)=sources.get(&(edited_index,name.clone())) {
+                    if let Some(old)=original_sheet.drawings.iter().find(|old|old.name.as_ref()==Some(source)) {
+                        return old.non_visual_id.and_then(|id|aliases.get(&id).cloned()).or_else(||old.name.clone());
+                    }
+                }
+                // Legacy callers may rebase IDs while retaining unique
+                // names (worksheet copies). Explicit ID sources above are
+                // authoritative; otherwise prefer that name before a reused ID.
+                if original_drawings.iter().any(|old|old.name.as_ref()==Some(name)) { return Some(name.clone()); }
+                if let Some(id)=drawing.non_visual_id {
+                    if let Some(old)=original_drawings.iter().find(|old|old.non_visual_id==Some(id)) { return old.name.clone(); }
+                }
+                Some(name.clone())
+            };
             let order = |drawings: &[crate::ir::Drawing]| drawings.iter().filter_map(|drawing| drawing.name.clone()).collect::<Vec<_>>();
-            let before_order = order(&original_sheet.drawings);
-            let after_order = order(&edited_sheet.drawings);
+            let before_order = order(&original_drawings);
+            let after_order = edited_drawings.iter().filter_map(&source_name).collect::<Vec<_>>();
             if before_order != after_order {
                 self.drawing_order_edits.insert(original_index, after_order);
             }
             let mut new_groups = Vec::new();
-            for drawing in edited_sheet.drawings.iter().filter(|drawing| drawing.grouped) {
+            for drawing in edited_drawings.iter().filter(|drawing| drawing.grouped) {
                 let Some(group_name) = drawing.group_name.as_ref() else { continue };
                 if new_groups.iter().any(|group: &DrawingGroupAddition| &group.name == group_name) { continue; }
                 let from = drawing.from;
                 let Some(to) = drawing.to else { continue };
                 let Some(transform) = drawing.group_transform else { continue };
-                let members = edited_sheet.drawings.iter().filter_map(|member| {
+                let members = edited_drawings.iter().filter_map(|member| {
                     if !member.grouped || member.group_name.as_ref() != Some(group_name) { return None; }
-                    let name = member.name.as_ref()?;
-                    let was_ungrouped = original_sheet.drawings.iter()
+                    let source = source_name(member)?;
+                    let name = &source;
+                    let was_ungrouped = original_drawings.iter()
                         .find(|original| original.name.as_ref() == Some(name))
                         .is_some_and(|original| !original.grouped);
                     was_ungrouped.then_some((name.clone(), member.group_child_transform?))
@@ -345,31 +494,35 @@ impl XlsxEditor {
             if !new_groups.is_empty() {
                 self.drawing_group_additions.insert(original_index, new_groups);
             }
-            for original in &original_sheet.drawings {
+            for original in original_drawings.iter() {
                 let Some(name) = original.name.as_ref() else { continue };
-                if !edited_sheet.drawings.iter().any(|drawing| drawing.name.as_ref() == Some(name)) {
+                if !edited_drawings.iter().any(|drawing| source_name(drawing).as_ref() == Some(name)) {
                     self.drawing_deletions.entry(original_index).or_default().insert(name.clone());
                 }
             }
-            for drawing in &edited_sheet.drawings {
-                let Some(name) = drawing.name.as_ref() else { continue };
+            for drawing in edited_drawings.iter() {
+                let Some(source) = source_name(drawing) else { continue };
+                let name = &source;
                 if drawing.grouped
                     && self.drawing_deletions.get(&original_index).is_some_and(|names| !names.is_empty())
                 {
                     self.drawing_states.insert((original_index, name.clone()), drawing.clone());
                 }
-                let existed = original_sheet.drawings.iter().any(|original| original.name.as_ref() == Some(name));
+                let existed = original_drawings.iter().any(|original| original.name.as_ref() == Some(name));
                 let is_new_ole = drawing.ole_prog_id.is_some() && drawing.ole_embedded_package.is_some()
                     && drawing.ole_source_name.is_none();
                 if !existed && (matches!(&drawing.kind, crate::ir::DrawingKind::Shape(_) | crate::ir::DrawingKind::Chart(_)) || drawing.ole_source_name.is_some() || is_new_ole) {
                     self.drawing_additions.entry(original_index).or_default().push(drawing.clone());
                     continue;
                 }
-                let matches = original_sheet.drawings.iter().filter(|original| original.name.as_ref() == Some(name)).collect::<Vec<_>>();
+                let matches = original_drawings.iter().filter(|original| original.name.as_ref() == Some(name)).collect::<Vec<_>>();
                 if matches.len() > 1 {
                     return Err(XlsxError::InvalidData(format!("drawing name {name:?} is ambiguous on sheet {}", original_sheet.name)));
                 }
                 let Some(original) = matches.first() else { continue };
+                if drawing.metadata != original.metadata || drawing.name != original.name || (drawing.non_visual_id.is_some() && drawing.non_visual_id != original.non_visual_id) {
+                    self.drawing_states.insert((original_index, name.clone()), drawing.clone());
+                }
                 if (original.grouped && !drawing.grouped)
                     || ((!original.grouped || !drawing.grouped) && drawing_position_changed(original, drawing))
                 {
@@ -483,11 +636,21 @@ impl XlsxEditor {
             }
             copy.defined_names.retain(|(name, _)| !crate::ir::defined_name_scope(name)
                 .is_some_and(|(scope, _)| deleted.iter().any(|gone| gone.eq_ignore_ascii_case(&scope))));
+            let requested_names: std::collections::HashSet<_> = copy.defined_names.iter()
+                .map(|(name, _)| oxicells_calc::case_fold::name_key(name)).collect();
+            let requested_owners: std::collections::HashSet<_> = copy.sheets.iter()
+                .map(|sheet| oxicells_calc::case_fold::name_key(&sheet.name)).collect();
             for (name, refers_to) in &mut copy.defined_names {
                 for (old, new) in &renames {
                     if let Some((scope, leaf)) = crate::ir::defined_name_scope(name) {
                         if scope.eq_ignore_ascii_case(old) {
                             let renamed = crate::ir::scoped_defined_name(new, leaf);
+                            // VBA may already have moved this name and reused
+                            // the old sheet name for a different sheet. Keep
+                            // both explicit owners instead of merging them.
+                            if requested_owners.contains(&oxicells_calc::case_fold::name_key(&scope))
+                                && requested_names.contains(&oxicells_calc::case_fold::name_key(&renamed))
+                            { continue; }
                             if let Some(attributes) = copy.defined_name_attributes.remove(name) { copy.defined_name_attributes.insert(renamed.clone(), attributes); }
                             *name = renamed;
                         }
@@ -516,6 +679,26 @@ impl XlsxEditor {
             *formula = oxicells_calc::lexer::rewrite_builtin_function_values(formula, &qualify).unwrap_or_else(|_| formula.clone());
         }
         let edited = &callable_storage;
+
+        self.named_style_fonts.clear();
+        for before in &self.workbook.named_styles {
+            let after = edited.named_styles.iter().find(|style| style.source_id == before.source_id)
+                .map(|style| &style.style)
+                .or_else(|| (edited.named_styles.is_empty() && before.builtin_id == Some(0))
+                    .then_some(&edited.default_style));
+            if let Some(after) = after {
+                if font_xml(&before.style) != font_xml(after) {
+                    self.named_style_fonts.insert(before.source_id, (before.style.clone(), after.clone()));
+                }
+            }
+        }
+
+        self.named_style_plan = (!edited.named_styles.is_empty()
+            && (edited.named_styles.len() != self.workbook.named_styles.len()
+                || edited.named_styles.iter().any(|after| {
+                    self.workbook.named_styles.iter().find(|before|before.source_id==after.source_id)
+                        .is_none_or(|before|named_style_definition_key(before)!=named_style_definition_key(after))
+                }))).then(||edited.named_styles.clone());
 
         if edited.defined_names != self.workbook.defined_names
             || edited.defined_name_attributes != self.workbook.defined_name_attributes
@@ -575,11 +758,21 @@ impl XlsxEditor {
             }).collect());
         }
 
-        for (index, (before, after)) in pairs {
+        for (index, (before, after)) in pairs.iter().copied() {
             if before.hyperlinks != after.hyperlinks {
                 self.hyperlinks.insert(index, after.hyperlinks.clone());
             }
             let mut after_comments = after.comments.clone();
+            for comment in &mut after_comments {
+                // An omitted read-only identity is unknown, not a request to
+                // discard the source VML identity or rewrite an unchanged note.
+                if comment.shape_id.is_none() {
+                    if let Some(original) = before.comments.iter().find(|held| held.cell == comment.cell) {
+                        comment.shape_id = original.shape_id;
+                        if comment.shape_name.is_none() { comment.shape_name = original.shape_name.clone(); }
+                    }
+                }
+            }
             for compatibility in &before.comments {
                 if compatibility.author.strip_prefix("tc=").is_some_and(|id| after.threaded_comments.iter().any(|thread| thread.cell == compatibility.cell && thread.id.eq_ignore_ascii_case(id)))
                     && !after_comments.iter().any(|comment| comment.cell == compatibility.cell)
@@ -590,6 +783,7 @@ impl XlsxEditor {
             after_comments.sort_by_key(|comment| comment.cell);
             if !legacy_comments_equivalent(&before.comments, &after_comments) {
                 self.legacy_comments.insert(index, after_comments);
+                self.legacy_comment_id_blocks.insert(index, after.drawing_id_blocks.clone());
             }
             let held_ids: std::collections::HashSet<&str> = before.threaded_comments.iter()
                 .map(|comment| comment.id.as_str()).collect();
@@ -635,6 +829,9 @@ impl XlsxEditor {
             }
             if before.tab_color != after.tab_color {
                 self.tab_colors.insert(index, after.tab_color.clone());
+            }
+            if before.header_footer != after.header_footer {
+                self.header_footers.insert(index, after.header_footer.clone());
             }
             let mut changes: Vec<((usize, u32, u32), CellEditValue)> = Vec::new();
             let held = cells_of(before);
@@ -686,9 +883,36 @@ impl XlsxEditor {
                 let was = before.rows.iter().find(|held| held.index == row.index);
                 let had = was.and_then(|held| held.height);
                 let pinned = was.is_some_and(|held| held.custom_height);
-                if had != row.height || pinned != row.custom_height {
-                    self.row_height
-                        .insert((index, row.index), (row.height, row.custom_height));
+                let inherited = (was.is_none() && row.height.is_none()
+                    && after.default_row_custom && !row.cells.is_empty())
+                    .then_some(after.default_row_height);
+                let height = row.height.or(inherited);
+                let custom = row.custom_height || inherited.is_some();
+                if had != height || pinned != custom {
+                    self.row_height.insert((index, row.index), (height, custom));
+                }
+                if let Some(recorded) = row.format_recorded {
+                    if was.and_then(|held| held.format_recorded) != Some(recorded) {
+                        self.row_format_recorded.insert((index, row.index), recorded);
+                    }
+                }
+                let thickness = (row.thick_top, row.thick_bottom);
+                let previous = was.map(|held| (held.thick_top, held.thick_bottom)).unwrap_or_default();
+                if thickness != previous {
+                    self.row_thickness.insert((index, row.index), thickness);
+                }
+            }
+            for row in &before.rows {
+                if !after.rows.iter().any(|held| held.index == row.index) {
+                    if row.height.is_some() || row.custom_height {
+                        self.row_height.insert((index, row.index), (None, false));
+                    }
+                    if row.format_recorded == Some(true) {
+                        self.row_format_recorded.insert((index, row.index), false);
+                    }
+                    if row.thick_top || row.thick_bottom {
+                        self.row_thickness.insert((index, row.index), (false, false));
+                    }
                 }
             }
 
@@ -711,12 +935,24 @@ impl XlsxEditor {
                 let was = before.col_widths.get(col).copied().unwrap_or(0.0);
                 let custom = after.column_has_custom_width(col as u32);
                 if *width != was || custom != before.column_has_custom_width(col as u32) {
-                    self.col_width.insert((index, col as u32), *width);
+                    self.col_width.insert((index, col as u32), column_file_width(*width));
                     self.col_custom_width.insert((index, col as u32), custom);
+                    self.col_best_fit.insert((index, col as u32), after.best_fit_cols.contains(&(col as u32)));
+                }
+            }
+            for &column in before.best_fit_cols.union(&after.best_fit_cols) {
+                let wanted = after.best_fit_cols.contains(&column);
+                if wanted != before.best_fit_cols.contains(&column) {
+                    self.col_best_fit.insert((index, column), wanted);
                 }
             }
             if before.default_col_width != after.default_col_width || before.default_col_width_explicit != after.default_col_width_explicit {
-                self.default_col_width.insert(index, after.default_col_width);
+                self.default_col_width.insert(index, column_file_width(after.default_col_width));
+            }
+            if (before.default_row_height, before.default_row_custom)
+                != (after.default_row_height, after.default_row_custom)
+            {
+                self.default_row.insert(index, (after.default_row_height, after.default_row_custom));
             }
 
             if (before.frozen_rows, before.frozen_cols)
@@ -742,9 +978,9 @@ impl XlsxEditor {
             for row in before.band_styles.rows.keys().chain(after.band_styles.rows.keys()).copied().collect::<std::collections::BTreeSet<_>>() {
                 let was = before.band_styles.rows.get(&row);
                 let now = after.band_styles.rows.get(&row);
-                if was != now { self.row_band_styles.insert((index, row), now.map(|style|reconcile_style_edit(was,style,&self.workbook.theme_colors,&self.workbook.indexed_colors))); }
+                if !stored_style_same(was,now,&edited.named_styles) { self.row_band_styles.insert((index, row), now.map(|style|reconcile_style_edit(was,style,&self.workbook.theme_colors,&self.workbook.indexed_colors))); }
             }
-            let columns: std::collections::BTreeSet<u32> = if before.band_styles.sheet != after.band_styles.sheet {
+            let columns: std::collections::BTreeSet<u32> = if !stored_style_same(before.band_styles.sheet.as_ref(),after.band_styles.sheet.as_ref(),&edited.named_styles) {
                 (0..16_384).collect()
             } else {
                 before.band_styles.columns.keys().chain(after.band_styles.columns.keys()).copied().collect()
@@ -752,18 +988,285 @@ impl XlsxEditor {
             for column in columns {
                 let was = before.band_styles.columns.get(&column).or(before.band_styles.sheet.as_ref());
                 let now = after.band_styles.columns.get(&column).or(after.band_styles.sheet.as_ref());
-                if was != now { self.column_band_styles.insert((index, column), now.map(|style|reconcile_style_edit(was,style,&self.workbook.theme_colors,&self.workbook.indexed_colors))); }
+                if !stored_style_same(was,now,&edited.named_styles) { self.column_band_styles.insert((index, column), now.map(|style|reconcile_style_edit(was,style,&self.workbook.theme_colors,&self.workbook.indexed_colors))); }
             }
 
             for (&(row, col), cell) in &now {
                 let was = held.get(&(row, col)).map(|before| &before.style);
-                if was != Some(&cell.style) {
+                if !stored_style_same(was,Some(&cell.style),&edited.named_styles) {
                     self.styles
                         .insert((index, row, col), reconcile_style_edit(was,&cell.style,&self.workbook.theme_colors,&self.workbook.indexed_colors));
                 }
             }
         }
+        // An automatic height in the file is a cache. Excel refreshes it on
+        // an edited save; a no-edit round trip still preserves the input bytes.
+        if self.has_edits() {
+            for (index, (_, sheet)) in pairs {
+                if sheet.default_row_custom { continue; }
+                let face = sheet.column_width_font.as_deref()
+                    .or_else(|| edited.default_style.latin_font_name())
+                    .or_else(|| sheet.normal_font.as_ref().map(|font| font.0.as_str()))
+                    .unwrap_or("Aptos Narrow");
+                let size = sheet.normal_font.as_ref().map(|font| font.1)
+                    .or(edited.default_style.font_size).unwrap_or(11.0);
+                let normal = edited.named_styles.iter().find(|style| style.builtin_id == Some(0))
+                    .map_or(&edited.default_style, |style| &style.style);
+                if let Some((_, pixels)) = crate::row_defaults::font_styled_default_geometry_px(face, size, normal.bold, normal.italic) {
+                    let height = if pixels >= 546 { 409.6 } else { f32::from(pixels) * 0.75 };
+                    if height != sheet.default_row_height {
+                        self.default_row.insert(index, (height, false));
+                    }
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// Give each copied sheet a detached source package before calculating
+    /// edits. Original part indices remain stable; copies are appended and
+    /// the edited order is applied by the ordinary sheet-plan machinery.
+    fn expand_copied_sheet_sources(&mut self, edited: &Workbook) -> Result<Option<Workbook>, XlsxError> {
+        if edited.copied_sheet_origins.is_empty() { return Ok(None); }
+        let mut rebased = edited.clone();
+        let mut instance_sources = self.copy_instance_sources.clone();
+        let mut parts = HashMap::new();
+        let mut order = Vec::new();
+        let mut archive = ZipArchive::new(Cursor::new(&self.original_data))
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            let name = entry.name().to_string();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            order.push(name.clone());
+            parts.insert(name, bytes);
+        }
+        drop(archive);
+        let mut paths = self.resolve_sheet_paths()?;
+        let mut names: Vec<_> = self.workbook.sheets.iter().map(|sheet| (sheet.name.clone(), sheet.visibility.stated())).collect();
+        let mut workbook_relationships = String::from_utf8(parts.get("xl/_rels/workbook.xml.rels").cloned()
+            .ok_or_else(|| XlsxError::InvalidData("workbook relationships are missing".into()))?)
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        let original_types = String::from_utf8(parts.get("[Content_Types].xml").cloned()
+            .ok_or_else(|| XlsxError::InvalidData("copied workbook has no content types".into()))?)
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        let mut content_types = original_types.clone();
+        let mut overrides = HashMap::new();
+        let mut reader = Reader::from_str(&original_types);
+        loop {
+            match reader.read_event().map_err(XlsxError::Xml)? {
+                Event::Empty(start) | Event::Start(start) if start.local_name().as_ref() == b"Override" => {
+                    if let (Some(part), Some(kind)) = (get_attr(&start, "PartName"), get_attr(&start, "ContentType")) {
+                        overrides.insert(part.trim_start_matches('/').to_string(), kind);
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        let mut table_id = 0u32;
+        let mut table_names = std::collections::HashSet::new();
+        for (part, bytes) in &parts {
+            if !overrides.get(part).is_some_and(|kind| kind.ends_with(".table+xml")) { continue; }
+            let xml = std::str::from_utf8(bytes).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            let mut reader = Reader::from_str(xml);
+            loop {
+                match reader.read_event().map_err(XlsxError::Xml)? {
+                    Event::Start(start) | Event::Empty(start) if start.local_name().as_ref() == b"table" => {
+                        table_id = table_id.max(get_attr(&start, "id").and_then(|id| id.parse().ok()).unwrap_or(0));
+                        if let Some(name) = get_attr(&start, "name") { table_names.insert(name.to_lowercase()); }
+                        break;
+                    }
+                    Event::Eof => break,
+                    _ => {}
+                }
+            }
+        }
+        let mut pending: Vec<_> = edited.sheets.iter().filter_map(|sheet| {
+            let id = sheet.origin_id?;
+            edited.copied_sheet_origins.get(&id).map(|source| (id, *source, sheet.clone()))
+        }).collect();
+        let mut materialized = false;
+        while !pending.is_empty() {
+            let mut progressed = false;
+            let mut remaining = Vec::new();
+            for (id, source_id, desired) in pending {
+                if instance_sources.contains_key(&id) { progressed = true; continue; }
+                let mut source_id = source_id;
+                let mut visited = std::collections::HashSet::new();
+                let source_index = loop {
+                    if !visited.insert(source_id) { return Err(XlsxError::InvalidData("copied sheet provenance is cyclic".into())); }
+                    if let Some(index) = instance_sources.get(&source_id).copied()
+                        .or_else(|| self.workbook.sheets.iter().position(|sheet| sheet.origin_id == Some(source_id)))
+                    { break Some(index); }
+                    if let Some(parent) = edited.copied_sheet_origins.get(&source_id) { source_id = *parent; }
+                    else { break None; }
+                };
+                let Some(source_index) = source_index else { remaining.push((id, source_id, desired)); continue };
+                let source_part = paths.get(source_index).ok_or_else(|| XlsxError::InvalidData("copy template part is missing".into()))?.clone();
+                let occupied = parts.keys().cloned().collect();
+                // Pivot caches and connections belong to the workbook, rather
+                // than a copied view. Other mutable dependent parts detach.
+                let shared = parts.keys().filter(|part| part.starts_with("xl/pivotCache/") || part.as_str() == "xl/connections.xml").cloned().collect();
+                let mut graph = copy_part_graph(&parts, &source_part, &occupied, &shared)?;
+                let copied_code_name = edited.copied_sheet_code_names.get(&id).map(String::as_str);
+                let copied_xml = std::str::from_utf8(&graph.parts[&graph.root])
+                    .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                let mut reader = Reader::from_str(copied_xml);
+                let mut has_properties = false;
+                loop {
+                    match reader.read_event().map_err(XlsxError::Xml)? {
+                        Event::Start(start) | Event::Empty(start) if start.local_name().as_ref() == b"sheetPr" => { has_properties = true; break; }
+                        Event::Eof => break,
+                        _ => {}
+                    }
+                }
+                let mut reader = Reader::from_str(copied_xml);
+                let mut writer = Writer::new(Cursor::new(Vec::new()));
+                loop {
+                    let event = reader.read_event().map_err(XlsxError::Xml)?;
+                    match &event {
+                        Event::Start(start) | Event::Empty(start) if start.local_name().as_ref() == b"sheetPr" => {
+                            let mut changed = start.to_owned();
+                            changed.clear_attributes();
+                            for attribute in start.attributes().flatten() {
+                                if attribute.key.as_ref() != b"codeName" { changed.push_attribute(attribute); }
+                            }
+                            if let Some(name) = copied_code_name.filter(|name| !name.is_empty()) { changed.push_attribute(("codeName", name)); }
+                            writer.write_event(if matches!(event, Event::Empty(_)) { Event::Empty(changed) } else { Event::Start(changed) })
+                                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                        }
+                        Event::Start(start) if !has_properties && matches!(start.local_name().as_ref(), b"worksheet" | b"chartsheet") => {
+                            writer.write_event(event.clone()).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                            if let Some(name) = copied_code_name.filter(|name| !name.is_empty()) {
+                                let mut properties = BytesStart::new("sheetPr");
+                                properties.push_attribute(("codeName", name));
+                                writer.write_event(Event::Empty(properties)).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                            }
+                        }
+                        Event::Eof => break,
+                        _ => writer.write_event(event).map_err(|error| XlsxError::InvalidData(error.to_string()))?,
+                    }
+                }
+                graph.parts.insert(graph.root.clone(), writer.into_inner().into_inner());
+                let source_kind = parse_relationships(&workbook_relationships)?.into_values()
+                    .find(|relation| resolve_part_target("xl/workbook.xml", &relation.target) == source_part)
+                    .ok_or_else(|| XlsxError::InvalidData("copy template relationship is missing".into()))?.rel_type;
+                workbook_relationships = append_relationship(Some(&workbook_relationships), &source_kind,
+                    &relative_sheet_target("xl/workbook.xml", &graph.root))?;
+                let mut copied_paths: Vec<_> = graph.paths.iter().collect();
+                copied_paths.sort_by(|a, b| (a.0 != &source_part).cmp(&(b.0 != &source_part))
+                    .then_with(|| a.0.cmp(b.0)));
+                for (old, new) in copied_paths {
+                    if let Some(kind) = overrides.get(old).cloned() {
+                        content_types = append_content_type(&content_types, new, &kind)?;
+                        overrides.insert(new.clone(), kind);
+                    }
+                }
+                // Table identities are workbook-wide, unlike the part-local
+                // relationship ids which can remain unchanged in the clone.
+                let mut copied_tables: Vec<_> = graph.paths.iter().filter(|(old, _)| overrides.get(*old).is_some_and(|kind| kind.ends_with(".table+xml"))).collect();
+                copied_tables.sort_by(|a, b| a.0.cmp(b.0));
+                for (old, new) in copied_tables {
+                    table_id = table_id.checked_add(1).ok_or_else(|| XlsxError::InvalidData("table id overflow".into()))?;
+                    let xml = std::str::from_utf8(&graph.parts[new]).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                    let mut reader = Reader::from_str(xml);
+                    let mut writer = Writer::new(Cursor::new(Vec::new()));
+                    loop {
+                        let event = reader.read_event().map_err(XlsxError::Xml)?;
+                        match &event {
+                            Event::Start(start) | Event::Empty(start) if start.local_name().as_ref() == b"table" => {
+                                let original_name = get_attr(start, "name").unwrap_or_else(|| "Table".into());
+                                let asked = desired.tables.iter().find(|table| table.origin_part.as_deref() == Some(old.as_str())).map(|table| table.name.clone());
+                                let name = if let Some(asked) = asked.filter(|name| !table_names.contains(&name.to_lowercase())) { asked } else {
+                                    let mut suffix = table_id.saturating_add(1);
+                                    loop {
+                                        let name = format!("{original_name}{suffix}");
+                                        if !table_names.contains(&name.to_lowercase()) { break name; }
+                                        suffix = suffix.checked_add(1).ok_or_else(|| XlsxError::InvalidData("table name overflow".into()))?;
+                                    }
+                                };
+                                table_names.insert(name.to_lowercase());
+                                let mut changed = start.to_owned();
+                                changed.clear_attributes();
+                                for attribute in start.attributes().flatten() {
+                                    if !matches!(attribute.key.as_ref(), b"id" | b"name" | b"displayName") { changed.push_attribute(attribute); }
+                                }
+                                changed.push_attribute(("id", table_id.to_string().as_str()));
+                                changed.push_attribute(("name", name.as_str()));
+                                changed.push_attribute(("displayName", name.as_str()));
+                                writer.write_event(if matches!(event, Event::Empty(_)) { Event::Empty(changed) } else { Event::Start(changed) })
+                                    .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                            }
+                            Event::Eof => break,
+                            _ => writer.write_event(event).map_err(|error| XlsxError::InvalidData(error.to_string()))?,
+                        }
+                    }
+                    graph.parts.insert(new.clone(), writer.into_inner().into_inner());
+                }
+                let index = paths.len();
+                instance_sources.insert(id, index);
+                paths.push(graph.root.clone());
+                names.push((desired.name.clone(), desired.visibility.stated()));
+                let mut added: Vec<_> = graph.parts.into_iter().collect();
+                added.sort_by(|a, b| a.0.cmp(&b.0));
+                for (name, bytes) in added { order.push(name.clone()); parts.insert(name, bytes); }
+                // Copies of copies can use their detached template on the
+                // next pass, even if the source instance has been deleted.
+                materialized = true;
+                progressed = true;
+            }
+            if !progressed { return Err(XlsxError::InvalidData("copied sheet template identity is missing or cyclic".into())); }
+            pending = remaining;
+        }
+        if materialized {
+            let workbook_xml = std::str::from_utf8(parts.get("xl/workbook.xml").ok_or_else(|| XlsxError::InvalidData("workbook part is missing".into()))?)
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            parts.insert("xl/workbook.xml".into(), patch_workbook_sheets(workbook_xml, &names)?.into_bytes());
+            let rels = workbook_relationships.as_str();
+            let targets: Vec<_> = paths.iter().map(|part| part.strip_prefix("xl/").unwrap_or(part).to_string()).collect();
+            parts.insert("xl/_rels/workbook.xml.rels".into(), patch_workbook_rels(rels, &targets)?.into_bytes());
+            parts.insert("[Content_Types].xml".into(), content_types.into_bytes());
+            let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+            for name in &order {
+                writer.start_file(name, SimpleFileOptions::default()).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                writer.write_all(&parts[name]).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            }
+            let bytes = writer.finish().map_err(|error| XlsxError::InvalidData(error.to_string()))?.into_inner();
+            let mut parsed = parse_xlsx(&bytes)?;
+            // Detached package positions must not become new public origin
+            // identities: an unrelated edited sheet may already hold that
+            // numeric id. Keep each copied instance's reserved identity.
+            for (&id, &index) in &instance_sources {
+                if let Some(sheet) = parsed.sheets.get_mut(index) { sheet.origin_id = Some(id); }
+            }
+            self.workbook = parsed;
+            self.copy_instance_sources = instance_sources.clone();
+            self.original_data = bytes;
+            self.source_copies_materialized = true;
+        }
+        for sheet in &mut rebased.sheets {
+            let Some(id) = sheet.origin_id else { continue };
+            let Some(&index) = instance_sources.get(&id) else { continue };
+            let template = &self.workbook.sheets[index];
+            sheet.origin_id = template.origin_id;
+            for (table, source) in sheet.tables.iter_mut().zip(&template.tables) {
+                table.origin_part = source.origin_part.clone();
+                // An untouched source name takes its new copied identity.
+                if self.workbook.sheets.iter().enumerate().any(|(at, held)| at != index && held.tables.iter().any(|held| held.name.eq_ignore_ascii_case(&table.name))) {
+                    table.name = source.name.clone();
+                }
+            }
+            for (drawing, source) in sheet.drawings.iter_mut().zip(&template.drawings) {
+                if let (crate::ir::DrawingKind::Chart(chart), crate::ir::DrawingKind::Chart(source)) = (&mut drawing.kind, &source.kind) {
+                    chart.origin_id = source.origin_id;
+                }
+            }
+        }
+        rebased.copied_sheet_origins.clear();
+        rebased.copied_sheet_code_names.clear();
+        Ok(Some(rebased))
     }
 
     /// Hide or reveal a whole row. `row` is one-based, as OOXML counts them.
@@ -786,9 +1289,56 @@ impl XlsxEditor {
         self.row_height.insert((sheet_index, row), (height, pinned));
     }
 
+    /// Keep the stated sheet default, including an automatic height cache.
+    /// A live editor can retain this cache until the workbook is opened again.
+    pub fn set_default_row_height(&mut self, sheet_index: usize, height: f32, pinned: bool) {
+        self.default_row.insert(sheet_index, (height, pinned));
+    }
+
+    /// Set a default cache by position in the workbook passed to `apply_workbook`.
+    /// Kept sheets still write to their original parts; added sheets own the cache.
+    pub fn set_edited_default_row_height(&mut self, sheet_index: usize, height: f32, pinned: bool) {
+        let origin = match self.sheet_plan.as_mut().and_then(|plan| plan.get_mut(sheet_index)) {
+            Some(PlannedSheet::Held { origin, .. }) => *origin,
+            Some(PlannedSheet::Added(sheet)) => {
+                sheet.default_row_height = height;
+                sheet.default_row_custom = pinned;
+                self.added_default_row.insert(sheet_index, (height, pinned));
+                return;
+            }
+            None => sheet_index,
+        };
+        if self.workbook.sheets.get(origin).is_some_and(|sheet|
+            (sheet.default_row_height, sheet.default_row_custom) == (height, pinned)) {
+            // Cancel an automatic refresh that the caller's live cache has
+            // overridden. An unchanged default must not turn a raw copy into
+            // a rewrite, including adding a redundant sheetFormatPr element.
+            self.default_row.remove(&origin);
+        } else {
+            self.default_row.insert(origin, (height, pinned));
+        }
+    }
+
+    /// Supply the stored default width for newly written column-style bands.
+    /// Existing widths retain their exact representation and provenance.
+    /// The index refers to the workbook already passed to `apply_workbook`.
+    pub fn set_edited_column_style_default_width(&mut self, sheet_index: usize, width: f32) {
+        let width = column_file_width(width);
+        match self.sheet_plan.as_ref().and_then(|plan| plan.get(sheet_index)) {
+            Some(PlannedSheet::Held { origin, .. }) => {
+                self.column_style_default_width.insert(*origin, width);
+            }
+            Some(PlannedSheet::Added(_)) => {
+                self.added_column_style_default_width.insert(sheet_index, width);
+            }
+            None => { self.column_style_default_width.insert(sheet_index, width); }
+        }
+    }
+
     /// Hide or reveal a whole column. `col` is zero-based, as the IR counts it.
     pub fn set_col_hidden(&mut self, sheet_index: usize, col: u32, hidden: bool) {
         self.col_hidden.insert((sheet_index, col), hidden);
+        if hidden { self.col_best_fit.insert((sheet_index, col), false); }
     }
 
     /// Sets how wide a column is.
@@ -798,6 +1348,7 @@ impl XlsxEditor {
     /// what Excel's own box shows: typing 10 there stores 10.625.
     pub fn set_col_width(&mut self, sheet_index: usize, col: u32, width: f32) {
         self.col_width.insert((sheet_index, col), width);
+        self.col_best_fit.insert((sheet_index, col), false);
     }
 
     /// Replaces every merged cell on a sheet.
@@ -838,22 +1389,30 @@ impl XlsxEditor {
     }
 
     fn has_non_chart_edits(&self) -> bool {
-        !self.edits.is_empty()
+        self.source_copies_materialized
+            || !self.edits.is_empty()
             || !self.row_hidden.is_empty()
             || !self.row_height.is_empty()
+            || !self.row_thickness.is_empty()
+            || !self.row_format_recorded.is_empty()
             || !self.col_hidden.is_empty()
             || !self.col_width.is_empty()
+            || !self.col_best_fit.is_empty()
             || !self.default_col_width.is_empty()
+            || !self.default_row.is_empty()
             || !self.panes.is_empty()
             || !self.merges.is_empty()
             || !self.styles.is_empty()
             || !self.row_band_styles.is_empty()
             || !self.column_band_styles.is_empty()
+            || !self.named_style_fonts.is_empty()
+            || self.named_style_plan.is_some()
             || !self.filters.is_empty()
             || !self.validations.is_empty()
             || !self.conditional_rules.is_empty()
             || !self.hyperlinks.is_empty()
             || !self.tab_colors.is_empty()
+            || !self.header_footers.is_empty()
             || !self.sheet_protection.is_empty()
             || self.sheet_plan.is_some()
             || self.name_plan.is_some()
@@ -872,6 +1431,8 @@ impl XlsxEditor {
             || !self.drawing_picture_edits.is_empty()
             || !self.drawing_geometry_edits.is_empty()
             || !self.drawing_order_edits.is_empty()
+            || !self.drawing_states.is_empty()
+            || !self.drawing_restore_names.is_empty()
             || !self.drawing_deletions.is_empty()
             || !self.drawing_additions.is_empty()
             || !self.drawing_group_additions.is_empty()
@@ -917,14 +1478,20 @@ impl XlsxEditor {
         }
         let mut drawing_sheet_paths = sheet_paths.clone();
         let mut planned_drawing_additions = self.drawing_additions.clone();
+        let mut planned_legacy_comments = self.legacy_comments.clone();
+        let mut planned_legacy_id_blocks = self.legacy_comment_id_blocks.clone();
         if let Some(plan) = &self.sheet_plan {
             for (planned, (path, origin)) in plan.iter().zip(&planned_parts) {
                 if origin.is_some() { continue; }
                 let PlannedSheet::Added(sheet) = planned else { continue; };
-                if sheet.drawings.is_empty() { continue; }
+                if sheet.drawings.is_empty() && sheet.comments.is_empty() { continue; }
                 let index = drawing_sheet_paths.len();
                 drawing_sheet_paths.push(path.clone());
-                planned_drawing_additions.insert(index, sheet.drawings.clone());
+                if !sheet.drawings.is_empty() { planned_drawing_additions.insert(index, sheet.drawings.clone()); }
+                if !sheet.comments.is_empty() {
+                    planned_legacy_comments.insert(index, sheet.comments.clone());
+                    planned_legacy_id_blocks.insert(index, sheet.drawing_id_blocks.clone());
+                }
             }
         }
         let drawing_package = drawing_addition_package(
@@ -941,6 +1508,13 @@ impl XlsxEditor {
             &self.drawing_order_edits,
             &self.drawing_states,
             &self.drawing_deletions,
+            &self.drawing_source_aliases,
+            &self.drawing_restore_names,
+            &self.workbook.sheets.iter().flat_map(|sheet| &sheet.drawings).filter_map(|drawing| {
+                if let crate::ir::DrawingKind::Chart(chart) = &drawing.kind {
+                    chart.origin_id.map(|origin| (origin, chart))
+                } else { None }
+            }).collect(),
         )?;
         let threaded_edits = threaded_comment_package_edits(
             &mut source,
@@ -951,7 +1525,7 @@ impl XlsxEditor {
             &self.threaded_comment_deletions,
             &self.threaded_comment_resolved,
         )?;
-        let mut legacy_comments = self.legacy_comments.clone();
+        let mut legacy_comments = planned_legacy_comments;
         for (&sheet, additions) in &self.threaded_comment_additions {
             let Some(original) = self.workbook.sheets.get(sheet) else { continue };
             for thread in additions.iter().filter(|thread| thread.parent_id.is_none()) {
@@ -1011,8 +1585,9 @@ impl XlsxEditor {
         }
         let legacy_edits = legacy_comment_package_edits(
             &mut source,
-            &sheet_paths,
+            &drawing_sheet_paths,
             &legacy_comments,
+            &planned_legacy_id_blocks,
             &self.workbook.sheets,
             &threaded_edits,
             &drawing_package,
@@ -1150,7 +1725,7 @@ impl XlsxEditor {
             }
         }
         let create_styles_part = !has_styles_part
-            && (self.indexed_colors.is_some() || !distinct.is_empty() || !conditional_styles.is_empty());
+            && (self.indexed_colors.is_some() || !distinct.is_empty() || !conditional_styles.is_empty() || self.named_style_plan.is_some());
 
         // The style sheet is read ahead of the walk below, since a worksheet
         // needs the indices and may come before it in the archive.
@@ -1218,7 +1793,7 @@ impl XlsxEditor {
 
         let mut style_indices: Vec<u32> = Vec::new();
         let mut conditional_style_indices: Vec<u32> = Vec::new();
-        if !distinct.is_empty() || self.indexed_colors.is_some() || !conditional_styles.is_empty() {
+        if !distinct.is_empty() || self.indexed_colors.is_some() || !conditional_styles.is_empty() || !self.named_style_fonts.is_empty() || self.named_style_plan.is_some() {
             let mut xml = String::new();
             if create_styles_part {
                 xml = default_styles_xml();
@@ -1233,10 +1808,33 @@ impl XlsxEditor {
                     .read_to_string(&mut xml)
                     .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
             }
+            if !self.named_style_fonts.is_empty() {
+                xml = patch_named_style_fonts(&xml, &self.named_style_fonts)?;
+            }
+            // Intern named resources before cell XFs. A new template and its
+            // attached cells must share one font ID even when that font did not
+            // exist in the source package and several cells introduce it.
+            if let Some(wanted)=&self.named_style_plan {
+                xml=patch_named_style_definitions(&xml,&self.workbook.named_styles,wanted)?;
+            }
             let (mut patched, indices) = if distinct.is_empty() {
                 (xml, Vec::new())
             } else {
-                patch_styles_xml(&xml, &distinct, &self.workbook.default_style)?
+                let mut reuse=named_font_references(&xml,&distinct,&self.named_style_fonts,self.named_style_plan.as_deref())?;
+                if self.named_style_plan.is_some() || distinct.iter().any(|style|
+                    style.normal_font_link.is_some() || style.named_font_link.is_some()) {
+                    for (style,reference) in distinct.iter().zip(&mut reuse) {
+                        if reference.is_none() && (self.named_style_plan.is_some()
+                            || style.normal_font_link.is_some() || style.named_font_link.is_some()) {
+                            let found=named_style_find_resource(&xml,"fonts","font",&font_xml(style))?;
+                            *reference=match found {
+                                Some(id)if named_plan_font_reuse_allowed(&xml,style,id)?=>Some(id),
+                                _=>None,
+                            };
+                        }
+                    }
+                }
+                patch_styles_xml_with_font_references(&xml, &distinct, &self.workbook.default_style, &reuse)?
             };
             if let Some(indexed_colors) = &self.indexed_colors {
                 patched = patch_indexed_colors_xml(&patched, indexed_colors)?;
@@ -1285,8 +1883,14 @@ impl XlsxEditor {
             want.height = Some(*height);
             want.pinned = *pinned;
         }
+        for ((sheet, row), thickness) in &self.row_thickness {
+            rows_by_sheet.entry(*sheet).or_default().entry(*row).or_default().thickness = Some(*thickness);
+        }
         for ((sheet, row), slot) in &row_band_slots {
             rows_by_sheet.entry(*sheet).or_default().entry(*row).or_default().style = Some(slot.map(|slot| style_indices[slot]));
+        }
+        for ((sheet, row), recorded) in &self.row_format_recorded {
+            rows_by_sheet.entry(*sheet).or_default().entry(*row).or_default().format_recorded = Some(*recorded);
         }
         let mut cols_by_sheet: HashMap<usize, BTreeMap<u32, ColumnWant>> = HashMap::new();
         for ((sheet, col), hidden) in &self.col_hidden {
@@ -1308,8 +1912,13 @@ impl XlsxEditor {
         for ((sheet, col), custom) in &self.col_custom_width {
             cols_by_sheet.entry(*sheet).or_default().entry(*col).or_default().custom = Some(*custom);
         }
+        for ((sheet, col), best_fit) in &self.col_best_fit {
+            cols_by_sheet.entry(*sheet).or_default().entry(*col).or_default().best_fit = Some(*best_fit);
+        }
         for ((sheet, col), slot) in &column_band_slots {
-            cols_by_sheet.entry(*sheet).or_default().entry(*col).or_default().style = Some(slot.map(|slot| style_indices[slot]));
+            let want = cols_by_sheet.entry(*sheet).or_default().entry(*col).or_default();
+            want.style = Some(slot.map(|slot| style_indices[slot]));
+            if slot.is_some() { want.fallback_width = self.column_style_default_width.get(sheet).copied(); }
         }
 
 
@@ -1494,7 +2103,7 @@ impl XlsxEditor {
                             path.strip_prefix("xl/").unwrap_or(path).to_string()
                         })
                         .collect();
-                    let mut patched = patch_workbook_rels(&xml, &targets)?;
+                    let mut patched = patch_workbook_rels(&without_calc_chain(&xml), &targets)?;
                     if let Some(additions) = threaded_edits.relationship_xml.get(&name) {
                         patched = merge_relationship_additions(&patched, additions)?;
                     }
@@ -1513,7 +2122,7 @@ impl XlsxEditor {
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     let parts: Vec<String> =
                         planned_parts.iter().map(|(path, _)| path.clone()).collect();
-                    let mut patched = patch_content_types(&xml, &parts)?;
+                    let mut patched = patch_content_types(&without_calc_chain(&xml), &parts)?;
                     for (part, kind) in &threaded_edits.content_types {
                         patched = append_content_type(&patched, part, kind)?;
                     }
@@ -1600,8 +2209,12 @@ impl XlsxEditor {
                     .and_then(|origin| self.tab_colors.get(&origin));
                 let protection_change = sheet_paths_by_index.iter().position(|part| *part == name)
                     .and_then(|origin| self.sheet_protection.get(&origin));
+                let header_change = sheet_paths_by_index.iter().position(|part| *part == name)
+                    .and_then(|origin| self.header_footers.get(&origin));
                 let default_width = sheet_paths_by_index.iter().position(|part| *part == name)
                     .and_then(|origin| self.default_col_width.get(&origin)).copied();
+                let default_row = sheet_paths_by_index.iter().position(|part| *part == name)
+                    .and_then(|origin| self.default_row.get(&origin)).copied();
                 let validation_change = sheet_paths_by_index.iter().position(|part| *part == name)
                     .and_then(|origin| self.validations.get(&origin).map(|rules| (origin, rules)));
                 let conditional_change = sheet_paths_by_index.iter().position(|part| *part == name)
@@ -1624,9 +2237,12 @@ impl XlsxEditor {
                     if let Some(links) = sheet_edits.hyperlinks {
                         patched = patch_hyperlinks_xml(&patched, links, sheet_edits.hyperlink_ids)?;
                     }
-                    if let Some(width) = default_width { patched = patch_default_column_width(&patched, width)?; }
+                    if default_width.is_some() || default_row.is_some() { patched = patch_sheet_defaults(&patched, default_width, default_row)?; }
                     if let Some(colour) = colour_change {
                         patched = set_tab_color_in_worksheet(&patched, colour);
+                    }
+                    if let Some(footer) = header_change {
+                        patched = set_header_footer_in_worksheet(&patched, footer.as_ref())?;
                     }
                     if let Some(rid) = legacy_edits.worksheet_drawing.get(&name) {
                         patched = set_legacy_drawing(&patched, rid)?;
@@ -1645,7 +2261,7 @@ impl XlsxEditor {
                     }
                     writer.write_all(patched.as_bytes())
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                } else if protection_change.is_some() || colour_change.is_some() || default_width.is_some() || legacy_edits.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_legacy_drawing.contains_key(&name) || drawing_package.ole_anchors.contains_key(&name) || drawing_package.worksheet_ole_objects.contains_key(&name) {
+                } else if protection_change.is_some() || colour_change.is_some() || header_change.is_some() || default_width.is_some() || default_row.is_some() || legacy_edits.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_legacy_drawing.contains_key(&name) || drawing_package.ole_anchors.contains_key(&name) || drawing_package.worksheet_ole_objects.contains_key(&name) {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
@@ -1654,7 +2270,8 @@ impl XlsxEditor {
                         recoloured = set_sheet_protection_in_worksheet(&recoloured, *contents, flags.as_ref())?;
                     }
                     if let Some(colour) = colour_change { recoloured = set_tab_color_in_worksheet(&recoloured, colour); }
-                    if let Some(width) = default_width { recoloured = patch_default_column_width(&recoloured, width)?; }
+                    if let Some(footer) = header_change { recoloured = set_header_footer_in_worksheet(&recoloured, footer.as_ref())?; }
+                    if default_width.is_some() || default_row.is_some() { recoloured = patch_sheet_defaults(&recoloured, default_width, default_row)?; }
                     if let Some(rid) = legacy_edits.worksheet_drawing.get(&name) {
                         recoloured = set_legacy_drawing(&recoloured, rid)?;
                     }
@@ -1681,6 +2298,7 @@ impl XlsxEditor {
                 }
             }
 
+            let mut emitted_new_parts = std::collections::HashSet::new();
             // Sheets the file never held are written after everything it did.
             if let Some(plan) = self.sheet_plan.as_ref() {
                 for (index, (planned, (path, origin))) in plan.iter().zip(&planned_parts).enumerate() {
@@ -1695,7 +2313,12 @@ impl XlsxEditor {
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     let empty_styles = BTreeMap::new();
                     let empty_band_styles = BTreeMap::new();
-                    let mut relationships = None;
+                    let rels_path = sheet_rels_path(path);
+                    // Start from the composed drawing/note relationships so
+                    // hyperlinks allocate disjoint IDs in the same new part.
+                    let mut relationships = legacy_edits.new_parts.iter().find(|(held, _)| held == &rels_path)
+                        .or_else(|| drawing_package.new_parts.iter().find(|(held, _)| held == &rels_path))
+                        .map(|(_, xml)| xml.clone());
                     let mut relationship_ids = Vec::with_capacity(sheet.hyperlinks.len());
                     for hyperlink in &sheet.hyperlinks {
                         if hyperlink.internal {
@@ -1717,10 +2340,24 @@ impl XlsxEditor {
                         added_cell_styles.get(&index).unwrap_or(&empty_styles),
                         added_row_band_styles.get(&index).unwrap_or(&empty_band_styles),
                         added_column_band_styles.get(&index).unwrap_or(&empty_band_styles),
+                        self.added_column_style_default_width.get(&index).copied(),
                         &multiple,
                     )?;
+                    if let Some(&cache) = self.added_default_row.get(&index) {
+                        sheet_xml = patch_sheet_defaults(
+                            std::str::from_utf8(&sheet_xml)
+                                .map_err(|error| XlsxError::InvalidData(error.to_string()))?,
+                            None,
+                            Some(cache),
+                        )?
+                        .into_bytes();
+                    }
                     if let Some(rid) = drawing_package.worksheet_drawing.get(path) {
                         sheet_xml = set_drawing(std::str::from_utf8(&sheet_xml)
+                            .map_err(|error| XlsxError::InvalidData(error.to_string()))?, rid)?.into_bytes();
+                    }
+                    if let Some(rid) = legacy_edits.worksheet_drawing.get(path) {
+                        sheet_xml = set_legacy_drawing(std::str::from_utf8(&sheet_xml)
                             .map_err(|error| XlsxError::InvalidData(error.to_string()))?, rid)?.into_bytes();
                     }
                     if !sheet.conditional_rules.is_empty() {
@@ -1739,6 +2376,7 @@ impl XlsxEditor {
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     if let Some(relationships) = relationships {
                         let rels_path = sheet_rels_path(path);
+                        emitted_new_parts.insert(rels_path.clone());
                         writer.start_file(rels_path, SimpleFileOptions::default())
                             .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
                         writer.write_all(relationships.as_bytes())
@@ -1747,8 +2385,8 @@ impl XlsxEditor {
                 }
             }
 
-            let mut emitted_new_parts = std::collections::HashSet::new();
             for (path, bytes) in &threaded_edits.new_parts {
+                if emitted_new_parts.contains(path) { continue; }
                 writer.start_file(path, SimpleFileOptions::default())
                     .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
                 let xml = String::from_utf8_lossy(bytes);
@@ -1872,6 +2510,7 @@ impl XlsxEditor {
             }
         }
         let output = patch_dynamic_array_package(&output, &arrays)?;
+        let output = finish_drawing_deletions(&output, &drawing_package)?;
         let contains_rich_error = |sheet: &crate::ir::Sheet| sheet.rows.iter().flat_map(|row| &row.cells)
             .any(|cell| matches!(&cell.value, crate::ir::CellValue::Error(error) if crate::parser::rich_error_type(error).is_some()));
         if !self.edits.values().any(|value| value.error_text().and_then(crate::parser::rich_error_type).is_some())
@@ -2359,13 +2998,13 @@ impl CellEditValue {
                 "spreadsheet numbers must be finite".to_string(),
             )),
             Self::Boolean(value) => Ok(Some(if *value { "1" } else { "0" }.to_string())),
-            Self::Error(value) => Ok(Some(value.clone())),
+            Self::Error(value) => Ok(Some(if value.eq_ignore_ascii_case("#GETTING_DATA") { "#N/A".to_owned() } else { value.clone() })),
             Self::CachedFormula { value, .. } | Self::CachedUtf16Formula { value, .. } => match value {
                 crate::ir::CellValue::Empty => Ok(None),
                 crate::ir::CellValue::Number(value) => Self::Number(*value).value_text(),
                 crate::ir::CellValue::String(value) => Self::String(value.clone()).value_text(),
                 crate::ir::CellValue::Utf16(units) => Self::Utf16(units.clone()).value_text(),
-                crate::ir::CellValue::Error(value) => Ok(Some(value.clone())),
+                crate::ir::CellValue::Error(value) => Self::Error(value.clone()).value_text(),
                 crate::ir::CellValue::Boolean(value) => Self::Boolean(*value).value_text(),
             },
             Self::Formula(_) | Self::ArrayFormula { .. } | Self::Empty => Ok(None),
@@ -2425,14 +3064,18 @@ fn drawing_position_changed(before: &crate::ir::Drawing, after: &crate::ir::Draw
     { return true; }
     let anchor_changed = |left: crate::ir::Anchor, right: crate::ir::Anchor| {
         left.col != right.col || left.row != right.row
-            || left.col_off.abs_diff(right.col_off) > 2
-            || left.row_off.abs_diff(right.row_off) > 2
+            || left.col_off != right.col_off
+            || left.row_off != right.row_off
     };
+    if let (crate::ir::DrawingKind::Shape(left), crate::ir::DrawingKind::Shape(right)) = (&before.kind, &after.kind) {
+        if left.transform_offset != right.transform_offset || before.extent != after.extent
+            || left.rotation != right.rotation { return true; }
+    }
     if anchor_changed(before.from, after.from) { return true; }
     match before.to {
         Some(before_to) => after.to.is_none_or(|after_to| anchor_changed(before_to, after_to)),
         None => match (before.extent, after.extent) {
-            (Some(before_extent), Some(after_extent)) => before_extent.0.abs_diff(after_extent.0) > 2 || before_extent.1.abs_diff(after_extent.1) > 2,
+            (Some(before_extent), Some(after_extent)) => before_extent != after_extent,
             (None, None) => false,
             _ => true,
         },
@@ -2478,6 +3121,8 @@ struct DrawingAdditionPackage {
     worksheet_drawing: HashMap<String, String>,
     worksheet_legacy_drawing: HashMap<String, String>,
     content_types: Vec<(String, String)>,
+    detached_roots: std::collections::HashSet<String>,
+    removed_relationships: HashMap<String, std::collections::HashSet<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -2515,13 +3160,37 @@ fn drawing_addition_package(
     drawing_order_edits: &HashMap<usize, Vec<String>>,
     drawing_states: &HashMap<(usize, String), crate::ir::Drawing>,
     deletions: &HashMap<usize, std::collections::HashSet<String>>,
+    source_aliases: &HashMap<(usize,u32),String>,
+    restore_names: &HashMap<(usize,u32),String>,
+    source_charts: &HashMap<u32, &crate::ir::Chart>,
 ) -> Result<DrawingAdditionPackage, XlsxError> {
     let mut plan = DrawingAdditionPackage::default();
+    let mut aliases_by_part=HashMap::<String,HashMap<u32,String>>::new();
+    for ((sheet,id),name) in source_aliases {
+        let part=existing_parts.get(sheet).ok_or_else(||XlsxError::InvalidData("drawing alias has no source part".into()))?;
+        aliases_by_part.entry(part.clone()).or_default().insert(*id,name.clone());
+    }
+    for (part,aliases) in aliases_by_part {
+        plan.parts.insert(part.clone(),patch_drawing_names_by_ids(&archive.read_part(&part)?,&aliases)?);
+    }
+    // Rebase existing identities before adding objects. Connector endpoints
+    // refer to these part-local ids and must move in the same operation.
+    let mut identity_edits: HashMap<String, HashMap<String, u32>> = HashMap::new();
+    for ((sheet, name), drawing) in drawing_states {
+        let Some(id) = drawing.non_visual_id else { continue };
+        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData("drawing identity has no source part".into()))?;
+        identity_edits.entry(part.clone()).or_default().insert(name.clone(), id);
+    }
+    for (part, edits) in &identity_edits {
+        let xml = plan.parts.remove(part).map_or_else(||archive.read_part(part),Ok)?;
+        plan.parts.insert(part.clone(), patch_drawing_nonvisual_ids(&xml, edits)?);
+    }
     let mut names: std::collections::HashSet<String> = archive.file_names().into_iter().collect();
     let mut part_additions: HashMap<String, Vec<crate::ir::Drawing>> = HashMap::new();
     let mut ole_additions: HashMap<usize, Vec<crate::ir::Drawing>> = HashMap::new();
     let mut fresh_ole_additions: HashMap<usize, Vec<crate::ir::Drawing>> = HashMap::new();
     let mut fresh_ole_parts: HashMap<usize, String> = HashMap::new();
+    let mut created_drawing_parts: HashMap<usize,String> = HashMap::new();
     let mut chart_additions: BTreeMap<String, Vec<crate::ir::Drawing>> = BTreeMap::new();
     let mut ordered_additions: Vec<_> = additions.iter().collect();
     ordered_additions.sort_unstable_by_key(|(sheet, _)| **sheet);
@@ -2573,6 +3242,7 @@ fn drawing_addition_package(
             }
             plan.worksheet_drawing.insert(sheet_path.clone(), relationship_id);
             fresh_ole_parts.insert(*sheet, drawing_path.clone());
+            created_drawing_parts.insert(*sheet,drawing_path.clone());
             drawing_path
         };
         chart_additions.entry(part.clone()).or_default().extend(charts);
@@ -2599,19 +3269,40 @@ fn drawing_addition_package(
             .unwrap_or_else(|| "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"></Relationships>".into());
         for drawing in drawings {
             let crate::ir::DrawingKind::Chart(chart) = &drawing.kind else { unreachable!() };
-            let path = unique_part_path(&names, "xl/charts", "chart", ".xml");
-            names.insert(path.clone());
-            let chart_xml = if let Some(origin) = chart.origin_id {
+            let (path, chart_xml) = if let Some(origin) = chart.origin_id {
                 let source = original_charts.get(origin as usize)
                     .ok_or_else(|| XlsxError::InvalidData("copied chart source is not in this workbook".into()))?;
-                let original = archive.read_part(source)?;
-                let before = crate::chart::parse_chart_xml(&original, &crate::parser::Theme::default())
-                    .ok_or_else(|| XlsxError::InvalidData("copied chart source cannot be read".into()))?;
-                if let Some(source_rels) = archive.try_read_part(&sheet_rels_path(source))? {
-                    plan.new_parts.push((sheet_rels_path(&path), source_rels));
+                let before = source_charts.get(&origin)
+                    .ok_or_else(|| XlsxError::InvalidData("copied chart source data is missing".into()))?;
+                // Resolve the differential edit against the actual imported
+                // chart, including its workbook theme, rather than default
+                // theme colors. Related style/color/embedded parts are owned
+                // by this copy, not shared with its source chart.
+                let graph_source = read_part_graph(archive, source)?;
+                let graph = copy_part_graph(&graph_source, source, &names, &Default::default())?;
+                let original = std::str::from_utf8(&graph_source[source])
+                    .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                let patched = crate::chart_edit::patch_chart(original, before, chart)?;
+                let content_types = archive.read_part("[Content_Types].xml")?;
+                let mut paths: Vec<_> = graph.paths.into_iter().collect();
+                paths.sort_by(|a, b| a.0.cmp(&b.0));
+                for (old, new) in paths {
+                    names.insert(new.clone());
+                    if old != *source {
+                        plan.content_types.push((new, content_type_for_part(&content_types, &old)?));
+                    }
                 }
-                crate::chart_edit::patch_chart(&original, &before, chart)?
-            } else { crate::chart_edit::new_chart_xml(chart)? };
+                let mut parts: Vec<_> = graph.parts.into_iter().collect();
+                parts.sort_by(|a, b| a.0.cmp(&b.0));
+                for (part, payload) in parts {
+                    names.insert(part.clone());
+                    if part != graph.root { plan.new_binary_parts.push((part, payload)); }
+                }
+                (graph.root, patched)
+            } else {
+                (unique_part_path(&names, "xl/charts", "chart", ".xml"), crate::chart_edit::new_chart_xml(chart)?)
+            };
+            names.insert(path.clone());
             plan.new_parts.push((path.clone(), chart_xml));
             plan.content_types.push((path.clone(), "application/vnd.openxmlformats-officedocument.drawingml.chart+xml".into()));
             let previous: std::collections::HashSet<_> = parse_relationships(&rels)
@@ -2622,8 +3313,12 @@ fn drawing_addition_package(
             let current = parse_relationships(&rels).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
             let relationship = current.keys().find(|id| !previous.contains(*id))
                 .ok_or_else(|| XlsxError::InvalidData("new chart relationship id was not allocated".into()))?;
-            let id = max_drawing_shape_id(&xml)?.checked_add(1)
-                .ok_or_else(|| XlsxError::InvalidData("chart drawing id overflow".into()))?;
+            let id = match drawing.non_visual_id {
+                Some(id) if id > 0 => id,
+                Some(_) => return Err(XlsxError::InvalidData("chart drawing id must be positive".into())),
+                None => max_drawing_shape_id(&xml)?.checked_add(1)
+                    .ok_or_else(|| XlsxError::InvalidData("chart drawing id overflow".into()))?,
+            };
             xml = append_xml_child(&xml, "wsDr", &write_chart_frame(&drawing, id, relationship))?;
         }
         if let Some((_, contents)) = plan.new_parts.iter_mut().find(|(path, _)| path == &part) {
@@ -2741,11 +3436,12 @@ fn drawing_addition_package(
         existing_parts.get(sheet).map(|part| (part.clone(), *sheet))
     }).collect();
     let groups_by_part: HashMap<String, Vec<DrawingGroupAddition>> = group_additions.iter().filter_map(|(sheet, groups)| existing_parts.get(sheet).map(|part| (part.clone(), groups.clone()))).collect();
-    for part in part_additions.keys().chain(edits_by_part.keys()).chain(fills_by_part.keys()).chain(text_by_part.keys()).chain(pictures_by_part.keys()).chain(geometry_by_part.keys()).chain(deletions_by_part.keys()).chain(ole_parts.keys()).chain(groups_by_part.keys()).chain(fresh_ole_parts.values()).cloned().collect::<std::collections::HashSet<_>>() {
+    for part in part_additions.keys().chain(edits_by_part.keys()).chain(fills_by_part.keys()).chain(text_by_part.keys()).chain(pictures_by_part.keys()).chain(geometry_by_part.keys()).chain(deletions_by_part.keys()).chain(ole_parts.keys()).chain(groups_by_part.keys()).chain(fresh_ole_parts.values()).chain(identity_edits.keys()).cloned().collect::<std::collections::HashSet<_>>() {
         let mut xml = plan.parts.remove(&part)
             .or_else(|| plan.new_parts.iter().find(|(path, _)| path == &part).map(|(_, xml)| xml.clone()));
         if xml.is_none() { xml = Some(archive.read_part(&part)?); }
         let mut xml = xml.expect("drawing XML loaded");
+        let before_deletion = deletions_by_part.contains_key(&part).then(|| xml.clone());
         if let Some(edits) = edits_by_part.get(&part) { xml = patch_drawing_line_xml(&xml, edits)?; }
         if let Some(edits) = fills_by_part.get(&part) { xml = patch_drawing_fill_xml(&xml, edits)?; }
         if let Some(edits) = text_by_part.get(&part) { xml = patch_drawing_text_xml(&xml, edits)?; }
@@ -2816,6 +3512,7 @@ fn drawing_addition_package(
                     .ok_or_else(|| XlsxError::InvalidData("drawing shape id overflow".into()))?;
                 let mut anchor = clone_drawing_anchor_xml(&source_drawing_xml, source_name, drawing.name.as_deref().unwrap_or("Object"), source_shape_id, new_shape_id)?;
                 xml = append_xml_child(&xml, "wsDr", &anchor)?;
+                xml = patch_drawing_metadata_xml(&xml, &HashMap::from([(new_shape_id, drawing.metadata.clone())]))?;
                 let name = drawing.name.as_deref().unwrap_or("Object");
                 xml = patch_drawing_geometry_xml(&xml, &HashMap::from([(name.to_string(), drawing.clone())]))?;
                 anchor.clear();
@@ -2841,6 +3538,9 @@ fn drawing_addition_package(
                 plan.parts.insert(path, xml);
             }
         }
+        if let Some(before) = before_deletion {
+            remove_deleted_drawing_relationships(archive, &mut plan, &part, &before, &xml)?;
+        }
         if let Some((_, contents)) = plan.new_parts.iter_mut().find(|(path, _)| path == &part) {
             *contents = xml;
         } else {
@@ -2851,6 +3551,7 @@ fn drawing_addition_package(
     // oleObject/objectPr anchors. Keep the latter in sync when a shape moves.
     let mut ole_edits_by_sheet: HashMap<String, HashMap<u32, crate::ir::Drawing>> = HashMap::new();
     for ((sheet, shape_name), drawing) in geometry_edits {
+        if drawing.ole_prog_id.is_none() && drawing.ole_type.is_none() { continue; }
         let drawing_part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving OLE position")))?;
         let drawing_xml = archive.read_part(drawing_part)?;
         let shape_id = drawing_shape_id(&drawing_xml, shape_name)?.ok_or_else(|| XlsxError::InvalidData(format!("drawing shape {shape_name:?} has no id while saving OLE position")))?;
@@ -2904,6 +3605,47 @@ fn drawing_addition_package(
         let xml = patch_drawing_order(&xml, order)?;
         if let Some(index) = fresh { plan.new_parts[index].1 = xml; }
         else { plan.parts.insert(part.clone(), xml); }
+    }
+    for xml in plan.parts.values().chain(plan.new_parts.iter().map(|(_, xml)| xml)) {
+        drawing_shape_ids(xml)?;
+    }
+    let mut renames: BTreeMap<String, HashMap<String, String>> = BTreeMap::new();
+    for ((sheet, source), drawing) in drawing_states {
+        let Some(name) = drawing.name.as_ref().filter(|name|*name != source) else { continue };
+        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData("renamed drawing has no source part".into()))?;
+        renames.entry(part.clone()).or_default().insert(source.clone(), name.clone());
+    }
+    for (part, names) in renames {
+        let xml = plan.parts.remove(&part).map_or_else(||archive.read_part(&part), Ok)?;
+        plan.parts.insert(part, patch_drawing_names_xml(&xml, &names)?);
+    }
+    let mut restored=HashMap::<String,HashMap<u32,String>>::new();
+    for ((sheet,id),name) in restore_names {
+        let part=existing_parts.get(sheet).or_else(||created_drawing_parts.get(sheet))
+            .ok_or_else(||XlsxError::InvalidData("drawing restore has no source part".into()))?;
+        restored.entry(part.clone()).or_default().insert(*id,name.clone());
+    }
+    for (part,names) in restored {
+        if let Some(index)=plan.new_parts.iter().position(|(path,_)|path==&part) {
+            plan.new_parts[index].1=patch_drawing_names_by_ids(&plan.new_parts[index].1,&names)?;
+        } else {
+            let xml=plan.parts.remove(&part).map_or_else(||archive.read_part(&part),Ok)?;
+            plan.parts.insert(part,patch_drawing_names_by_ids(&xml,&names)?);
+        }
+    }
+    let mut metadata_edits = HashMap::<String, HashMap<u32, Option<crate::ir::DrawingMetadata>>>::new();
+    for ((sheet, _), drawing) in drawing_states {
+        let Some(id) = drawing.non_visual_id else { continue };
+        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData("metadata drawing has no source part".into()))?;
+        metadata_edits.entry(part.clone()).or_default().insert(id, drawing.metadata.clone());
+    }
+    for (part, edits) in metadata_edits {
+        if let Some(index) = plan.new_parts.iter().position(|(path, _)| path == &part) {
+            plan.new_parts[index].1 = patch_drawing_metadata_xml(&plan.new_parts[index].1, &edits)?;
+        } else {
+            let xml = plan.parts.remove(&part).map_or_else(|| archive.read_part(&part), Ok)?;
+            plan.parts.insert(part, patch_drawing_metadata_xml(&xml, &edits)?);
+        }
     }
     Ok(plan)
 }
@@ -3244,9 +3986,148 @@ fn append_xml_child(xml: &str, root: &str, child: &str) -> Result<String, XlsxEr
     Ok(format!("{}{}{}", &xml[..close_at], child, &xml[close_at..]))
 }
 
+fn drawing_shape_ids(xml: &str) -> Result<std::collections::HashSet<u32>, XlsxError> {
+    let mut reader = Reader::from_str(xml);
+    let mut ids = std::collections::HashSet::new();
+    loop {
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Start(start) | Event::Empty(start) if local_name(start.name().as_ref()) == "cNvPr" => {
+                let id = get_attr(&start, "id").and_then(|id| id.parse::<u32>().ok())
+                    .filter(|id| *id > 0).ok_or_else(|| XlsxError::InvalidData("drawing shape id must be a positive integer".into()))?;
+                if !ids.insert(id) { return Err(XlsxError::InvalidData(format!("duplicate drawing shape id {id}"))); }
+            }
+            Event::Eof => return Ok(ids),
+            _ => {}
+        }
+    }
+}
+
+fn replace_drawing_event_attributes(event: &mut Event<'static>, updates: &[(&str, &str)]) {
+    let (source, empty) = match event {
+        Event::Start(element) => (element, false),
+        Event::Empty(element) => (element, true),
+        _ => return,
+    };
+    let mut changed = source.to_owned();
+    changed.clear_attributes();
+    for attribute in source.attributes().flatten() {
+        if !updates.iter().any(|(name, _)|attribute.key.as_ref() == name.as_bytes()) { changed.push_attribute(attribute); }
+    }
+    for (name, value) in updates { changed.push_attribute((*name,*value)); }
+    *event = if empty { Event::Empty(changed) } else { Event::Start(changed) };
+}
+
+fn patch_drawing_names_by_ids(xml: &str, edits: &HashMap<u32, String>) -> Result<String, XlsxError> {
+    let mut reader = quick_xml::NsReader::from_str(xml);
+    let mut writer = Writer::new(Vec::with_capacity(xml.len()));
+    let mut hit: HashMap<u32, usize> = HashMap::new();
+    loop {
+        let mut event = reader.read_event().map_err(XlsxError::Xml)?.into_owned();
+        match &event {
+            Event::Start(element) | Event::Empty(element) if local_name(element.name().as_ref()) == "cNvPr" => {
+                let standard = match reader.resolve_element(element.name()).0 {
+                    quick_xml::name::ResolveResult::Bound(namespace) => matches!(namespace.as_ref(),
+                        b"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" | b"http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"),
+                    quick_xml::name::ResolveResult::Unbound => true,
+                    _ => false,
+                };
+                if standard {
+                    if let Some((source, name)) = get_attr(element, "id").and_then(|source|source.parse::<u32>().ok()).and_then(|source|edits.get(&source).map(|name|(source,name))) {
+                        *hit.entry(source).or_default() += 1;
+                        replace_drawing_event_attributes(&mut event, &[("name", name)]);
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        writer.write_event(event).map_err(|error|XlsxError::InvalidData(error.to_string()))?;
+    }
+    for name in edits.keys() {
+        if hit.get(name).copied() != Some(1) { return Err(XlsxError::InvalidData(format!("renamed drawing {name:?} is missing or ambiguous"))); }
+    }
+    String::from_utf8(writer.into_inner()).map_err(|error|XlsxError::InvalidData(error.to_string()))
+}
+
+fn patch_drawing_names_xml(xml: &str, edits: &HashMap<String, String>) -> Result<String, XlsxError> {
+    let mut reader = quick_xml::NsReader::from_str(xml);
+    let mut writer = Writer::new(Vec::with_capacity(xml.len()));
+    let mut hit: HashMap<String, usize> = HashMap::new();
+    loop {
+        let mut event = reader.read_event().map_err(XlsxError::Xml)?.into_owned();
+        match &event {
+            Event::Start(element) | Event::Empty(element) if local_name(element.name().as_ref()) == "cNvPr" => {
+                let standard = match reader.resolve_element(element.name()).0 {
+                    quick_xml::name::ResolveResult::Bound(namespace) => matches!(namespace.as_ref(),
+                        b"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" | b"http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"),
+                    quick_xml::name::ResolveResult::Unbound => true,
+                    _ => false,
+                };
+                if standard {
+                    if let Some((source, name)) = get_attr(element, "name").and_then(|source|edits.get(&source).map(|name|(source,name))) {
+                        *hit.entry(source).or_default() += 1;
+                        replace_drawing_event_attributes(&mut event, &[("name", name)]);
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        writer.write_event(event).map_err(|error|XlsxError::InvalidData(error.to_string()))?;
+    }
+    for name in edits.keys() {
+        if hit.get(name).copied() != Some(1) { return Err(XlsxError::InvalidData(format!("renamed drawing {name:?} is missing or ambiguous"))); }
+    }
+    String::from_utf8(writer.into_inner()).map_err(|error|XlsxError::InvalidData(error.to_string()))
+}
+
+fn patch_drawing_nonvisual_ids(xml: &str, edits: &HashMap<String, u32>) -> Result<String, XlsxError> {
+    let mut reader = Reader::from_str(xml);
+    let mut ids = HashMap::new();
+    loop {
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Start(start) | Event::Empty(start) if local_name(start.name().as_ref()) == "cNvPr" => {
+                if let Some(new) = get_attr(&start, "name").and_then(|name| edits.get(&name)).copied() {
+                    if new == 0 { return Err(XlsxError::InvalidData("drawing shape id must be positive".into())); }
+                    let old = get_attr(&start, "id").and_then(|id| id.parse::<u32>().ok())
+                        .ok_or_else(|| XlsxError::InvalidData("drawing source id is missing".into()))?;
+                    if old != new { ids.insert(old, new); }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    if ids.is_empty() { return Ok(xml.to_string()); }
+    let mut reader = Reader::from_str(xml);
+    let mut writer = Writer::new(Vec::with_capacity(xml.len()));
+    loop {
+        let event = reader.read_event().map_err(XlsxError::Xml)?;
+        match &event {
+            Event::Start(start) | Event::Empty(start)
+                if matches!(local_name(start.name().as_ref()).as_str(), "cNvPr" | "stCxn" | "endCxn") => {
+                let replacement = get_attr(start, "id").and_then(|id| id.parse::<u32>().ok()).and_then(|id| ids.get(&id));
+                if let Some(id) = replacement {
+                    let mut changed = start.to_owned();
+                    changed.clear_attributes();
+                    for attribute in start.attributes().flatten() {
+                        if attribute.key.as_ref() != b"id" { changed.push_attribute(attribute); }
+                    }
+                    changed.push_attribute(("id", id.to_string().as_str()));
+                    writer.write_event(if matches!(event, Event::Empty(_)) { Event::Empty(changed) } else { Event::Start(changed) })
+                        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                } else { writer.write_event(event).map_err(|error| XlsxError::InvalidData(error.to_string()))?; }
+            }
+            Event::Eof => break,
+            _ => writer.write_event(event).map_err(|error| XlsxError::InvalidData(error.to_string()))?,
+        }
+    }
+    String::from_utf8(writer.into_inner()).map_err(|error| XlsxError::InvalidData(error.to_string()))
+}
+
 fn max_drawing_shape_id(xml: &str) -> Result<u32, XlsxError> {
     let mut reader = Reader::from_str(xml);
-    let mut max_id = 0u32;
+    let mut max_id = 1u32;
     loop {
         match reader.read_event().map_err(XlsxError::Xml)? {
             Event::Start(start) | Event::Empty(start) if local_name(start.name().as_ref()) == "cNvPr" => {
@@ -3268,16 +4149,21 @@ fn clone_drawing_anchor_xml(
     let bytes = xml.as_bytes();
     let mut reader = Reader::from_str(xml);
     let mut anchor_start = None;
+    let mut anchor_tag = String::new();
     let mut depth = 0usize;
     let mut matched = false;
     loop {
         let event_start = reader.buffer_position() as usize;
         let event = reader.read_event().map_err(XlsxError::Xml)?;
         let event_end = reader.buffer_position() as usize;
+        if matches!(event, Event::Eof) { break; }
         if anchor_start.is_none() {
-            if matches!(&event, Event::Start(start) if local_name(start.name().as_ref()) == "twoCellAnchor" || local_name(start.name().as_ref()) == "oneCellAnchor") {
-                anchor_start = Some(event_start);
-                depth = 1;
+            if let Event::Start(start) = &event {
+                if matches!(start.local_name().as_ref(), b"twoCellAnchor" | b"oneCellAnchor" | b"absoluteAnchor") {
+                    anchor_start = Some(event_start);
+                    anchor_tag = format!("<{}", String::from_utf8_lossy(start.name().as_ref()));
+                    depth = 1;
+                }
             }
             continue;
         }
@@ -3302,8 +4188,7 @@ fn clone_drawing_anchor_xml(
                         anchor = anchor.replacen(&format!("name=\"{source_name}\""), &format!("name=\"{new_name}\""), 1);
                         anchor = anchor.replacen(&format!("id=\"{source_id}\""), &format!("id=\"{new_id}\""), 1);
                         anchor = anchor.replace(&format!("_x0000_s{source_id}"), &format!("_x0000_s{new_id}"));
-                        let anchor_tag = if anchor.contains("<xdr:twoCellAnchor") { "<xdr:twoCellAnchor" } else { "<xdr:oneCellAnchor" };
-                        anchor = anchor.replacen(anchor_tag, &format!("{anchor_tag} xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\""), 1);
+                        anchor = anchor.replacen(&anchor_tag, &format!("{anchor_tag} xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\""), 1);
                         return Ok(anchor);
                     }
                     anchor_start = None;
@@ -3532,6 +4417,7 @@ fn clone_ole_object_xml(xml: &str, source_id: u32, new_id: u32, new_relationship
 }
 
 fn write_ole_drawing_shape(drawing: &crate::ir::Drawing, id: u32) -> Result<String, XlsxError> {
+    let metadata = drawing_metadata_attributes(drawing.metadata.as_ref(), false);
     let name = escape(drawing.name.as_deref().unwrap_or("Object"));
     let to = drawing.to.ok_or_else(|| XlsxError::InvalidData("new OLE object has no far anchor".into()))?;
     let marker = |tag: &str, anchor: crate::ir::Anchor| format!(
@@ -3539,7 +4425,7 @@ fn write_ole_drawing_shape(drawing: &crate::ir::Drawing, id: u32) -> Result<Stri
         anchor.col, anchor.col_off, anchor.row, anchor.row_off,
     );
     Ok(format!(
-        r#"<xdr:twoCellAnchor editAs="oneCell">{}{}<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="{id}" name="{name}" hidden="1"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr bwMode="auto"><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>"#,
+        r#"<xdr:twoCellAnchor editAs="oneCell">{}{}<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="{id}" name="{name}" hidden="1"{metadata}/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr bwMode="auto"><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>"#,
         marker("from", drawing.from), marker("to", to),
     ))
 }
@@ -3875,7 +4761,85 @@ fn rewrite_ole_object_anchor(events: Vec<Event<'static>>, drawing: &crate::ir::D
     Ok(output)
 }
 
+/// Serialize a plain XML attribute from live UTF-16 without replacing invalid
+/// units. Presence is decided before filtering: nonempty invalid text writes
+/// descr="", whereas assigning an empty description removes the attribute.
+fn escaped_drawing_attribute(units: &[u16]) -> String {
+    let mut output = String::new();
+    let mut after_cr = false;
+    for ch in char::decode_utf16(units.iter().copied()).flatten() {
+        if !matches!(ch, '\t' | '\n' | '\r' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}') { continue; }
+        match ch {
+            '\r' => { output.push_str("&#xA;"); after_cr = true; }
+            '\n' => { if !after_cr { output.push_str("&#xA;"); } after_cr = false; }
+            other => {
+                after_cr = false;
+                match other {
+                    '&' => output.push_str("&amp;"), '<' => output.push_str("&lt;"),
+                    '>' => output.push_str("&gt;"), '"' => output.push_str("&quot;"),
+                    _ => output.push(other),
+                }
+            }
+        }
+    }
+    output
+}
+
+fn drawing_metadata_values(metadata: Option<&crate::ir::DrawingMetadata>, include_hidden: bool) -> Vec<(&'static str, Option<String>)> {
+    let mut values = vec![
+        ("descr", metadata.and_then(|data| data.description_units()).map(|units| escaped_drawing_attribute(&units))),
+        ("title", metadata.and_then(|data| data.title.as_ref()).map(|text| escaped_drawing_attribute(&text.encode_utf16().collect::<Vec<_>>()))),
+    ];
+    if include_hidden { values.push(("hidden", metadata.and_then(|data| data.hidden.as_ref()).map(|text| escape(text)))); }
+    values
+}
+
+fn drawing_metadata_attributes(metadata: Option<&crate::ir::DrawingMetadata>, include_hidden: bool) -> String {
+    drawing_metadata_values(metadata, include_hidden).into_iter().filter_map(|(key, value)| value.map(|value| format!(" {key}=\"{value}\""))).collect()
+}
+
+fn patch_drawing_metadata_xml(xml: &str, edits: &HashMap<u32, Option<crate::ir::DrawingMetadata>>) -> Result<String, XlsxError> {
+    use quick_xml::{name::ResolveResult, reader::NsReader};
+    let mut reader = NsReader::from_str(xml);
+    let mut changes = Vec::new();
+    loop {
+        let at = reader.buffer_position() as usize;
+        let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let native = matches!(namespace, ResolveResult::Bound(ns) if matches!(ns.as_ref(),
+            b"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" |
+            b"http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"));
+        match &event {
+            Event::Start(element) | Event::Empty(element) if native && element.local_name().as_ref() == b"cNvPr" => {
+                let Some(metadata) = get_attr(element, "id").and_then(|id| id.parse().ok()).and_then(|id| edits.get(&id)) else { continue };
+                let values = drawing_metadata_values(metadata.as_ref(), true);
+                let values: Vec<_> = values.into_iter().filter(|(key, value)| {
+                    let desired = value.as_ref().map(|text| quick_xml::escape::unescape(text).expect("escaped XML attribute").into_owned());
+                    get_attr(element, key) != desired
+                }).collect();
+                if values.is_empty() { continue; }
+                let mut tag = element.to_owned(); tag.clear_attributes();
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                    if !values.iter().any(|(key, _)| attribute.key.as_ref() == key.as_bytes()) { tag.push_attribute(attribute); }
+                }
+                for (key, value) in values {
+                    if let Some(value) = value { tag.push_attribute((key.as_bytes(), value.as_bytes())); }
+                }
+                let mut writer = Writer::new(Vec::new());
+                writer.write_event(if matches!(event, Event::Empty(_)) { Event::Empty(tag) } else { Event::Start(tag) }).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                changes.push((at, reader.buffer_position() as usize, String::from_utf8(writer.into_inner()).map_err(|error| XlsxError::InvalidData(error.to_string()))?));
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    let mut output = xml.to_string();
+    for (start, end, value) in changes.into_iter().rev() { output.replace_range(start..end, &value); }
+    Ok(output)
+}
+
 fn write_chart_frame(drawing: &crate::ir::Drawing, id: u32, relationship: &str) -> String {
+    let metadata = drawing_metadata_attributes(drawing.metadata.as_ref(), true);
     let marker = |tag: &str, anchor: crate::ir::Anchor| format!(
         "<xdr:{tag}><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:{tag}>",
         anchor.col, anchor.col_off, anchor.row, anchor.row_off,
@@ -3887,7 +4851,7 @@ fn write_chart_frame(drawing: &crate::ir::Drawing, id: u32, relationship: &str) 
             ("oneCellAnchor", format!("<xdr:ext cx=\"{width}\" cy=\"{height}\"/>"))
         }
     };
-    format!("<xdr:{tag} xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">{}{second}<xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"{id}\" name=\"{}\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/></xdr:xfrm><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"{}\"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:{tag}>",
+    format!("<xdr:{tag} xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">{}{second}<xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"{id}\" name=\"{}\"{metadata}/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/></xdr:xfrm><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"{}\"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:{tag}>",
         marker("from", drawing.from), escape(drawing.name.as_deref().unwrap_or("Chart")), escape(relationship))
 }
 
@@ -3896,7 +4860,7 @@ fn append_drawing_shapes_xml(
     drawings: &[crate::ir::Drawing],
 ) -> Result<String, XlsxError> {
     let mut reader = Reader::from_str(xml);
-    let mut max_id = 0u32;
+    let mut max_id = 1u32;
     let mut root_end: Option<(usize, String)> = None;
     loop {
         match reader.read_event().map_err(XlsxError::Xml)? {
@@ -3915,14 +4879,22 @@ fn append_drawing_shapes_xml(
     let closing_len = qname.len() + 3;
     let close_at = end.checked_sub(closing_len).ok_or_else(|| XlsxError::InvalidData("drawing root end is malformed".into()))?;
     let mut additions = String::new();
+    let mut used = drawing_shape_ids(xml)?;
     for drawing in drawings {
-        max_id = max_id.checked_add(1).ok_or_else(|| XlsxError::InvalidData("drawing shape id overflow".into()))?;
-        additions.push_str(&write_drawing_shape(drawing, max_id)?);
+        let id = match drawing.non_visual_id {
+            Some(id) if id > 0 => id,
+            Some(_) => return Err(XlsxError::InvalidData("drawing shape id must be positive".into())),
+            None => max_id.checked_add(1).ok_or_else(|| XlsxError::InvalidData("drawing shape id overflow".into()))?,
+        };
+        if !used.insert(id) { return Err(XlsxError::InvalidData(format!("duplicate drawing shape id {id}"))); }
+        max_id = max_id.max(id);
+        additions.push_str(&write_drawing_shape(drawing, id)?);
     }
     Ok(format!("{}{}{}", &xml[..close_at], additions, &xml[close_at..]))
 }
 
 fn write_drawing_shape(drawing: &crate::ir::Drawing, id: u32) -> Result<String, XlsxError> {
+    let metadata = drawing_metadata_attributes(drawing.metadata.as_ref(), true);
     let name = escape(drawing.name.as_deref().unwrap_or("Shape"));
     let crate::ir::DrawingKind::Shape(shape) = &drawing.kind else {
         return Err(XlsxError::InvalidData("only shapes can be added to a drawing part by this writer".into()));
@@ -3985,9 +4957,10 @@ fn write_drawing_shape(drawing: &crate::ir::Drawing, id: u32) -> Result<String, 
     let text = if connector { String::new() } else { write_shape_text(shape.text.as_ref()) };
     let geometry = escape(&shape.geometry);
     let av_list = format!("<a:avLst>{adjusts}</a:avLst>");
-    let xfrm = format!("<a:xfrm{rotation}{flip_h}{flip_v}><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm>", point(drawing.from.col_off), point(drawing.from.row_off), width, height);
+    let (x, y) = shape.transform_offset.unwrap_or((drawing.from.col_off, drawing.from.row_off));
+    let xfrm = format!("<a:xfrm{rotation}{flip_h}{flip_v}><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm>", point(x), point(y), width, height);
     let style = "<xdr:style><a:lnRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:lnRef><a:fillRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:fillRef><a:effectRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:effectRef><a:fontRef idx=\"minor\"><a:schemeClr val=\"dk1\"/></a:fontRef></xdr:style>";
-    let anchor = format!("<xdr:{anchor_open}>{}{}<xdr:{object} macro=\"\"><xdr:{nonvisual}><xdr:cNvPr id=\"{id}\" name=\"{name}\"/><xdr:{properties}{text_box}/></xdr:{nonvisual}><xdr:spPr>{xfrm}<a:prstGeom prst=\"{geometry}\">{av_list}</a:prstGeom>{paint}</xdr:spPr>{style}{text}</xdr:{object}><xdr:clientData/>{anchor_close}", marker("from", drawing.from), to_xml);
+    let anchor = format!("<xdr:{anchor_open}>{}{}<xdr:{object} macro=\"\"><xdr:{nonvisual}><xdr:cNvPr id=\"{id}\" name=\"{name}\"{metadata}/><xdr:{properties}{text_box}/></xdr:{nonvisual}><xdr:spPr>{xfrm}<a:prstGeom prst=\"{geometry}\">{av_list}</a:prstGeom>{paint}</xdr:spPr>{style}{text}</xdr:{object}><xdr:clientData/>{anchor_close}", marker("from", drawing.from), to_xml);
     Ok(anchor)
 }
 
@@ -5692,7 +6665,7 @@ fn patch_drawing_geometry_xml(
 }
 
 fn rewrite_drawing_anchor_geometry(
-    events: Vec<Event<'static>>,
+    mut events: Vec<Event<'static>>,
     drawing: &crate::ir::Drawing,
 ) -> Result<Vec<Event<'static>>, XlsxError> {
     fn qualified(tag: &str, local: &str) -> String {
@@ -5722,6 +6695,46 @@ fn rewrite_drawing_anchor_geometry(
             }
         }
         events.len()
+    }
+
+    // An anchor and the contained shape's transform describe distinct
+    // coordinate systems. Patch both when the caller supplies the transform.
+    if let crate::ir::DrawingKind::Shape(shape) = &drawing.kind {
+        if let (Some((x, y)), Some((cx, cy))) = (shape.transform_offset, drawing.extent) {
+            let mut owned = false;
+            let mut in_properties = false;
+            let mut in_transform = false;
+            for event in &mut events {
+                if let Event::End(end) = event {
+                    match local_name(end.name().as_ref()).as_str() {
+                        "xfrm" => in_transform = false,
+                        "spPr" => in_properties = false,
+                        "sp" | "cxnSp" => owned = false,
+                        _ => {}
+                    }
+                    continue;
+                }
+                let element = match event {
+                    Event::Start(element) | Event::Empty(element) => element,
+                    _ => continue,
+                };
+                match local_name(element.name().as_ref()).as_str() {
+                    "cNvPr" => owned = drawing.non_visual_id.map_or_else(
+                        ||get_attr(element, "name").as_ref() == drawing.name.as_ref(),
+                        |id|get_attr(element, "id").and_then(|v|v.parse::<u32>().ok()) == Some(id)),
+                    "spPr" if owned => in_properties = true,
+                    "xfrm" if in_properties => {
+                        in_transform = true;
+                        if get_attr(element, "rot").and_then(|v|v.parse::<i32>().ok()).unwrap_or(0) != shape.rotation {
+                            replace_drawing_event_attributes(event, &[("rot", &shape.rotation.to_string())]);
+                        }
+                    }
+                    "off" if in_transform => replace_drawing_event_attributes(event, &[("x", &x.to_string()), ("y", &y.to_string())]),
+                    "ext" if in_transform => replace_drawing_event_attributes(event, &[("cx", &cx.to_string()), ("cy", &cy.to_string())]),
+                    _ => {}
+                }
+            }
+        }
     }
 
     let mut output = Vec::with_capacity(events.len());
@@ -5905,7 +6918,7 @@ fn write_cell_value(
     styles: &BTreeMap<(u32, u32), u32>,
 ) -> Result<(), XlsxError> {
     let reference = format!("{}{row}", col_to_letter(col));
-    let style_text = styles.get(&(row, col)).map(|index| index.to_string());
+    let style_text = styles.get(&(row, col)).filter(|index| **index != 0).map(|index| index.to_string());
     let mut cell = BytesStart::new("c");
     cell.push_attribute(("r", reference.as_str()));
     if let Some(style) = style_text.as_deref() {
@@ -6366,6 +7379,159 @@ fn patch_dynamic_array_package(data: &[u8], plan: &[Vec<crate::ir::CachedSpill>]
     replace_package_parts(data, replacements)
 }
 
+/// Remove only native direct children selected by an attribute. Byte ranges
+/// preserve untouched prefixes, extension content and attribute formatting.
+fn remove_package_xml_children(xml: &str, root: &str, namespace: &str, child: &str, attribute: &str,
+    values: &std::collections::HashSet<String>) -> Result<String, XlsxError> {
+    use quick_xml::{name::ResolveResult, reader::NsReader};
+    let mut reader = NsReader::from_str(xml);
+    let mut depth = 0usize; let mut native_root = false; let mut begin = None; let mut ranges = Vec::new();
+    loop {
+        let at = reader.buffer_position() as usize;
+        let (ns, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let native = matches!(ns, ResolveResult::Bound(ns) if ns.as_ref() == namespace.as_bytes());
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let name = local_name(element.name().as_ref());
+                if depth == 0 { native_root = native && name == root; }
+                if native_root && depth == 1 && native && name == child
+                    && get_attr(element, attribute).is_some_and(|value| values.contains(&value)) {
+                    if matches!(event, Event::Empty(_)) { ranges.push((at, reader.buffer_position() as usize)); }
+                    else { begin = Some((at, depth + 1)); }
+                }
+                if matches!(event, Event::Start(_)) { depth += 1; }
+            }
+            Event::End(_) => {
+                if let Some((start, selected_depth)) = begin {
+                    if selected_depth == depth { ranges.push((start, reader.buffer_position() as usize)); begin = None; }
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    let mut out = xml.to_string();
+    for (start, end) in ranges.into_iter().rev() { out.replace_range(start..end, ""); }
+    Ok(out)
+}
+
+fn drawing_relationship_refs(xml: &str) -> Result<std::collections::HashSet<String>, XlsxError> {
+    use quick_xml::{name::ResolveResult, reader::NsReader};
+    let mut reader = NsReader::from_str(xml); let mut refs = std::collections::HashSet::new();
+    loop {
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Start(element) | Event::Empty(element) => {
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                    if matches!(reader.resolve_attribute(attribute.key).0, ResolveResult::Bound(ns) if matches!(ns.as_ref(),
+                        b"http://schemas.openxmlformats.org/officeDocument/2006/relationships" | b"http://purl.oclc.org/ooxml/officeDocument/relationships")) {
+                        refs.insert(attribute.unescape_value().map_err(XlsxError::Xml)?.into_owned());
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(refs)
+}
+
+fn remove_deleted_drawing_relationships(archive: &mut OoxmlArchive, plan: &mut DrawingAdditionPackage,
+    part: &str, before: &str, after: &str) -> Result<(), XlsxError> {
+    let retained = drawing_relationship_refs(after)?;
+    let removed: std::collections::HashSet<_> = drawing_relationship_refs(before)?.difference(&retained).cloned().collect();
+    if removed.is_empty() { return Ok(()); }
+    let path = sheet_rels_path(part);
+    let xml = if let Some(xml) = plan.relationship_xml.get(&path) { Some(xml.clone()) }
+        else if let Some((_, xml)) = plan.new_parts.iter().find(|(p, _)| p == &path) { Some(xml.clone()) }
+        else { archive.try_read_part(&path)? };
+    let Some(xml) = xml else { return Ok(()); };
+    for (id, relation) in parse_relationships(&xml).map_err(|error| XlsxError::InvalidData(error.to_string()))? {
+        if removed.contains(&id) && relation.target_mode.as_deref() != Some("External") {
+            let target = relation.target.split('#').next().unwrap_or_default();
+            plan.detached_roots.insert(if target.is_empty() { part.to_string() } else { resolve_part_target(part, target) });
+        }
+    }
+    let xml = remove_package_xml_children(&xml, "Relationships", "http://schemas.openxmlformats.org/package/2006/relationships", "Relationship", "Id", &removed)?;
+    plan.removed_relationships.entry(path.clone()).or_default().extend(removed);
+    if let Some((_, contents)) = plan.new_parts.iter_mut().find(|(p, _)| p == &path) { *contents = xml; }
+    else { plan.relationship_xml.insert(path, xml); }
+    Ok(())
+}
+
+fn finish_drawing_deletions(data: &[u8], plan: &DrawingAdditionPackage) -> Result<Vec<u8>, XlsxError> {
+    if plan.removed_relationships.is_empty() { return Ok(data.to_vec()); }
+    // Other save stages merge relationship additions with the original XML.
+    // Apply explicit deletions after those merges, before deciding which
+    // detached parts still have an incoming reference in the final package.
+    let mut archive = OoxmlArchive::new(data)?;
+    let mut replacements = BTreeMap::new();
+    for (path, ids) in &plan.removed_relationships {
+        if let Some(xml) = archive.try_read_part(path)? {
+            let changed = remove_package_xml_children(&xml, "Relationships", "http://schemas.openxmlformats.org/package/2006/relationships", "Relationship", "Id", ids)?;
+            if changed != xml { replacements.insert(path.clone(), changed.into_bytes()); }
+        }
+    }
+    let output = if replacements.is_empty() { data.to_vec() } else { replace_package_parts(data, replacements)? };
+    prune_detached_drawing_parts(&output, &plan.detached_roots)
+}
+
+/// Delete only graphs detached by an actual drawing deletion. Any incoming
+/// edge from outside that candidate graph protects its target and descendants.
+/// Pre-existing unused data is never a candidate merely because it is unused.
+fn prune_detached_drawing_parts(data: &[u8], roots: &std::collections::HashSet<String>) -> Result<Vec<u8>, XlsxError> {
+    use std::collections::HashSet;
+    if roots.is_empty() { return Ok(data.to_vec()); }
+    let mut archive = OoxmlArchive::new(data)?;
+    let names: HashSet<_> = archive.file_names().into_iter().collect();
+    let mut candidates = HashSet::new();
+    for root in roots {
+        if names.contains(root) { candidates.extend(read_part_graph(&mut archive, root)?.into_keys()); }
+    }
+    if candidates.is_empty() { return Ok(data.to_vec()); }
+    let mut edges: HashMap<String, Vec<String>> = HashMap::new();
+    let mut protected = HashSet::new();
+    let mut rel_paths: Vec<_> = names.iter().filter(|path| path.ends_with(".rels")).cloned().collect(); rel_paths.sort();
+    for path in rel_paths {
+        let owner = if path == "_rels/.rels" { String::new() }
+            else if let Some((folder, file)) = path.rsplit_once("/_rels/") {
+                format!("{folder}/{}", file.strip_suffix(".rels").unwrap_or(file))
+            } else if let Some(file) = path.strip_prefix("_rels/") {
+                file.strip_suffix(".rels").unwrap_or(file).to_string()
+            } else { continue };
+        for relation in parse_relationships(&archive.read_part(&path)?).map_err(|error| XlsxError::InvalidData(error.to_string()))?.values() {
+            if relation.target_mode.as_deref() == Some("External") { continue; }
+            let target = relation.target.split('#').next().unwrap_or_default();
+            let target = if target.is_empty() { owner.clone() } else { resolve_part_target(&owner, target) };
+            if candidates.contains(&target) && !candidates.contains(&owner) { protected.insert(target.clone()); }
+            edges.entry(owner.clone()).or_default().push(target);
+        }
+    }
+    let mut pending: Vec<_> = protected.iter().cloned().collect();
+    while let Some(part) = pending.pop() {
+        if candidates.contains(&sheet_rels_path(&part)) { protected.insert(sheet_rels_path(&part)); }
+        for child in edges.get(&part).into_iter().flatten() {
+            if candidates.contains(child) && protected.insert(child.clone()) { pending.push(child.clone()); }
+        }
+    }
+    let removed: HashSet<_> = candidates.difference(&protected).cloned().collect();
+    if removed.is_empty() { return Ok(data.to_vec()); }
+    let overrides: HashSet<_> = removed.iter().map(|path| format!("/{path}")).collect();
+    let types = remove_package_xml_children(&archive.read_part("[Content_Types].xml")?, "Types", "http://schemas.openxmlformats.org/package/2006/content-types", "Override", "PartName", &overrides)?;
+    let mut source = ZipArchive::new(Cursor::new(data)).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..source.len() {
+        let entry = source.by_index(index).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        if removed.contains(entry.name()) { continue; }
+        if entry.name() == "[Content_Types].xml" {
+            writer.start_file(entry.name(), SimpleFileOptions::default().compression_method(entry.compression())).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            writer.write_all(types.as_bytes()).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        } else { writer.raw_copy_file(entry).map_err(|error| XlsxError::InvalidData(error.to_string()))?; }
+    }
+    Ok(writer.finish().map_err(|error| XlsxError::InvalidData(error.to_string()))?.into_inner())
+}
+
 fn replace_package_parts(data: &[u8], mut replacements: BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, XlsxError> {
     let mut archive = ZipArchive::new(Cursor::new(data)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
@@ -6821,10 +7987,675 @@ fn edit_for(cell: &crate::ir::Cell, row: u32, multiple: &dyn Fn(&str) -> bool) -
 /// it, so reusing an existing entry risks carrying over something the parser
 /// never saw. Appending costs a few bytes and keeps every original entry as it
 /// was for the cells still using it.
+#[derive(Debug)]
+struct StyleXmlNode {
+    parent: Option<usize>,
+    name: String,
+    qualified: String,
+    standard: bool,
+    start: usize,
+    head_end: usize,
+    close_start: usize,
+    end: usize,
+    empty: bool,
+}
+
+fn style_xml_nodes(xml: &str) -> Result<Vec<StyleXmlNode>, XlsxError> {
+    use quick_xml::name::ResolveResult;
+    let mut reader = quick_xml::reader::NsReader::from_str(xml);
+    let mut nodes: Vec<StyleXmlNode> = Vec::new();
+    let mut stack = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let standard = matches!(namespace, ResolveResult::Bound(namespace)
+            if namespace.as_ref() == b"http://schemas.openxmlformats.org/spreadsheetml/2006/main");
+        let end = reader.buffer_position() as usize;
+        match event {
+            Event::Start(tag) | Event::Empty(tag) => {
+                let empty = xml[start..end].ends_with("/>");
+                let index = nodes.len();
+                nodes.push(StyleXmlNode {
+                    parent: stack.last().copied(),
+                    name: local_name(tag.name().as_ref()).to_string(),
+                    qualified: String::from_utf8_lossy(tag.name().as_ref()).into_owned(),
+                    standard, start, head_end: end, close_start: end, end, empty,
+                });
+                if !empty { stack.push(index); }
+            }
+            Event::End(_) => {
+                let index = stack.pop().ok_or_else(|| XlsxError::InvalidData("unbalanced style XML".into()))?;
+                nodes[index].close_start = start;
+                nodes[index].end = end;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    if !stack.is_empty() { return Err(XlsxError::InvalidData("incomplete style XML".into())); }
+    Ok(nodes)
+}
+
+fn apply_style_xml_edits(xml: &str, mut edits: Vec<(usize, usize, String)>) -> Result<String, XlsxError> {
+    edits.sort_by_key(|edit| (edit.0, edit.1));
+    let mut result = String::new();
+    let mut from = 0;
+    for (start, end, value) in edits {
+        if start < from || end < start || end > xml.len() {
+            return Err(XlsxError::InvalidData("overlapping style changes".into()));
+        }
+        result.push_str(&xml[from..start]);
+        result.push_str(&value);
+        from = end;
+    }
+    result.push_str(&xml[from..]);
+    Ok(result)
+}
+
+fn style_node_number(xml: &str, node: &StyleXmlNode, attribute: &str) -> Result<u32, XlsxError> {
+    let mut reader = Reader::from_str(&xml[node.start..node.head_end]);
+    match reader.read_event().map_err(XlsxError::Xml)? {
+        Event::Start(tag) | Event::Empty(tag) => {
+            for attr in tag.attributes().with_checks(false) {
+                let attr = attr.map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                if attr.key.as_ref() == attribute.as_bytes() {
+                    return String::from_utf8_lossy(attr.value.as_ref()).parse()
+                        .map_err(|_| XlsxError::InvalidData("invalid style reference".into()));
+                }
+            }
+            Ok(0)
+        }
+        _ => Err(XlsxError::InvalidData("missing style reference".into())),
+    }
+}
+
+/// Append the edited named font and redirect only that named parent's cell
+/// XFs. Other named styles may share its original font but remain independent.
+/// Native103 shows this distinction even for two initially identical fonts.
+// Excel reads the workbook's Normal face from physical font zero, even
+// when the named/default XFs point elsewhere. Keep the edited Normal there
+// and move the displaced font, retaining independent named/direct formats.
+fn put_edited_normal_font_first(
+    xml: &str,
+    changes: &BTreeMap<u32, (CellStyle, CellStyle)>,
+) -> Result<String, XlsxError> {
+    let nodes = style_xml_nodes(xml)?;
+    let root = nodes.iter().position(|n| n.standard && n.parent.is_none() && n.name == "styleSheet")
+        .ok_or_else(|| XlsxError::InvalidData("missing style sheet root".into()))?;
+    let section = |name: &str| nodes.iter().position(|n| n.standard && n.parent == Some(root) && n.name == name);
+    let Some(styles) = section("cellStyles") else { return Ok(xml.to_string()); };
+    let mut normal = None;
+    let mut named_normal = None;
+    for node in nodes.iter().filter(|n| n.standard && n.parent == Some(styles) && n.name == "cellStyle") {
+        let mut reader = Reader::from_str(&xml[node.start..node.head_end]);
+        if let Event::Start(tag) | Event::Empty(tag) = reader.read_event().map_err(XlsxError::Xml)? {
+            if get_attr(&tag,"builtinId").is_some_and(|id| id.parse::<u32>().ok() == Some(0)) {
+                normal = Some(style_node_number(xml,node,"xfId")?);
+                break;
+            }
+            if get_attr(&tag,"name").is_some_and(|name| name.eq_ignore_ascii_case("Normal")) {
+                named_normal = Some(style_node_number(xml,node,"xfId")?);
+            }
+        }
+    }
+    let Some(normal) = normal.or(named_normal).filter(|id| changes.contains_key(id)) else { return Ok(xml.to_string()); };
+    if changes.get(&normal).is_some_and(|(_,after)|
+        after.format_reference.as_ref().is_some_and(|r|r.font==Some(false))) {return Ok(xml.to_string());}
+    let named = section("cellStyleXfs").ok_or_else(|| XlsxError::InvalidData("missing named style XFs".into()))?;
+    let cells = section("cellXfs").ok_or_else(|| XlsxError::InvalidData("missing cell XFs".into()))?;
+    let parent = nodes.iter().filter(|n| n.standard && n.parent == Some(named) && n.name == "xf")
+        .nth(normal as usize).ok_or_else(|| XlsxError::InvalidData("missing Normal style XF".into()))?;
+    let current = style_node_number(xml,parent,"fontId")?;
+    if current == 0 { return Ok(xml.to_string()); }
+    let fonts = section("fonts").ok_or_else(|| XlsxError::InvalidData("missing font table".into()))?;
+    let fonts: Vec<_> = nodes.iter().filter(|n| n.standard && n.parent == Some(fonts) && n.name == "font").collect();
+    let old = fonts.first().ok_or_else(|| XlsxError::InvalidData("missing first font".into()))?;
+    let new = fonts.get(current as usize).ok_or_else(|| XlsxError::InvalidData("missing Normal font".into()))?;
+    let mut edits = vec![(old.start,old.end,xml[new.start..new.end].to_string()),
+                         (new.start,new.end,xml[old.start..old.end].to_string())];
+    for node in nodes.iter().filter(|n| n.standard && n.name == "xf" && (n.parent == Some(named) || n.parent == Some(cells))) {
+        let font = style_node_number(xml,node,"fontId")?;
+        let target = if font == 0 { current } else if font == current { 0 } else { continue };
+        edits.push((node.start,node.head_end,
+            xml_root_attributes(&xml[node.start..node.head_end],&[("fontId",Some(target.to_string()))])?));
+    }
+    apply_style_xml_edits(xml,edits)
+}
+
+fn patch_named_style_fonts(
+    xml: &str,
+    changes: &BTreeMap<u32, (CellStyle, CellStyle)>,
+) -> Result<String, XlsxError> {
+    if changes.is_empty() { return Ok(xml.to_string()); }
+    let nodes = style_xml_nodes(xml)?;
+    let root = nodes.iter().position(|node| node.parent.is_none() && node.standard && node.name == "styleSheet")
+        .ok_or_else(|| XlsxError::InvalidData("missing style sheet root".into()))?;
+    let section = |name: &str| nodes.iter().position(|node| node.parent == Some(root) && node.standard && node.name == name)
+        .ok_or_else(|| XlsxError::InvalidData(format!("missing {name} in style sheet")));
+    let fonts_section = section("fonts")?;
+    let named_section = section("cellStyleXfs")?;
+    let cells_section = section("cellXfs")?;
+    let children = |parent, name: &str| nodes.iter().enumerate()
+        .filter(|(_, node)| node.parent == Some(parent) && node.standard && node.name == name)
+        .map(|(index, _)| index).collect::<Vec<_>>();
+    let fonts = children(fonts_section, "font");
+    let named = children(named_section, "xf");
+    let cells = children(cells_section, "xf");
+    let mut edits = Vec::new();
+    let mut additions = String::new();
+    let mut redirects = BTreeMap::new();
+    for (&style, (before, after)) in changes {
+        let index = *named.get(style as usize).ok_or_else(|| XlsxError::InvalidData("missing named style XF".into()))?;
+        let old_font = style_node_number(xml, &nodes[index], "fontId")?;
+        let font_index = *fonts.get(old_font as usize).ok_or_else(|| XlsxError::InvalidData("missing named style font".into()))?;
+        let font = &nodes[font_index];
+        let old_generated = font_xml(before);
+        let new_generated = font_xml(after);
+        let prefix = font.qualified.rsplit_once(':').map(|(prefix, _)| prefix);
+        let mut font_edits = Vec::new();
+        let mut extra = String::new();
+        for tag in ["b", "i", "u", "strike", "sz", "color", "name", "family", "charset", "scheme", "vertAlign"] {
+            let old = direct_xml_child(&old_generated, tag)?.0.map(|(a, b)| &old_generated[a..b]);
+            let new = direct_xml_child(&new_generated, tag)?.0.map(|(a, b)| &new_generated[a..b]);
+            if old == new { continue; }
+            let replacement = new.map(|value| match prefix {
+                Some(prefix) => value.replace(&format!("<{tag}"), &format!("<{prefix}:{tag}"))
+                    .replace(&format!("</{tag}>"), &format!("</{prefix}:{tag}>")),
+                None => value.to_string(),
+            }).unwrap_or_default();
+            let existing = children(font_index, tag);
+            if existing.is_empty() { extra.push_str(&replacement); }
+            else {
+                for (position, index) in existing.into_iter().enumerate() {
+                    let node = &nodes[index];
+                    font_edits.push((node.start - font.start, node.end - font.start,
+                        if position == 0 { replacement.clone() } else { String::new() }));
+                }
+            }
+        }
+        if font.empty {
+            let raw = &xml[font.start..font.end];
+            additions.push_str(&format!("{}>{extra}</{}>", &raw[..raw.len() - 2], font.qualified));
+        } else {
+            font_edits.push((font.close_start - font.start, font.close_start - font.start, extra));
+            additions.push_str(&apply_style_xml_edits(&xml[font.start..font.end], font_edits)?);
+        }
+        let new_font = fonts.len() as u32 + redirects.len() as u32;
+        redirects.insert(style, (old_font, new_font));
+        let node = &nodes[index];
+        edits.push((node.start, node.head_end,
+            xml_root_attributes(&xml[node.start..node.head_end], &[("fontId", Some(new_font.to_string()))])?));
+    }
+    for index in cells {
+        let node = &nodes[index];
+        let parent = style_node_number(xml, node, "xfId")?;
+        if let Some(&(old_font, new_font)) = redirects.get(&parent) {
+            if changes.get(&parent).is_some_and(|(_,after)|
+                after.format_reference.as_ref().is_some_and(|r|r.font==Some(false))) {continue;}
+            if style_node_number(xml, node, "fontId")? == old_font {
+                edits.push((node.start, node.head_end,
+                    xml_root_attributes(&xml[node.start..node.head_end], &[("fontId", Some(new_font.to_string()))])?));
+            }
+        }
+    }
+    let section = &nodes[fonts_section];
+    edits.push((section.start, section.head_end,
+        xml_root_attributes(&xml[section.start..section.head_end], &[("count", Some((fonts.len() + redirects.len()).to_string()))])?));
+    edits.push((section.close_start, section.close_start, additions));
+    let patched = apply_style_xml_edits(xml, edits)?;
+    put_edited_normal_font_first(&patched,changes)
+}
+
+fn append_named_style_resources(xml:&str,section:&str,records:&str,legacy_optional:bool)->Result<String,XlsxError> {
+    if records.is_empty(){return Ok(xml.to_owned())}
+    let nodes=style_xml_nodes(xml)?;
+    if !nodes.iter().any(|n|n.parent.is_none()&&n.standard&&n.name=="styleSheet") {
+        return append_section(xml,section,records,legacy_optional)
+    }
+    let child=match section {"fonts"=>"font","fills"=>"fill","borders"=>"border","numFmts"=>"numFmt","cellXfs"=>"xf",
+        _=>return Err(XlsxError::InvalidData("unexpected style resource section".into()))};
+    named_style_append_record(xml,section,child,records,None)
+}
+
+fn named_style_definition_key(style: &crate::ir::NamedCellStyle) -> String {
+    let mut value = style.style.clone();
+    let mut reference = value.format_reference.as_deref().cloned().unwrap_or_default();
+    reference.style_id = None;
+    value.format_reference = Some(Box::new(reference));
+    format!("{:?}|{:?}|{}|{:?}|{}|{}|{}", style.name, style.builtin_id,
+        style.number_format_id, value.number_format, fill_xml(&value), border_xml(&value),
+        xf_xml(&value, 0, 0, 0, 0))
+}
+
+fn named_node_attributes(xml: &str, node: &StyleXmlNode) -> Result<BTreeMap<String,String>,XlsxError> {
+    let mut reader=Reader::from_str(&xml[node.start..node.head_end]);
+    let tag=match reader.read_event().map_err(XlsxError::Xml)? {
+        Event::Start(tag)|Event::Empty(tag)=>tag,
+        _=>return Err(XlsxError::InvalidData("missing named-style element".into()))
+    };
+    tag.attributes().with_checks(false).map(|attribute| {
+        let attribute=attribute.map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+        let key=String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+        let value=attribute.decode_and_unescape_value(reader.decoder()).map_err(XlsxError::Xml)?.into_owned();
+        Ok((key,value))
+    }).collect()
+}
+
+fn named_style_section(nodes:&[StyleXmlNode],name:&str)->Option<usize> {
+    let root=nodes.iter().position(|n|n.parent.is_none()&&n.standard&&n.name=="styleSheet")?;
+    nodes.iter().position(|n|n.parent==Some(root)&&n.standard&&n.name==name)
+}
+
+fn named_style_children(nodes:&[StyleXmlNode],parent:usize,name:&str)->Vec<usize> {
+    nodes.iter().enumerate().filter(|(_,n)|n.parent==Some(parent)&&n.standard&&n.name==name)
+        .map(|(index,_)|index).collect()
+}
+
+fn named_style_qualify(fragment:&str,qualified_parent:&str)->Result<String,XlsxError> {
+    let Some((prefix,_))=qualified_parent.rsplit_once(':') else{return Ok(fragment.to_owned())};
+    let mut reader=Reader::from_str(fragment);let mut writer=Writer::new(Vec::new());
+    loop {
+        let event=match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Start(mut tag)=>{tag.set_name(format!("{prefix}:{}",String::from_utf8_lossy(tag.name().as_ref())).as_bytes());Event::Start(tag)},
+            Event::Empty(mut tag)=>{tag.set_name(format!("{prefix}:{}",String::from_utf8_lossy(tag.name().as_ref())).as_bytes());Event::Empty(tag)},
+            Event::End(tag)=>Event::End(BytesEnd::new(format!("{prefix}:{}",String::from_utf8_lossy(tag.name().as_ref())))),
+            Event::Eof=>break,
+            event=>event
+        };
+        writer.write_event(event).map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+    }
+    String::from_utf8(writer.into_inner()).map_err(|e|XlsxError::InvalidData(e.to_string()))
+}
+
+fn named_style_section_rank(name:&str)->usize {
+    ["numFmts","fonts","fills","borders","cellStyleXfs","cellXfs","cellStyles","dxfs","tableStyles","colors","extLst"]
+        .iter().position(|n|*n==name).unwrap_or(usize::MAX)
+}
+
+fn named_style_append_record(xml:&str,section:&str,child:&str,record:&str,before:Option<usize>)->Result<String,XlsxError> {
+    let added=style_xml_nodes(record)?.iter().filter(|n|n.parent.is_none()&&n.name==child).count();
+    if added==0{return Err(XlsxError::InvalidData("missing generated style records".into()))}
+    let nodes=style_xml_nodes(xml)?;
+    if let Some(index)=named_style_section(&nodes,section) {
+        let node=&nodes[index];let count=named_style_children(&nodes,index,child).len()+added;
+        let head=xml_root_attributes(&xml[node.start..node.head_end],&[("count",Some(count.to_string()))])?;
+        let record=named_style_qualify(record,&node.qualified)?;
+        if node.empty {
+            let opened=head.strip_suffix("/>").ok_or_else(||XlsxError::InvalidData("invalid empty style section".into()))?;
+            return apply_style_xml_edits(xml,vec![(node.start,node.end,format!("{opened}>{record}</{}>",node.qualified))]);
+        }
+        let at=before.unwrap_or(node.close_start);
+        return apply_style_xml_edits(xml,vec![(node.start,node.head_end,head),(at,at,record)]);
+    }
+    let root=nodes.iter().position(|n|n.parent.is_none()&&n.standard&&n.name=="styleSheet")
+        .ok_or_else(||XlsxError::InvalidData("missing style-sheet root".into()))?;
+    let parent=&nodes[root];
+    let record=format!("<{section} count=\"{added}\">{record}</{section}>");
+    let record=named_style_qualify(&record,&parent.qualified)?;
+    if parent.empty {
+        let head=xml[parent.start..parent.head_end].strip_suffix("/>")
+            .ok_or_else(||XlsxError::InvalidData("invalid empty style-sheet root".into()))?;
+        return apply_style_xml_edits(xml,vec![(parent.start,parent.end,format!("{head}>{record}</{}>",parent.qualified))]);
+    }
+    let at=nodes.iter().filter(|n|n.parent==Some(root)&&n.standard&&named_style_section_rank(&n.name)>named_style_section_rank(section))
+        .map(|n|n.start).min().unwrap_or(parent.close_start);
+    apply_style_xml_edits(xml,vec![(at,at,record)])
+}
+
+fn named_resource_key(xml:&str,nodes:&[StyleXmlNode],root:usize)->Result<String,XlsxError> {
+    let allowed:&[&str]=match nodes[root].name.as_str() {
+        "font"=>&["font","b","i","u","strike","sz","color","name","family","charset","scheme","vertAlign"],
+        "fill"=>&["fill","patternFill","fgColor","bgColor","gradientFill","stop","color"],
+        "border"=>&["border","left","right","top","bottom","diagonal","color","start","end","vertical","horizontal"],
+        _=>return Err(XlsxError::InvalidData("invalid style resource".into()))
+    };
+    let mut projected=BTreeMap::new();let mut result=Vec::new();
+    for (index,node) in nodes.iter().enumerate().skip(root) {
+        if index!=root && !node.parent.is_some_and(|p|projected.contains_key(&p)){continue}
+        if !node.standard||!allowed.contains(&node.name.as_str()){continue}
+        let mut attributes=named_node_attributes(xml,node)?;
+        attributes.retain(|name,_|!name.contains(':')&&name!="xmlns");
+        let keys:&[&str]=match node.name.as_str() {
+            "font"|"fill"=>&[],
+            "border"=>&["diagonalUp","diagonalDown","outline"],
+            "b"|"i"|"u"|"strike"|"sz"|"name"|"family"|"charset"|"scheme"|"vertAlign"=>&["val"],
+            "color"|"fgColor"|"bgColor"=>&["rgb","indexed","theme","tint","auto"],
+            "patternFill"=>&["patternType"],
+            "gradientFill"=>&["type","degree","left","right","top","bottom"],
+            "stop"=>&["position"],
+            _=>&["style"]
+        };
+        attributes.retain(|name,_|keys.contains(&name.as_str()));
+        if ["b","i","strike"].contains(&node.name.as_str()) {
+            if attributes.get("val").is_some_and(|v|v=="0"||v=="false"){continue}
+            attributes.insert("val".into(),"1".into());
+        }
+        if node.name=="u" {attributes.entry("val".into()).or_insert_with(||"single".into());}
+        if node.name=="patternFill"&&attributes.get("patternType").is_none_or(|v|v=="none"){continue}
+        if ["left","right","top","bottom","diagonal","start","end","vertical","horizontal"].contains(&node.name.as_str())
+            &&!attributes.contains_key("style"){continue}
+        for (name,value) in &mut attributes {
+            if name=="rgb"{*value=value.to_ascii_uppercase();}
+            let numeric=["theme","indexed","tint","degree","position","left","right","top","bottom"].contains(&name.as_str())
+                || (name=="val"&&["sz","family","charset"].contains(&node.name.as_str()));
+            if numeric {if let Ok(number)=value.parse::<f64>(){*value=number.to_string();}}
+        }
+        for name in ["tint","diagonalUp","diagonalDown","auto"] {
+            if attributes.get(name).is_some_and(|v|v=="0"||v=="false"){attributes.remove(name);}
+        }
+        if attributes.get("outline").is_some_and(|v|v=="1"||v=="true"){attributes.remove("outline");}
+        let parent=if index==root{None}else{node.parent.and_then(|p|projected.get(&p).copied())};
+        projected.insert(index,result.len());result.push((parent,node.name.clone(),attributes));
+    }
+    Ok(format!("{result:?}"))
+}
+
+fn named_style_find_resource(xml:&str,section:&str,child:&str,record:&str)->Result<Option<u32>,XlsxError> {
+    let wrapper=format!("<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">{record}</styleSheet>");
+    let generated=style_xml_nodes(&wrapper)?;
+    let root=generated.iter().position(|n|n.standard&&n.name==child&&n.parent==Some(0))
+        .ok_or_else(||XlsxError::InvalidData("missing generated style resource".into()))?;
+    let wanted=named_resource_key(&wrapper,&generated,root)?;
+    let nodes=style_xml_nodes(xml)?;
+    let Some(parent)=named_style_section(&nodes,section)else{return Ok(None)};
+    for (id,node) in named_style_children(&nodes,parent,child).into_iter().enumerate() {
+        if named_resource_key(xml,&nodes,node)?==wanted{return Ok(Some(id as u32))}
+    }
+    Ok(None)
+}
+
+fn named_style_intern_resource(xml:&mut String,section:&str,child:&str,record:&str)->Result<u32,XlsxError> {
+    if let Some(id)=named_style_find_resource(xml,section,child,record)?{return Ok(id)}
+    let nodes=style_xml_nodes(xml)?;
+    let id=named_style_section(&nodes,section).map_or(0,|parent|named_style_children(&nodes,parent,child).len()) as u32;
+    *xml=named_style_append_record(xml,section,child,record,None)?;
+    Ok(id)
+}
+
+fn named_style_number_format(xml:&mut String,style:&CellStyle)->Result<u32,XlsxError> {
+    let Some(format)=style.number_format.as_deref()else{return Ok(0)};
+    if let Some(id)=builtin_number_format_id(format){return Ok(id)}
+    let storage=oxicells_calc::numfmt::number_format_to_storage(format,false)
+        .or_else(||oxicells_calc::numfmt::number_format_to_storage(format,true)).unwrap_or_else(||format.to_owned());
+    let nodes=style_xml_nodes(xml)?;let mut next=164u32;
+    if let Some(parent)=named_style_section(&nodes,"numFmts") {
+        for node in named_style_children(&nodes,parent,"numFmt") {
+            let values=named_node_attributes(xml,&nodes[node])?;
+            let id=style_node_number(xml,&nodes[node],"numFmtId")?;
+            if values.get("formatCode")==Some(&storage){return Ok(id)}
+            next=next.max(id.checked_add(1).ok_or_else(||XlsxError::InvalidData("number-format identity overflow".into()))?);
+        }
+    }
+    *xml=named_style_append_record(xml,"numFmts","numFmt",&format!("<numFmt numFmtId=\"{next}\" formatCode=\"{}\"/>",escape(&storage)),None)?;
+    Ok(next)
+}
+
+fn named_style_merge_xf(xml:&str,index:usize,generated:&str,before:Option<&str>)->Result<String,XlsxError> {
+    let nodes=style_xml_nodes(xml)?;let node=&nodes[index];
+    let wrapped=format!("<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">{generated}</styleSheet>");
+    let wanted=style_xml_nodes(&wrapped)?;let root=1usize;
+    let attributes=named_node_attributes(&wrapped,&wanted[root])?;
+    let keys=["numFmtId","fontId","fillId","borderId","xfId","applyNumberFormat","applyFont","applyFill","applyBorder","applyAlignment","applyProtection","quotePrefix"];
+    let changes:Vec<_>=keys.iter().map(|key|(*key,attributes.get(*key).map(|v|escape(v)))).collect();
+    let mut head=xml_root_attributes(&xml[node.start..node.head_end],&changes)?;
+    let mut edits=Vec::new();let mut additions=String::new();
+    for name in ["alignment","protection"] {
+        let target=named_style_children(&nodes,index,name).first().copied();
+        let source=named_style_children(&wanted,root,name).first().copied();
+        if let Some(before)=before {
+            let old=direct_xml_child(before,name)?.0.map(|(a,b)|&before[a..b]);
+            let new=source.map(|index|&wrapped[wanted[index].start..wanted[index].end]);
+            if old==new {continue}
+        }
+        if let Some(target)=target {
+            let values=source.map(|source|named_node_attributes(&wrapped,&wanted[source])).transpose()?.unwrap_or_default();
+            let keys:&[&str]=if name=="alignment" {
+                &["horizontal","vertical","indent","wrapText","shrinkToFit","textRotation","readingOrder","justifyLastLine"]
+            } else {&["locked","hidden"]};
+            let changes:Vec<_>=keys.iter().map(|key|(*key,values.get(*key).map(|v|escape(v)))).collect();
+            let target=&nodes[target];
+            let header=xml_root_attributes(&xml[target.start..target.head_end],&changes)?;
+            edits.push((target.start,target.head_end,header));
+        } else if let Some(source)=source {
+            let source=&wanted[source];
+            additions.push_str(&named_style_qualify(&wrapped[source.start..source.end],&node.qualified)?);
+        }
+    }
+    if node.empty&&!additions.is_empty() {
+        head=head.strip_suffix("/>").ok_or_else(||XlsxError::InvalidData("invalid named-style template".into()))?.to_owned()+">";
+        additions.push_str(&format!("</{}>",node.qualified));
+    }
+    edits.push((node.start,node.head_end,head));
+    if !additions.is_empty() {
+        let at=nodes.iter().filter(|n|n.parent==Some(index)&&n.standard&&n.name=="extLst").map(|n|n.start).min().unwrap_or(node.close_start);
+        edits.push((at,at,additions));
+    }
+    apply_style_xml_edits(xml,edits)
+}
+
+fn patch_named_style_definitions(
+    xml:&str,before:&[crate::ir::NamedCellStyle],wanted:&[crate::ir::NamedCellStyle],
+)->Result<String,XlsxError> {
+    let mut output=xml.to_owned();let mut identities=std::collections::HashSet::new();
+    for style in wanted {
+        if !identities.insert(style.source_id){return Err(XlsxError::InvalidData("duplicate named-style template identity".into()))}
+    }
+    let mut ordered:Vec<_>=wanted.iter().collect();ordered.sort_by_key(|s|s.source_id);
+    for style in ordered {
+        let old=before.iter().find(|s|s.source_id==style.source_id);
+        if old.is_some_and(|old|named_style_definition_key(old)==named_style_definition_key(style)){continue}
+        let nodes=style_xml_nodes(&output)?;
+        let parent=named_style_section(&nodes,"cellStyleXfs");
+        let templates=parent.map_or_else(Vec::new,|p|named_style_children(&nodes,p,"xf"));
+        let existing=templates.get(style.source_id as usize).copied();
+        let implicit_normal=before.is_empty()&&style.source_id==0&&style.builtin_id==Some(0)&&existing.is_some();
+        if old.is_none()&&!implicit_normal&&style.source_id!=templates.len() as u32 {
+            return Err(XlsxError::InvalidData("new named-style identity collides with reserved source templates".into()));
+        }
+        let previous=existing.map(|index| {
+            Ok::<_,XlsxError>((style_node_number(&output,&nodes[index],"fontId")?,
+                style_node_number(&output,&nodes[index],"fillId")?,
+                style_node_number(&output,&nodes[index],"borderId")?,
+                style_node_number(&output,&nodes[index],"numFmtId")?))
+        }).transpose()?;
+        let font=match previous {
+            Some((font,_,_,_))=>font,
+            None=>named_style_intern_resource(&mut output,"fonts","font",&font_xml(&style.style))?
+        };
+        let fill=if old.is_some_and(|old|fill_xml(&old.style)==fill_xml(&style.style)) {
+            previous.unwrap().1
+        } else {named_style_intern_resource(&mut output,"fills","fill",&fill_xml(&style.style))?};
+        let border=if old.is_some_and(|old|border_xml(&old.style)==border_xml(&style.style)) {
+            previous.unwrap().2
+        } else {named_style_intern_resource(&mut output,"borders","border",&border_xml(&style.style))?};
+        let number=if old.is_some_and(|old|old.style.number_format==style.style.number_format) {
+            previous.unwrap().3
+        } else {named_style_number_format(&mut output,&style.style)?};
+        let mut resolved=style.style.clone();
+        let mut reference=resolved.format_reference.as_deref().cloned().unwrap_or_default();
+        reference.style_id=None;resolved.format_reference=Some(Box::new(reference));
+        let generated=xf_xml(&resolved,number,font,fill,border);
+        let nodes=style_xml_nodes(&output)?;
+        let parent=named_style_section(&nodes,"cellStyleXfs");
+        let templates=parent.map_or_else(Vec::new,|p|named_style_children(&nodes,p,"xf"));
+        if let Some(index)=templates.get(style.source_id as usize) {
+            let prior=old.map(|old|xf_xml(&old.style,0,0,0,0));
+            output=named_style_merge_xf(&output,*index,&generated,prior.as_deref())?;
+        } else {output=named_style_append_record(&output,"cellStyleXfs","xf",&generated,None)?;}
+        let nodes=style_xml_nodes(&output)?;
+        let names=named_style_section(&nodes,"cellStyles");
+        let records=names.map_or_else(Vec::new,|p|named_style_children(&nodes,p,"cellStyle"));
+        let record=records.iter().copied().find(|index|style_node_number(&output,&nodes[*index],"xfId").ok()==Some(style.source_id));
+        if let Some(index)=record {
+            if old.is_none_or(|old|old.name!=style.name||old.builtin_id!=style.builtin_id) {
+                let node=&nodes[index];
+                let head=xml_root_attributes(&output[node.start..node.head_end],&[
+                    ("name",Some(escape(&style.name))),("xfId",Some(style.source_id.to_string())),
+                    ("builtinId",style.builtin_id.map(|id|id.to_string()))
+                ])?;
+                output=apply_style_xml_edits(&output,vec![(node.start,node.head_end,head)])?;
+            }
+        } else {
+            let key=oxicells_calc::case_fold::name_key(&style.name);
+            let mut at=None;
+            for index in records {
+                let attributes=named_node_attributes(&output,&nodes[index])?;
+                if attributes.get("name").is_some_and(|name|oxicells_calc::case_fold::name_key(name)>key) {at=Some(nodes[index].start);break}
+            }
+            let builtin=style.builtin_id.map(|id|format!(" builtinId=\"{id}\"")).unwrap_or_default();
+            let record=format!("<cellStyle name=\"{}\" xfId=\"{}\"{builtin}/>",escape(&style.name),style.source_id);
+            output=named_style_append_record(&output,"cellStyles","cellStyle",&record,at)?;
+        }
+    }
+    let nodes=style_xml_nodes(&output)?;
+    if let Some(parent)=named_style_section(&nodes,"cellStyles") {
+        let mut edits=Vec::new();
+        for index in named_style_children(&nodes,parent,"cellStyle") {
+            let id=style_node_number(&output,&nodes[index],"xfId")?;
+            if before.iter().any(|s|s.source_id==id)&&!wanted.iter().any(|s|s.source_id==id) {
+                edits.push((nodes[index].start,nodes[index].end,String::new()));
+            }
+        }
+        if !edits.is_empty() {
+            let count=named_style_children(&nodes,parent,"cellStyle").len()-edits.len();
+            let node=&nodes[parent];
+            let head=xml_root_attributes(&output[node.start..node.head_end],&[("count",Some(count.to_string()))])?;
+            edits.push((node.start,node.head_end,head));output=apply_style_xml_edits(&output,edits)?;
+        }
+    }
+    Ok(output)
+}
+
+
 fn patch_styles_xml(
     xml: &str,
     wanted: &[CellStyle],
     default_style: &CellStyle,
+) -> Result<(String, Vec<u32>), XlsxError> {
+    patch_styles_xml_with_font_references(xml, wanted, default_style, &[])
+}
+
+fn named_font_references(
+    xml: &str,
+    wanted: &[CellStyle],
+    changes: &BTreeMap<u32, (CellStyle, CellStyle)>,
+    plan: Option<&[crate::ir::NamedCellStyle]>,
+) -> Result<Vec<Option<u32>>, XlsxError> {
+    let nodes = style_xml_nodes(xml)?;
+    let fonts = named_style_section(&nodes,"fonts")
+        .map_or_else(Vec::new,|section|named_style_children(&nodes,section,"font"));
+    let named = named_style_section(&nodes,"cellStyleXfs")
+        .map_or_else(Vec::new,|section|named_style_children(&nodes,section,"xf"));
+    let matches_font = |id:u32, style:&CellStyle| -> Result<bool,XlsxError> {
+        let Some(&font)=fonts.get(id as usize) else{return Ok(false)};
+        let generated=format!("<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">{}</styleSheet>",font_xml(style));
+        let generated_nodes=style_xml_nodes(&generated)?;
+        let root=generated_nodes.iter().position(|n|n.standard&&n.name=="font"&&n.parent==Some(0))
+            .ok_or_else(||XlsxError::InvalidData("missing generated font".into()))?;
+        Ok(named_resource_key(xml,&nodes,font)?==named_resource_key(&generated,&generated_nodes,root)?)
+    };
+    wanted.iter().map(|style| {
+        // Default-font ownership can survive an excluded named font group.
+        if style.normal_font_link==Some(true)&&matches_font(0,style)? {return Ok(Some(0))}
+        let Some(parent)=style.format_reference.as_ref().and_then(|r|r.style_id)else{return Ok(None)};
+        if style.named_font_link==Some(true) {
+            if let Some(&node)=named.get(parent as usize) {
+                let id=style_node_number(xml,&nodes[node],"fontId")?;
+                return if matches_font(id,style)?{Ok(Some(id))}else{Ok(None)};
+            }
+            // A new definition is appended after the cell XFs. Both must
+            // choose the same resource even when it equals default font0.
+            if plan.is_some_and(|styles|styles.iter().any(|named|
+                named.source_id==parent&&font_xml(&named.style)==font_xml(style))) {
+                return named_style_find_resource(xml,"fonts","font",&font_xml(style));
+            }
+            return Ok(None);
+        }
+        // Older editing views lack logical ownership fields. Retain the
+        // already-qualified changed-parent path without reattaching a cell
+        // whose imported or explicit provenance says it is independent.
+        if style.named_font_link==Some(false){return Ok(None)}
+        let Some((_,after))=changes.get(&parent)else{return Ok(None)};
+        if style.normal_font_link==Some(false)&&style.named_font_link.is_none(){return Ok(None)}
+        if font_xml(style)!=font_xml(after){return Ok(None)}
+        let node=*named.get(parent as usize)
+            .ok_or_else(||XlsxError::InvalidData("missing inherited named font".into()))?;
+        style_node_number(xml,&nodes[node],"fontId").map(Some)
+    }).collect()
+}
+
+fn named_plan_font_reuse_allowed(xml:&str,style:&CellStyle,font:u32)->Result<bool,XlsxError> {
+    if font==0&&style.normal_font_link==Some(false){return Ok(false)}
+    if style.named_font_link!=Some(false){return Ok(true)}
+    let Some(parent)=style.format_reference.as_ref().and_then(|r|r.style_id)else{return Ok(true)};
+    let nodes=style_xml_nodes(xml)?;
+    let Some(section)=named_style_section(&nodes,"cellStyleXfs")else{return Ok(true)};
+    let named=named_style_children(&nodes,section,"xf");
+    let Some(&node)=named.get(parent as usize)else{return Ok(true)};
+    Ok(style_node_number(xml,&nodes[node],"fontId")?!=font)
+}
+
+fn stored_style_same(
+    before:Option<&CellStyle>,after:Option<&CellStyle>,named:&[crate::ir::NamedCellStyle],
+)->bool {
+    match (before,after) {
+        (Some(before),Some(after))=>{
+            if before==after{return true}
+            let mut after=after.clone();
+            // A stale eligible font (16 while its disabled template is20)
+            // is live-only state in Excel. Equal-value reattachment and
+            // explicit detachment can be stored by sharing/separating the
+            // resource, and must remain real edits.
+            let stale_live=after.named_font_link==Some(true)&&before.named_font_link!=Some(true)
+                &&after.format_reference.as_ref().and_then(|r|r.style_id)
+                    .and_then(|id|named.iter().find(|s|s.source_id==id))
+                    .is_some_and(|parent|font_xml(&parent.style)!=font_xml(&after));
+            if stale_live{after.named_font_link=before.named_font_link;}
+            before==&after
+        },
+        (None,None)=>true,
+        _=>false,
+    }
+}
+
+// Resource identities carry inheritance. Reuse complete equal records without
+// rewriting imported resources or treating an edit of another group as detachment.
+fn cell_style_resource_key(xml:&str,nodes:&[StyleXmlNode],root:usize)->Result<Option<String>,XlsxError> {
+    let held=&nodes[root];
+    let fragment=&xml[held.start..held.end];
+    let mut reader=Reader::from_str(fragment);
+    loop {
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Text(text) if text.as_ref().iter().any(|b|!b.is_ascii_whitespace()) => return Ok(None),
+            Event::CData(_)|Event::Comment(_)|Event::PI(_)|Event::DocType(_)|Event::Decl(_) => return Ok(None),
+            Event::Eof => break,
+            _=>{},
+        }
+    }
+    let mut projected=BTreeMap::<usize,usize>::new();
+    let mut parts=Vec::<(Option<usize>,String,BTreeMap<String,String>)>::new();
+    for (index,node) in nodes.iter().enumerate().skip(root).take_while(|(_,n)|n.start<held.end) {
+        if !node.standard {return Ok(None)}
+        let mut attributes=named_node_attributes(xml,node)?;
+        attributes.retain(|name,_|name!="xmlns"&&!name.starts_with("xmlns:"));
+        let empty=!nodes.get(index+1).is_some_and(|child|child.parent==Some(index));
+        // An absent empty pattern or border edge is the same default record;
+        // retain cached colors, unknown attributes, and all XF apply flags.
+        if empty && held.name=="fill" && node.name=="patternFill"
+            && (attributes.is_empty() || (attributes.len()==1 && attributes.get("patternType").is_some_and(|p|p=="none"))) {continue}
+        if empty && held.name=="border" && attributes.is_empty()
+            && ["left","right","top","bottom","diagonal","start","end","vertical","horizontal"].contains(&node.name.as_str()) {continue}
+        let parent=if index==root {None}else{node.parent.and_then(|p|projected.get(&p).copied())};
+        projected.insert(index,parts.len());parts.push((parent,node.name.clone(),attributes));
+    }
+    Ok(Some(format!("{parts:?}")))
+}
+
+fn patch_styles_xml_with_font_references(
+    xml: &str,
+    wanted: &[CellStyle],
+    default_style: &CellStyle,
+    reused_fonts: &[Option<u32>],
 ) -> Result<(String, Vec<u32>), XlsxError> {
     if wanted.is_empty() {
         return Ok((xml.to_string(), Vec::new()));
@@ -6834,6 +8665,27 @@ fn patch_styles_xml(
     let fills_at = count_of(xml, "fills");
     let borders_at = count_of(xml, "borders");
     let xfs_at = count_of(xml, "cellXfs");
+    let nodes=style_xml_nodes(xml)?;
+    let existing=|section:&str,child:&str|->Result<BTreeMap<String,u32>,XlsxError> {
+        let mut cache=BTreeMap::new();
+        if let Some(parent)=named_style_section(&nodes,section) {
+            for (id,root) in named_style_children(&nodes,parent,child).into_iter().enumerate() {
+                if let Some(key)=cell_style_resource_key(xml,&nodes,root)? {cache.entry(key).or_insert(id as u32);}
+            }
+        }
+        Ok(cache)
+    };
+    let mut fill_cache=existing("fills","fill")?;
+    let mut border_cache=existing("borders","border")?;
+    let mut xf_cache=existing("cellXfs","xf")?;
+    let generated_key=|child:&str,record:&str|->Result<Option<String>,XlsxError> {
+        let wrapper=format!("<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">{record}</styleSheet>");
+        let nodes=style_xml_nodes(&wrapper)?;
+        let root=nodes.iter().position(|node|node.parent==Some(0)&&node.standard&&node.name==child)
+            .ok_or_else(||XlsxError::InvalidData("missing generated cell-style resource".into()))?;
+        cell_style_resource_key(&wrapper,&nodes,root)
+    };
+
     let mut next_number_format = 164_u32.max(
         // Custom formats are numbered from 164; step past any the file already has.
         highest_custom_number_format(xml).map_or(164, |highest| highest + 1),
@@ -6845,6 +8697,8 @@ fn patch_styles_xml(
     let mut xfs = String::new();
     let mut number_formats = String::new();
     let mut indices = Vec::with_capacity(wanted.len());
+    let mut added_fonts = 0_u32;
+    let mut added_fills=0u32;let mut added_borders=0u32;let mut added_xfs=0u32;
 
     for (offset, style) in wanted.iter().enumerate() {
         let offset = offset as u32;
@@ -6864,9 +8718,25 @@ fn patch_styles_xml(
                 reference.scheme = default.scheme.clone();
             }
         }
-        fonts.push_str(&font_xml(&font_style));
-        fills.push_str(&fill_xml(style));
-        borders.push_str(&border_xml(style));
+        let font = match reused_fonts.get(offset as usize).copied().flatten() {
+            Some(font) => font,
+            None => {
+                fonts.push_str(&font_xml(&font_style));
+                let font = fonts_at + added_fonts;
+                added_fonts += 1;
+                font
+            }
+        };
+        let fill_record=fill_xml(style);let fill_key=generated_key("fill",&fill_record)?;
+        let fill=if let Some(id)=fill_key.as_ref().and_then(|key|fill_cache.get(key)).copied() {id}else{
+            let id=fills_at+added_fills;added_fills+=1;fills.push_str(&fill_record);
+            if let Some(key)=fill_key {fill_cache.insert(key,id);}id
+        };
+        let border_record=border_xml(style);let border_key=generated_key("border",&border_record)?;
+        let border=if let Some(id)=border_key.as_ref().and_then(|key|border_cache.get(key)).copied() {id}else{
+            let id=borders_at+added_borders;added_borders+=1;borders.push_str(&border_record);
+            if let Some(key)=border_key {border_cache.insert(key,id);}id
+        };
 
         let number_format_id = match style.number_format.as_deref() {
             None => 0,
@@ -6886,24 +8756,20 @@ fn patch_styles_xml(
             },
         };
 
-        xfs.push_str(&xf_xml(
-            style,
-            number_format_id,
-            fonts_at + offset,
-            fills_at + offset,
-            borders_at + offset,
-        ));
-        indices.push(xfs_at + offset);
+        let xf_record=xf_xml(style,number_format_id,font,fill,border);let xf_key=generated_key("xf",&xf_record)?;
+        let index=if let Some(id)=xf_key.as_ref().and_then(|key|xf_cache.get(key)).copied() {id}else{
+            let id=xfs_at+added_xfs;added_xfs+=1;xfs.push_str(&xf_record);
+            if let Some(key)=xf_key {xf_cache.insert(key,id);}id
+        };
+        indices.push(index);
     }
 
-    let added = wanted.len() as u32;
     let mut patched = xml.to_string();
-    patched = append_section(&patched, "numFmts", &number_formats, true)?;
-    patched = append_section(&patched, "fonts", &fonts, false)?;
-    patched = append_section(&patched, "fills", &fills, false)?;
-    patched = append_section(&patched, "borders", &borders, false)?;
-    patched = append_section(&patched, "cellXfs", &xfs, false)?;
-    let _ = added;
+    patched = append_named_style_resources(&patched, "numFmts", &number_formats, true)?;
+    patched = append_named_style_resources(&patched, "fonts", &fonts, false)?;
+    patched = append_named_style_resources(&patched, "fills", &fills, false)?;
+    patched = append_named_style_resources(&patched, "borders", &borders, false)?;
+    patched = append_named_style_resources(&patched, "cellXfs", &xfs, false)?;
     Ok((patched, indices))
 }
 
@@ -6993,6 +8859,15 @@ fn patch_indexed_colors_xml(xml: &str, colors: &[String]) -> Result<String, Xlsx
 
 /// How many entries a section already holds, read from its `count` attribute.
 fn count_of(xml: &str, section: &str) -> u32 {
+    let child=match section {"fonts"=>"font","fills"=>"fill","borders"=>"border","cellXfs"|"cellStyleXfs"=>"xf",
+        "numFmts"=>"numFmt","cellStyles"=>"cellStyle","dxfs"=>"dxf",_=>""};
+    if !child.is_empty() {
+        if let Ok(nodes)=style_xml_nodes(xml) {
+            if let Some(parent)=named_style_section(&nodes,section) {
+                return named_style_children(&nodes,parent,child).len() as u32;
+            }
+        }
+    }
     let open = format!("<{section} ");
     let Some(start) = xml.find(&open).or_else(|| xml.find(&format!("<{section}>"))) else {
         return 0;
@@ -7267,6 +9142,131 @@ fn escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// A detached source-part graph. The caller still rebases workbook-wide
+/// identities (tables, document modules) and registers content-type overrides.
+struct CopiedPartGraph {
+    root: String,
+    paths: HashMap<String, String>,
+    parts: HashMap<String, Vec<u8>>,
+}
+
+/// Load only the transitive internal graph needed by an opaque object copy.
+/// Fragments do not name a new package part; external targets remain external.
+fn read_part_graph(archive: &mut OoxmlArchive, root: &str) -> Result<HashMap<String, Vec<u8>>, XlsxError> {
+    let mut parts = HashMap::new();
+    let mut pending = vec![root.to_string()];
+    while let Some(part) = pending.pop() {
+        if parts.contains_key(&part) { continue; }
+        parts.insert(part.clone(), archive.read_binary_part(&part)?);
+        let relationships = sheet_rels_path(&part);
+        if let Some(xml) = archive.try_read_part(&relationships)? {
+            for relation in parse_relationships(&xml).map_err(|error| XlsxError::InvalidData(error.to_string()))?.values() {
+                if relation.target_mode.as_deref() == Some("External") { continue; }
+                let target = relation.target.split('#').next().unwrap_or_default();
+                pending.push(if target.is_empty() { part.clone() } else { resolve_part_target(&part, target) });
+            }
+            parts.insert(relationships, xml.into_bytes());
+        }
+    }
+    Ok(parts)
+}
+
+/// Copy opaque part payloads as well as their relationships. Keeping the
+/// source XML avoids discarding features that the spreadsheet IR cannot edit.
+/// `shared` names workbook-wide resources that must retain their identity.
+fn copy_part_graph(
+    source: &HashMap<String, Vec<u8>>,
+    root: &str,
+    occupied: &std::collections::HashSet<String>,
+    shared: &std::collections::HashSet<String>,
+) -> Result<CopiedPartGraph, XlsxError> {
+    use std::collections::{HashSet, VecDeque};
+    let mut used: HashSet<String> = occupied.iter().chain(source.keys()).map(|name| name.to_ascii_lowercase()).collect();
+    let reserve = |original: &str, used: &mut HashSet<String>| {
+        let (folder, leaf) = original.rsplit_once('/').unwrap_or(("", original));
+        let (stem, extension) = leaf.rsplit_once('.').map_or((leaf, ""), |(stem, extension)| (stem, extension));
+        for index in 1u64.. {
+            let suffix = if extension.is_empty() { String::new() } else { format!(".{extension}") };
+            let leaf = format!("{stem}_copy{index}{suffix}");
+            let candidate = if folder.is_empty() { leaf } else { format!("{folder}/{leaf}") };
+            let relationships = sheet_rels_path(&candidate);
+            if !used.contains(&candidate.to_ascii_lowercase()) && !used.contains(&relationships.to_ascii_lowercase()) {
+                used.insert(candidate.to_ascii_lowercase());
+                used.insert(relationships.to_ascii_lowercase());
+                return candidate;
+            }
+        }
+        unreachable!("part-name space exhausted")
+    };
+    let copied_root = reserve(root, &mut used);
+    let mut result = CopiedPartGraph {
+        root: copied_root.clone(),
+        paths: HashMap::from([(root.to_string(), copied_root)]),
+        parts: HashMap::new(),
+    };
+    let mut pending = VecDeque::from([root.to_string()]);
+    while let Some(original) = pending.pop_front() {
+        let destination = result.paths[&original].clone();
+        let payload = source.get(&original).ok_or_else(|| XlsxError::InvalidData(
+            format!("copied relationship part is missing: {original}")))?;
+        result.parts.insert(destination.clone(), payload.clone());
+        let relationship_path = sheet_rels_path(&original);
+        let Some(relationships) = source.get(&relationship_path) else { continue };
+        let xml = std::str::from_utf8(relationships).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        let mut reader = Reader::from_str(xml);
+        let mut writer = Writer::new(Cursor::new(Vec::new()));
+        loop {
+            let event = reader.read_event().map_err(XlsxError::Xml)?;
+            match &event {
+                Event::Start(start) | Event::Empty(start) if start.local_name().as_ref() == b"Relationship" => {
+                    let attributes: Vec<_> = start.attributes().collect::<Result<_, _>>()
+                        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                    let external = attributes.iter().any(|attribute| attribute.key.as_ref() == b"TargetMode" && attribute.value.as_ref() == b"External");
+                    let target = attributes.iter().find(|attribute| attribute.key.as_ref() == b"Target")
+                        .ok_or_else(|| XlsxError::InvalidData("copied relationship has no target".into()))?;
+                    if external {
+                        writer.write_event(event).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                        continue;
+                    }
+                    let target = target.unescape_value().map_err(XlsxError::Xml)?;
+                    let (path, fragment) = target.split_once('#').map_or((target.as_ref(), None), |(path, fragment)| (path, Some(fragment)));
+                    let source_target = if path.is_empty() { original.clone() } else { resolve_part_target(&original, path) };
+                    let copied_target = if shared.contains(&source_target) {
+                        if !source.contains_key(&source_target) {
+                            return Err(XlsxError::InvalidData(format!("shared relationship part is missing: {source_target}")));
+                        }
+                        source_target
+                    } else if let Some(existing) = result.paths.get(&source_target) {
+                        existing.clone()
+                    } else {
+                        if !source.contains_key(&source_target) {
+                            return Err(XlsxError::InvalidData(format!("copied relationship part is missing: {source_target}")));
+                        }
+                        let copied = reserve(&source_target, &mut used);
+                        result.paths.insert(source_target.clone(), copied.clone());
+                        pending.push_back(source_target);
+                        copied
+                    };
+                    let mut target = relative_sheet_target(&destination, &copied_target);
+                    if let Some(fragment) = fragment { target.push('#'); target.push_str(fragment); }
+                    let mut changed = start.to_owned();
+                    changed.clear_attributes();
+                    for attribute in attributes {
+                        if attribute.key.as_ref() != b"Target" { changed.push_attribute(attribute); }
+                    }
+                    changed.push_attribute(("Target", target.as_str()));
+                    writer.write_event(if matches!(event, Event::Empty(_)) { Event::Empty(changed) } else { Event::Start(changed) })
+                        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                }
+                Event::Eof => break,
+                _ => writer.write_event(event).map_err(|error| XlsxError::InvalidData(error.to_string()))?,
+            }
+        }
+        result.parts.insert(sheet_rels_path(&destination), writer.into_inner().into_inner());
+    }
+    Ok(result)
+}
+
 fn resolve_part_target(from: &str, target: &str) -> String {
     if target.starts_with('/') {
         return target.trim_start_matches('/').to_string();
@@ -7401,6 +9401,7 @@ fn legacy_comment_package_edits(
     archive: &mut OoxmlArchive,
     sheet_paths: &[String],
     changed: &HashMap<usize, Vec<crate::ir::Comment>>,
+    id_blocks: &HashMap<usize, Vec<u32>>,
     original_sheets: &[crate::ir::Sheet],
     threaded: &ThreadedCommentPackageEdits,
     drawing: &DrawingAdditionPackage,
@@ -7408,7 +9409,9 @@ fn legacy_comment_package_edits(
     let mut plan = LegacyCommentPackageEdits::default();
     let mut names: std::collections::HashSet<String> = archive.file_names().into_iter().collect();
     let archive_names = names.clone();
-    for (sheet_index, comments) in changed {
+    let mut changed_in_sheet_order: Vec<_> = changed.iter().collect();
+    changed_in_sheet_order.sort_by_key(|(sheet, _)| **sheet);
+    for (sheet_index, comments) in changed_in_sheet_order {
         let Some(sheet_path) = sheet_paths.get(*sheet_index) else { continue };
         let rels_path = sheet_rels_path(sheet_path);
         let mut rels_xml = archive.try_read_part(&rels_path)?;
@@ -7481,10 +9484,12 @@ fn legacy_comment_package_edits(
         };
 
         let original_comment_part_exists = archive_names.contains(&comment_path);
+        let original_comments = original_sheets.get(*sheet_index).map(|sheet| sheet.comments.as_slice()).unwrap_or(&[]);
+        let original_blocks = original_sheets.get(*sheet_index).map(|sheet| sheet.drawing_id_blocks.as_slice()).unwrap_or(&[]);
         let comments_xml = if original_comment_part_exists {
             let original_xml = archive.try_read_part(&comment_path)?
                 .ok_or_else(|| XlsxError::InvalidData("missing comments part".into()))?;
-            patch_legacy_comments(&original_xml, &original_sheets[*sheet_index].comments, comments)?
+            patch_legacy_comments(&original_xml, original_comments, comments)?
         } else {
             write_legacy_comments(comments)
         };
@@ -7497,7 +9502,9 @@ fn legacy_comment_package_edits(
         }
 
         let original_vml = archive.try_read_part(&vml_path)?.unwrap_or_else(empty_vml_drawing);
-        let vml = patch_vml_notes(&original_vml, comments)?;
+        let blocks = id_blocks.get(sheet_index).filter(|blocks| !blocks.is_empty())
+            .map(Vec::as_slice).unwrap_or(original_blocks);
+        let vml = patch_vml_notes(&original_vml, comments, blocks, original_comments)?;
         if archive_names.contains(&vml_path) {
             plan.parts.insert(vml_path, vml);
         } else if let Some((_, xml)) = plan.new_parts.iter_mut().find(|(path, _)| path == &vml_path) {
@@ -7570,6 +9577,9 @@ fn threaded_compatibility_note(thread: &crate::ir::ThreadedComment) -> crate::ir
     let utf16_text = String::from_utf16(&units).err().map(|_| units);
     let (row, col) = thread.cell;
     crate::ir::Comment {
+        position: None,
+        shape_id: None,
+                        shape_name: None,
         author: format!("tc={}", thread.id), utf16_text,
         from: crate::ir::Anchor { col: col.saturating_add(1), col_off: 0, row, row_off: 0 },
         to: None, size: (96.0, 59.25),
@@ -7772,39 +9782,133 @@ fn empty_vml_drawing() -> String {
     "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"1\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype></xml>".to_string()
 }
 
-fn patch_vml_notes(xml: &str, comments: &[crate::ir::Comment]) -> Result<String, XlsxError> {
-    let mut base = xml.to_string();
-    if base.is_empty() { base = empty_vml_drawing(); }
-    let mut kept = String::with_capacity(base.len());
-    let mut cursor = 0;
-    let mut max_id = 1024u32;
-    while let Some(relative) = base[cursor..].find("<v:shape ") {
-        let start = cursor + relative;
-        kept.push_str(&base[cursor..start]);
-        let Some(end_rel) = base[start..].find("</v:shape>") else { return Err(XlsxError::InvalidData("unterminated VML shape".into())); };
-        let end = start + end_rel + "</v:shape>".len();
-        let shape = &base[start..end];
-        for capture in shape.split("_x0000_s").skip(1) {
-            let digits: String = capture.chars().take_while(char::is_ascii_digit).collect();
-            if let Ok(id) = digits.parse::<u32>() { max_id = max_id.max(id); }
+fn vml_note_cell(xml: &str) -> Option<(u32, u32)> {
+    let mut reader = Reader::from_str(xml);
+    let (mut row, mut col, mut note) = (None, None, false);
+    loop {
+        match reader.read_event().ok()? {
+            Event::Start(element) | Event::Empty(element) => {
+                let local = local_name(element.name().as_ref());
+                if local == "ClientData" { note = get_attr(&element, "ObjectType").as_deref() == Some("Note"); }
+                if local == "Row" { row = reader.read_text(element.name()).ok()?.trim().parse().ok(); }
+                if local == "Column" { col = reader.read_text(element.name()).ok()?.trim().parse().ok(); }
+            }
+            Event::Eof => return if note { row.zip(col) } else { None },
+            _ => {}
         }
-        if !shape.contains("ObjectType=\"Note\"") && !shape.contains("ObjectType='Note'") { kept.push_str(shape); }
-        cursor = end;
     }
-    kept.push_str(&base[cursor..]);
-    let at = kept.rfind("</xml>").ok_or_else(|| XlsxError::InvalidData("VML drawing has no closing xml element".into()))?;
+}
+
+fn vml_shape_numeric_id(xml: &str) -> Option<u32> {
+    table_root_attribute(xml, "spid").or_else(|| table_root_attribute(xml, "id"))?
+        .strip_prefix("_x0000_s")?.parse().ok()
+}
+
+fn vml_note_name(name: &str) -> String {
+    use std::fmt::Write;
+    let mut result = String::new();
+    // VML stores Shape.Name as an XML-name escaped ID, not an OOXML text value.
+    for (index, (offset, ch)) in name.char_indices().enumerate() {
+        let code = ch as u32;
+        let start = ch == '_' || ch.is_ascii_alphabetic() || matches!(code,
+            0xC0..=0xD6 | 0xD8..=0xF6 | 0xF8..=0x2FF | 0x370..=0x37D |
+            0x37F..=0x1FFF | 0x200C..=0x200D | 0x2070..=0x218F |
+            0x2C00..=0x2FEF | 0x3001..=0xD7FF | 0xF900..=0xFDCF |
+            0xFDF0..=0xFFFD);
+        let allowed = start || index != 0 && (ch.is_ascii_digit() || matches!(code, 0x2D | 0x2E | 0xB7 | 0x300..=0x36F | 0x203F..=0x2040));
+        let tail = &name[offset..];
+        let bytes = tail.as_bytes();
+        let escape = ch == '_' && bytes.len() >= 7 && bytes[1] == b'x' && bytes[6] == b'_' && bytes[2..6].iter().all(u8::is_ascii_hexdigit);
+        if allowed && !escape { result.push(ch); }
+        else { for unit in ch.encode_utf16(&mut [0; 2]) { write!(&mut result, "_x{unit:04x}_").unwrap(); } }
+    }
+    result
+}
+
+fn vml_note_identity(xml: &str, comment: &crate::ir::Comment, id: u32) -> Result<String, XlsxError> {
+    let physical = format!("_x0000_s{id}");
+    if let Some(name) = &comment.shape_name {
+        let encoded = vml_note_name(name);
+        if table_root_attribute(xml, "id").as_deref() == Some(&encoded)
+            && table_root_attribute(xml, "spid").as_deref() == Some(&physical) { return Ok(xml.into()); }
+        table_root_attributes(xml, &[("id", escape(&encoded)), ("o:spid", physical)])
+    } else {
+        if table_root_attribute(xml, "id").as_deref() == Some(&physical)
+            && table_root_attribute(xml, "spid").is_none() { return Ok(xml.into()); }
+        table_root_attributes_removed(xml, &[("id", physical)], &["o:spid"])
+    }
+}
+
+fn vml_note_appearance_equal(before: &crate::ir::Comment, after: &crate::ir::Comment) -> bool {
+    let mut before = before.clone();
+    let mut after = after.clone();
+    for comment in [&mut before, &mut after] {
+        comment.shape_id = None; comment.shape_name = None;
+        comment.author.clear(); comment.utf16_text = None;
+        comment.text.paragraphs.clear();
+    }
+    before == after
+}
+
+fn patch_vml_notes(xml: &str, comments: &[crate::ir::Comment], blocks: &[u32], original: &[crate::ir::Comment]) -> Result<String, XlsxError> {
+    let base = if xml.is_empty() { empty_vml_drawing() } else { xml.to_string() };
+    let spans = root_child_spans(&base, "shape")?;
+    let mut used = std::collections::HashSet::new();
+    let mut max_id = blocks.first().copied().unwrap_or(1) * 1024;
+    let mut old_notes = HashMap::new();
+    for &(start, end) in &spans {
+        let shape = &base[start..end];
+        if let Some(id) = vml_shape_numeric_id(shape) { max_id = max_id.max(id); }
+        if let Some(cell) = vml_note_cell(shape) { old_notes.insert(cell, (start, end)); }
+        else if let Some(id) = vml_shape_numeric_id(shape) { used.insert(id); }
+    }
+    for comment in comments {
+        if let Some(id) = comment.shape_id {
+            if !used.insert(id) { return Err(XlsxError::InvalidData("duplicate legacy shape identity".into())); }
+            max_id = max_id.max(id);
+        }
+    }
+    let mut ids = HashMap::new();
+    let mut owned: std::collections::BTreeSet<_> = blocks.iter().copied().collect();
     let mut generated = String::new();
-    let mut sorted = comments.to_vec();
-    sorted.sort_by_key(|comment| comment.cell);
-    for (ordinal, comment) in sorted.iter().enumerate() {
-        generated.push_str(&write_vml_note(comment, max_id + ordinal as u32 + 1, ordinal as u32 + 1));
+    for (ordinal, comment) in comments.iter().enumerate() {
+        let id = comment.shape_id.unwrap_or_else(|| { max_id += 1; while used.contains(&max_id) { max_id += 1; } used.insert(max_id); max_id });
+        owned.insert(id / 1024);
+        ids.insert(comment.cell, id);
+        if !old_notes.contains_key(&comment.cell) {
+            generated.push_str(&write_vml_note(comment, id, ordinal as u32 + 1));
+        }
     }
-    kept.insert_str(at, &generated);
-    Ok(kept)
+    let mut replacements = Vec::new();
+    for (cell, (start, end)) in old_notes {
+        let changed = if let Some(comment) = comments.iter().find(|comment| comment.cell == cell) {
+            if original.iter().find(|old| old.cell == cell).is_some_and(|old| vml_note_appearance_equal(old, comment)) {
+                vml_note_identity(&base[start..end], comment, ids[&cell])?
+            } else { write_vml_note(comment, ids[&cell], comments.iter().position(|note| note.cell == cell).unwrap() as u32 + 1) }
+        } else { String::new() };
+        replacements.push((start, end, changed));
+    }
+    let mut result = base;
+    replacements.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
+    for (start, end, changed) in replacements { result.replace_range(start..end, &changed); }
+    // Keep non-note shapes and extension XML untouched, including their IDs.
+    for id in used { owned.insert(id / 1024); }
+    owned.remove(&0);
+    let data = owned.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    if let Some((start, end)) = first_xml_element(&result, "idmap")? {
+        if table_root_attribute(&result[start..end], "data").as_deref() != Some(&data) {
+            let changed = table_root_attributes(&result[start..end], &[("data", data)])?;
+            result.replace_range(start..end, &changed);
+        }
+    }
+    let (at, _) = xml_root_close(&result, "xml")?;
+    result.insert_str(at, &generated);
+    Ok(result)
 }
 
 fn write_vml_note(comment: &crate::ir::Comment, shape_id: u32, z_index: u32) -> String {
     let (row, col) = comment.cell;
+    let (left, top) = comment.position.unwrap_or((0.0, 0.0));
     let from = comment.from;
     let to = comment.to.unwrap_or(crate::ir::Anchor {
         col: from.col,
@@ -7824,7 +9928,10 @@ fn write_vml_note(comment: &crate::ir::Comment, shape_id: u32, z_index: u32) -> 
     let visibility = if comment.visible { "visible" } else { "hidden" };
     let visible = if comment.visible { "<x:Visible/>" } else { "" };
     let anchor = format!("{}, {}, {}, {}, {}, {}, {}, {}", from.col, px(from.col_off), from.row, px(from.row_off), to.col, px(to.col_off), to.row, px(to.row_off));
-    format!("<v:shape id=\"_x0000_s{shape_id}\" type=\"#_x0000_t202\" style='position:absolute;margin-left:0pt;margin-top:0pt;width:{}pt;height:{}pt;z-index:{};visibility:{}'{filled} fillcolor=\"{}\" strokecolor=\"{}\" strokeweight=\"{}pt\"{stroked} o:insetmode=\"auto\"><v:fill{fill_opacity} color2=\"{}\"/>{stroke}<v:shadow color=\"none [81]\" obscured=\"t\"/><v:path o:connecttype=\"none\"/><v:textbox style='mso-direction-alt:auto' inset=\"{}pt,{}pt,{}pt,{}pt\"><div style='text-align:left'></div></v:textbox><x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{anchor}</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{row}</x:Row><x:Column>{col}</x:Column>{visible}</x:ClientData></v:shape>", comment.size.0, comment.size.1, z_index, visibility, escape(&fill), escape(&line), comment.line_weight, escape(&fill), comment.text.insets.0 as f64 / 12700.0, comment.text.insets.1 as f64 / 12700.0, comment.text.insets.2 as f64 / 12700.0, comment.text.insets.3 as f64 / 12700.0)
+    let identity = if let Some(name) = &comment.shape_name {
+        format!("id=\"{}\" o:spid=\"_x0000_s{shape_id}\"", escape(&vml_note_name(name)))
+    } else { format!("id=\"_x0000_s{shape_id}\"") };
+    format!("<v:shape {identity} type=\"#_x0000_t202\" style='position:absolute;margin-left:{left}pt;margin-top:{top}pt;width:{}pt;height:{}pt;z-index:{};visibility:{}'{filled} fillcolor=\"{}\" strokecolor=\"{}\" strokeweight=\"{}pt\"{stroked} o:insetmode=\"auto\"><v:fill{fill_opacity} color2=\"{}\"/>{stroke}<v:shadow color=\"none [81]\" obscured=\"t\"/><v:path o:connecttype=\"none\"/><v:textbox style='mso-direction-alt:auto' inset=\"{}pt,{}pt,{}pt,{}pt\"><div style='text-align:left'></div></v:textbox><x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{anchor}</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{row}</x:Row><x:Column>{col}</x:Column>{visible}</x:ClientData></v:shape>", comment.size.0, comment.size.1, z_index, visibility, escape(&fill), escape(&line), comment.line_weight, escape(&fill), comment.text.insets.0 as f64 / 12700.0, comment.text.insets.1 as f64 / 12700.0, comment.text.insets.2 as f64 / 12700.0, comment.text.insets.3 as f64 / 12700.0)
 }
 
 fn vml_opacity_attribute(transparency: f32) -> String {
@@ -9657,6 +11764,10 @@ fn record_style_edits(before:Option<&CellStyle>,after:&mut CellStyle) {
     use crate::ir::{CellFormatComponent as Part,CellFormatReference};
     if before.is_some_and(|before|after.format_reference.is_some() && before.format_reference!=after.format_reference) {return;}
     let default=CellStyle::default();let before=before.unwrap_or(&default);
+    if font_xml(before)!=font_xml(after) {
+        after.normal_font_link=Some(false);
+        if after.named_font_link.is_some(){after.named_font_link=Some(false);}
+    }
     let changes=[
         (font_xml(before)!=font_xml(after),Part::Font),
         (fill_xml(before)!=fill_xml(after),Part::Fill),
@@ -9744,8 +11855,9 @@ fn font_xml(style: &CellStyle) -> String {
     if !reference.is_some_and(|r|r.implicit_automatic) {
         if let Some(color)=color.as_ref() {font.push_str(&cell_fill_color_xml("color",Some(color),None));}
     }
-    if let Some(name) = style.latin_font_name() {
-        font.push_str(&format!("<name val=\"{}\"/>", escape(name)));
+    if let Some(units) = style.latin_font_units() {
+        let name = crate::string_value::encode(&units);
+        font.push_str(&format!("<name val=\"{}\"/>", escape(&name)));
     }
     if let Some(family) = style.font_family {
         font.push_str(&format!("<family val=\"{family}\"/>"));
@@ -9824,11 +11936,13 @@ fn fill_xml(style: &CellStyle) -> String {
 fn border_xml(style: &CellStyle) -> String {
     let edge = |name: &str, line: &Option<BorderLine>| match line {
         Some(line) => {
-            let colour = match line.color.as_deref() {
+            let colour = if let Some(reference)=line.color_reference.as_deref() {
+                cell_fill_color_xml("color",Some(reference),None)
+            } else {match line.color.as_deref() {
                 Some(colour) => format!("<color rgb=\"FF{}\"/>", escape(colour)),
                 None if name == "diagonal" => "<color auto=\"1\"/>".to_string(),
                 None => "<color indexed=\"64\"/>".to_string(),
-            };
+            }};
             format!(
                 "<{name} style=\"{}\">{colour}</{name}>",
                 escape(&line.style)
@@ -10242,7 +12356,7 @@ fn patch_workbook_calculation(xml: &str, settings: CalculationSettings) -> Resul
     crate::compatibility::patch_version(&patched, settings.compatibility_version)
 }
 
-fn patch_default_column_width(xml: &str, width: f32) -> Result<String, XlsxError> {
+fn patch_sheet_defaults(xml: &str, width: Option<f32>, row: Option<(f32, bool)>) -> Result<String, XlsxError> {
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut written = false;
@@ -10253,9 +12367,16 @@ fn patch_default_column_width(xml: &str, width: f32) -> Result<String, XlsxError
                 let mut changed = start.to_owned();
                 changed.clear_attributes();
                 for attribute in start.attributes().flatten() {
-                    if attribute.key.as_ref() != b"defaultColWidth" { changed.push_attribute(attribute); }
+                    let key = attribute.key.as_ref();
+                    if !(width.is_some() && key == b"defaultColWidth"
+                        || row.is_some() && matches!(key, b"defaultRowHeight" | b"customHeight"))
+                    { changed.push_attribute(attribute); }
                 }
-                changed.push_attribute(("defaultColWidth", width_text(width).as_str()));
+                if let Some(width) = width { changed.push_attribute(("defaultColWidth", width_text(width).as_str())); }
+                if let Some((height, custom)) = row {
+                    changed.push_attribute(("defaultRowHeight", width_text(height).as_str()));
+                    if custom { changed.push_attribute(("customHeight", "1")); }
+                }
                 writer.write_event(if matches!(event, Event::Empty(_)) { Event::Empty(changed) } else { Event::Start(changed) })
                     .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                 written = true;
@@ -10263,8 +12384,9 @@ fn patch_default_column_width(xml: &str, width: f32) -> Result<String, XlsxError
             }
             Event::Start(start) | Event::Empty(start) if !written && matches!(start.local_name().as_ref(), b"cols" | b"sheetData") => {
                 let mut format = BytesStart::new("sheetFormatPr");
-                format.push_attribute(("defaultRowHeight", "15"));
-                format.push_attribute(("defaultColWidth", width_text(width).as_str()));
+                format.push_attribute(("defaultRowHeight", width_text(row.map_or(15.0, |row| row.0)).as_str()));
+                if row.is_some_and(|row| row.1) { format.push_attribute(("customHeight", "1")); }
+                if let Some(width) = width { format.push_attribute(("defaultColWidth", width_text(width).as_str())); }
                 writer.write_event(Event::Empty(format)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                 written = true;
             }
@@ -10281,6 +12403,7 @@ fn write_new_sheet(
     styles: &BTreeMap<(u32, u32), u32>,
     row_styles: &BTreeMap<u32, u32>,
     column_styles: &BTreeMap<u32, u32>,
+    column_style_default_width: Option<f32>,
     multiple: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<u8>, XlsxError> {
     if sheet.kind == crate::ir::SheetKind::Chart {
@@ -10291,7 +12414,7 @@ fn write_new_sheet(
         xml.push_str("<sheetViews><sheetView workbookViewId=\"0\"/></sheetViews>");
         if sheet.protected { xml.push_str("<sheetProtection content=\"1\" objects=\"1\"/>"); }
         xml.push_str("</chartsheet>");
-        return Ok(xml.into_bytes());
+        return set_header_footer_in_worksheet(&xml, sheet.header_footer.as_ref()).map(String::into_bytes);
     }
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut root = BytesStart::new("worksheet");
@@ -10317,23 +12440,38 @@ fn write_new_sheet(
             .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
     }
 
-    if sheet.has_default_column_width() {
+    // Copies can retain the source file's automatic row-height cache.
+    // Refresh known Normal-font metrics, while keeping explicit heights.
+    let default_row_height = if sheet.default_row_custom {
+        sheet.default_row_height
+    } else {
+        sheet.column_width_font.as_deref()
+            .or_else(|| sheet.normal_font.as_ref().map(|font| font.0.as_str()))
+            .and_then(|face| sheet.normal_font.as_ref()
+                .and_then(|font| crate::row_defaults::font_default_geometry_px(face, font.1)))
+            .map(|(_, pixels)| if pixels >= 546 { 409.6 } else { f32::from(pixels) * 0.75 })
+            .unwrap_or(sheet.default_row_height)
+    };
+    if sheet.has_default_column_width() || sheet.default_row_custom || default_row_height != 15.0 {
         let mut format = BytesStart::new("sheetFormatPr");
-        format.push_attribute(("defaultRowHeight", width_text(sheet.default_row_height).as_str()));
-        format.push_attribute(("defaultColWidth", width_text(sheet.default_col_width).as_str()));
+        format.push_attribute(("defaultRowHeight", width_text(default_row_height).as_str()));
+        if sheet.default_row_custom { format.push_attribute(("customHeight", "1")); }
+        if sheet.has_default_column_width() { format.push_attribute(("defaultColWidth", width_text(column_file_width(sheet.default_col_width)).as_str())); }
         writer.write_event(Event::Empty(format)).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
     }
     let columns: std::collections::BTreeSet<u32> = (0..sheet.col_widths.len() as u32)
-        .chain(sheet.hidden_cols.iter().copied()).chain(sheet.col_custom_widths.keys().copied()).collect();
+        .chain(sheet.hidden_cols.iter().copied()).chain(sheet.col_custom_widths.keys().copied()).chain(sheet.best_fit_cols.iter().copied()).collect();
     let mut pending = BTreeMap::new();
     for column in columns {
         let width = sheet.col_widths.get(column as usize).copied().unwrap_or(0.0);
         let hidden = sheet.hidden_cols.contains(&column);
         let custom = sheet.column_has_custom_width(column);
-        if width > 0.0 || hidden || custom { pending.insert(column, ColumnWant { hidden: Some(hidden), width: Some(width), custom: Some(custom), style: None, }); }
+        if width > 0.0 || hidden || custom || sheet.best_fit_cols.contains(&column) { pending.insert(column, ColumnWant { best_fit: Some(sheet.best_fit_cols.contains(&column)), hidden: Some(hidden), width: Some(column_file_width(width)), custom: Some(custom), style: None, fallback_width: None, }); }
     }
     for (&column, &style) in column_styles {
-        pending.entry(column).or_default().style = Some(Some(style));
+        let want = pending.entry(column).or_default();
+        want.style = Some(Some(style));
+        want.fallback_width = column_style_default_width;
     }
     if !pending.is_empty() {
         open_cols(&mut writer)?;
@@ -10341,7 +12479,7 @@ fn write_new_sheet(
         close_cols(&mut writer)?;
     }
 
-    if sheet.rows.iter().all(|row| row.cells.is_empty() && !row.hidden && row.height.is_none()) && row_styles.is_empty() {
+    if sheet.rows.iter().all(|row| row.cells.is_empty() && !row.hidden && row.height.is_none() && row.format_recorded != Some(true)) && row_styles.is_empty() {
         writer
             .write_event(Event::Empty(BytesStart::new("sheetData")))
             .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
@@ -10359,18 +12497,24 @@ fn write_new_sheet(
                 }
             }
             let hidden = row.is_some_and(|row| row.hidden);
-            let height = row.and_then(|row| row.height);
-            if cells.is_empty() && !hidden && height.is_none() && !row_styles.contains_key(&index) {
+            let inherited = sheet.default_row_custom
+                && row.is_some_and(|row| row.height.is_none() && !row.cells.is_empty());
+            let height = row.and_then(|row| row.height)
+                .or_else(|| inherited.then_some(sheet.default_row_height));
+            if cells.is_empty() && !hidden && height.is_none() && !row_styles.contains_key(&index)
+                && !row.is_some_and(|row| row.thick_top || row.thick_bottom)
+                && !row.is_some_and(|row| row.format_recorded == Some(true)) {
                 continue;
             }
             write_inserted_row(
                 &mut writer,
                 index,
                 cells,
-                Some(RowWant {
+                Some(RowWant { format_recorded: row.and_then(|row| row.format_recorded),
                     hidden: Some(hidden),
                     height: Some(height),
-                    pinned: row.is_some_and(|row| row.custom_height),
+                    pinned: row.is_some_and(|row| row.custom_height) || inherited,
+                    thickness: row.map(|row| (row.thick_top, row.thick_bottom)),
                     style: row_styles.get(&index).map(|style| Some(*style)),
                 }),
                 styles,
@@ -10392,7 +12536,8 @@ fn write_new_sheet(
     let refs=edits.iter().map(|(at,value)|(*at,value)).collect();
     let rich = crate::rich_text::patch(std::str::from_utf8(&part).map_err(|error|XlsxError::InvalidData(error.to_string()))?, &refs)?;
     let protected = set_sheet_protection_in_worksheet(&rich, sheet.protected, sheet.protection.as_ref())?;
-    patch_data_validations_xml(&protected, &[], &sheet.validations).map(String::into_bytes)
+    let headers = set_header_footer_in_worksheet(&protected, sheet.header_footer.as_ref())?;
+    patch_data_validations_xml(&headers, &[], &sheet.validations).map(String::into_bytes)
 }
 
 /// Serialize filter criteria for a table part or another spreadsheet container.
@@ -10547,6 +12692,7 @@ fn write_merges(
 /// already says, so hiding a row does not disturb its height.
 #[derive(Clone, Copy, Default, PartialEq)]
 struct RowWant {
+    format_recorded: Option<bool>,
     hidden: Option<bool>,
     /// `Some(None)` puts the row back on the sheet's automatic height.
     height: Option<Option<f32>>,
@@ -10557,6 +12703,8 @@ struct RowWant {
     pinned: bool,
     /// Some(None) removes the row format; None leaves it unchanged.
     style: Option<Option<u32>>,
+    /// None retains the imported cache, Some(false, false) explicitly clears it.
+    thickness: Option<(bool, bool)>,
 }
 
 /// What a column should end up as. A field left `None` keeps whatever the
@@ -10567,7 +12715,10 @@ struct ColumnWant {
     hidden: Option<bool>,
     /// In characters of the workbook's default font, gutter included.
     width: Option<f32>,
+    /// An implicit style-band width, not a resize or a manual width.
+    fallback_width: Option<f32>,
     custom: Option<bool>,
+    best_fit: Option<bool>,
     /// Some(None) removes the column format; None leaves it unchanged.
     style: Option<Option<u32>>,
 }
@@ -10603,9 +12754,11 @@ fn write_col_span(
             width: match want.width {
                 Some(width) if width == 0.0 && want.custom == Some(false) => None,
                 Some(width) => Some(width_text(width)),
-                None => was_width.clone(),
+                None => was_width.clone().or_else(|| want.fallback_width.map(|width|
+                    width_text(if want.hidden.unwrap_or(was_hidden) { 0.0 } else { width }))),
             },
             resized: want.width.is_some(),
+            best_fit: want.best_fit,
             custom: want.custom.unwrap_or(want.width.is_some() || was_custom),
             style: match want.style { Some(value) => value.map(|style| style.to_string()), None => get_attr(start, "style") },
             style_changed: want.style.is_some(),
@@ -10629,6 +12782,7 @@ struct ColumnFace {
     width: Option<String>,
     /// True when this run's width was set here rather than read off the file.
     resized: bool,
+    best_fit: Option<bool>,
     custom: bool,
     style: Option<String>,
     style_changed: bool,
@@ -10640,8 +12794,22 @@ struct ColumnFace {
 /// Excel writes: 10.625 for a column someone typed 10 into, and a bare `9` for
 /// one left at the default. Rounding to a fixed number of places would write
 /// 10.63, a different width.
+// Workbook edits carry live pixel precision; OOXML stores 1/256 units.
+// Direct XML-width editing keeps its exact input representation.
+fn column_file_width(width: f32) -> f32 {
+    ((f64::from(width)*256.0).floor()/256.0) as f32
+}
+
 fn width_text(width: f32) -> String {
-    format!("{width}")
+    let exact = f64::from(width);
+    // Excel stores column widths in 1/256 units. The shortest f32 decimal
+    // can round that exact value (12.77734375 becomes 12.777344), so print
+    // those widths as f64. Other direct XML edits keep their existing form.
+    if exact.is_finite() && (exact * 256.0).fract() == 0.0 {
+        format!("{exact}")
+    } else {
+        format!("{width}")
+    }
 }
 
 /// Writes one `<col>` span, keeping whatever attributes `from` carried that
@@ -10669,7 +12837,7 @@ fn write_col(
             if matches!(
                 key.as_str(),
                 "min" | "max" | "width" | "hidden" | "customWidth"
-            ) || (face.resized && key == "bestFit") || (face.style_changed && key == "style")
+            ) || ((face.resized || face.best_fit.is_some()) && key == "bestFit") || (face.style_changed && key == "style")
             {
                 continue;
             }
@@ -10686,6 +12854,10 @@ fn write_col(
     if face.custom {
         span.push_attribute(("customWidth", "1"));
     }
+    if face.best_fit == Some(true) { span.push_attribute(("bestFit", "1")); }
+    // An implicit column has no column-specific attributes. A bare min/max
+    // span would materialize a different fallback width on the next parse.
+    if span.attributes().count() == 2 { return Ok(()); }
     writer
         .write_event(Event::Empty(span))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
@@ -10699,16 +12871,18 @@ fn write_new_cols(
     let mut runs: Vec<(u32, u32, ColumnFace)> = Vec::new();
     for (column, want) in std::mem::take(pending) {
         let hidden = want.hidden.unwrap_or(false);
-        if !hidden && want.width.is_none() && !matches!(want.style, Some(Some(_))) {
+        if !hidden && want.width.is_none() && !want.style.flatten().is_some_and(|style|style!=0) && want.best_fit != Some(true) {
             continue;
         }
         let face = ColumnFace {
             hidden,
-            width: want.width.filter(|width| *width != 0.0 || want.custom != Some(false)).map(width_text),
+            width: want.width.or_else(|| want.fallback_width.map(|width|
+                if hidden { 0.0 } else { width })).filter(|width| *width != 0.0 || want.custom != Some(false)).map(width_text),
             resized: want.width.is_some(),
+            best_fit: want.best_fit,
             custom: want.custom.unwrap_or(want.width.is_some()),
-            style: want.style.flatten().map(|style| style.to_string()),
-            style_changed: want.style.is_some(),
+            style: want.style.flatten().filter(|style|*style!=0).map(|style| style.to_string()),
+            style_changed: want.style.flatten().is_some_and(|style|style!=0),
         };
         match runs.last_mut() {
             Some((_, last, held)) if *held == face && *last + 1 == column + 1 => *last = column + 1,
@@ -10822,7 +12996,9 @@ fn row_as_wanted(start: &BytesStart<'_>, want: &RowWant) -> BytesStart<'static> 
     for attribute in start.attributes().flatten() {
         let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
         if matches!(key.as_str(), "hidden" | "ht" | "customHeight")
-            || (want.style.is_some() && matches!(key.as_str(), "s" | "customFormat")) {
+            || (want.style.is_some() && key == "s")
+            || ((want.style.is_some() || want.format_recorded.is_some()) && key == "customFormat")
+            || (want.thickness.is_some() && matches!(key.as_str(), "thickTop" | "thickBot")) {
             continue;
         }
         let value = String::from_utf8_lossy(&attribute.value).into_owned();
@@ -10839,7 +13015,13 @@ fn row_as_wanted(start: &BytesStart<'_>, want: &RowWant) -> BytesStart<'static> 
     }
     if let Some(Some(style)) = want.style {
         rebuilt.push_attribute(("s", style.to_string().as_str()));
+    }
+    if matches!(want.style, Some(Some(_))) || want.format_recorded == Some(true) {
         rebuilt.push_attribute(("customFormat", "1"));
+    }
+    if let Some((top, bottom)) = want.thickness {
+        if top { rebuilt.push_attribute(("thickTop", "1")); }
+        if bottom { rebuilt.push_attribute(("thickBot", "1")); }
     }
     rebuilt
 }
@@ -10855,7 +13037,7 @@ fn with_style(start: &BytesStart<'_>, style: u32) -> BytesStart<'static> {
         let value = String::from_utf8_lossy(&attribute.value).into_owned();
         rewritten.push_attribute((key.as_str(), value.as_str()));
     }
-    rewritten.push_attribute(("s", style.to_string().as_str()));
+    if style != 0 { rewritten.push_attribute(("s", style.to_string().as_str())); }
     rewritten
 }
 
@@ -10931,7 +13113,7 @@ fn flush_inserted_rows(
         let cells = pending.remove(&row).unwrap_or_default();
         pending_rows.remove(&row);
         let want = edits.rows.get(&row).copied();
-        if !cells.is_empty() || want.is_some_and(|want| want.hidden == Some(true) || want.height.is_some() || matches!(want.style, Some(Some(_)))) {
+        if !cells.is_empty() || want.is_some_and(|want| want.hidden == Some(true) || want.height.is_some() || matches!(want.style, Some(Some(_))) || want.thickness.is_some_and(|(top,bottom)|top||bottom) || want.format_recorded == Some(true)) {
             write_inserted_row(writer, row, cells, want, edits.styles)?;
         }
     }
@@ -10943,6 +13125,87 @@ fn flush_inserted_rows(
 /// `None` to take any colour away. Done as string surgery so the streaming
 /// cell patcher stays untouched; a worksheet part never holds a `<sheetPr` or a
 /// raw `>` anywhere but in this one element's start tag.
+fn set_header_footer_in_worksheet(xml: &str, requested: Option<&crate::ir::HeaderFooter>) -> Result<String, XlsxError> {
+    let spans = root_child_spans(xml, "headerFooter")?;
+    let mut reader = Reader::from_str(xml);
+    let root = loop {
+        match reader.read_event().map_err(XlsxError::Xml)? {
+            Event::Start(start) | Event::Empty(start) => break String::from_utf8(start.local_name().as_ref().to_vec())
+                .map_err(|e| XlsxError::InvalidData(e.to_string()))?,
+            Event::Eof => return Err(XlsxError::InvalidData("worksheet has no root".into())),
+            _ => {}
+        }
+    };
+    let fragment = if let Some(footer) = requested {
+        let original = spans.first().map(|(a, b)| &xml[*a..*b])
+            .unwrap_or("<headerFooter xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"></headerFooter>");
+        let mut attrs = Vec::new();
+        if footer.different_first { attrs.push(("differentFirst", "1".into())); }
+        if footer.different_odd_even { attrs.push(("differentOddEven", "1".into())); }
+        if !footer.scale_with_doc { attrs.push(("scaleWithDoc", "0".into())); }
+        if !footer.align_with_margins { attrs.push(("alignWithMargins", "0".into())); }
+        let mut fragment = table_root_attributes_removed(original, &attrs,
+            &["differentFirst", "differentOddEven", "scaleWithDoc", "alignWithMargins"])?;
+        let mut reader = Reader::from_str(&fragment);
+        let qname = loop {
+            match reader.read_event().map_err(XlsxError::Xml)? {
+                Event::Start(start) | Event::Empty(start) => break String::from_utf8(start.name().as_ref().to_vec())
+                    .map_err(|e| XlsxError::InvalidData(e.to_string()))?,
+                _ => {}
+            }
+        };
+        if fragment.ends_with("/>") {
+            fragment.truncate(fragment.len() - 2);
+            fragment.push_str(&format!("></{qname}>"));
+        }
+        let prefix = qname.rsplit_once(':').map(|(prefix, _)| format!("{prefix}:")).unwrap_or_default();
+        for (tag, units) in [("oddHeader", &footer.odd_header), ("oddFooter", &footer.odd_footer),
+            ("evenHeader", &footer.even_header), ("evenFooter", &footer.even_footer),
+            ("firstHeader", &footer.first_header), ("firstFooter", &footer.first_footer)]
+        {
+            for (a, b) in root_child_spans(&fragment, tag)?.into_iter().rev() { fragment.replace_range(a..b, ""); }
+            if !units.is_empty() {
+                let qualified = format!("{prefix}{tag}");
+                let child = format!("<{qualified}>{}</{qualified}>", escape(&crate::string_value::encode(units)));
+                fragment = append_xml_child(&fragment, "headerFooter", &child)?;
+            }
+        }
+        let mut needed = footer != &crate::ir::HeaderFooter::default();
+        if !needed {
+            let mut reader = Reader::from_str(&fragment);
+            let mut depth = 0usize;
+            loop {
+                match reader.read_event().map_err(XlsxError::Xml)? {
+                    Event::Start(start) => {
+                        if depth > 0 { needed = true; }
+                        else if start.attributes().flatten().any(|a| !a.key.as_ref().starts_with(b"xmlns")) { needed = true; }
+                        depth += 1;
+                    }
+                    Event::Empty(_) if depth > 0 => needed = true,
+                    Event::End(_) => depth = depth.saturating_sub(1),
+                    Event::Eof => break,
+                    _ => {}
+                }
+            }
+        }
+        if needed { fragment } else { String::new() }
+    } else { String::new() };
+    let mut result = xml.to_string();
+    if let Some((first, _)) = spans.first() {
+        for (a, b) in spans.iter().rev() { result.replace_range(*a..*b, ""); }
+        result.insert_str(*first, &fragment);
+    } else if !fragment.is_empty() {
+        let mut at = xml_root_close(xml, &root)?.0;
+        for tag in ["rowBreaks", "colBreaks", "customProperties", "cellWatches", "ignoredErrors", "smartTags",
+            "drawing", "legacyDrawing", "legacyDrawingHF", "picture", "oleObjects", "controls", "webPublishItems", "tableParts", "extLst"]
+        {
+            if let Some((start, _)) = root_child_spans(xml, tag)?.first() { at = at.min(*start); }
+        }
+        result.insert_str(at, &fragment);
+    }
+    Ok(result)
+}
+
 fn set_tab_color_in_worksheet(xml: &str, colour: &Option<String>) -> String {
     let element = colour.as_ref().map(|hex| format!("<tabColor rgb=\"FF{hex}\"/>"));
     if let Some(pr_at) = xml.find("<sheetPr") {
@@ -11247,7 +13510,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                                 }
                                 new_start.push_attribute((key, std::str::from_utf8(&attr.value).unwrap_or("")));
                             }
-                            if let Some(style) = restyle {
+                            if let Some(style) = restyle.filter(|style| *style != 0) {
                                 new_start.push_attribute(("s", style.to_string().as_str()));
                             }
                             if let Some(cell_type) = value.cell_type() {
@@ -11458,7 +13721,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     close_cols(&mut writer)?;
                     seen_cols = true;
                 }
-                if name == "sheetData" && !pending.is_empty() {
+                if name == "sheetData" && (!pending.is_empty() || !pending_rows.is_empty()) {
                     writer
                         .write_event(Event::Start(e.clone()))
                         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
@@ -11526,7 +13789,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                             if key == "t" || (key == "s" && restyle.is_some()) { continue; }
                             new_start.push_attribute((key, std::str::from_utf8(&attr.value).unwrap_or("")));
                         }
-                        if let Some(style) = restyle {
+                        if let Some(style) = restyle.copied().filter(|style| *style != 0) {
                             new_start.push_attribute(("s", style.to_string().as_str()));
                         }
                         if let Some(cell_type) = value.cell_type() {
@@ -11559,7 +13822,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                                 restyled.push_attribute(attr);
                             }
                         }
-                        restyled.push_attribute(("s", style.to_string().as_str()));
+                        if *style != 0 { restyled.push_attribute(("s", style.to_string().as_str())); }
                         writer.write_event(Event::Empty(restyled)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         continue;
                     }
@@ -11582,6 +13845,190 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_empty_row_formats_survive_added_sheet_and_legacy_ir_edits() {
+        let encoded = "504b030414000600080000002100a453c5cf4e01000008040000130008025b436f6e74656e745f54797065735d2e786d6c20a2040228a000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ac93cb4ec3301045f748fc43e42d8addb2400835ed82c712ba281f60e24962d52f79dcd2fe3d13f7b140a1156a37b162cfdc733d339ecc36d6146b88a8bdabd8988f5801aef64abbb6629f8bb7f2911598a453d2780715db02b2d9f4f666b2d806c082b21d56ac4b293c098175075622f7011c9d343e5a99e837b622c87a295b10f7a3d183a8bd4be052997a0d369dbc4023572615af1bdade3989609015cfbbc09e55311982d1b54ce454ac9dfa4529f7044e9939063b1df08e6c303148e84ffe06ecf33ea834512b28e632a67769c986d818f1ede3f2cbfb253f2d32e0d2378dae41f97a65a9021c4304a9b00348d6f0bc722bb53bf83ec1cfc128f232beb291fe7e59f88c8f44fd0691bf975bc832678098b606f0da65cfa2a7c8d4af79f401697223fc9f7e18cd3ebb0c24043169380ee750938f449afa8baf0bfdbb52a006d822bfe3e90f000000ffff0300504b030414000600080000002100b5553023f40000004c0200000b0008025f72656c732f2e72656c7320a2040228a000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ac924d4fc3300c86ef48fc87c8f7d5dd9010424b774148bb21547e8049dc0fb58da3241bddbf271c10541a8303477fbd7efccadbdd3c8deac821f6e234ac8b12143b23b677ad8697fa7175072a2672964671ace1c41176d5f5d5f699474a792876bd8f2aabb8a8a14bc9df2346d3f144b110cf2e571a0913a51c86163d99815ac64d59de62f8ae01d54253edad86b0b737a0ea93cf9b7fd796a6e90d3f88394cecd29915c8736267d9ae7cc86c21f5f91a5553683969b0629e723a22795f646cc0f3449bbf13fd7c2d4e9cc852223412f832cf47c725a0f57f5ab434f1cb9d79c43709c3abc8f0c9828b1fa8de010000ffff0300504b030414000600080000002100e070e75ad30300009b0900000f000000786c2f776f726b626f6f6b2e786d6cac56db6ee336107d2fd07f10f4ce8894a82be22c645dd000c92248bc490b185830121dab914495a26c07c1fe7b87f225b7a270b3356cd22487876766ce503afdb2696a63c5655f89766292136c1abc2d4459b50f13f3db2c478169f48ab525ab45cb27e613efcd2f67bffe72ba16f2f15e88470300da7e622e95ea22cbea8b256f587f223adec2ca42c8862918ca07abef246765bfe45c35b56563ec590dab5a738b10c96330c46251153c15c5d0f0566d4124af9902fafdb2eafa3d5a531c03d730f93874a8104d0710f7555da9a711d4349a223a7f688564f735b8bd21aeb191f0f5e0473034f6fe2458fa7054531552f462a14e00dada92fee03fc116216f42b0f91883e390a825f9aad2393cb092de275979072cef058ce09f462320ad512b1104ef9368ee819b6d9e9d2eaa9adf6ea56bb0aefbca1a9da9da346ad6abacac142f27a60f43b1e66f26e4d04d87aa865507bbb66f5a6707395f49a3e40b36d46a0642dec34f4c1bdb0ec6da128411d78acb96299e8856810e777efdace646ec642940e1c635ff6ba82487c2027d81afd0b22262f7fd15534b6390f5c44ca2f9b71edc9fcba7e1cf6a1e775dca149b5f8882d5f3196fbab9d8546875cfd09af50d2a189426023f3c821d327f255ff6b156fe838059a1a3624158b6d4b7ffdf87083c90d15ea4574a1af0ff3cbd8044ddb015a40dc451eeaafa1cf2127c7f4e30ce3ccf2628a36e82a89bf92874f300797190d29cc641e0873fc00be9458560835aeea4a031272685bc7f58ba649bfd0ac1d150952fe73fe3dd07e9fe5db35ffba13dd597de6dc5d7fd8b68f4d0d8dc556d29d61313111bbc797a3b5c8f8b7755a99620a6105330d9cefdc6ab87253026aeaff74171686613f3d98e732f4b68886c3bf721004986a681e7a334cf129c850144078f8cac5794c6eb15a88dbdd18e257123065970b8c7f5d5aba34b4c4346fa0c795e92317bfb6d209d024a4077a36148b01d6a0bbe5117bd1a7b505f05f408c5b18f438a70e6b88806a18d02ead828a1a99db97e96665357e7473f1ea2ffe3921c8b20da3f7734cb25936a2659f1084fab6bbe98b21e94b47508f8be263b758329768022cd498e2809319a4e3d8adc34775c9fa449e6e62f64b5fb8b4f5e518135eee64c0d50beba72c771a4db7c377b985c6c2776797a5374d175aae3bedbfd6f8637e07dcd8f34ce6f8f344cbe5ece2e8fb4bdc866dfeff2638de3cb691a1f6f1f5f5fc77fccb2dff74758ff1850eb5dc2534243ec6431729c8422ea430505397691437d9ab8749a11ecbf24bc5e17abcfe5dba6d65e91c9ebb788dd65a4f3afc1a3dd2b96d173b55b826b602cbd91b8a63fd6d701edec6f000000ffff0300504b0304140006000800000021008d87da70e00000002d0200001a000801786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c7320a2040128a0000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ac91cb6ac3301045f785fe83987d3d760aa594c8d99442b6c5fd00218f1fc496846692d67f5fe182dd404836d908ae06dd73246d773fe3a04e14b9f74e4391e5a0c8595ff7aed5f0557d3cbd826231ae368377a46122865df9f8b0fda4c1483ac45d1f58a516c71a3a91f086c8b6a3d170e603b934697c1c8da4185b0cc61e4c4bb8c9f3178cff3ba03ceb54fb5a43dcd7cfa0aa2924f2ed6edf34bda5776f8f2339b98040966948175095892d8986bf9c2547c0cbf8cd3df1929e8556fa1c715e8b6b0ec53d1dbe7d3c704724abc7b2c5384f16193cfbe4f2170000ffff0300504b030414000600080000002100dac194bbdf0100001a04000018000000786c2f776f726b7368656574732f7368656574312e786d6c9c93db8adb301086ef0b7d07a17b5b3ee4b0367196ddcd86ee45a1b4dbde2bf2d816b12423299b84d277efd86e928550080b366864cff7ffa3192dee0faa256f609d34baa0711851025a9852eabaa03f5fd7c11d25ce735df2d66828e8111cbd5f7efeb4d81bbb750d802748d0aea08df75dce98130d28ee42d381c62f95b18a7b0c6dcd5c67819743926a59124533a6b8d47424e4f61686a92a296065c44e81f623c442cb3dfa778decdc89a6c42d38c5ed76d705c2a80e111bd94a7f1ca0942891bfd4da58be69b1ee433ce1821c2c3e09bee94966d8bf52525258e34ce54324b3d1f375f919cb181767d275fd3761e209b3f026fb065e50c9c72cc5d3332bb9c0d20fc26667587f5c36dfc9b2a0bf2749faf4bc7a4c82f553bc0e26b3bb79f018675990a651946449fa3c9d467fe872514aec705f15b15015f421c91fa6942d17c3fcfc92b077efd6c4f3cd0f684178408d98927e3c37c66cfb1f5f702bea53d955ee7a18cf6f969450f15debbf9bfd179075e3113245d37dd7f3f2b8022770dc10132617132beef97261cd9e60ebf0bcc4ce79a346e460e2bfe9ff7250e1f69cd1fca8d9f11abe725b4bed480bd5606c4e891d9d4721aebde97abb73d4d8188fbe4e51837710d0701462572a63fc29e80fe87cab977f010000ffff0300504b030414000600080000002100ed55d4c8c50700001522000013000000786c2f7468656d652f7468656d65312e786d6cec5add6b24b9117f0fe47f10fd3e3bdd3ddf66678ff95cdfaeed35ebd90df728cf68a6b556b71a49637b0807610d07f712085c425e12f29687107290831c21903fc6b04b72f9235252f74cb73c9adbf57e709760fba55bf3abd2afab4a55d552dfffe43266e89c084979d2f5827bbe874832e5339a2cbadeb3c9b8d2f69054389961c613d2f556447a9f3cf8e94feee33d15919820904fe41eee7a9152e95eb52aa7308ce53d9e92047e9b73116305b762519d097c017a63560d7dbf598d314d3c94e018d43e99cfe994a0ebab2faeaffe717df57befc17a821183591225f5c0948913ad9e5852063b3b0b3442aee48009748e59d783b966fc62422e958718960a7ee87abef9f3aa0fee57f15e2ec4d40ed992dcd8fce572b9c0ec2c34738ac5e966527f14b6ebc146bf0130b58d1bb5f5ff469f01e0e9149e34e352d619349a7e3bccb1255076e9d0dd6905351b5fd25fdbe21c749afdb06ee937a04c7f7dfb19c79dd1b061e10d28c337b6f03d3fec776a16de80327c730b5f1ff55ae1c8c21b50c46872b68d6eb6daed668ede40e69ced3be19d66d36f0d7378818268d844979e62ce13b52bd662fc828b31003490614513a4562999e32944722f555ca2219529c32b0fa538e11286fd300820f4ea7eb8f93716c77b0497a4352f6022b786341f24a782a6aaeb3d02ad5e09f2eadb6faf5f7e73fdf26fd75757d72fff820ee82252992a4b6e1f278bb2dc777ffcd57f7ef70bf4efbffee1bbaf7eedc6cb32fef59fbf7cfdf77f7e9f7a586a85295efde6ebd7df7cfdeab7bffcd79fbe7268ef097c5a864f684c243a2217e8298fe1018d296cfee454dc4e6212616a49e008743b548f5464018f5698b9707d629bf0b9802ce3023e5cbeb0b89e4462a9a863e6c7516c010f39677d2e9c0678ace72a5978b24c16eec9c5b28c7b8af1b96bee014e2c078f9629a457ea5239888845f398e144e105498842fa377e4688e3e93ea3d4b2eb219d0a2ef95ca1cf28ea63ea34c9849e5a815408edd318fcb2721104575bb6397c8efa9cb99e7a48ce6d242c0bcc1ce4278459667c88970ac72e95131cb3b2c10fb08a5c244f56625ac68da4024f2f08e368342352ba649e0878de92d31f63486c4eb71fb2556c2385a2672e9d0798f33272c8cf06118e5327679a4465eca7f20c4214a363ae5cf0436eaf107d0f7ec0c94e773fa7c472f79b13c1334870654a4580e85f96c2e1cb8784dbeb71c5e698b8b24c4fc45676ed09ea8c8efe726185f601210c5fe01921e8d9a70e067d9e5a362f483f8a20abec1357603dc276aceafb8448824c5fb39d220fa8b442f6842cf80e3e87ab1b89678593188b5d9a8fc0eb56e89e0a588c8ee77cc2a66765e011851610e2c5699427127494827bb44beb7184addaa5efa53b5e57c2f2dfdbac3158972f6ebb2e4186dc5a0612fb5bdb66829935411130134cd1812bdd8288e5fe4244d75523b674cacded455bb8011a23abdf8969f2a6e6e7080bc12f7e98dee7a3753d6ec5efd3efecca2bfb37ba9c5db8ffc1de668897c9318172b29db8ee5a9bbbd6c6fbbf6f6d76ade5bb86e6aea1b96b685caf601fa5a1297a18686f8aad1eb3f113efdcf79953c64ed48a910369b67e24bcd6ccc63068f6a4ccc6e4661f308de0523f0f4c60e116021b1924b8fa1955d1498453d81f0acc2ee642e6aa1712a55cc2b69119367baae4866eb3f9b48c0ff92cdbee34fb4b7e6642895531ee3760e3291b87ad2a95a19bad7c50f35b53376c1766ab754d40cbde864469329b44cd41a2b51e7c0309bd73f66158741c2cda5afdda555ba6006a1bafc07b3782b7f5aed7a8678c60470e7af499f653e6eab577b5733ea8a7771993952300b616b73dddd15c773e9e7eba2cd4dec2d31609e3942cac6c12c657a6c19311bc0de7d159de77ffbe80bbadaf3b854b2d7ada14ebd550d068b53f86af7512b9911b5852ce142c4117b0c64358741e9ae2b4ebcd61df182ee3148247ea772fcc1670003355225bf1ef925a5221d510cb28b3b8c93a997f62aa88408cc65d4f3fff261c5862924846ae034bf7c74a2ed40beec7460ebc6e7b99cce764aaca7e2f8d684b67b790e2b364e1fcd588bf3b584bf225b8fb249a5da053b6144f318458a31568efcea884e3832073f58cc279d8269315f177a332e5d9df3ae42af231666984f39252cee619dc14940d1d73b7b141e92e7f6630e8b6094f17bac2be77d97d73add6962bea63a7289a565ad165d39d4d3f5e952fb12aaaa8c52acbdd37736e679dec20509d65e2fd6b7f895a3199454d33decec33a69e7a336b50fd81194aa4f7387dd3645c26989772dfd2077336a758558379626f0cde179f96c9b9fbe80e4318453c425cb4ebb590277a6b54c8f85f1ed299fadf24b26b34493f95c37a5592a7f4ae688ce2ebb5ee8ea1cf3c3e3bc1b6009a04dcf0b2b6c23e8ecf66c415dec72d16cc16e84b336f646bf6a0b6f24d6c7ac1b61b3b5e8a2ad2ed727eaba5737336b87654f6dd2b0b1145c6d5b118eff0586d6393bcccd722fe4994b9577da7085968276bd9ffb8d5e7d10360615bfdd1855eab5ba5f69377ab54aafd1a805a346e00ffbe1e7404f4571d0c8be7e18c369105be5df4098f1adef20e2f581d7bd298fabdc7ce75035de37df4104a1eb3b8889fec8c1034702ad7014d4c35e38a80c8641b3520f87cd4abb55eb5506617318f6a06837c7bdcf3d746ec0417f381c8f1b61a539005cddef352abd7e6d5069b647fd701c8cea431fc079f9b984b7189d73735bc0a5e1f5e0bf000000ffff0300504b03041400060008000000210098e2eb1db7020000540600000d000000786c2f7374796c65732e786d6ca4554b6edb3010dd17e81d08ee157d62b9b6212988e30808d016059202ddd2126513e14720e9446ed16b14e80d7a861e28e7e850922d1901da22d998c321f5e6cdbce138b96804470f541ba6648ac3b300232a0b5532b949f1e7bbdc9b61642c9125e14ad214efa9c117d9db3789b17b4e6fb7945a0410d2a4786b6dbdf07d536ca920e64cd554c249a5b42016b67ae39b5a53521af791e07e1404535f10267187b010c5ff8008a2ef77b557285113cbd68c33bb6fb13012c5e2662395266b0e549b70420ad484531da1461f82b4de6771042bb432aab26780ebabaa62057d4e77eecf7d520c4880fc32a430f683e824f746bf1069e26bfac09c7c384b2a25ad4185da490b6202515782c5bd548f327747ced9ddca12f3153d100e9e10fb595228ae34b2201d54aef548226877e3b2b6caa08f446bf5e8ee564430beefce22e7f05ddc7e3170ce383fb2885c40706409c865a996396c506fdfed6b0827a1b33a98f6de3f6e6f34d987513cfac06f0366c95ae9123a79c8ffe0ca124e2b0b4435db6cdd6a550dbf6b652da89d2525231b250977a974204703d22928e7b7aedbbf5427d84d85e44ee4c2de94298677e38a70302191deecf0ba8dc31fa375d8af86454d758a0f8823da27a48fe191d337c54fbf7e3efdfe019dd243a0f58e71cb64cfbed81928d1b2f3f58d31a40051ca66284ae034b1eef1b5e53ac685da94b4223b6eef8e87291eec0fb4643b111d6f7d620fcab610291eecf74ebb70ea62d0c6be37d070b0a29d6629fe76bd7c375f5de791370b96336f724e636f1e2f575e3cb95aae56f93c8882abefa311f08a01d04eac2c81a7b5301cc684ee93ed53bc1d7c291e6d3afa6dd702ed31f779340d2ee330f0f2f320f4265332f366d3f3d8cbe3305a4d27cbeb388f47dce3170e8ac00fc36ee438f2f1c23241399307ad0e0a8dbd20126cff92847f50c21ffe0eb23f000000ffff0300504b0304140006000800000021004033a3418e010000d102000011000801646f6350726f70732f636f72652e786d6c20a2040128a0000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ac92cb4a03311486f782ef3064dfa6538b97613a0595ae14042b8abb901cebe04c6648a2b5bbd2a22008ea565c88b8f0020aba528b2f93b6be8699e9c58aae44c822c9f9cfc77ffec42ded8781b50742fa112f223b9b4316701a319f578b68ad52cecc224b2ac21909220e455407894adee4844b6387460256441483503e48cb90b874685c44db4ac50ec6926e434864d628b8296e452224ca1c4515c784ee902ae07c2e378d43508411457002ccc423221a20191d21e35d11a40046310410025712db591b7f69158850feda9056c694a1afeab1996960779ccd68bf3852ef4b7f24acd56ad9da546ac3f8b7f1c6f2d26a3a6ac6e749561490e732ea50014445c2d38dd3dee55db77dd2699f7f5cbfebe68d6e5deae68b6e3e26fbe6956ebde9d6ad6e5de8c699d57d38ea3d3d770f0f74a3f1717fd1793d76f1182c093e20522d9b37daf281cdd7ff81ff9369fca771f587006699009c7e5cc3cafad4c262a58cbc7c2e3f9db16db32af69c5328388599cdc4f2b7fe2490fe453830fe67e210e0b9f8c727f43e010000ffff0300504b0304140006000800000021003e78ea969d0100001903000010000801646f6350726f70732f6170702e786d6c20a2040128a00001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009c92b16edb301086f7007d07817b4c390d82c0a018144e8b0c2962c04e76963ad944299220cf82dd315ef23619b3e46dfc2239498823a79dbafd77ffe9d7c723c5d5a6b659033119ef0a361ee52c03a77d69dcb260f78b1fa7972c4ba85ca9ac7750b02d247625bf9c8859f401221a481945b854b0156298709ef40a6a9546643b722a1f6b8554c625f75565345c7bbdaec1213fcbf30b0e1b045742791a0e81ac4f9c34f8bfa1a5d72d5f7a586c03014bf12d046bb4423aa5fc6974f4c957987ddf68b0820f4d417473d0eb68702b73c187a5986b65614ac1b2523681e01f0d7103aa5dda4c9998a46870d280461fb364fed0dace58f64b2568710ad6a8689443c26ac7faa2d336248c72bf7bdeef5ef78fcffbc79756ec9e04a7c1deece4f09ba136e772dc0d90381e6c037a20328e5117062da4bb6aa622fe837c3c24ef187aee1e67eed751d3223ef17547a73f7dca9efa3a28b725e3a06e8dfb9deec3c25f2b84f7b51e37c57ca52294741387b51f1ae286361a6d1b325d29b784f27de66fa37d040ffd4b97e38b51fe35a7fb1df404ff78d3f20d0000ffff0300504b01022d0014000600080000002100a453c5cf4e010000080400001300000000000000000000000000000000005b436f6e74656e745f54797065735d2e786d6c504b01022d0014000600080000002100b5553023f40000004c0200000b00000000000000000000000000870300005f72656c732f2e72656c73504b01022d0014000600080000002100e070e75ad30300009b0900000f00000000000000000000000000ac060000786c2f776f726b626f6f6b2e786d6c504b01022d00140006000800000021008d87da70e00000002d0200001a00000000000000000000000000ac0a0000786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c73504b01022d0014000600080000002100dac194bbdf0100001a0400001800000000000000000000000000cc0c0000786c2f776f726b7368656574732f7368656574312e786d6c504b01022d0014000600080000002100ed55d4c8c5070000152200001300000000000000000000000000e10e0000786c2f7468656d652f7468656d65312e786d6c504b01022d001400060008000000210098e2eb1db7020000540600000d00000000000000000000000000d7160000786c2f7374796c65732e786d6c504b01022d00140006000800000021004033a3418e010000d10200001100000000000000000000000000b9190000646f6350726f70732f636f72652e786d6c504b01022d00140006000800000021003e78ea969d0100001903000010000000000000000000000000007e1c0000646f6350726f70732f6170702e786d6c504b050600000000090009003e020000511f00000000";
+        let bytes: Vec<u8> = encoded.as_bytes().chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect();
+        let book = crate::parse_xlsx(&bytes).unwrap();
+        for index in [2, 5] {
+            let row = book.sheets[0].rows.iter().find(|row| row.index == index).unwrap();
+            assert_eq!(row.format_recorded, Some(true));
+            assert_eq!(row.height, None);
+            assert!(!book.sheets[0].band_styles.rows.contains_key(&index));
+        }
+        assert_eq!(XlsxEditor::new(&bytes).unwrap().save().unwrap(), bytes);
+        let blank_encoded = "504b030414000600080000002100a453c5cf4e01000008040000130008025b436f6e74656e745f54797065735d2e786d6c20a2040228a000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ac93cb4ec3301045f748fc43e42d8addb2400835ed82c712ba281f60e24962d52f79dcd2fe3d13f7b140a1156a37b162cfdc733d339ecc36d6146b88a8bdabd8988f5801aef64abbb6629f8bb7f2911598a453d2780715db02b2d9f4f666b2d806c082b21d56ac4b293c098175075622f7011c9d343e5a99e837b622c87a295b10f7a3d183a8bd4be052997a0d369dbc4023572615af1bdade3989609015cfbbc09e55311982d1b54ce454ac9dfa4529f7044e9939063b1df08e6c303148e84ffe06ecf33ea834512b28e632a67769c986d818f1ede3f2cbfb253f2d32e0d2378dae41f97a65a9021c4304a9b00348d6f0bc722bb53bf83ec1cfc128f232beb291fe7e59f88c8f44fd0691bf975bc832678098b606f0da65cfa2a7c8d4af79f401697223fc9f7e18cd3ebb0c24043169380ee750938f449afa8baf0bfdbb52a006d822bfe3e90f000000ffff0300504b030414000600080000002100b5553023f40000004c0200000b0008025f72656c732f2e72656c7320a2040228a000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ac924d4fc3300c86ef48fc87c8f7d5dd9010424b774148bb21547e8049dc0fb58da3241bddbf271c10541a8303477fbd7efccadbdd3c8deac821f6e234ac8b12143b23b677ad8697fa7175072a2672964671ace1c41176d5f5d5f699474a792876bd8f2aabb8a8a14bc9df2346d3f144b110cf2e571a0913a51c86163d99815ac64d59de62f8ae01d54253edad86b0b737a0ea93cf9b7fd796a6e90d3f88394cecd29915c8736267d9ae7cc86c21f5f91a5553683969b0629e723a22795f646cc0f3449bbf13fd7c2d4e9cc852223412f832cf47c725a0f57f5ab434f1cb9d79c43709c3abc8f0c9828b1fa8de010000ffff0300504b03041400060008000000210015e6b52fd10300009b0900000f000000786c2f776f726b626f6f6b2e786d6cac566b6fab3810fdbed2fe07c477171b0c24a8e9154f6da5f6aa6a73db5d29d295034ec316306b4c92aabaff7dc7e4d5c76a95eddd2831b13d1c9f99393370fe655357c68acbae14cdc42467d83478938ba26c1e27e6b7698646a6d129d614ac120d9f98cfbc33bf5cfcfacbf95ac8a7b9104f060034ddc45c2ad50696d5e54b5eb3ee4cb4bc819d8590355330958f56d74ace8a6ec9b9aa2bcbc6d8b36a5636e6162190a76088c5a2cc7922f2bee68dda82485e3105f4bb65d9767bb43a3f05ae66f2a96f512eea1620e66555aae701d434ea3cb87c6c8464f30adcde10d7d848f87af02318067b7f126c7d38aa2e73293ab15067006d6d497ff09f608b903721d87c8cc16948d4927c55ea1c1e5849ef93acbc0396770423f8a7d108486bd04a00c1fb249a7be0669b17e78bb2e2f75be91aac6dbfb25a67aa328d8a752a2d4ac58b89e9c354acf99b05d9b7515f56b0eb60d7f64debe220e71b69147cc1fa4a4d41c87bf8896963dbc1585b8230c24a71d930c563d128d0e1ceaf9fd5dc801d2f0528dcb8e57ff5a5e45058a02ff0154696076cdedd30b5347a594dcc38987debc0fd997ceeff2c6761db264cb1d995c859359bf2ba9d894d89567386d6acab51cea03411f8e111ec90d92bf9b28fb5f21f04cc721d150bc2b2a5befdff3e44e0810cf622bd51d280ff97c91524ea8ead206d208e6257d5979097d1f7176cdb1149931439991d21eafb148d5dd7433149484c33d70d53fc03bc905e900bd6abe54e0a1a736252c8fb87ad6bb6d9ef101cf465713cff05ef3e485fdf0dfbbd1fda53ddf4ee4bbeee8ea2d15363f3503685584f4c446cf0e6f9ed743d6c3e94855a8298c69882c976ed375e3e2e8131717d7d1f14876636315f68e8c7a1334e514cdd18d1cc0951e47b3a1e5118b90487de783430b25e511ada2b501bae463394c49de865cea18febd6aba34b4c4306fa0c795990217bfbdb403a399480be0c866382edb1b6e01b75d5a9e10aea2b811ea138f4f198229c3a2ea2a3b18d46d4b1816d62a7ae0f998b5c9d1ffd7808fe8f26391441b07fee68964b26d554b2fc099e56b77c11b10e94b47508f8be261bb9a3083b4091662443948c318a228f2237c91cd727499cbad991ac767ff1c91635b286bb39533d94afaedc611ee831dbad1e1617db855d9ede145d709be8b8efeefe37c33bf0bee2271a67f7271ac65fafa7d727da5ea5d3ef0fd9a9c6e1759484a7db87b7b7e11fd3f4f7fd11d63f06d47a97f084d03176d210394e4ca17b643e1a65d8450ef569ecd22825d83f26bc5ae7abcfe5dba6d65e91f1ebb7885d33d2f9d7e0c1ee15cbe8b8da6d411b184a6f20aee90ff57540bbf81b0000ffff0300504b0304140006000800000021008d87da70e00000002d0200001a000801786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c7320a2040128a0000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ac91cb6ac3301045f785fe83987d3d760aa594c8d99442b6c5fd00218f1fc496846692d67f5fe182dd404836d908ae06dd73246d773fe3a04e14b9f74e4391e5a0c8595ff7aed5f0557d3cbd826231ae368377a46122865df9f8b0fda4c1483ac45d1f58a516c71a3a91f086c8b6a3d170e603b934697c1c8da4185b0cc61e4c4bb8c9f3178cff3ba03ceb54fb5a43dcd7cfa0aa2924f2ed6edf34bda5776f8f2339b98040966948175095892d8986bf9c2547c0cbf8cd3df1929e8556fa1c715e8b6b0ec53d1dbe7d3c704724abc7b2c5384f16193cfbe4f2170000ffff0300504b0304140006000800000021005fee5cecc1010000a403000018000000786c2f776f726b7368656574732f7368656574312e786d6c9c93df6bdb3010c7df07fb1f84de6df967538738259d1bd68741d9d6be2bf2d916b12423294dc2d8ffbeb343d2415e4241029da4fbdcf774a7c5c341f5e41dac934697340e234a400b534bdd96f4f5f73ab8a7c479ae6bde1b0d253d82a30fcbaf5f167b63b7ae03f00409da95b4f37e9833e644078abbd00ca0f1a43156718fa66d991b2cf07a72523d4ba2e88e292e353d11e6f61686691a29a03262a740fb13c442cf3dea779d1cdc99a6c42d38c5ed763704c2a801111bd94b7f9ca09428317f6eb5b17cd363de8738e3821c2c8e04677a0e33ed5f45525258e34ce34324b393e6ebf40b56302e2ea4ebfc6fc2c419b3f02ec7027ea092cf498af30b2bf980a59f84dd5d60e373d9f94ed625fd133f15c963b19a05791a554176bf7e0c56599107695e3ca5ebec5b1665d55fba5cd4122b3c66452c34255dc5942d1753f3bc49d8bbffd6c4f3cd2fe84178c0003125636f6e8cd98e179f712b1a5dd995ef7aeacd174b6a68f8aef73fcdfe3bc8b6f308c951f158f2797dacc009ec35c484497e115171cf913af0167e70db4aed480fcd746b46893d61a210d7de0ca3ef0c911be3bd5167abc3df0058f528c4f7698cf16763547bf95fcb7f000000ffff0300504b030414000600080000002100ed55d4c8c50700001522000013000000786c2f7468656d652f7468656d65312e786d6cec5add6b24b9117f0fe47f10fd3e3bdd3ddf66678ff95cdfaeed35ebd90df728cf68a6b556b71a49637b0807610d07f712085c425e12f29687107290831c21903fc6b04b72f9235252f74cb73c9adbf57e709760fba55bf3abd2afab4a55d552dfffe43266e89c084979d2f5827bbe874832e5339a2cbadeb3c9b8d2f69054389961c613d2f556447a9f3cf8e94feee33d15919820904fe41eee7a9152e95eb52aa7308ce53d9e92047e9b73116305b762519d097c017a63560d7dbf598d314d3c94e018d43e99cfe994a0ebab2faeaffe717df57befc17a821183591225f5c0948913ad9e5852063b3b0b3442aee48009748e59d783b966fc62422e958718960a7ee87abef9f3aa0fee57f15e2ec4d40ed992dcd8fce572b9c0ec2c34738ac5e966527f14b6ebc146bf0130b58d1bb5f5ff469f01e0e9149e34e352d619349a7e3bccb1255076e9d0dd6905351b5fd25fdbe21c749afdb06ee937a04c7f7dfb19c79dd1b061e10d28c337b6f03d3fec776a16de80327c730b5f1ff55ae1c8c21b50c46872b68d6eb6daed668ede40e69ced3be19d66d36f0d7378818268d844979e62ce13b52bd662fc828b31003490614513a4562999e32944722f555ca2219529c32b0fa538e11286fd300820f4ea7eb8f93716c77b0497a4352f6022b786341f24a782a6aaeb3d02ad5e09f2eadb6faf5f7e73fdf26fd75757d72fff820ee82252992a4b6e1f278bb2dc777ffcd57f7ef70bf4efbffee1bbaf7eedc6cb32fef59fbf7cfdf77f7e9f7a586a85295efde6ebd7df7cfdeab7bffcd79fbe7268ef097c5a864f684c243a2217e8298fe1018d296cfee454dc4e6212616a49e008743b548f5464018f5698b9707d629bf0b9802ce3023e5cbeb0b89e4462a9a863e6c7516c010f39677d2e9c0678ace72a5978b24c16eec9c5b28c7b8af1b96bee014e2c078f9629a457ea5239888845f398e144e105498842fa377e4688e3e93ea3d4b2eb219d0a2ef95ca1cf28ea63ea34c9849e5a815408edd318fcb2721104575bb6397c8efa9cb99e7a48ce6d242c0bcc1ce4278459667c88970ac72e95131cb3b2c10fb08a5c244f56625ac68da4024f2f08e368342352ba649e0878de92d31f63486c4eb71fb2556c2385a2672e9d0798f33272c8cf06118e5327679a4465eca7f20c4214a363ae5cf0436eaf107d0f7ec0c94e773fa7c472f79b13c1334870654a4580e85f96c2e1cb8784dbeb71c5e698b8b24c4fc45676ed09ea8c8efe726185f601210c5fe01921e8d9a70e067d9e5a362f483f8a20abec1357603dc276aceafb8448824c5fb39d220fa8b442f6842cf80e3e87ab1b89678593188b5d9a8fc0eb56e89e0a588c8ee77cc2a66765e011851610e2c5699427127494827bb44beb7184addaa5efa53b5e57c2f2dfdbac3158972f6ebb2e4186dc5a0612fb5bdb66829935411130134cd1812bdd8288e5fe4244d75523b674cacded455bb8011a23abdf8969f2a6e6e7080bc12f7e98dee7a3753d6ec5efd3efecca2bfb37ba9c5db8ffc1de668897c9318172b29db8ee5a9bbbd6c6fbbf6f6d76ade5bb86e6aea1b96b685caf601fa5a1297a18686f8aad1eb3f113efdcf79953c64ed48a910369b67e24bcd6ccc63068f6a4ccc6e4661f308de0523f0f4c60e116021b1924b8fa1955d1498453d81f0acc2ee642e6aa1712a55cc2b69119367baae4866eb3f9b48c0ff92cdbee34fb4b7e6642895531ee3760e3291b87ad2a95a19bad7c50f35b53376c1766ab754d40cbde864469329b44cd41a2b51e7c0309bd73f66158741c2cda5afdda555ba6006a1bafc07b3782b7f5aed7a8678c60470e7af499f653e6eab577b5733ea8a7771993952300b616b73dddd15c773e9e7eba2cd4dec2d31609e3942cac6c12c657a6c19311bc0de7d159de77ffbe80bbadaf3b854b2d7ada14ebd550d068b53f86af7512b9911b5852ce142c4117b0c64358741e9ae2b4ebcd61df182ee3148247ea772fcc1670003355225bf1ef925a5221d510cb28b3b8c93a997f62aa88408cc65d4f3fff261c5862924846ae034bf7c74a2ed40beec7460ebc6e7b99cce764aaca7e2f8d684b67b790e2b364e1fcd588bf3b584bf225b8fb249a5da053b6144f318458a31568efcea884e3832073f58cc279d8269315f177a332e5d9df3ae42af231666984f39252cee619dc14940d1d73b7b141e92e7f6630e8b6094f17bac2be77d97d73add6962bea63a7289a565ad165d39d4d3f5e952fb12aaaa8c52acbdd37736e679dec20509d65e2fd6b7f895a3199454d33decec33a69e7a336b50fd81194aa4f7387dd3645c26989772dfd2077336a758558379626f0cde179f96c9b9fbe80e4318453c425cb4ebb590277a6b54c8f85f1ed299fadf24b26b34493f95c37a5592a7f4ae688ce2ebb5ee8ea1cf3c3e3bc1b6009a04dcf0b2b6c23e8ecf66c415dec72d16cc16e84b336f646bf6a0b6f24d6c7ac1b61b3b5e8a2ad2ed727eaba5737336b87654f6dd2b0b1145c6d5b118eff0586d6393bcccd722fe4994b9577da7085968276bd9ffb8d5e7d10360615bfdd1855eab5ba5f69377ab54aafd1a805a346e00ffbe1e7404f4571d0c8be7e18c369105be5df4098f1adef20e2f581d7bd298fabdc7ce75035de37df4104a1eb3b8889fec8c1034702ad7014d4c35e38a80c8641b3520f87cd4abb55eb5506617318f6a06837c7bdcf3d746ec0417f381c8f1b61a539005cddef352abd7e6d5069b647fd701c8cea431fc079f9b984b7189d73735bc0a5e1f5e0bf000000ffff0300504b03041400060008000000210098e2eb1db7020000540600000d000000786c2f7374796c65732e786d6ca4554b6edb3010dd17e81d08ee157d62b9b6212988e30808d016059202ddd2126513e14720e9446ed16b14e80d7a861e28e7e850922d1901da22d998c321f5e6cdbce138b96804470f541ba6648ac3b300232a0b5532b949f1e7bbdc9b61642c9125e14ad214efa9c117d9db3789b17b4e6fb7945a0410d2a4786b6dbdf07d536ca920e64cd554c249a5b42016b67ae39b5a53521af791e07e1404535f10267187b010c5ff8008a2ef77b557285113cbd68c33bb6fb13012c5e2662395266b0e549b70420ad484531da1461f82b4de6771042bb432aab26780ebabaa62057d4e77eecf7d520c4880fc32a430f683e824f746bf1069e26bfac09c7c384b2a25ad4185da490b6202515782c5bd548f327747ced9ddca12f3153d100e9e10fb595228ae34b2201d54aef548226877e3b2b6caa08f446bf5e8ee564430beefce22e7f05ddc7e3170ce383fb2885c40706409c865a996396c506fdfed6b0827a1b33a98f6de3f6e6f34d987513cfac06f0366c95ae9123a79c8ffe0ca124e2b0b4435db6cdd6a550dbf6b652da89d2525231b250977a974204703d22928e7b7aedbbf5427d84d85e44ee4c2de94298677e38a70302191deecf0ba8dc31fa375d8af86454d758a0f8823da27a48fe191d337c54fbf7e3efdfe019dd243a0f58e71cb64cfbed81928d1b2f3f58d31a40051ca66284ae034b1eef1b5e53ac685da94b4223b6eef8e87291eec0fb4643b111d6f7d620fcab610291eecf74ebb70ea62d0c6be37d070b0a29d6629fe76bd7c375f5de791370b96336f724e636f1e2f575e3cb95aae56f93c8882abefa311f08a01d04eac2c81a7b5301cc684ee93ed53bc1d7c291e6d3afa6dd702ed31f779340d2ee330f0f2f320f4265332f366d3f3d8cbe3305a4d27cbeb388f47dce3170e8ac00fc36ee438f2f1c23241399307ad0e0a8dbd20126cff92847f50c21ffe0eb23f000000ffff0300504b03041400060008000000210062ac9c1e8e010000d102000011000801646f6350726f70732f636f72652e786d6c20a2040128a0000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ac92cd4a03311485f782ef3064dfa6d396a2c3740a2a5d290856147721b9d6c199cc90446b77a5454110d4adb81071e10f28e84a2dbe4cdafa1a66a6b5567425421649eeb91fe79ec4adec8581b50b42fa112f233b9b4316701a319fd7cb68b556cdcc204b2ac21909220e65d404892adef4944b6387460296451483503e48cb90b874685c465b4ac50ec6926e414864d628b8296e462224ca1c451dc7846e933ae07c2e57c22128c28822380166e231118d908c8e91f18e085200a3180208812b89edac8dbfb40a44287f6d482b13cad057cdd8cc34b23bc96674581cabf7a43f16361a8d6ca390da30fe6dbcbeb4b8928e9af179921505e4b98c3a54005191f074eb647071dbef1ef7ba67ef576fba7dad3b17bafdacdb0fc9be7da93bafba73a33be7ba756af5ef0f078f4ffd837ddd6abddf9df75e8e5c3c014b820f88544be68d367d6073cd7fe0ff641aff695cc321805926006718d76765ad30bf50ab222f9fcb9732b66d56cd9e758a45a758da482c7feb4f02195e8423e37f267e023c17fff884de07000000ffff0300504b0304140006000800000021003e78ea969d0100001903000010000801646f6350726f70732f6170702e786d6c20a2040128a00001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009c92b16edb301086f7007d07817b4c390d82c0a018144e8b0c2962c04e76963ad944299220cf82dd315ef23619b3e46dfc2239498823a79dbafd77ffe9d7c723c5d5a6b659033119ef0a361ee52c03a77d69dcb260f78b1fa7972c4ba85ca9ac7750b02d247625bf9c8859f401221a481945b854b0156298709ef40a6a9546643b722a1f6b8554c625f75565345c7bbdaec1213fcbf30b0e1b045742791a0e81ac4f9c34f8bfa1a5d72d5f7a586c03014bf12d046bb4423aa5fc6974f4c957987ddf68b0820f4d417473d0eb68702b73c187a5986b65614ac1b2523681e01f0d7103aa5dda4c9998a46870d280461fb364fed0dace58f64b2568710ad6a8689443c26ac7faa2d336248c72bf7bdeef5ef78fcffbc79756ec9e04a7c1deece4f09ba136e772dc0d90381e6c037a20328e5117062da4bb6aa622fe837c3c24ef187aee1e67eed751d3223ef17547a73f7dca9efa3a28b725e3a06e8dfb9deec3c25f2b84f7b51e37c57ca52294741387b51f1ae286361a6d1b325d29b784f27de66fa37d040ffd4b97e38b51fe35a7fb1df404ff78d3f20d0000ffff0300504b01022d0014000600080000002100a453c5cf4e010000080400001300000000000000000000000000000000005b436f6e74656e745f54797065735d2e786d6c504b01022d0014000600080000002100b5553023f40000004c0200000b00000000000000000000000000870300005f72656c732f2e72656c73504b01022d001400060008000000210015e6b52fd10300009b0900000f00000000000000000000000000ac060000786c2f776f726b626f6f6b2e786d6c504b01022d00140006000800000021008d87da70e00000002d0200001a00000000000000000000000000aa0a0000786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c73504b01022d00140006000800000021005fee5cecc1010000a40300001800000000000000000000000000ca0c0000786c2f776f726b7368656574732f7368656574312e786d6c504b01022d0014000600080000002100ed55d4c8c5070000152200001300000000000000000000000000c10e0000786c2f7468656d652f7468656d65312e786d6c504b01022d001400060008000000210098e2eb1db7020000540600000d00000000000000000000000000b7160000786c2f7374796c65732e786d6c504b01022d001400060008000000210062ac9c1e8e010000d1020000110000000000000000000000000099190000646f6350726f70732f636f72652e786d6c504b01022d00140006000800000021003e78ea969d0100001903000010000000000000000000000000005e1c0000646f6350726f70732f6170702e786d6c504b050600000000090009003e020000311f00000000";
+        let blank_bytes: Vec<u8> = blank_encoded.as_bytes().chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect();
+        let mut blank = crate::parse_xlsx(&blank_bytes).unwrap();
+        assert!(blank.sheets[0].rows.is_empty());
+        blank.sheets[0].rows = book.sheets[0].rows.clone();
+        let mut existing_sheet_editor = XlsxEditor::new(&blank_bytes).unwrap();
+        existing_sheet_editor.apply_workbook(&blank).unwrap();
+        let inserted = existing_sheet_editor.save().unwrap();
+        let inserted = crate::parse_xlsx(&inserted).unwrap();
+        assert_eq!(inserted.sheets[0].rows.iter().map(|row| (row.index, row.format_recorded, row.height)).collect::<Vec<_>>(),
+            vec![(2, Some(true), None), (5, Some(true), None)]);
+        let xml = write_new_sheet(&book.sheets[0], &BTreeMap::new(), &BTreeMap::new(),
+            &BTreeMap::new(), None, &|_| false).unwrap();
+        let rebuilt = replace_package_parts(&bytes,
+            BTreeMap::from([("xl/worksheets/sheet1.xml".to_owned(), xml)])).unwrap();
+        let reopened = crate::parse_xlsx(&rebuilt).unwrap();
+        assert_eq!(reopened.sheets[0].rows.iter().map(|row| (row.index, row.format_recorded, row.height)).collect::<Vec<_>>(),
+            vec![(2, Some(true), None), (5, Some(true), None)]);
+        let mut value = serde_json::to_value(&book).unwrap();
+        for row in value["sheets"][0]["rows"].as_array_mut().unwrap() {
+            row.as_object_mut().unwrap().remove("format_recorded");
+        }
+        let mut legacy: crate::ir::Workbook = serde_json::from_value(value).unwrap();
+        legacy.sheets[0].rows.iter_mut().find(|row| row.index == 2).unwrap().hidden = true;
+        let mut editor = XlsxEditor::new(&bytes).unwrap();
+        editor.apply_workbook(&legacy).unwrap();
+        let saved = editor.save().unwrap();
+        let edited = crate::parse_xlsx(&saved).unwrap();
+        for index in [2, 5] {
+            let row = edited.sheets[0].rows.iter().find(|row| row.index == index).unwrap();
+            assert_eq!(row.format_recorded, Some(true));
+            assert_eq!(row.hidden, index == 2);
+            assert!(!edited.sheets[0].band_styles.rows.contains_key(&index));
+        }
+    }
+
+
+    #[test]
+    fn copied_part_graph_keeps_self_fragments_and_avoids_case_collisions() {
+        let root = "xl/worksheets/Sheet1.xml";
+        let source = HashMap::from([
+            (root.to_string(), b"<worksheet/>".to_vec()),
+            (sheet_rels_path(root), br##"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="self" Type="opaque" Target="#anchor"/></Relationships>"##.to_vec()),
+        ]);
+        let occupied = std::collections::HashSet::from(["XL/WORKSHEETS/SHEET1_COPY1.XML".into()]);
+        let copied = copy_part_graph(&source, root, &occupied, &Default::default()).unwrap();
+        assert_eq!(copied.root, "xl/worksheets/Sheet1_copy2.xml");
+        assert_eq!(copied.paths.len(), 1);
+        let relations = parse_relationships(std::str::from_utf8(&copied.parts[&sheet_rels_path(&copied.root)]).unwrap()).unwrap();
+        assert_eq!(relations["self"].target, "Sheet1_copy2.xml#anchor");
+    }
+
+    #[test]
+    fn copied_sheet_save_detaches_source_and_keeps_opaque_source_xml() {
+        let original = include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
+        let mut archive = ZipArchive::new(Cursor::new(original)).unwrap();
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().to_string();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if name == "xl/worksheets/sheet1.xml" {
+                let xml = String::from_utf8(bytes).unwrap();
+                assert!(!xml.contains("<headerFooter"));
+                bytes = xml.replace("</worksheet>", "<headerFooter><oddHeader>&amp;CKEEP</oddHeader></headerFooter></worksheet>").into_bytes();
+            }
+            writer.start_file(name, SimpleFileOptions::default()).unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+        let before = parse_xlsx(&bytes).unwrap();
+        let original_value = serde_json::to_value(&before.sheets[0].rows[0].cells[0].value).unwrap();
+        let original_name = before.sheets[0].name.clone();
+        let source_xml = {
+            let mut zip = ZipArchive::new(Cursor::new(&bytes)).unwrap();
+            let mut value = Vec::new();
+            zip.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_end(&mut value).unwrap();
+            value
+        };
+        for before_source in [false, true] {
+            let mut edited = before.clone();
+            let source_id = edited.sheets[0].origin_id.unwrap();
+            let mut copy = edited.sheets[0].clone();
+            copy.name = "Copied".into();
+            copy.origin_id = Some(u32::MAX);
+            copy.rows[0].cells[0].value = crate::ir::CellValue::String("copy-only".into());
+            copy.rows[0].cells[0].formula = None;
+            copy.rows[0].cells[0].formula_utf16 = None;
+            edited.copied_sheet_origins.insert(u32::MAX, source_id);
+            let copy_index = if before_source { edited.sheets.insert(0, copy); 0 } else { edited.sheets.push(copy); 1 };
+            let mut editor = XlsxEditor::new(&bytes).unwrap();
+            editor.apply_workbook(&edited).unwrap();
+            assert!(editor.has_edits());
+            let saved = editor.save().unwrap();
+            let reopened = parse_xlsx(&saved).unwrap();
+            let source = reopened.sheets.iter().find(|sheet| sheet.name == original_name).unwrap();
+            let copied = reopened.sheets.iter().find(|sheet| sheet.name == "Copied").unwrap();
+            assert_eq!(serde_json::to_value(&source.rows[0].cells[0].value).unwrap(), original_value);
+            assert!(matches!(&copied.rows[0].cells[0].value, crate::ir::CellValue::String(value) if value == "copy-only"));
+            let mut zip = ZipArchive::new(Cursor::new(&saved)).unwrap();
+            let mut untouched_source = Vec::new();
+            zip.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_end(&mut untouched_source).unwrap();
+            assert_eq!(untouched_source, source_xml);
+            let copied_parts: Vec<_> = (0..zip.len()).filter_map(|index| {
+                let entry = zip.by_index(index).unwrap();
+                entry.name().starts_with("xl/worksheets/").then(|| entry.name().to_string())
+            }).filter(|name| name.ends_with(".xml") && name.contains("_copy")).collect();
+            assert_eq!(copied_parts.len(), 1);
+            let mut copied_xml = String::new();
+            zip.by_name(&copied_parts[0]).unwrap().read_to_string(&mut copied_xml).unwrap();
+            assert!(copied_xml.contains("<oddHeader>&amp;CKEEP</oddHeader>"));
+            edited.sheets[copy_index].name = "Copy Renamed".into();
+            edited.sheets[copy_index].rows[0].cells[0].value = crate::ir::CellValue::String("copy-again".into());
+            editor.apply_workbook(&edited).unwrap();
+            let saved_again = editor.save().unwrap();
+            let reopened = parse_xlsx(&saved_again).unwrap();
+            assert_eq!(reopened.sheets.len(), 2);
+            assert_eq!(serde_json::to_value(&reopened.sheets.iter().find(|sheet| sheet.name == original_name).unwrap().rows[0].cells[0].value).unwrap(), original_value);
+            assert!(matches!(&reopened.sheets.iter().find(|sheet| sheet.name == "Copy Renamed").unwrap().rows[0].cells[0].value, crate::ir::CellValue::String(value) if value == "copy-again"));
+        }
+    }
+
+
+    #[test]
+    fn copied_part_graph_keeps_opaque_data_and_detaches_relationships() {
+        use std::collections::HashSet;
+        let root = "xl/worksheets/sheet1.xml";
+        let payload = br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetViews><sheetView showGridLines="0"/></sheetViews><headerFooter><oddHeader>&amp;Ckeep</oddHeader></headerFooter><drawing r:id="rId1"/></worksheet>"#.to_vec();
+        let source = HashMap::from([
+            (root.to_string(), payload.clone()),
+            (sheet_rels_path(root), br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="drawing" Target="../drawings/drawing1.xml"/><Relationship Id="rId2" Type="hyperlink" Target="https://example.com/?a=1&amp;b=2" TargetMode="External"/><Relationship Id="rId3" Type="cache" Target="../pivotCache/cache1.xml"/></Relationships>"#.to_vec()),
+            ("xl/drawings/drawing1.xml".into(), b"<drawing><opaque/></drawing>".to_vec()),
+            (sheet_rels_path("xl/drawings/drawing1.xml"), br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="chart" Target="../charts/chart1.xml"/><Relationship Id="rId2" Type="image" Target="../media/image1.bin"/></Relationships>"#.to_vec()),
+            ("xl/charts/chart1.xml".into(), b"<chart><unknownExtension/></chart>".to_vec()),
+            (sheet_rels_path("xl/charts/chart1.xml"), br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="cycle" Type="opaque" Target="../drawings/drawing1.xml"/></Relationships>"#.to_vec()),
+            ("xl/media/image1.bin".into(), vec![0, 255, 4, 0]),
+            ("xl/pivotCache/cache1.xml".into(), b"<cache/>".to_vec()),
+        ]);
+        let before = source.clone();
+        let occupied = HashSet::from(["xl/worksheets/sheet1_copy1.xml".to_string()]);
+        let copied = copy_part_graph(&source, root, &occupied, &HashSet::from(["xl/pivotCache/cache1.xml".into()])).unwrap();
+        assert_eq!(source, before);
+        assert_eq!(copied.root, "xl/worksheets/sheet1_copy2.xml");
+        assert_eq!(copied.parts[&copied.root], payload);
+        assert_eq!(copied.paths.len(), 4);
+        assert_eq!(copied.parts[&copied.paths["xl/media/image1.bin"]], vec![0, 255, 4, 0]);
+        assert_eq!(copied.parts[&copied.paths["xl/charts/chart1.xml"]], b"<chart><unknownExtension/></chart>");
+        let xml = std::str::from_utf8(&copied.parts[&sheet_rels_path(&copied.root)]).unwrap();
+        let relations = parse_relationships(xml).unwrap();
+        assert_eq!(resolve_part_target(&copied.root, &relations["rId1"].target), copied.paths["xl/drawings/drawing1.xml"]);
+        assert_eq!(relations["rId2"].target, "https://example.com/?a=1&b=2");
+        assert_eq!(resolve_part_target(&copied.root, &relations["rId3"].target), "xl/pivotCache/cache1.xml");
+        let chart = &copied.paths["xl/charts/chart1.xml"];
+        let chart_relations = parse_relationships(std::str::from_utf8(&copied.parts[&sheet_rels_path(chart)]).unwrap()).unwrap();
+        assert_eq!(resolve_part_target(chart, &chart_relations["cycle"].target), copied.paths["xl/drawings/drawing1.xml"]);
+        assert!(!copied.parts.contains_key("xl/pivotCache/cache1.xml"));
+    }
+
+    #[test]
+    fn copied_part_graph_rejects_missing_targets_without_mutating_source() {
+        let source = HashMap::from([
+            ("xl/worksheets/sheet1.xml".into(), b"<worksheet/>".to_vec()),
+            (sheet_rels_path("xl/worksheets/sheet1.xml"), br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="drawing" Target="../drawings/missing.xml"/></Relationships>"#.to_vec()),
+        ]);
+        let before = source.clone();
+        assert!(copy_part_graph(&source, "xl/worksheets/sheet1.xml", &Default::default(), &Default::default()).is_err());
+        assert_eq!(source, before);
+    }
+
 
     #[test]
     fn worksheet_protection_survives_save_reorder_copy_and_removal() {
@@ -11725,6 +14172,167 @@ mod tests {
     }
 
     #[test]
+    fn drawing_metadata_plain_xml_roundtrip_retains_units_and_foreign_content() {
+        let seed = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut book = crate::parse_xlsx_preserving_values(seed).unwrap();
+        let mut shape = simple_added_shape("Description");
+        let units = vec![0x8aac, 0x660e, 9, 13, 10, 0xd83d, 0xde00, 0xd83d, 1, 0xfffe, 38, 60, 34];
+        shape.metadata = Some(crate::ir::DrawingMetadata {
+            description: Some(String::from_utf16_lossy(&units)), utf16_description: Some(units.clone()),
+            title: Some("Title < &".into()), hidden: Some("0".into()),
+        });
+        book.sheets[0].drawings.push(shape);
+        let mut editor = XlsxEditor::new(seed).unwrap(); editor.apply_workbook(&book).unwrap();
+        let saved = editor.save().unwrap();
+        assert_eq!(book.sheets[0].drawings.last().unwrap().metadata.as_ref().unwrap().description_units(), Some(units));
+        let mut reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+        let metadata = reopened.sheets[0].drawings.last().unwrap().metadata.as_ref().unwrap();
+        assert_eq!(metadata.description.as_deref(), Some("説明 \n😀&<\""));
+        assert_eq!(metadata.title.as_deref(), Some("Title < &"));
+        let mut unchanged = XlsxEditor::new(&saved).unwrap(); unchanged.apply_workbook(&reopened).unwrap();
+        assert_eq!(unchanged.save().unwrap(), saved);
+        reopened.sheets[0].drawings.last_mut().unwrap().metadata.as_mut().unwrap().description = Some("_x0041_".into());
+        let mut changed = XlsxEditor::new(&saved).unwrap(); changed.apply_workbook(&reopened).unwrap();
+        let changed = changed.save().unwrap();
+        assert_eq!(crate::parse_xlsx_preserving_values(&changed).unwrap().sheets[0].drawings.last().unwrap().metadata.as_ref().unwrap().description.as_deref(), Some("_x0041_"));
+        let xml = r#"<d:wsDr xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:z="urn:opaque"><d:cNvPr id="2" name="Box" descr="before" title="keep" hidden="false" z:custom="untouched"><z:data>opaque &amp; data</z:data></d:cNvPr><z:cNvPr id="2" descr="foreign"/></d:wsDr>"#;
+        let metadata = crate::ir::DrawingMetadata { description: Some("<&\"\t\r\n_x0041_".into()), title: Some("keep".into()), hidden: Some("false".into()), ..Default::default() };
+        let output = patch_drawing_metadata_xml(xml, &HashMap::from([(2, Some(metadata))])).unwrap();
+        assert!(output.contains("descr=\"&lt;&amp;&quot;\t&#xA;_x0041_\""));
+        assert!(output.contains("z:custom=\"untouched\""));
+        assert!(output.contains("<z:data>opaque &amp; data</z:data>"));
+        assert!(output.contains("<z:cNvPr id=\"2\" descr=\"foreign\"/>"));
+        assert!(output.contains("hidden=\"false\""));
+    }
+
+    #[test]
+    fn copied_chart_parts_detach_opaque_styles_colors_and_binary_dependencies() {
+        let seed = include_bytes!("../../../tests/fixtures/vba/advanced_chart_operations.xlsm");
+        let mut archive = OoxmlArchive::new(seed).unwrap();
+        let chart_part = crate::chart_edit::chart_part_names(&mut archive).unwrap()[0].clone();
+        let folder = chart_part.rsplit_once('/').unwrap().0;
+        let style = format!("{folder}/opaque-style.xml");
+        let colors = format!("{folder}/opaque-colors.xml");
+        let payload = format!("{folder}/opaque-payload.bin");
+        let style_xml = b"<s:chartStyle xmlns:s=\"http://schemas.microsoft.com/office/drawing/2012/chartStyle\" id=\"201\"><x:preserve xmlns:x=\"urn:opaque\" value=\"style-data\"/></s:chartStyle>".to_vec();
+        let colors_xml = b"<s:colorStyle xmlns:s=\"http://schemas.microsoft.com/office/drawing/2012/chartStyle\" id=\"10\"><x:preserve xmlns:x=\"urn:opaque\" value=\"color-data\"/></s:colorStyle>".to_vec();
+        let binary = vec![0, 1, 2, 254, 255];
+        let types = [(&style, "application/vnd.ms-office.chartstyle+xml"),
+            (&colors, "application/vnd.ms-office.chartcolorstyle+xml"), (&payload, "application/octet-stream")];
+        let mut content_types = archive.read_part("[Content_Types].xml").unwrap();
+        for (path, kind) in types { content_types = append_content_type(&content_types, path, kind).unwrap(); }
+        let relationships = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="opaque-style.xml"/><Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="opaque-colors.xml"/><Relationship Id="rId3" Type="urn:opaque-payload" Target="opaque-payload.bin#keep"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.org/chart#keep" TargetMode="External"/></Relationships>"#.to_vec();
+        let source = replace_package_parts(seed, BTreeMap::from([
+            ("[Content_Types].xml".into(), content_types.into_bytes()),
+            (sheet_rels_path(&chart_part), relationships.clone()),
+            (style.clone(), style_xml.clone()), (colors.clone(), colors_xml.clone()), (payload.clone(), binary.clone()),
+        ])).unwrap();
+        for other_sheet in [false, true] {
+            let mut book = crate::parse_xlsx_preserving_values(&source).unwrap();
+            let sheet = book.sheets.iter().position(|s| s.drawings.iter().any(|d| matches!(d.kind, crate::ir::DrawingKind::Chart(_)))).unwrap();
+            let original = book.sheets[sheet].drawings.iter().find(|d| matches!(d.kind, crate::ir::DrawingKind::Chart(_))).unwrap().clone();
+            let mut copied = original.clone(); copied.name = Some("Opaque Copy".into()); copied.non_visual_id = Some(100);
+            let destination = if other_sheet {
+                let mut added = book.sheets[sheet].clone(); added.name = "Destination".into(); added.origin_id = None;
+                added.drawings.clear(); book.sheets.push(added); book.sheets.len() - 1
+            } else { sheet };
+            book.sheets[destination].drawings.push(copied);
+            let mut editor = XlsxEditor::new(&source).unwrap();
+            editor.apply_workbook_with_drawing_id_sources(&book, &HashMap::from([((destination, 100), None)])).unwrap();
+            let saved = editor.save().unwrap();
+            let mut output = OoxmlArchive::new(&saved).unwrap();
+            assert_eq!(output.read_part(&chart_part).unwrap(), archive.read_part(&chart_part).unwrap());
+            assert_eq!(output.read_part(&sheet_rels_path(&chart_part)).unwrap().as_bytes(), relationships);
+            let parts = crate::chart_edit::chart_part_names(&mut output).unwrap();
+            assert_eq!(parts.len(), 2);
+            let copy = parts.iter().find(|part| *part != &chart_part).unwrap();
+            let rels = parse_relationships(&output.read_part(&sheet_rels_path(copy)).unwrap()).unwrap();
+            for (id, old, bytes) in [("rId1", &style, &style_xml), ("rId2", &colors, &colors_xml), ("rId3", &payload, &binary)] {
+                let relation = &rels[id]; let target = relation.target.split('#').next().unwrap();
+                let target = resolve_part_target(copy, target);
+                assert_ne!(&target, old);
+                assert_eq!(&output.read_binary_part(&target).unwrap(), bytes);
+                assert_eq!(&output.read_binary_part(old).unwrap(), bytes);
+                let saved_types = output.read_part("[Content_Types].xml").unwrap();
+                assert_eq!(content_type_for_part(&saved_types, &target).unwrap(), content_type_for_part(&saved_types, old).unwrap());
+            }
+            assert!(rels["rId3"].target.ends_with("#keep"));
+            assert_eq!(rels["rId4"].target, "https://example.org/chart#keep");
+            assert_eq!(rels["rId4"].target_mode.as_deref(), Some("External"));
+            // A deleted source frame must not keep its former chart graph
+            // alive through an unused drawing relationship. The copy survives.
+            let mut edited = crate::parse_xlsx_preserving_values(&saved).unwrap();
+            edited.sheets[sheet].drawings.retain(|drawing| drawing.non_visual_id != original.non_visual_id);
+            let mut delete = XlsxEditor::new(&saved).unwrap(); delete.apply_workbook(&edited).unwrap();
+            let deleted = delete.save().unwrap();
+            let mut remaining = OoxmlArchive::new(&deleted).unwrap();
+            assert_eq!(crate::chart_edit::chart_part_names(&mut remaining).unwrap(), vec![copy.clone()]);
+            assert!(remaining.try_read_part(&chart_part).unwrap().is_none());
+            for path in [&style, &colors, &payload] { assert!(remaining.try_read_part(path).unwrap().is_none()); }
+            assert!(remaining.try_read_part(copy).unwrap().is_some());
+        }
+        // Two frames can legitimately reuse one relationship. Removing one
+        // frame must retain the graph while the other still uses that id.
+        let mut shared_archive = OoxmlArchive::new(&source).unwrap();
+        let paths = XlsxEditor::sheet_paths_in(&source).unwrap();
+        let drawing_parts = resolve_drawing_parts(&mut shared_archive, &paths).unwrap();
+        let mut book = crate::parse_xlsx_preserving_values(&source).unwrap();
+        let sheet = book.sheets.iter().position(|s| s.drawings.iter().any(|d| matches!(d.kind, crate::ir::DrawingKind::Chart(_)))).unwrap();
+        let original = book.sheets[sheet].drawings.iter().find(|d| matches!(d.kind, crate::ir::DrawingKind::Chart(_))).unwrap();
+        let original_id = original.non_visual_id;
+        let part = &drawing_parts[&sheet];
+        let xml = shared_archive.read_part(part).unwrap();
+        assert!(clone_drawing_anchor_xml(&xml, "Missing Chart", "Copy", 1, 900).is_err());
+        let clone = clone_drawing_anchor_xml(&xml, original.name.as_deref().unwrap(), "Shared Chart", original_id.unwrap(), 900).unwrap();
+        let shared = replace_package_parts(&source, BTreeMap::from([(part.clone(), append_xml_child(&xml, "wsDr", &clone).unwrap().into_bytes())])).unwrap();
+        book = crate::parse_xlsx_preserving_values(&shared).unwrap();
+        book.sheets[sheet].drawings.retain(|drawing| drawing.non_visual_id != original_id);
+        let mut editor = XlsxEditor::new(&shared).unwrap(); editor.apply_workbook(&book).unwrap();
+        let kept = editor.save().unwrap(); let mut output = OoxmlArchive::new(&kept).unwrap();
+        assert_eq!(crate::chart_edit::chart_part_names(&mut output).unwrap(), vec![chart_part]);
+        assert_eq!(output.read_binary_part(&payload).unwrap(), binary);
+        assert_eq!(crate::parse_xlsx_preserving_values(&kept).unwrap().sheets[sheet].drawings.len(), 1);
+    }
+
+    #[test]
+    fn detached_graph_pruning_preserves_shared_descendants_and_unrelated_unused_parts() {
+        let seed = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut input = OoxmlArchive::new(seed).unwrap();
+        let nodes = ["xl/charts/removed.xml", "xl/charts/kept.xml", "xl/charts/shared.xml", "xl/charts/exclusive.xml",
+            "xl/charts/shared.bin", "xl/charts/exclusive.bin", "xl/unrelated-unused.bin", "root-kept.xml", "xl/charts/root-shared.xml"];
+        let mut types = input.read_part("[Content_Types].xml").unwrap();
+        let mut parts = BTreeMap::new();
+        for path in nodes {
+            types = append_content_type(&types, path, "application/octet-stream").unwrap();
+            parts.insert(path.to_string(), format!("opaque:{path}").into_bytes());
+        }
+        types = types.replace("</Types>", "<z:Override xmlns:z=\"urn:opaque\" PartName=\"/xl/charts/removed.xml\" keep=\"yes\"/></Types>");
+        parts.insert("[Content_Types].xml".into(), types.into_bytes());
+        let rels = |targets: &[&str]| format!("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{}</Relationships>",
+            targets.iter().enumerate().map(|(i, target)| format!("<Relationship Id=\"rId{i}\" Type=\"urn:opaque\" Target=\"{target}\"/>")).collect::<String>()).into_bytes();
+        parts.insert(sheet_rels_path("xl/charts/removed.xml"), rels(&["shared.xml", "exclusive.xml", "root-shared.xml"]));
+        parts.insert("_rels/root-kept.xml.rels".into(), rels(&["xl/charts/root-shared.xml"]));
+        parts.insert(sheet_rels_path("xl/charts/kept.xml"), rels(&["shared.xml"]));
+        parts.insert(sheet_rels_path("xl/charts/shared.xml"), rels(&["shared.bin"]));
+        parts.insert(sheet_rels_path("xl/charts/exclusive.xml"), rels(&["exclusive.bin", "removed.xml#cycle"]));
+        let source = replace_package_parts(seed, parts).unwrap();
+        assert_eq!(prune_detached_drawing_parts(&source, &Default::default()).unwrap(), source);
+        let saved = prune_detached_drawing_parts(&source, &std::collections::HashSet::from(["xl/charts/removed.xml".into()])).unwrap();
+        let mut output = OoxmlArchive::new(&saved).unwrap();
+        for path in ["xl/charts/removed.xml", "xl/charts/exclusive.xml", "xl/charts/exclusive.bin"] {
+            assert!(output.try_read_part(path).unwrap().is_none());
+            assert!(output.try_read_part(&sheet_rels_path(path)).unwrap().is_none());
+        }
+        for path in ["xl/charts/kept.xml", "xl/charts/shared.xml", "xl/charts/shared.bin", "xl/unrelated-unused.bin", "root-kept.xml", "xl/charts/root-shared.xml"] {
+            assert_eq!(output.read_binary_part(path).unwrap(), format!("opaque:{path}").as_bytes());
+        }
+        assert!(output.try_read_part(&sheet_rels_path("xl/charts/shared.xml")).unwrap().is_some());
+        let types = output.read_part("[Content_Types].xml").unwrap();
+        assert!(types.contains("<z:Override xmlns:z=\"urn:opaque\" PartName=\"/xl/charts/removed.xml\" keep=\"yes\"/>"));
+        assert!(!types.contains("<Override PartName=\"/xl/charts/removed.xml\""));
+    }
+
+    #[test]
     fn new_embedded_charts_survive_save_without_replacing_existing_charts() {
         for bytes in [
             include_bytes!("../../../tests/fixtures/vba/chart_persistence_sheet_title_legend.xlsm").as_slice(),
@@ -11736,6 +14344,8 @@ mod tests {
             let mut added = book.sheets.iter().flat_map(|sheet| &sheet.drawings)
                 .find(|drawing| matches!(drawing.kind, crate::ir::DrawingKind::Chart(_))).unwrap().clone();
             added.name = Some("Uniform & Embedded".into());
+            // This is a newly created drawing, not the imported identity.
+            added.non_visual_id = None;
             added.from = crate::ir::Anchor { row: 0, col: 0, col_off: 254_000, row_off: 381_000 };
             added.to = None;
             added.extent = Some((3_048_000, 2_032_000));
@@ -11752,6 +14362,8 @@ mod tests {
             assert_eq!(reopened.sheets[ledger].drawings.len(), existing + 1);
             let drawing = reopened.sheets[ledger].drawings.iter()
                 .find(|drawing| drawing.name == added.name).unwrap();
+            let ids: Vec<_> = reopened.sheets[ledger].drawings.iter().map(|drawing| drawing.non_visual_id.unwrap()).collect();
+            assert_eq!(ids.len(), ids.iter().collect::<std::collections::HashSet<_>>().len());
             assert_eq!(drawing.from, added.from);
             assert_eq!(drawing.extent, added.extent);
             let crate::ir::DrawingKind::Chart(chart) = &drawing.kind else { panic!("new chart became a different drawing") };
@@ -11863,7 +14475,7 @@ mod tests {
             painted.pattern_fill=Some(Box::new(crate::ir::CellFill {
                 pattern:"solid".into(),foreground:Some(color),background:None,
             }));
-            painted.border_bottom=Some(crate::ir::BorderLine {style:"thick".into(),color:None});
+            painted.border_bottom=Some(crate::ir::BorderLine {style:"thick".into(),color:None, color_reference: None});
             let mut editor=super::XlsxEditor::new(bytes).unwrap();
             editor.set_cell_style(0,1,0,painted);
             let intermediate=editor.save().unwrap();
@@ -12052,6 +14664,8 @@ mod tests {
     fn simple_added_shape(name: &str) -> crate::ir::Drawing {
         crate::ir::Drawing {
             name: Some(name.into()),
+            non_visual_id: None,
+            metadata: None,
             ole_prog_id: None,
             ole_source_name: None,
             ole_clone_position: None,
@@ -12074,6 +14688,7 @@ mod tests {
             to: Some(crate::ir::Anchor { col: 3, col_off: 38_100, row: 5, row_off: 50_800 }),
             extent: Some((1_000_000, 600_000)),
             kind: crate::ir::DrawingKind::Shape(crate::ir::Shape {
+                transform_offset: None,
                 geometry: "rect".into(), text_box: false, fill: Some("112233".into()), fill_theme: None, fill_legacy_color_index: None, fill_brightness: None,
                 line: Some(crate::ir::ShapeLine {
                     color: "FF0000".into(), pattern: None, back_color: None, back_color_theme: None, back_legacy_color_index: None, back_color_brightness: None, back_color_shade: None, width: 19_050,
@@ -12108,6 +14723,44 @@ mod tests {
         }
         writer.finish().unwrap();
         bytes
+    }
+
+    #[test]
+    fn drawing_identity_rebase_keeps_connector_endpoints_and_unknown_content() {
+        let xml = r#"<x:wsDr xmlns:x="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:custom="urn:preserve"><x:sp><x:cNvPr id="2" name="Left"/></x:sp><x:sp><x:cNvPr id="3" name="Right"/></x:sp><x:cxnSp><x:cNvPr id="4" name="Link"/><a:stCxn id="2" idx="1"/><a:endCxn id="3" idx="2"/></x:cxnSp><custom:data id="2"><![CDATA[untouched < & >]]></custom:data></x:wsDr>"#;
+        let swapped = patch_drawing_nonvisual_ids(xml, &HashMap::from([("Left".into(), 3), ("Right".into(), 2)])).unwrap();
+        assert_eq!(drawing_shape_id(&swapped, "Left").unwrap(), Some(3));
+        assert_eq!(drawing_shape_id(&swapped, "Right").unwrap(), Some(2));
+        assert!(swapped.contains(r#"<a:stCxn idx="1" id="3"/>"#));
+        assert!(swapped.contains(r#"<a:endCxn idx="2" id="2"/>"#));
+        assert!(swapped.contains(r#"<custom:data id="2"><![CDATA[untouched < & >]]></custom:data>"#));
+        assert_eq!(drawing_shape_ids(&swapped).unwrap().len(), 3);
+        let collision = patch_drawing_nonvisual_ids(xml, &HashMap::from([("Left".into(), 3)])).unwrap();
+        assert!(drawing_shape_ids(&collision).is_err());
+    }
+
+    #[test]
+    fn drawing_identity_only_edit_is_saved_and_new_shapes_keep_requested_gaps() {
+        let bytes = workbook_with_line_shape();
+        let mut editor = XlsxEditor::new(&bytes).unwrap();
+        let mut edited = crate::parse_xlsx(&bytes).unwrap();
+        edited.sheets[0].drawings[0].non_visual_id = Some(19);
+        editor.apply_workbook(&edited).unwrap();
+        let saved = editor.save().unwrap();
+        assert_ne!(saved, bytes);
+        let mut reopened = crate::parse_xlsx(&saved).unwrap();
+        assert_eq!(reopened.sheets[0].drawings[0].non_visual_id, Some(19));
+        let mut added = simple_added_shape("After gap");
+        added.non_visual_id = Some(27);
+        reopened.sheets[0].drawings.push(added);
+        let mut editor = XlsxEditor::new(&saved).unwrap();
+        editor.apply_workbook(&reopened).unwrap();
+        let saved = editor.save().unwrap();
+        let reopened = crate::parse_xlsx(&saved).unwrap();
+        assert_eq!(reopened.sheets[0].drawings.iter().map(|drawing| drawing.non_visual_id).collect::<Vec<_>>(), vec![Some(19), Some(27)]);
+        let mut no_edit = XlsxEditor::new(&saved).unwrap();
+        no_edit.apply_workbook(&reopened).unwrap();
+        assert_eq!(no_edit.save().unwrap(), saved);
     }
 
     #[test]
@@ -12164,6 +14817,8 @@ mod tests {
         let xml = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"><xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="1" name="Move"/></xdr:nvSpPr><xdr:spPr><a:xfrm xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:off x="0" y="0"/><a:ext cx="100" cy="200"/></a:xfrm></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#;
         let after = crate::ir::Drawing {
             name: Some("Move".into()),
+            non_visual_id: None,
+            metadata: None,
             ole_prog_id: None,
             ole_source_name: None,
             ole_clone_position: None,
@@ -12186,6 +14841,7 @@ mod tests {
             to: Some(crate::ir::Anchor { col: 4, col_off: 381, row: 6, row_off: 508 }),
             extent: Some((300, 400)),
             kind: crate::ir::DrawingKind::Shape(crate::ir::Shape {
+                transform_offset: None,
                 geometry: "rect".into(), text_box: false, fill: None, fill_theme: None, fill_legacy_color_index: None, fill_brightness: None, line: None,
                 adjusts: Vec::new(), path: None, flip_h: false, flip_v: false, rotation: 0, text: None,
             }),
@@ -12197,10 +14853,59 @@ mod tests {
             group_child_transform: None,
             group_nested: false,
         };
-        let saved = patch_drawing_geometry_xml(xml, &HashMap::from([("Move".into(), after)])).unwrap();
+        let saved = patch_drawing_geometry_xml(xml, &HashMap::from([("Move".into(), after.clone())])).unwrap();
         assert!(saved.contains("<xdr:col>1</xdr:col><xdr:colOff>127</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>254</xdr:rowOff>"));
         assert!(saved.contains("<xdr:col>4</xdr:col><xdr:colOff>381</xdr:colOff><xdr:row>6</xdr:row><xdr:rowOff>508</xdr:rowOff>"));
         assert!(saved.contains("<a:off x=\"0\" y=\"0\"/><a:ext cx=\"100\" cy=\"200\"/>"));
+        let mut exact = after.clone();
+        let crate::ir::DrawingKind::Shape(shape) = &mut exact.kind else { unreachable!() };
+        shape.transform_offset = Some((12700001, 25400002));
+        exact.extent = Some((1270, 400));
+        let physical = patch_drawing_geometry_xml(xml, &HashMap::from([("Move".into(), exact.clone())])).unwrap();
+        assert!(physical.contains("<a:off x=\"12700001\" y=\"25400002\"/><a:ext cx=\"1270\" cy=\"400\"/>"));
+        let mut one_emu = exact.clone();
+        one_emu.from.col_off += 1;
+        assert!(drawing_position_changed(&exact, &one_emu));
+        let mut size_only = exact.clone();
+        size_only.extent = Some((1271, 400));
+        assert!(drawing_position_changed(&exact, &size_only));
+
+        let foreign = xml.replace("<xdr:clientData/>", "<xdr:clientData/><z:cNvPr xmlns:z=\"urn:opaque\" name=\"Move\" keep=\"yes\"/>");
+        let renamed = patch_drawing_names_xml(&foreign, &HashMap::from([("Move".into(), "Copy & retained".into())])).unwrap();
+        assert!(renamed.contains("name=\"Copy &amp; retained\""));
+        assert!(renamed.contains("<z:cNvPr xmlns:z=\"urn:opaque\" name=\"Move\" keep=\"yes\"/>"));
+        let by_id = patch_drawing_names_by_ids(&foreign, &HashMap::from([(1,"Box & retained".into())])).unwrap();
+        assert!(by_id.contains("name=\"Box &amp; retained\""));
+        assert!(by_id.contains("<z:cNvPr xmlns:z=\"urn:opaque\" name=\"Move\" keep=\"yes\"/>"));
+
+        // Native71/72: equal display names are valid. New parts, no-edit
+        // round trips, movement, rename and either deletion use physical IDs.
+        let seed=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut book=parse_xlsx(seed).unwrap();
+        assert!(book.sheets[0].drawings.is_empty());
+        let mut first=after.clone();first.name=Some("Box".into());first.non_visual_id=Some(2);
+        let mut second=first.clone();second.non_visual_id=Some(3);second.from.col_off+=127;
+        book.sheets[0].drawings=vec![first,second];
+        let mut create=XlsxEditor::new(seed).unwrap();create.apply_workbook(&book).unwrap();
+        let created=create.save().unwrap();let original=parse_xlsx(&created).unwrap();
+        assert_eq!(original.sheets[0].drawings.iter().map(|d|(d.name.as_deref(),d.non_visual_id)).collect::<Vec<_>>(),vec![(Some("Box"),Some(2)),(Some("Box"),Some(3))]);
+        let mut unchanged=XlsxEditor::new(&created).unwrap();unchanged.apply_workbook(&original).unwrap();
+        assert_eq!(unchanged.save().unwrap(),created);
+        for action in 0..5 {
+            let mut edited=original.clone();
+            match action {
+                0=>edited.sheets[0].drawings[1].from.col_off+=1,
+                1=>edited.sheets[0].drawings[1].name=Some("Renamed & Copy".into()),
+                2=>{edited.sheets[0].drawings.remove(0);},
+                3=>{edited.sheets[0].drawings.remove(1);},
+                _=>edited.sheets[0].drawings[1].name=Some("__oxi_drawing_source_0_new_2".into()),
+            }
+            let mut editor=XlsxEditor::new(&created).unwrap();editor.apply_workbook(&edited).unwrap();
+            let bytes=editor.save().unwrap();let actual=parse_xlsx(&bytes).unwrap();
+            assert_eq!(actual.sheets[0].drawings.iter().map(|d|(d.non_visual_id,d.name.clone(),d.from)).collect::<Vec<_>>(),edited.sheets[0].drawings.iter().map(|d|(d.non_visual_id,d.name.clone(),d.from)).collect::<Vec<_>>(),"action {action}");
+        }
+
+
     }
 
     #[test]
@@ -12283,6 +14988,8 @@ mod tests {
         let xml = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="100" cy="200"/><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="1" name="Resize"/></xdr:nvSpPr></xdr:sp><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>"#;
         let after = crate::ir::Drawing {
             name: Some("Resize".into()),
+            non_visual_id: None,
+            metadata: None,
             ole_prog_id: None,
             ole_source_name: None,
             ole_clone_position: None,
@@ -12305,6 +15012,7 @@ mod tests {
             to: None,
             extent: Some((300, 400)),
             kind: crate::ir::DrawingKind::Shape(crate::ir::Shape {
+                transform_offset: None,
                 geometry: "rect".into(), text_box: false, fill: None, fill_theme: None, fill_legacy_color_index: None, fill_brightness: None, line: None,
                 adjusts: Vec::new(), path: None, flip_h: false, flip_v: false, rotation: 0, text: None,
             }),
@@ -12509,6 +15217,9 @@ mod tests {
         let mut editor = XlsxEditor::new(base).unwrap();
         let mut edited = editor.workbook().clone();
         edited.sheets[0].comments.push(crate::ir::Comment {
+            position: Some((111.75, 82.5)),
+            shape_id: None,
+                        shape_name: None,
             author: "VBA Author".into(),
             utf16_text: None,
             from: crate::ir::Anchor { col: 2, col_off: 15 * 9525, row: 4, row_off: 10 * 9525 },
@@ -12549,6 +15260,7 @@ mod tests {
             .unwrap()
             .read_to_string(&mut vml)
             .unwrap();
+        assert!(vml.contains("margin-left:111.75pt;margin-top:82.5pt;"));
         assert!(vml.contains("fillcolor=\"infoBackground [80]\""));
         assert!(vml.contains("filled=\"f\""));
         assert!(vml.contains("<v:fill opacity=\"39322f\""));
@@ -12578,6 +15290,7 @@ mod tests {
         assert!(rich_xml.contains("<b/><sz val=\"9\""));
         assert!(rich_xml.contains("<i/><sz val=\"9\"/><color rgb=\"FFFF0000\"/>"));
         assert!(rich_xml.contains("&lt;B&gt;</t>"));
+        assert_eq!(note.position, Some((111.75, 82.5)));
         assert_eq!(note.author, "VBA Author");
         assert_eq!(note.cell, (4, 2));
         assert_eq!(note.text.paragraphs[0].text, "A & <B>");
@@ -12754,6 +15467,45 @@ mod tests {
     }
 
     #[test]
+    fn column_best_fit_survives_roundtrip_and_same_width_manual_reset() {
+        let data = include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
+        let mut edited = parse_xlsx(data).unwrap();
+        edited.sheets[0].col_widths.resize(4, 0.0);
+        edited.sheets[0].col_widths[3] = 14.0;
+        edited.sheets[0].col_custom_widths.insert(3, true);
+        edited.sheets[0].best_fit_cols.insert(3);
+        let mut editor = XlsxEditor::new(data).unwrap();
+        editor.apply_workbook(&edited).unwrap();
+        let automatic = editor.save().unwrap();
+        let mut parsed = parse_xlsx(&automatic).unwrap();
+        assert!(parsed.sheets[0].best_fit_cols.contains(&3));
+        let mut noop = XlsxEditor::new(&automatic).unwrap();
+        noop.apply_workbook(&parsed).unwrap();
+        assert_eq!(noop.save().unwrap(), automatic);
+        parsed.sheets[0].best_fit_cols.remove(&3);
+        let mut manual = XlsxEditor::new(&automatic).unwrap();
+        manual.apply_workbook(&parsed).unwrap();
+        let manual = parse_xlsx(&manual.save().unwrap()).unwrap();
+        assert_eq!(manual.sheets[0].col_widths[3], 14.0);
+        assert!(!manual.sheets[0].best_fit_cols.contains(&3));
+        let mut restored = parse_xlsx(&automatic).unwrap();
+        restored.sheets[0].col_widths[3] = 0.0;
+        restored.sheets[0].col_custom_widths.insert(3, false);
+        restored.sheets[0].best_fit_cols.remove(&3);
+        let mut implicit = XlsxEditor::new(&automatic).unwrap();
+        implicit.apply_workbook(&restored).unwrap();
+        let bytes = implicit.save().unwrap();
+        let mut zip = ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut xml = String::new();
+        zip.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+        assert!(!xml.contains("min=\"4\""), "restoring the standard must remove the old column span");
+        assert!(!parse_xlsx(&bytes).unwrap().sheets[0].column_has_custom_width(3));
+        let mut direct = XlsxEditor::new(&automatic).unwrap();
+        direct.set_col_width(0, 3, 14.0);
+        assert!(!parse_xlsx(&direct.save().unwrap()).unwrap().sheets[0].best_fit_cols.contains(&3));
+    }
+
+    #[test]
     fn column_width_custom_state_roundtrips_even_when_width_is_unchanged() {
         let data = include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
         let mut edited = parse_xlsx(data).unwrap();
@@ -12772,6 +15524,29 @@ mod tests {
         let restored = parse_xlsx(&editor.save().unwrap()).unwrap();
         assert_eq!(restored.sheets[0].col_widths[3], 9.140625);
         assert!(!restored.sheets[0].column_has_custom_width(3));
+    }
+
+    #[test]
+    fn saved_column_metrics_keep_native_xml_precision() {
+        // Exact values read from Excel's saved ColumnPrecisionProbe files.
+        // Reading back through our f32 IR alone hides decimal truncation.
+        let data = include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
+        let mut editor = XlsxEditor::new(data).unwrap();
+        let mut edited = editor.workbook().clone();
+        edited.sheets[0].col_widths.resize(2, 0.0);
+        edited.sheets[0].col_widths[0] = 12.777_344;
+        edited.sheets[0].col_widths[1] = 12.503_906;
+        edited.sheets[0].default_col_width = 12.777_344;
+        edited.sheets[0].default_col_width_explicit = true;
+        editor.apply_workbook(&edited).unwrap();
+        let saved = editor.save().unwrap();
+        let mut archive = ZipArchive::new(Cursor::new(saved)).unwrap();
+        let mut xml = String::new();
+        archive.by_name("xl/worksheets/sheet1.xml").unwrap()
+            .read_to_string(&mut xml).unwrap();
+        assert!(xml.contains(r#"width="12.77734375""#), "{xml}");
+        assert!(xml.contains(r#"width="12.50390625""#), "{xml}");
+        assert!(xml.contains(r#"defaultColWidth="12.77734375""#), "{xml}");
     }
 
     #[test]
@@ -13727,10 +16502,10 @@ mod tests {
                     let mut edited=editor.workbook().clone();
                     let cell=edited.sheets[0].rows.iter_mut().find(|r|r.index==1).unwrap()
                         .cells.iter_mut().find(|c|c.col==0).unwrap();
-                    cell.style.border_diagonal=Some(BorderLine {style:"thin".into(),color});
+                    cell.style.border_diagonal=Some(BorderLine {style:"thin".into(),color, color_reference: None});
                     cell.style.diagonal_up=up;
                     cell.style.diagonal_down=down;
-                    cell.style.border_left=Some(BorderLine {style:"double".into(),color:Some("FF0000".into())});
+                    cell.style.border_left=Some(BorderLine {style:"double".into(),color:Some("FF0000".into()), color_reference: None});
                     let expected=cell.style.clone();
                     if whole_workbook {
                         editor.apply_workbook(&edited).unwrap();
@@ -13759,6 +16534,758 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn native_named_font_alias_zip() -> Vec<u8> {
+        // Exact native package plus two controlled identical-font aliases.
+        // Independent Excel Normal26/Other23 consumers distinguish ownership.
+        const ZIP_HEX:&str="504b03041400000008000000215cf234fb71171900005b22000006000000302e786c7378ed5a75501ceb971ddc820f0e419360410708ee4e80e0ae4106081020380c0ceeeeae21d800091682bb85602104067777822f79bfdd7def65f3fb7bb76adfe9aa96eaba5f57759ff39defdedbaa8a48c840002a001d0000d0020ad5bb47941100007464008010808ea82fe960ef6261ef62ace1e168e16cc8e6feca8e261f199131178008f807ffaf519e30a8dcc981277d2e772db9f2341c5e2386ceb30bed25f8c8486db2246f36c9ee313b762b4c785e2d964764c3576d3632eb2ccc9d3dc4fb15681b5ad25cf62d354607a1f24ca1a9ce2c27a2fe288e28b5507dcc1d8d6806b166fae4ccb2e61b6a1bb4864aab5c914908c3ff0d9a16dd3902651648442f6d83af8eaecf93491fefbc6034a0a45971412dcd139b37eb9318bdf6632218c5f739fe309358a291a6b66c4d4e32e868add28a4679d6a534d339b2721a3faa20d541b41d07a7dc86ca2deaceb14809e8050be31a57b11bb83ff81be9e1eef2d1e0d523d1a75c0b637c5195e2179e16ef10292591df5521c97d3df8e4c4522bf843a47da49df188aba526eed657f747648cd40d6a5c6b8a7e1f97955f6a1deac1778b91fcb77d13308f1304b013fd758e2fe9b048d30306644ef0339c75d58418a9f4cb0818d64d935a2eea37bad6e54ddcfb377977870450fd9b0c6b3539e84feecf94ee5586752f4363270b3b6776b69ffb7fe4f70f7ea23cfeb94a27c783e07db9eb90bef349782c9e84a29bb85c13ad86af9ffc2c6e6d54010305bcf509259e067900922ca4d9f77a60062e14b5d5477bb6042a8f20000ad2d7b95504a75cbe7e83c6fcd82959e675f96217beebe4e9e4599aac8207a36b730c735943499e62ff3cbdccf8a15435de089b36390661116530b1709abf5ecf73dd39b31f95089312eabb15c155f57cb95b09231990a9e4e24d6cd1507ea59db134a23e6733abe94aef3e3bdad30b724d756b7e709559b693009d87f14bbbb663a98c56c21befa7ca997d6a7420821f5c23b2bd8f724f217a1f408783591e5d7c189d657d07fdd008ea923984df89c49a566c6b180900c8c000007ecac8dd8eddcdc1c9d6ccc1c1f6a74f956bcdd82ff3e2f9b07f81e09d7c0e4d64d42758627591466288a0397cfcd4c4445cd16548a65e2d7197e61b645fb565550d685f17fc3c7ce5e06068886c60dd9857135cdeb023a5aea2e414fc3c60ca433df4f2b5996f86651f779472f547130bf5e3b08b21c1e3c16e586b268ce202e490fe0409b0656fc696648334b875f408a6e3f6f5c3a7e024697a96621346ea8acaa44c2278bcb3665272d4615f696ac9f053091a95766b62acb8e3c2feabf0291b2c3a8f7ee097fde4fcdd336b4d5f4c83ee15f5f9fc4feff4fc5223d44ad6112640a5420ddee514fd6b8f1a9a692babe30ea8da634cac776ee4ab4e164b14566a36d3830490ac6d152f03ee90f5033f61b4af993f5096cc4f5e61c973763779249bf39247c0242ada04f90e448e00c6d6c3a071cf9172c69db53b5ef2a655f06d4daa6cff7ec652e652ac30cea8fb764c82d1486988f341060f849bf68a774b1aa30cc775b71a6c48b9e24d1f0565d7312e6542f7c015e57c6527486aab8827a3c3cc665bec3e3b81e9d270bc6dc5c367d23b880ab49f3d6af5a4e507126f60790725af2264b8f1293d8d324a26e4c6b19c1770843cceb912ed66b59b0964e26db271d2fa5cfcc9c66a58267732338f679b39919bf139b26f24ba6bdf4e92f774afde052ea2656374388ae9b4dabc482b2ebe3b4d40b39c432268e182ab112a05af262ac4ee7ab1537a4970b4e40309cb1f8af2c12de0c02194a24fa1c1f5c209e7cefc488623a97443bd104489e2d1e9593b2b2f6eaeac84e97157e532cc7b45040d3002f61e1b1fec05b8dc554ec36ebe646f29ee1b1dbc7103463d24cf407b4132ec69466716c037e210b26d7a280eb4c1303be24449d89d75301062f3e77cddeb490d0cb1e4e534764cf5cbc90e31cbb80ced69c109a2a6d3579124afcef044a2df262a5af444b191749890949fdd64496913aef4a232744ff6179134227ed937e74b21f72484e00bdc6483d0eeea3bd46142f36df0c389277e0ff39e519ae7d0650ab0e5673bd0c708f08683cddeee3d7b3ed63779310a0b59b86b6008a1433fdba71a76ea2f4c5748166d9fd94a66a7fbea1f5f8783303ff5927e2aa20a090896e192c2e8e20a970136caaf3598c777d1bca3d7ddbd5d4ad04eb4c26ee257174e8455ce9a526ef0ce0c3f7c4c321366983d073474ccd868d877bdcb58a472373e228c7a7f4588bd0c9b1adf267c051bdb3c0fd9d1583e1050e818dfed9c993988015f5edda26f5323d9342bba4b94c46481a4a209d5a57aa7493dc85ce3247b41aee044022191c79f0cd6cb4656678abf1ac51d6e43f09b06e5d68d03d09a5a75647a27ed312afdf34e5097d26f558dd13e44b4fe56f95121df1d17eecf9edebb2039001de15ef9ff72c8bfeaffbfdc12e1de2d11fe57a7eaff03288f1bb4f963b116741b90ea23ec8a5994d8379d2851d77d03a08da1ee4a0eb48cff0a315e84c2c5e478a7d12b51e1ce0cafdc44977395818de7ca9271abb97dbac6e79593079a3e42cd5033ce4ade00b74253ba60c38b1f553785ed72025d86d43a45c4bde4027107c17d7505a38e6b488d20b037655421a9fe839e874a8a0dfdc724917782b942db1a577a92b35323b9a54c0c47bbf6f3a0e6223787187afe463fb164b01c896a52d8d3b0e0d6cc47b26d833f86850fe3b383b42e295f1b45d8e2740b53b5f80839ca3294f5d6743f53212613ba5a3922f91d3f662194763bf7df1ce93e8b2105fcb733385b5b58b838b3ff71e0fc4991cc84e731191c78c1fb4997d4acf3ed6288b4e83a603e69b86451a9b15bef0313148e9a2c76cd9b7d2ac247fa4cc2522ca6fdbcd9567353dc9f739425557072a334ccc52545739165f26cf8eb506e2e0a8ed4142257cd87bd7824c4474c36d42f0e257d353cad04008ab11ce950d7afca64e6322e1c8ecb651832d7e38cc28e118a702e6ef0c22925e88415131a886d107d22d17742ff6012a4d626137603286816039dcce6fb8ef7f71b8003dc91f91c9b6754b2553b03432b768a8447541550e39aeb0ac6bc670af6d51b56a099205ffce86e9ee14f901470ac044b01f9367d9a21687ec6f83dcff292ccc7f33bbcc7065cd8689b983f82c3e79e30453a946f60d7b93f616d6c9f7db369c7be0dbd5516e9d64c1291354a2d4caa57eae8d297dd8ca88f2cd324e815277f3402b14e9b2260d931c0c77e2e6e4c3730e06d9f6d4c10bd96c35fed7d45e58947cc212e17b63d5ca126e87640548f4832b06756d6c8d76aa326d979de7c531c9d235e97252db7053303ee96664fae6393faef0633403c12aa1793531ab564a1499ddb5c846efb2671fcf57758acce8bd1f984d0758913774649d1706757310f44b48e4a09f693b0fa83a06dade8e0932f43985a891b11036dbd8d9a09e3ab2bf649b5360d9502de767e1788d4283c0ad3db1d863dbb17c990dfce20bb9a137ddd68000011ddcf3cf70f86b8585bbcb2f8d7fe0f72ece8c16d191af121b82b10bc1b1141b8f0bca555cc85c17ce52ecff634f639e3887571ad563db9bcb9173a9a2936da3901ba818411c15172089e536c00256dac684f95a2d305bd9adab952bd50facca9af638ac95591fe71d918ac4c4173526dfe6e85cb7223135dde63ec14ead51222c7b5ca9dcefa71ee7d7fc3d859acc6b334d31ec2b1532d29cf1ca11f9b2a7bcbc24471a934b12a2b0ff73ce3d4368d6a99df7244ae0a67c723fb6638e39ba3d49bbdc8c2f046f034d7c2f669d58de27c2e94b8403a219236b29998bb5dc65e09bb7ded73eab5dfee09c50fd0257874da9618465891ada3862a28880592a85cf1c37089d69d0a68b4bc3693604b0a214dc6f4ddf06cb9382ec5ddd33e3462eb9ac0998e9ffd76bdead4d8b6c30a720eefdeb4548300ebb6db655a11386aa3286a4fef647210163681d9a065b5af64a0745fc1a1ea47aaae9b5fe060141e0ae331e399254a97f49b2afb4dbe5c2588cf15596fd66895e9223663275fdd81b0e88e9b0df19c1f97b7339631f5a9de625f07856a97b5535d947dddf75dcbe839b1b5cc5dc1c52ccb71076c67777fa8f537a9946cb3cf84b52c5fcdaea1119c0050aca93461a11653da32939413bba6413e6d1253270b6ed1b34582e01b0e749a932ddf860b3ee25e2fe494421e7613bafa601035c35b6871e9b630628511c6d1d68c03ccd8d7f9e6c8614a5b7b8afd0e8ab341a796c6ac684ffd24a266d60d723d09f13dc73ad96fbd5d6c82f9eef60c72dd9ee6b47adf9c437c733c756c82988c6ed6b6a7e6bd6fb6ea5bafa7725a9cacf731bcf58255ac951804e8483698621611a298ec6e57346695cd084c6de417d05d043562345e22c468a5363afa98651c34fab12e238a18b45435644b99bd2b315feb7d618780cb6fe5c39689ea5ebeceaceb5ea344bcd7df5d13e9157ed868bb87a0cc8a1693cc54a8bda5c61f1a2a7d9cba28b588221f2a71c9e72b13babc29523051b34d9b85c976619037c2b865be05ea0fccd6f3d740df1d27bdae71c247d6d6afe3f78ebecc6cccf694fbfc8a81156b8872e549a0aea577680a662f5b1221e5fb9a76dcaa700306152d33bd9ea842441576f4656b10bddac797d9e8ee73f1e3d4e67276caf5d4359a76f441f9566c5968a9c75c4e7d23a8f8d1ea4facd2a52c76de1e3d90001698571a1c48dac3f07c707ddbfa95dd44df76399d6710b673cb395a2848fb6d1827772c0e8604ce6cbfee5e4b6da85152e9d272ddc5d88a8cbe75320d3a43a07d60bc4046bb31fd1607d5275b8f975d4e349ca66c8750db44b8c3b57ceb2a500eaa64fc3e8b0eb7e483c45920eb0f1c9190328a30aba004d208c3f498b66dad8d6c4c9dc8e875ef8e622b8b05fc2062bca56e70e213029744a8d707c5edd78115df8bf68b048db43b8ee667ca397552d8ed9bd8c48367f55009aef4672ca1693ce2f81c844aa3fe2c7068e8eaad84d494267d9dcbc0f0aeb47e0302397dd97c18f8a8786d1d1dab9ddd37756ebde08db07df7fef8fece00cb15dfc74cc386bbf639cbd0947e4e7fa79aac863dbd8ca6af3d57ad0eaf5c2b569b82d72af31a6dad0d6026d445794c9ea4d60ee1150fdf1f12eecf9ea7a9f7284f84c72181eb7c193e7d1deae1b03e2b1cea59b1a4e6885a5013c55532592446a4206368b824d31c950f54ff468d39c4b626b1564a425064d0511747c6eb55ba126cfffee24324ee05ebcc1ee84ad1d752224c93738fcf64998922a48239292fa3c25bf5585f9dcf8ec4b2eccd73b1c1b96029305786d4b0787eed436f248c66e733531d174ad6ef7a37df35f58b013614b0362f3e68fd69e5548955a4892c8ee749da99fada56ad5badb348c95b37b284247a401d71bd307cd4c04d24dbf723ebc45cc73831c672226bb91d418f76717b02fe27ecf551dd39b7bb16bfa60a986090e253cfefc0ed49d52fd6b5a2c1b037048d71143a6a9f81ace224553d923a2e0fd3973e6c0f9bce93b22d03a1b25b6eec43c48e006e4d3afdc3fd783d35da49bc41c6f70dfd026910b3d250b1c81e4315d1bbc7943a66f1723295488ae7bd0a6c13587bbd32389fecbdd286d65f960ef8b247592b5ad5c72ebd7fb9783d19da2aa8a378f4a8e18a21dd3057bd0ea8c219a8534064bdffb924703980c6f934b2c3e3dbe304a243b702aed5e9798115e6234e4b70e071bcdae735b25960223695737db5f8261bc49263a30e4385e463478bdbb48f73c5d764962df3b78ce95a7aa316e359cf458d92d8ab994b4bba9907e17ccef656593b34aa59164b37b690303dce34e9e7dc739f3b05c0eb05bcb5b8dff0134b559c43e0bcd21de030b7a737346edc366f8274f8921f1f0c2f7a5cd865e4b4f8ad7006aa773d1a546ed245742bae558a093adc65caa938527cfc5e2ae1c280af489719a2b016fa99adc968638bf2b873f913850946eef3112c163bfa8d9d333b71c31da751bb76fbc0f7bc6732ad36580e0c5f7bcb294cdfd76ee457b04d3dd9faa8cdc76d1b62a1f26aacaa1a68f04a1f3ffa0e25f82bbfe0d0b013fb4a9a6292db77c7a064a86b73ce5594910f1e2f2a512b9c5473abf6a33198cfb35601365a825220b3807bb5b82ea622fdfa4b5f8b2f6927184f7f755e2cf5b0629f66e9d47faa9929a66cd67b5d95678e6f5e1c396f5b3034ecb6af1d4916b1c21138d169f4ace441b0f87b35dc90618526cd6d4d545367d2b35c6bbedee6116117fb3671c833ca180ad3227e80017c9f87b9d9f7952ab84ef6c69132724b92bacde3a231b09e34cbd959bfad68f174a115f03bd76f51ce59354602002cef2fb1ffe5face2e1e7616ce3ffdfe93d670f40c2f5e0bc98620fa47e75358ed0379ff57ba627ec0a75514b9da7af99fa418d57237a266e9528605811b14275f15fd513db250cef80526622a68a6afed228c589dfa2e7e0c7b73172e5b190e47ead3e933bb9b0990d481f18c42e38f7ccc5a3e7d1eed00e9057984a52d3070c614f2e414cd4348eab7fafa26b1690700e8738fd7a2d486c76abe2f054f3434e3612f56a961e89aa3a837d67f972130a8fbfece32d976264fd37c6018c15497c41849cdfc62eb4baec404b6968b2c9966efc341d096d985f748509720aa86606f6fd0287f9e4b94b272c8c9d798cfefc0b4d22ccc6f101a924b98f562633665b45e2e2e4522f7a9483a210eba8a863627a8481d3d95b77f973ca2b4ace038491ef4cc3129f521de24934ecbd212cfc82901a3d09ec2f219c9323177d5b3e2a49e20130972ccc280a153e2685bae1d77f7f3bddb3dd85553ebfe7c4b73eb95ba03ccf1f9f46b1dd7daf631595ce45bea8d03d197f004077f618b9d44116d2bcc07e0076f8a4357f895225f7bfbd8d1a850ea99a1b7cc9f07c1bdc262a2298628cb6fdb407318ba1258ca1de0285475726e35263958e115c58d66beff7c962ae600284a31fc1c6a5e8c922ad48310a88ed753e992716b301c4e17d534b01022009b3ce6e2cc5bac7519c743240b419ae340b8eecd3438b8fb90e09f114cf506bea92e82b4288499b79c2ecbd905c2928d38d95d24353ced6e78f884c713d702368d90a35b232a771af6296f868913128833aefd022252589930888442e40b47ce18d4740117ec7660c4ee5bb1e9bd82a27bf8534997b19e13b79c17b35fc84fe01f5ebe81f89ff9b55d206fc0a6ce1ecf07329e20e15ea451e74faeda04cd3a6e7b7954d5904c9f25f8e142ae6f0f6eebc3e8137bf7c4d2f2bd592396be48ec56a0cdb86b66f240a512e18ddf3da7935aa2af04848a505515d51691d4a7de767709c540681e094fc4e6bc9e5239d12a7948c739b24cf29129f3968e26cb73b4e306c978998689c1a5a925b2e6d55e7e50b311cd3c3d4238f44d3022e4fde71aa11a43af63cb33c6eb88277990ce5c1c2ac83497fbb315d21db9db2d3bc5a1e997b9f3c668625e9f859d24bd889ef10e08cf88fb869258e37b220c20f50e4b409ab18f4c7a84dd97c64df5a3b98524d2bdab343e3c8e3c922f93cf6b2492826e5a41ab1e3f2a3fa60e3ca1fead1261d802b849f72bf3d1fb0c1eff3e837fe960aeeae4e0e8cc6eeee064f19f5da67f1277c0cf32efb002122730e81cbacff172deb2b8483a78139dd95017af9c714fc2a922803b8d36ac0e9e448c22ae5abf24d115249a9bcb0239b0303be51952b2ad9808c2a28d60389f8d7156591aaecbfff21d813620553b36a13e0e25b38775210a53ef9db633775f7cb8a34c47aa244aad78be2ec473a0204cd11c41914e59ac0450682167f011f42ef779110189b93c1f2d1d97037016c867868f6f119def4f28512f87e4d85e37f80c519af405f2db36032eba7cdaf8517cae6962535413a0243abee3a3ea04b7837a2dffd01518b6ae8512194a69566a5ab06bef74244e38fd1b45547ad3f7d3437c1169d8cbf3edb6b5ddab7613066de3e58c34f3e6134588a1e1413041d97daba99b94cefa948498086d78f3443337dc6702dee4322f3cd56c056f1a6b5687f3d75dd65fed9fe3de341bc237bd67335b84a9dcdd1f24a35213bcb3598be2453471de852ca87045ddb156b6e3b5b112fa09866e97d5e8651a9768c7195761ad662ea76abad9d583969315b6dfad52df80690222acadaf63a47a9f929b7944fe403910163ac4b85101fc8ecb73d33e3159f74425bb7716bcbf72d9d4d1f11f2aff89ccf86afb190ebce073441f347f2f257e6c685b2e295039e201934d9bab6bb080ae14533c0d3b14ce6974c94bf6fee4d5351dbf7c287d7dd647381c727d71e8bee439f3ad3c2835d20d2543d929d97fbc0564af5e75bab53d4d3448c0accdbc4d05b4430b331c8ca1eea2bb04e0631746b21a30eb44915a663e31942c180b7c29abb06a5e103bd6b0d8521a194c01a3a670ec1b39be8eef246e4f52cd0e2aa0a5a0b47a7a0b036fbee94dd9d36e126b53f3c66927af8835626a25a3f23922b234ae232f5f307f8107273831073524342e2c6bb0d6d6703c31d765ca103b388736a04c62bfca535252fbf0cc56bc2046974b146cb7ceeaa58a219009ad65265f8dadfa5847bb694e4120e3f14d94faac15576524e46d0adbb73b824c72b46adc5eab9eeac6d8f1167fe878cf671300dd22f08dc517894ba3a71a5d905895de15e1ce36e105565b00e51ee5f1a9cadb8cdb83ecabc78cf5f48ba470b273fa8ace8179c6c0faea6ce2ee1a2d7c85cbb0e56f3128af1509a3eab8d3a6065ee57a6f5fe86f242ff87e73e16fce5cc971ba9c7ff1fce03c2b1906f82f4a23203e05fcbb1f017ec56f7e0bf87580bfb730ff8a907b9dfca5a1f96be0af6d9d3f518efa3f9a3cbf06ffbd32fc571463fe11fc6feac4bf8ef36b05f14ff43cf8f7f5c45f47f9b5caf42736707e5b73fa75805f17ac7f628ef897e5ebafa17f77d8bfc2fafec5fc0fbffd35fcef93da5f01a2fa4bf87f4e71aa8a28a83fef61dc6f22f70f44a3f979f51f504b03041400000008000000215c0ee789309c170000c719000006000000312e786c73787d7805501c59bbf6e0eeeeeeee9ae00e09ee1a1842823bc12648d0a0c1357896c135380c3640f000830709eeee5c76b7feda6fb9dffdbbabcfe973badea7abceeb8fa61a0222210000407d7ae800853abda32fe09e56880000c1d38e899cb39307d0c9c342f7830bd0dd8cdbc7d1a1fccb9013841757e132f90627a59195cf434b8f284881662805e91e3093838bd1b1ce47f8d04e20d7f28db52e58a3cc6663c9dd3aae7f32a6d6010b4de3088b664a6ea413fc35c642f0cef1c174d135ccc897cbf168ec888b36f7554565dfa923a24de105ec887bd38707b1143bab475cfe48f79d9c1bffa4bd7104eb9436b7f4026678a32c526ed726fb25b53f7f60a87e8583ed6b8a9b56b5c44efab7382d7d39532e640542aab6a5d1f53352ac53399a5f6ace2cdfd2637f0b8a0e096d3f91b0acf42b2a575144c81c48b2282ce0aeae5e6528fced873a74f37d202829cf31069eeae76042615f9af4fb3d404dada7913d4b0c4dd646aa2d2190cc4c14daf81849993e42e1357aca40984920fdc304c367db91a7b81fca9855849bc02cd2f5b86d51300b062b2bc6d75c3324948d3e986d959887bcec24fe4dfdfa259ce6bf4ebb5e8f9761f7e94d1d1e00c0789a2ddc800eee3cdc7f8ee589c3efbb79313f1e86b4858cb769cd759116bce2b11e9b279d45b06b3891c31f8239a5b6dfb776c3e0cdb6ad9486264a5ecbce2f4ac6ec40e92e5605cba2f10925181abccbc31a6f3e9c03d899dd52145dcb567af0bca6f6872f9295549b58bddae2d8754c7f8e15add3e0156cfbe41b46bc4d0591a31114dd6172f9f223d47fceac69ed3fca849b0afee3425f0e362fa1793e702ae4f02e63e9e84b5a770f77f6bb204916af94fdc170531aeddc122da14f295f90393698c219122f1514117244e64c9dcf2eeb445de9d522c7947f0dbdb4204b0d9d7e6cca07f6c50d4bae8687ae98d95c7975f562e9e6fefb4cece8a477f21100804c340000e769c7c781c7dbd9cdfe8db3b3fd5fd6a73fefb4268c1bc03306c23d1b894862dd0d16c5301b070cd0bbb4aa60901af2e25381c7cb09811286ebcb12ba9cf3b3eb5d1a33551fa8a872d2c5e4aeef861ad8eb8548ccc67fea64675999ad794eaf2bdc8b4e750cebacef18b31865d7d6fc71ad0bdac87ef8bd7ab93c2212e3e36b97c18205d8712aad2c7408e8deaa21aa34f49eae6b0dcb0632b0335bb153c7541065fd5e8c72374a0e8b3ceef966a8b55b89da2e8a5460c41dfdb95f63daa035a5923638551dfede49af6e31421f58d2a9a72e79ce3598518a14119ecfb97e0a28b5d7dbb078391d6389c3f4bd8da9a181e828bb33ced2eec73123ccd75b57cf267f3ba34812618b6adbfb81c001f7841971fe924f142b521677fad3e00adcfb1395b2016a7b3700c315a800cfffa38054a4ede1b8fafdaabf51d2dd815e33b9fd7c6599763abb67b94db6fa89ec897fa904afa3f0dd70f0d67c158f6a9a214c986af13b6ce85ad14ecca2a63dc99d5618f2da932093b86f103f142f29313a43855aa81e91ea817e180b365e0a37534ff658c2837888bcdd855dc7793a2be7ddbdaebaab2036c5003a2e4708c4385e7834e30c6e8849b78906335bff7e3302f61a77c0a80bb4b4eb6e4607628ad21d59cb5629102b9d000f3f3ca2c0d5aa2bf4c27440548f94f447d257d6274e856396fe641632f94eb3e413c8ab506fbd00b40fae1d8fa8dd3f6325490a68d1dfc8cb65d292b410476967c1d8b0e1d5db48cc920b7385ca52c16615841bba25232826330e1207b87b970a81a28f284b016328c3571fb472d8931788fc27a9e40b8ae72edabf9dda0a4ce1f175656e364e0ef3b6f0b835c1f37d483b9879f8d5bb864e4a30af15a6491995fe86b0e757c96e3eb4903a3fa144760509aa3b14afe8c072d00915cd17b479bb57efcb1a6922c4ec1207365720e98318bc8d18cac2445db3a6cdc65495f60cc953aada66c3684f36c8a6f4d5b4803b43ed0d0a7911e5f26636a23927d2f47d3a6b7e753aec153e4bdefd0907cf401eea5d81ecb0be3ab4c97296a0b5dcd69fac2696633349aef334cdc1ae85aee123bd864a146b9061d84a28bdc42bae793a57c444f178bd031ea98119a1b012b12f2f922ae95ffc08982a6e99ba5f1d71482d1141b9aa3514730b5ee1f2b1382188996c21c02aa89c39dd2570ac4cbcbebc3dd35dfb25fe3964723f6496f3ca3ee74e8cdaca9f742c97809a60c78a032d1ea840a8c5e2199ff986c2e8675e824677a8e566fc91db9772a954e72fe405f4056b1401de6bdfee385c4097246abbdf255b75b05585fa6ee60accee30feedce31e1732e734f6f5c4f218efc6f77fe3bcafda753ff1df11216a39ef2caa743920b2ac882f3a4bea10ddfb922b12fc7399cacf87d97305aba51bdb3b369170dee3104bca29e769835c09912ee8a2b81f953024caba68d6b1703f69b6787e97658b8e3f6cc4dfbba1013a92b5771be9422b6a714eca7dbf17d4dafcdc9b695761f9764234e29c4345210c3138351b0c12ac7d1266cb298ff63f2cc24cc0499d05b5d6b1a5dd668545af74bbf01ace29d6f08c7db07c5babb4e59fcd772a6d2bae27550f411f148caf8b8fd53ef39f7ac5ef06d87a448ed5bb21a6f5b584b55117642a51877f9954c891b1ac361ac29e5b3a0bf00a274587e4ab1084f2996f49f00e76e07047ab8f3fc35f1fd7928d95fe6a3e67971c30e310250f2fce6ab092462abdbaa54342ef3351bc2fd14a8e7e953808cbfe5b75bbcd7056765594391d00413373241b68577db8c7e6e00c7507274f21b0155cb5fa5c472266334cb1c3c453d86c23fcb0c1008cf30c35e26d348ad2b157917235421a285b0d9bddd4f430a5aa152b6f517827c648999483412f4a448d34200b3b0cca28c3ba42026460699a3a60786e66528bac058db53796118f272a39c3b22d9a4c3c9ccd70ca203674e52bea603787826e3187e395f939473daea42261ce6ad974a5cba44c5de51e28d5c0bfda80391a8a057246bc59c27dc199c06dc802d8978031916371f71994d2de1b021424758446d5f88960dc7291c1e5e19ba8534b96d3bf0ec043fa8beecd54b7ea9649e5698dca80ce93151d89e33e999e28f5c3322671aed78973e032fb197151956fc75370219f8721c842e9a019aeea9d917d90a32e904d0311d383a25cf3575932c6488cdfc1a69cca0861868bcb783b53756ee5c91c9cf1b85163ef02b8e57b418052c7d5cb95a885fe771e217fe51c33fb3a35ce56ec82dc07f89b3317b27150b1c599caa6fd9f548b9cec3bc671d0941185c13c5f322f2cd8b2bfbc4a3def886b730dc169e8b6d9c247972aed4d5386fa1bc467f003c6525222d818124a43a0b5e8972bd6dff4df36fa3d8d7fb09bd42060088e8ffaebb9e8cc2c30ee808fc7bfccb1ef68d4da22945880371f640b8e74b156adee7bddf1d6fc8fb73aac3d3ab49a44ac153666e60d54f8539e9cca4c128f01fd010b3e253cd2e1c695280587c0e86c417fd983d0e893478c9a5cdcd3fcb4f98a837656dc98bd526bc635f66bb7b7894963a2f8847a38aca7cb626f7e6baccb0862344f1885afb30e3eb225951cfd589f4b9247e8cd4b39c6875ba3c1374f30bb9955b96908ef6b775209557b966c47ab3e3a9b4975c600c336b8ab5c0203dabcd97e17db690126d67798751d70c2f445787205245edfdfb594c1454d32c90afebc372f46987b1c80cc1e7883b128c1c2fc4502aa4f7d335499057244e37bd06fed2a4a24185f6034dc56767a4d96818b8d04f945bc6b137b57b99227bb21111e8b3890b86f7bfdd9a3a3d56d8c48473098347a0f6220bb21da9dbcbbd3173db256325005ed475d545aab25d91ec86546bb5af7b135f5b26dd76c5db0b3bdac11d937b7e585816cbbf285aec29bd15e52cba45847d4028cbeead8125152bf758ed4d21ce9f7db99c0b5788581945cdf7f233cbbd5ad20b30a09f13e7157d4a663d8cbb29db65668bb606d7adb588ecf1fcd5670de193dcf33af970c188c396b4ae6df29ad861692c88159cf19d696eb3fb3e151c08952b3ebd4a4694e64a558cd99e48fe251cbf117c3a5de89ba7a9fe98629769bfbd988f2ee1e1ce79b85dbdbb5bddeee8a4ce0987d07a53f49dd62ce0801e57fb3bfce1db1f379ca5246f273e6f02ef8640811727528f7ec9be79e3373bd74324a31db737a78f8f6be9704bd62eda61346ba8ae2e38d9c172e40348e4ccd204175ef8fd743d1988984c1300ca484d842513993790f3042748b8ba2d3ac151f76feb985d2d680a3cc547ef6e6584031dd59b24b25477916c706b165052e4f5480a70812e94a5b809c5049b9a8b80ec0456e8864b1fb30197b014e64ec80037c1d72c0da5bd40b51eaeb815b54c9a4c07c4f16ec939080ef0e5a0d68e3952aa7494a923168185e6f7a4100354d577c2b7e495061de1225598e833c8a442d5e01818ac4913f8dd70a2c6e44fec7ae1877f992abf1ec5cbb31454c8cab439a84d56bce44e621bdaba08a889f26024f0b1923d90511d82d29961ca9232298e88620fc1e2ae64c35811517449553403c20b1db751480d9a6fe91457f71bce11d2837ec025c672a6bf53a32d3dec274a97b1d15eb24e4831f3c3a42828e8c8b2cf6b0bc70d2a7189c2f5394a407b4df09e398025c9e8b730ffec06f64f6b21c7fe0886af3be421d67c33b217a8c3ef9072efa7f4578dba4483cb544fdb3e51f317a075f7e9fae622627025bf4971321688bc950c762e3ca70d35362c72748a9d218a5ef68a5349ef9792436eabffacbee7ec9069ad1c2f66194b87ec57ecc1a190629be021c1565da4e554ec3c1743b157eecb0239de8dcaf58bafaef379107a9f7ba97f6e1ad8a6936cd000ce625f38ac6a208300fd3faebbbae9cd99260b837a268adff35810091a200debc99c4613096692f7714bed6819e70f6ebe1450872618e2d5f5eb9d77ff5eca8d0596bc67cd5be5d3c11f1cf217c71279ab6986a0d89b5b8d1a279b067d672ad49db559ba49c99834343150fab37ca71258f7bae45a47d2fbde46075dba7adbfb2edf42df9e7ed7b141384e06e3bc54681308dfae7db3c1a8fa659b710719bffc2633c1257be8cd385f955d4be51babd4567a1c16c024ca5a20833563b746d899e0b90e73c7c541915ff360da4dcd8bee13f118b5d33ac57c4227f1486dd2b09323d841bb8d85b7b8ad819f2279f9c5ed517d5b2685725963e7bbc13f9277d02c27ea6d4fa655cc152375a193ba48039207c64150ae7b776d35c87752596a5b5ea124325a083c9fb40b6348db1e0a7e2ad473bdf8ba3cf1549be56e1a3a3b6fae584b862eaf305accd6cfcfd437ee8d5882d59c541807d9664b8b6792089dd00c1cd26893e83525acc879a31f751043d478a2d74e524f229df9025d051f72a7ccf6f614b3a20243bcc893b5781e5ca3c19cf5a33fd575afdddc8ec35e3f8bb67c50f0e2e1d5353eb8393dd959dd2bbbe174c77a75f175287e7d43baf1a27af9ced1f79ea8af8266b51027f32291e5635158ac718bae61e9f4488ba3f8074e0610ebd014d380af32a749949b5b27e1255a76c5891aa4d62cb1fc5d36b2b27f842de0f5a8cda020190be883296375b743f0d9113b628cfe1492fb1df33121e460f71346a4e7b0392ab866a1503a8b48e0edd50f2b8569281730b38cf5f09e94b2cc62df765bf7bc42e72c1da016d632dd1fbb6c8f2909d2749f7bf836fd4d24cb78fe70cafec572650bc3b26758c06164210b047a2e80126b153ac0fe8815bab37c4d255fd76ed5443c062dde7182e84376bc712bdede50f5b88a3ba980958d97a08e3e2f9c352930176dcb57b032ebbdc04b60acd68db1dd01f525cacb1cc35ff2418b0f2ea2d4b7e6e562f1dfc3264feddb020334ed1b94029cf762c9e59482dd95b222cf2fc515892a33a59e554f3bf403b5824feda1edd312ebef44e9eef1c101e8fe678a6cd31f8e9d17c66d27d992406d763f572b0742d11d86e0e10b95833c83cc9bf07f33c926c02b38ae1337392ce5492f7f6d348517dcdae5ac1a1d1f8fe3729cb489761c270817e8766ebfa62bda5230715b4b29cd50a9e6cfc69817fc06b519e9b1023e54bd1e8708bed7907ff59dd00348fdceb13da2e39eb9f43c61124ca15a0f879b6f9e2e626ca036545a4b619c7823abaffbb128be9491bc61c7722a399fb1b2458ea9d1741ebb2c91d70a1b7588ff96859649cb39031d585316613bf3592060af5abde0470a0f8e2cbbdb70d0fbdd2b46016316cd8af1529d78f35ba3ac44a0ea74cd18c947fb817c4bb2fb2c27bb4fc403cc8cd281d489215cf301497ee09cc87593a8a59a8a005b4a22edad39a80dc3d9e019a045cdeb5a11da48bfaf3eb632ce11bb93fbd90422b396a64f094c5403da45a84bb08ca16a4f74adad4c96dcb6c45d7a772c778040a0cb3c01e2429b3bd1b4c55756585f1f693c8e68642fd5b0bcfaae9bfc2bc458575137d47598b461a405ad52fab85a9dc9a496be1d2cad3851945424a3d867183d6d29ece11c3e510be7769abd78259fc210a2a89c9af58606773e1b772bf7688d4065d02112d0c9482d00ecb35be094d9244df4ac668f9609693edba476c70f0366d32beedb2fa8a18aae1fc984a753719a2c246de24b57fb9d0e723e5ebd37b5cfe98d9fe4a4ba34da26753cb6311fd12959146811a8ced928d0cead571449e33815fa519a81fbcbcc5818b327b7d1c7af099bc7b1ce4494f43a7035ff9c381cdaed455af1e5a7c9d5524be0fa63f077d0bc147d2ff41a73cb59f842781199f5a83afcae0767ecc6ad4dd1a9eab48db0725fa1e6d6a4337c3930e06a2df50fc53ecfeeefb66f16801a58b58d641e6b4599be889fa0f37fbc08f8e4794929c58df56bbd8e166be6b6164f5b6c68793c4ba8c8efe2266751f585afc609f8401b1307cef11c6c7c091e6745be3e144eb5aa5133abab12c158f7232cc075c60fbddf67569918f3dadf6f99555ab1f0c7bff1a6641e384e1542e111629648ecc8f0e0706f20dbba3c4798733fc8a380d9efc158cf1d50aee18cbe2afcb24a7ad3af010faaed66cb71ed1fbdf380a5aca9af1f6bd726ba316f59dfdc36116720ce57325a658b5b6948a11e3f635f2ab1c471c29f9a93f1a7760def69c7c6d95ad3cdd9c59dc7dad90df817ff92f85aad9b97b4ef3078396fbdbd6811163fe1f9757520e897fc31f184b749b5861afea21705057af0577360381df51d02baaf76b805f3ab8eb0778b1bf238d4a194f8399bf76dce393d6c8d904e1802f75d44727cb25002dc67c59cd11da63a2db3014e5a39658824be3ca6ea372cf8e4c56bb1f03ee118d1b2635664ee00dc30663eabc9efa1e4da7dc27dc1c2b48cf4602af5e8fa8870f91d86cab5b4312a6d942c81617a6c19fc38e560024be61cfc71d2ed7136fea5df32e847ac6100594b6d4b0efb159e4a44ea280b0c6d601fd94d0d5577e574a4a86763a8949070e6b08340aef1f91df15269594589c1f015e74014bc1b55dc5c1242029eb7dee6baa3cb0b72ea0eecd1251e73dd4bed73e4d2db6fcdde03ed7e15bea3a5de45be015362428a8de1ce973805210153dbadcb6716b9b19492086ac13811f144f78a4234adbd17524720fe6cd7f8dc802e010fc0c55b5302a040479da9998cd3c80f228194228329fe7d48b019ab030b0308fc081fb6c60c6234f632278816e841ebd4d87c78405bc4f9b7d6966603e2e29eb446f6141871ff536b562e2e7fb592dad54e4fade422c6190de2015f511d2a7ac81b4d512efeba6f7012b3953f07e85513103fe0edc51e4f740cc08a406b34684cdd510b1e3b17074b6b6b6bc73de70d4246e174efdfaae9ff704bc9d3ab98f0d2a96939df8cc6e18c466c805fe34c71084f301b6a74eee1178d0b12ece3348219d6844147c5e24abb885739c785f9ea31b834d9bbc35a9aa7d19db37cedc6f13b7e9c72c49ac89a5879ae28c9797964799f751427eb04b4fb742c5dafb3f42a1dc6e84b6f279f80f5bb140c742ede81c7505f3229f01be7f9a26678f193f81b4725c38744db70daf3e22181de45988406daa98dd1a98e8fb7ca2970db683daa5bb7d8cc7a47c0fad98c50644298bc92a8a2e12868d8a0dd0fdb558fee3efee2920f075d0fa9bf18c43ab7d3d9a60f817ca8f8a224277c9a904dad990ccc3ee7737cf87b860f7c1a2f6d2cbf94819113a20cae5f89dcff6e732947c9441e503a5398a7391ea95cc4c2cde9f35d220423c3eb6fb3f455c761b966ba214dee9260c1b0f45986edf32d826fd78a8756dfa7740c9dae1cbe7ed165e165fc1241530d0e9e0bf07f93eeffeffa0807f8ef14fc7380e73cf23f004e70ff62959f0b3e275bff110c86ff5fd4eb73e1e7d4ce3fc25ac8ff3fa2e739ce7342e41f1c6b94ff9b1e798ef2bc83fe07c507edbff6d3cf019e5716ff00e4e13eab339e8b3e8f9affa140c2ff12439f8b3f77df7fc41b88feb7336baa2121fff915ede97ef9f44377923f57ff03504b03041400000008000000215c3eeeb64b9d170000c519000006000000322e786c73787d5805501ccbd65edc83bbbb43700dee12dc3db084c0e2b204db20418306d7e0b92c8b0549826671081edc3d38c19dc7bdb7fecabbbcf7fe999aeee99eface5475f7f9ce399fb63a1232110000407f78e801457a9d43cf101e46c80000e1c38c99bcab8b17d0c5cb4affb51bd0d382c7d719047bdfef027f8aa7789e72859bdac0c6e7a563401cac48db9f8a720b98ccc5c36a5de323ba6b21946ffcc8561ba2596eb7b1e0691bdf3d16fb098483a17988433b2e3fd806fd106b2578e37c673eef1e6ee2c7ed7c387cc84d97f7bca2b2ebd819d9aee86cea9067d39717b9ec497687b8c2a1fe2b790ffe3127d348b6715d1e9939ec88063994bc6f9b1ce73401fc41618615207b2dcaab26f5a4368697b88d5db9e36ee485426af665317593d26ce3b9daef6b4eac5f323cf9181c131ad67224615de95f0c535542caea4db62a2ae4a9ae5e612c5af747efbffadc1b9c9cef1c8b48fda32fb1a82b5dc6711750f3c9dbc4893596367b23cd9e08486e21dad3701f45953148e93374cc48944528f3dd0ccb77cb99b7a4bb8729bb182f9145e4dbfd9655e13414aaa2945073c998583e7467f1b3d43254aa8d649d464b0a41fb1fab5d67f09471e7e14d031100c07ae8ad3c80204f5e9e3f5b58d28063fb53ec3707a1cda123cd3a33dfc80a9ff3da0ecf924d2339d41fc913f44fb9a4b5dc36b54f215a6cd928f78f966ac9cdce4bc66ef7d09fad0896c710104930d68361e10d57af4f011c2c1ea94aeee5cb1df83ee37b036729ca6a5fd87c9ae339f4cc7f0c17afd1e2176ef9161847be4c8350601016df6073fbf123d5bdcbaa69ea3ecc42180ff9e3cc507e6a5642fbb4f75808f42a73e1f07d7a7b074fceab6049569fd4bdbe08735addbc521da1b7a9ef51393798231893ce159590724566cc5d4fce6b45dd19d4a3865596faa5acc8d3c226eebf1400bbe207245722c2962dec2e7cbe75e2e8e7fd734d1ce865b60b9000802c0c0000f761c617c40b76f5707ae1eaeaf4d7e9339c755915c60be41d86e09d0c4626b3ed848862598c007a19dc9a54b1c88c9f1250434760444009e3b545097daed9e9b56f9a9355afa9a97333c4e42f6ffaeb39ea84482d467ee8e564db58ac7a4fac29de8a8eb70ee8ad6d9bb29ae47caaf9e3521fb29173b7be72be382812ebebe790c98a03d87629ab2c0205b6ffac21ae34064fd43685e7001939586c3868622b88b3d7e7a33d4d52c2a37e757c34d6d9a9446f11452934e18979d7ad3961d4945a491792a68178eb62503b1f69082c6d33d0903ce5eecb2c43898c28e05a3b069439196c58494dc45ae3327f6e66aeaf273ecc698bb776f8fe8b69ca0fac6f6057b095592c89f4937a0b7c4708c23b62419e3de713c58992c39b78dbb78ce078a45ade4be3e40160bc8014e207bc11908eb23f18d1b85d093049bed937f84ae1345b59ae9bc1e10db3cbd138923b0a289378ea2c7c3310f273b68a572ddd784a987afef354ffa5928398554d4bb2279d305ccb9b308ba4ab8f200c3f392926539546a80e99fa8e6100676aa40c61b28efcbe9417f90075ebdb935aaee3697970fb9ada8ea2d83823e4170c2908ebd7dcbd0557487d6c865d0c94c576fdc520d4670484551b64edd0fe1513882d4a7f682b57a548a27c043c787d8f86f04943b1734a0f427d4fc5702873617be452346c1d406e255be0324d318abad2033608c478edde7a8fdefe234e92b4900ef385827c161d692349b46ef614fb13448d66528b94a23ca1f234a84505d1867ee9209ad92448621f6ff75c3148f41e6d2170186de0e2b54e2e47ca1c71c018b54261c9cc59cbc7637b81717cbe6f599b0d63034f1b793dbe20f2bd4edf9fbc5bea5cc524239cd509d7a68ace7841d4b154ba53d053445390582ab78cd2a3df9fa00462dd6feb112d10b47bb95be7c7166526c4e2160fb55424ed821bbd8ceccfc6465fb5a5cbc15693f10ecd57aeda62c76a4931caa1f2d3b6423841ef0c0e7d16edf6623af26b6e94b963065b4175c6d47302d6fcdb234edede7cf49b42b901438d9e2fd6d3844d30fb00f29a38cecd64f9b6e3749043237dfd1b064dd568b660e3f0e5300689e7dcb3f4eec849e20906fbbcd2bd9342e1a562ef9f2557323cfb1e385ed2387ebb32084a2b1541bbf8642ce611b2cced6b7544183bd6488853583979bc43e85c9974797e7da2bfba24fe2e746c2f749aebc229f7468cc626806c388f908670db86132301a848a4c3ea9d90f582d2e4477ea2667b98f566c2a1c77b98749aeb7b8a4286c255ca40f0eac71b4e37c839a9face67c926bd276a425d573385163758ff74e7d88819b7998737ee078aa3f8db9dff66b97f77eabf192f713efa21aebc3d203da386cfb98e191adbf19d2a91f8719e22c889df7e13c6c830a9737535ff468bf70b0e5dd6483fc8eee54a8d70c793c0fe2101a553d7c5738885facf724ce9b75a79e275cc4cf8b991106ba8547149499338510976d36ffb6931e872b1ff4cbf8d4fb613a712621e2c8ce58dc52adc6093e76c16369b2ff83e7662166e864a04d6d099c094331992d17fdf6d3455f1ca2f94f3e59d52ed4d9b1c8196bcb98cbe786d0fe6a078145542fcde3178c633bb137add2a29f2e925790dd87eaab1aaf84962a5180fec42b6d40383f120ce9cea11e9cf41a8408b0f2116e921c492fd26384f0720d0cb93f7af8eefcf45c9793f1b3dfb142ffc002b102ddf7fb69a5022aebab94a55f3bc40bb3ec25f9166962115c8b4aeb0d5085e139c96630b43c1104cdac882d817dd6c31f97b009cc3283029ae04d4ac97ca48e4cd86691739798b3b8c857f941b21119d60874ba5d04aaf2917834b90aa903142d91d5eeea5a3042f53abd80708c1dfb0c68e2699087a53a6eb20415959a7d14640a9c84951c196e8194161f9994a6e536c2d694fa7b014e487b8b64572c80652582e19457b4f5ca4fdcc7bf1f1cd46b0fc733f24abe436d7868e82666d174addbe898abda2c21fbc14fa5e0b2155c5ac48d1893d4dbc313a0ebc825a133f0d629cdfbcc76331b7467802173ac4216e7e4fbc683c4209ba7b6eec11fac5630bc4bb1d72a726d5699022a56c995e94d2a002ef3053dc9a31eb18e78f5a35a1601e6a7d95318928b19b1d155ef261271215283502c114cd844c74d4ec89fc0c366b03d033ef3bbba4cc7c69279dcb149b5c1a6cc8a4811b693a3a4cb534546e5f902bcc9a8415ddf12b8d54349a042ebc59be984b58e375e117fe5ec33fb9ad52e569cc23c07f8ebb317d231d071c9c1faf6bdcf14abdccc7be651b0c45ea5b15c5f721f6cb8f2f7fcbabd1f0e26951843d2237fb0869cad84c99bb69fe1cacc6b0173a6e232223818522a4360d5d8e76bf6e59a7fde7a1d833f8d173810a001033fc9d773d1c0a2f07a033f0eff6aff3b0676a164325421284bb0bc13b5da850079f767e76bea2e8cead8ec8a826952e838e5b7840d5de16e566b09085a021bec640ce4e48b33873a64d05e2f0818c49cebab13b4049b4f829655fbffe801d31d36ccad95394a88f82e3a4723cbdbccaca5ce7c463d04565dfd95280b9cf336d1188d0bca2575f4ffab94956d471b7a1bc2b4d1826f38611af4cc0b220574ba84d3c7244f474ebb641d43e30edc8b5afcec7323ef241b12c6ca9b6027d0c6c76ef07f6d8434b755d154043ee993ec8eea0603225ddbddb696c3474f36c889ffbdd62cc71aba9c824e1bbc81b52ac5c1fe4306a14c7899a64f8735297ab4ea3001932d1e022a7de2f25272764391858783d6fa97e9ac65d7ddacd12d9958b8cc49c4e9a33be5df7f8d2e6b5cc2e269c471432d8e3243227d79ab6b5d8193bb3553a5c0a788abea6364f5dbe2392539f66abfe6177f443e398c78e784b516b0bb4756cd71f07c76a7189b2d1890aac246fd52e22ec0b415bf46c0a2aad58bec569f912eaface8fdbb56899988d49d472b7200be6d3985188d5f32e6956c9b774dacbb49daa4576baf867df9aad0eb1137e80c6b43162b2677e1b1f1e1479c09acebd5941fb49783a2b720557425bbac7f49e6f052752e5b26fa7b20995a57215538e374a4029e73a926f9b1bc3d709ea3fc639645baecf66634a797972efae576e6e56b65adb687223e07460caaee39a395cc8fd4a776b0062cbfd86abb4e4f5e8bb4de04d3f24e8ec48fade3fc52f7fe46afbb29f74a8f5faeaf8fe7e350361c1d64d379c7615dddd0d3727449ea21785824586f0cc87a09bbe2313199b79144015a58db46026fb027e9ae8028fd0b0c7243c6c5fb78dddd1e94945a47c036e5741dad753bb4a264ff314c9813665032545b406538173f461ac255fd0cc9ed07013921f4d1579e031c46e20242e847b1231228cf27d95e9a13b43b71da8b816b54e1ecb00c43ffd290f12ece5cb45ff34ec4ca5da5aae815c0c159add95460e54d3d88ef8a9a0dce78c10a5cacc90492e1da68ec0c8684b96c8ef811b3dac70e4d08938b064aea235849f6f2da8989d65b7ff2945e99c2799bdffe759604db41713a1af8ddcbeac5a7f0fbd05b61c19b3d2a0e893fea9f80bb9703664347d3255edc08822e72d3432a3afd7f44a2b7bf5a74819c1df1192e2b8325ea9d3951d741367c8dae92ed826a65af863531616b6663be53747e00597ba45e3f91e266268113ab204b2269bac0bf34f6f3cf9612be4dc1dc9f8619b22d4966f52ee0c7de0154adeedb8e18ac937d19072b5e3e6b734fc8518ed5dfa7e79c858dc292f525d4c05a2ae25435c8b4ee9c24c8d8b9d5de2268963167de25533baa5e5519bebde69ecba82b26c5512c4ace3e851fd4bbc381553ed13bd24d8ab8b755c4a5c67622977617eacf05f3bd179fe09d5b5be77428e79e786a7e641cd7a2946f5d06c8eb983aa7a723830e0cd9abb87c18c798a30a463b4c491d78a58d00865c040f6388658308ba28b477a5bc7b4a06f534a40a327d118bfb6dbe0b47d7d212f0e58eac896bfc2a747d0d71f208e23f252db0249a933af1a3d5e2ebde795b9507bf666d926155372ff686fd90fd87625b056abf4524f127c6ba7872953bd05be29b0327462d871ae178e97c53a2d13da0422b6e85e6d30a9bddf62da4625805d6525bae5f4bf18e1ab7268ac7c6193d6c480cb0a18435b0d62b4656ad70c3f113cd563693ddb2ff6ffda977e55f3acfd483c56fdb856a980c8453c4a972cfce8706abfc5ce0a2c6e6fe4af44013bbb3eac6bcea254296f687bd5f747ca3686f5689dfdd184aaa552947ecf983e4aafe4be69700ff7ada7ae3afc33991c8dfd53a164723a38229f8c1b5368f32e1a415a8ff75ac9252ce95897f566a2677ad652e91339a682e250097b373f73d70818b914e76b72513c7c8b3d3d8159226c543ba85fb359a2d39ca822f78561f47e2c71c391410b691da94cd6334c5502f88d0afbcb63ec8a0a2cf1626fb69259688d264bf6f7ee34f7dd164b074e27c36c3a589fe0d9ddf34b02e8d78c14570d9f9cfae36ddb9579ad3082bafa0cd3790dd8f6e1e78ee80f82169fe02e96c5228bbf44a7e24c1bf58dcb26061b9dc55f733142d8fac7997bfd54b8cca23d3cda88ce31722a8ed4e19f2c9260af7250550222ed015a43767d82e4ac90d7e64cd5eda09093430ee458c37114cf1b965f44f0fd9db75851de0396e8d09ab922996c62819717df6d14277ab88159e56c07b76454e5567bf65bfaa7157a271900f5f0c689eeb845276c4988b6e7ccddc7898f22d9a6b307e34ecf162b1b1917bdc3030fa28a58e13da70268713661bd1cf73861db8b97d40ab52d365f48867b4ab65de086f06d305ec5cb2bea0e77711755a88ae9428fb3ef33576d4aec797bd8324e569d0f74018ad3b431bcd3abb140759e6bbca4103c7fe7264a736d09134bf81c3e76ecd41c14a8ed54af1ce8ba1b4721af1ce2a99c1d757a2eae445c9925fd287bcad8bcf4e57f280fed1f86387f074a4fafd720a0e79f21b2d970367a4e98ac85f784fadd41f391eac2af25f774f278fa8424f8f3fc0653b35ce24466c67e4a2d7517e103ed9f94273c22c1e12d8370296508adfdae7326683ad5726b127271f769f7a7a299c76a6a59a66a357f0ed6ace0c71ebbc10e1be05d9516ecedab1f9991d96eec3ffb24476702f021d79afa3b8ca54622c98e48740acdfcaeb515a9e8e3d338dcaa81f49c1c32ba2a06043846de32dec56cbd3b831fd77aeaf6002961189e32c6a9d3d208ec517e63fa862cfdd10e3e03a263dd34fd827da0cb23ba2286492a3967ea3c3ba51de43e21536f8f514fe963bd1a8d5e53922b44b7442eccd491a1761c9d4815617a84a3e304aa77a0739d7d981f4b523c5133d0e2fabb2847d1705d62afd2cf942d049fb4dda3d80457c599a80fed858654e3d2e40d6148dd7c3a54c02475a0c3a18604f312baeea8eceaf258e97563fc39b875b11502819ce7139214d9dd8846cec705a30edfe38a5fe0e65f17a28aadde984b4d5291b9237b96fc41c06efe2e718196f390cd9a1935ddf200632f9441b9bb5320f40ed03aa9bb5e15c23a64118f6a48e56eeaf0547bd76d2cc7d4f023a1230e23beb218231a3bfa019d1609234215f9fa4d99d9186dccb476878e195901fb986eeb772316ae80b4dba8b0374a1e6fc8797ef62bed93c662eb1adc4c0dcc13e2599dc66c98608b0d8cbae7a5c48d90686d9c16d5f9c7ed5319d36e14eae67d511249e73c16fa5e9689b764612a8cdd93d7e0ebffe509afb353835bd5fa759413ac41b4561214b12caedafcf6a07947f98e37f2bae1967114495c4006f2a9ba614bb80a91d63f35ef22b8aec5bc925b64ead2327af28c61fa967ba9ddb555eae657bf3ee3ea571b7301be859a92f0e959ec26f7ad121a59fa231f472d2b9bf967ddf1ea48a262dc2aeda7775c61fa832760c1979a5bb9752d2f1b74e34d096fcbcca297e93fc0820c76ee04293ae9eee737f8357cfe70e2de1d801f3d8b86e1b912605dcf6a2615e5efcdcc823fc5c35b2f984e0e44359256799d9e983a6af860df39aec0be4f03d15b2b69c39ec53ff342f28fa59e557b365b7df386ab5c71c986b3332e0bf9ce3e424f32865afa78cc86b13b23a45b7d40ad2fe3437cfbe2d09761a6cf41cc185edbc89941782b8f9dab12471c37e2a134197928d6f01f66ec5c6db53d5cdd3c796d5d3d807fa92f495aeaed4fc9ba0e4216f3d75a8ae7a71246bd3facf4062f29fc2219059b556baa13ccfb505262867cb00446d0d3dc2061fae94658b13c6f0d7f35bfa1804b13464590bb79dbec9adbc1de006f9b42e2b9894c4948114a4478a7943bb4cd5cab63d1cb4527af02972450c056fb888398327f2916d1251c2b5afe8b0d9527102f9c85cf66ec7318856e97705788301d1303945a23a62e3242619bb172357d985a172d5b6080e1892c41bc4a08a1354b2ec108d9d6083bffc2ba2ce6215b3840ce5ad79ad36999b7129926da0a4b17d8457e5543dd5e391125eadd10262d249c350012c8333dbd2159282baf28351ab8e0ea8d46f4a08e9f49464ac4071b6cae39bb3da3a0697d32b4c06ba97fae7b8a5a76fdf12bb8b7c5bfc26fa80c5cec17382e26a4d410e17a8e5b181a38bed5b478629517472589a41e821b99407cab2444dbd479267d08e1cf714fc80bfc26e005387b694e081468ad35b7907519fc4e2c905a6c34cebf070fb16003b13242a0f788e1ab2c1026531f4bc218810e8c36cdcdbb3b8c79dc7feedac274607cfcc3ae913fd022debfef9a8d9bdb5f85a46eb5cb4321398f75428bbccf575c8b8e19fa425b949bbff62382c474e58f5e06b544e4d7f8bb71bf465b7ba78a21abb418ccedd1735edb67fb0babababbf3a4eeb854c22e81d5faa1b7ef748cd37a818f5d1ab693cdd8cc1e58a41ae475ce54a0545245af437b876f08bc6070b7671994c19d784f70c89c5977d2359e11a11e6abc3e2d6e6680f6ffc3a81e99aede73042d0fafd9833ce4cceccc67b5959dec72b1b7cd25a92a217d8e2dbba70b9c6daa97c106b28b395720435fca668a477f60a3a8c2ec5acc86f9aef879ee9c34f1a601a9d82181a63c7e5f4141f05f22ad22c2cc8417d985e6d64a4495e91c74ee75ec3b6d16e1a1c39d5cd6e82261bcaec934c1d834049cbded37eb75575efe91b202e79b7ffed2e6d8951ac6d2b837de200c8874e204a7ac4a70ddfd499ccc4ee723d2540bc657ccda7296567fdbe1c8a9a186d74f95ce476bdd90d869685daab7ca2384bfb6bb0721e072fb7cb6f81088a8a68b8c5da551d8fe39ee58132b6438a338563c83ae054601572bd5ad2bfe298dada7fbc7ca0f5ec9b958fa91492b63a022237e07f4beeff77bd4100fc7701feb181c72af26f032e08ffd0941f031f4badbf812188ff21bc3e063f16767e837550ff3f99e7b19dc772c86f3bb668ff5b1c796ce571fdfcdb8a2fc67fada61f1b789c57fc36908ff728cb780c7dcc9abfa17784ff85431fc31fbbef6f782df17f3ab3b63a0aea9f5f311e6ea9871fba93fe39fa17504b03041400000008000000215c65f3f38a3203000025080000140000006275696c74696e2d302f7374796c65732e786d6cb5554d8bdc3618be17fa1f84a047af2d8fedd883ed90d95943202d81dd42af1a5b9e15d18791355b4f4b2eb397fe8242ae39f5d6430b0dedcf19d8df51c99e197b12da865d7a92deafe77d1e4b7a9d3eef38037744b5548a0ca20b0f02224a5951b1cee0b737851343d06a2c2acca42019dc92163ecfbffc226df59691eb5b42343010a2cde0add6cddc75dbf29670dc5ec8860813a9a5e2581b53adddb6510457ad2de2ccf53d2f7239a6020e08735e7e0e08c7eacda6714ac91bace98a32aab73d1604bc9cbf5c0ba9f08a19aa1d0a70093a14291f74ead8a4f77ed287d352c956d6fac2e0bab2ae69493ea59bb8898bcb11c9203f0e0985aee79f69efd423910257913b6a8f0fe6692d856e4129374267d037d856ecfc8d90df8bc286cc091fb2f2b4fd01dc61663c08ba795a4a2615d0a633b149c623302743c6c3870ffbddeffbdd1ffbfbfbfdee571bac31a76c3b847deb7007d0ff11ba5f5a13a78c9d34cee0e0c85373193451a2300638ec6fb68de928ccbd1d60fabcffc85e2bbc457ef8f905ad64b4b22cd697539d01049a5a86dec5b324496214c5719c04331404bda8d5219d8a8a74a4ca6034f49cf43931e817a37c2555655eea51bb3dcac195a78cd4da942bbabeb5ab968ded21b53637274f2b8ad75260661b1c2b0e1b035b12c6aeed6bfeae9edc9d3ced6a2036bce0faa5a167e682fdfec7ad2174d80e3083e1fe73111a8bfcf322809b866dbfd9f0155145ffce47efa2cf1bed178cae05276292f25a494d4add8faf9e813bd533a87bb230d0d54f513854a313bb13b19ee619b79317d847627cde57c001fbdd7bf33af6bbbff6f7bfedef7f0268c404ab0d65e6aa596bd613fc18e2e197770f7ffe3c6a98567cf4c50cadaa1b3f561fd5769a9e13351815a9f186e99b533083e3fe6b52d10df74f59afe99dd487ac71ffca5e5614d91ea4d3af5addaf60a368067fbc5a3c4b965785efc4de22768219099d245c2c9d30b85c2c9745e2f9dee5dbc94c7fc244efc7b0395714cc5b66b2d441ec81fcf5e8cbe0c418e8f7dfcfd09e724ffcc87b1122cf29661e728208c74e1ccd42a70891bf8c82c555588413eee12327bfe72234920fe79a72c2a820e7f46fa65e7348c6fc1711eef124dcf1ff9eff0d504b03041400000008000000215c8911d159de010000030400001f0000006275696c74696e2d302f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbf12127637be92684ee45a16c0ff78a3cb6452cc948ca89d277efc869b28550080b126824cd37ffcc48c5d349f6e400c60aad4a1a87134a40715d0bd596f4c7f74db0a0c43aa66ad66b05253d83a54fd5c70fc5519b9ded001c4182b225ed9c1bf228b2bc03c96ca8075078d268239943d3b4911d0cb07a74927d944c26b34832a1e885909b4718ba690487b5e67b09ca5d20067ae650bfedc460af34c91fc1496676fb21e05a0e88d88a5eb8f308a544f2fca555dab06d8f799fe28c71723238129ce935ccb87f17490a6eb4d58d0b91fc57f37dfacb6819317e23dde7ff1026ceb00007e11bf8864adec99ade58c91b2c7d276c7683f972997c2fea92fe4a36eb6cf39c64c12c5d664196a49b6019afe3205d3d7f9ac5f36cb1982d7ed3aaa80576d83b13034d4957098daa62a4ff1470b4ffac8963db6fd003778001624afcdbdc6abdf3872fb835f1aed19def667c085f0da9a161fbdebdeae367106de710b208e75314edbb9bd7e735588ecf0d49617693b1668e5585d147829dc372d981f97f90e6e97f1cab82fbab2b7fd7ebac8a431587c9b4880e288fe344d855e8853eb016be30d30a65490fcd089a53622e2ac7b5d3c3b842b95bed9c9657abc36e80f1160a6ab47657c317e3f67dab3f504b03041400000008000000215c8238381f3303000025080000140000006275696c74696e2d312f7374796c65732e786d6cb5554d8bdc3618be17fa1f84a047af6c8fedd883ed90d95943202d81dd42af1a5b9e15d18791355b4f4b2eb397fe8242ae39f5d6430b0dedcf19d8df51c99e197b12da865d7a92deafe77d1e4b7a9d3eef38037744b5548a0c7a172e044494b2a2629dc16f6f0a2786a0d5585498494132b8252d7c9e7ff945daea2d23d7b784686020449bc15bad9b39426d794b386e2f64438489d45271ac8da9d6a86d14c1556b8b3843beeb4688632ae08030e7e5e78070acde6c1aa794bcc19aae28a37adb6341c0cbf9cbb5900aaf98a1da79012e41e745ca079d3a36e9bd9ff4e1b454b295b5be30b848d6352dc9a7741394205c8e4806f971485e885cff4c7ba71e89142045eea83d3e98a7b514ba05a5dc089d41df605bb1f337427e2f0a1b32277cc8cad3f607708799f17810e569299954409bcec426198fc09c0c190f1f3eec77bfef777fecefeff7bb5f6db0c69cb2ed10f6ad030da0ff2374bfb4264e193b699cc1c191a7e63268a244610c70d8df6c1bd351987b3bc0f479ff91bd5678ebf9e1e717b492d1cab2585f4e758610686a19ba17cf922489bd288ee324987941d08b5a1dd2a9a84847aa0c4643cf499f13837e31ca575255e6a51eb5dba31c5c79ca48ad4db9a2eb5bbb6ad9d81e526b7373f2b4a2782d0566b6c1b1e2b031b02561ecdabee6efeac9ddc9d3ae0662c30bae5f1a7a662ed8ef7fdc1a4287ed003318e89f8bbcb1c83f2f02b869d8f69b0d5f1155f4ef7cf42efabcd17ec1e85a70222629af95d4a4d4fdf8ea19a0a99e41dd938581ae7e8ac2a1da3bb13b11eb699e713b79817d24c6e77e051cb0dfbd37af63bffb6b7fffdbfefe27e08f9860b5a1cc5c356bcd82febd7d04f1f0cbbb873f7f1e354c2b3efa628656d58d1fab8f6a3b4dcf891a8c8ad478c3f4cd2998c171ff35a9e886fba7acd7f44eea43d6b87f652fab17d91ea4d3af5addaf60a368067fbc5a3c4b965785efc4ee22768219099d245c2c9d30b85c2c9745e2faeee5dbc94c7fc244efc7b039572f98b7cc64a983d803f9ebd197c18931d0efbf9fa13de59ef891fb22f45ca798b99e13443876e268163a45e8f9cb28585c854538e11e3e72f2bbc8f346f2e15c534e1815e49cfecdd46b0ec998ff22021d4f028dfff7fc6f504b03041400000008000000215cbbc21563de010000030400001f0000006275696c74696e2d312f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b9fe34d626c2f6db2a67b5128edb6f78a3cb6452ccb48ca89d277efc869b20ba1101624d0489a6ffe9991f2c7a3ecc91eb4116a2868e48794c0c0552d86b6a03f5f2a6f4189b16ca859af0628e8090c7d2c3f7ec80f4a6f4d076009120653d0ceda310b02c33b90ccf86a84014f1aa525b368ea3630a306564f4eb20fe2307c082413033d13327d0f43358de0b0567c2761b06788869e59d46f3a319a0b4df27b7092e9ed6ef4b892232236a217f6344129913c7b6e07a5d9a6c7bc8fd18c7172d438629cc925ccb47f13490aae95518df591fc4ff36dfacb6019307e25dde67f17269a6101f6c235f01515bf93955e59f12b2c7927ece10a73e5d2d94ed405fd5da54f78b40abd345aafbc599586dea24a222f5ea5e16299ccaba7cf9ffed032af0576d839130d4d4157310dca7ca2ff1270306fd6c4b2cd0fe8815bc0001125ee6d6e94dabac367dc0a9d6b70e35b4d0fe19b2635346cd7dbefeaf00544db59842cfc798aa25d77b3fab406c3f1b921c99f5d65ac996565aed58160e7b05c6664ee1f2459f21fc732e7eeeacadd753acb7c5f467e9ce6c11ee5719c08bb083dd347d6c257a65b3118d2433381e694e8b3ca696dd538ad50ee4659abe4c5eab01ba09d85821aa5ecc570c5b87edff22f504b03041400000008000000215ce26251873303000025080000140000006275696c74696e2d322f7374796c65732e786d6cb5554d8bdb4618be17fa1f06418f5a6964c9918cac10af5710484b60b7d0eb581a7987cc87188db7724b2ede4b7f4121d79c7aeba18586f6e718f677f41dc9b6e484b661979e66deafe77d1ecdccabf4792b38baa3ba614ace1d7ce13b88ca42954caee7ceb737b91b3ba8314496842b49e7ce9636cef3eccb2fd2c66c39bdbea5d4208090cddcb935a69e795e53dc52419a0b555309914a69410c987aed35b5a6a46c6c91e05ee0fb534f10269d1e61268acf011144bfd9d46ea1444d0c5b31ceccb6c3729028662fd75269b2e240b5c52129508ba73a40ad3e36e9bc9ff411acd0aa5195b9005c4f55152be8a774132ff148312001f2e39070e4f9c199f6563f1229f434bd63f6f89c2cad94340d2ad4469ab91300b6153b7b23d5f732b72138e1435696363fa03bc2c1831d2f4b0bc59546063a539b041e4904ed331e3e7cd8ef7edfeffed8dfdfef77bfda604504e3db3e1c5887d783fe8fd0ddd2409c717ed238717a4796c2653054cb1c0c74d8df6c6be828e1def6305dde7f64af35d9e220fafc824671565a16ebcbb14eb88d865986fec5b32449623c8de3380927380c3b51ab433a93256d6909057dcf519f13836e01e52ba54b78a947edf6287b5796725a1928d76c7d6b57a36adb43190337274b4b46d64a126e1b1c2b0e1b802d28e7d7f6357f578dee4e96b615921b910bf312e8c15cb0dfffb80542876d0fd31bde3f17e1a128382f42a4aef9f69b8d58519d77ef7cf02ebabcc17ec1d95a0a2a4729afb532b430ddf8ea1878633dbdba270b436df514857d353eb13b11eb689e713b79917d24e0f3bf422edaefdec3ebd8effedadfffb6bfff094d064cb4da300e57cd5a93b87b6f1f413cfcf2eee1cf9f070de38a8fbe18d02adbe163755163a7e93951c028694536dcdc9c827367d87f4d4bb611c129eb35bb53e69035ec5fd9cb8aa7b6076dcdabc6742bda6836777ebc5a3c4b965779e0c6fe2276c3098ddc245a2cdd28bc5c2c9779e207fee5dbd14c7fc244efc6309c2b0e670d872c7d107b207f3df8e6cec8e8e977df0f688fb927c1d47f1161dfcd273e76c32989dd783a89dc3cc2c1721a2eaea23c1a718f1e39f97d0fe3817c34334c50ce243da77f33f6c22181f92f22bce34978c3ff3dfb1b504b03041400000008000000215cc568676bdf010000030400001f0000006275696c74696e2d322f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a1fbd8f12127637b49366bba1785d2d3bd228f6d11cb329272a2f4dd3b72ea6c2114c282041a49f3cdaf9951fa74962d3982364275190dbc2925d071558aaecee88fefc5644989b1ac2b59ab3ac8e8050c7dca3f7e484f4aef4d036009123a93d1c6da3ef17dc31b90cc78aa870e4f2aa525b368eada37bd06560e4eb2f5c3e974ee4b263a7a2524fa1186aa2ac161abf8414267af100d2db3a8df34a237234df2477092e9fda19f70257b44ec442bec6580522279f25a774ab35d8bef3e0731e3e4ac718438a331ccb07f17490aae955195f590fc57f3fdf357feca67fc46ba7fff439820c6041c852be01b2a7c276b7663856fb0e89db0f90de6d2a593832833fa6bbd89379b65809d358f5e2671b10827eba8984de6eb6554ace269bc2d5e7ed33c2d0556d839130d55469f43eae7e940ff29e064fe5913cb76dfa0056e01030494b8dedc29b57787afb83575aefe9d6f3134c2174d4aa8d8a1b55fd5e91388bab108597a8b198a76d54dcacb160cc776439217df646c996579aad58960e5305da667ee1f4449f41fc73ce5eeeab3bbeb74e6e9310fbc7096fa4794c771226c147aa5f7ac86cf4cd7a233a4856a002d28d15795c3daaa7e58a1dc9db256c9d16ab01aa09d85822aa5ec68b864dcbe6ffe07504b03041400000008000000215ca23be1d13203000025080000140000006275696c74696e2d332f7374796c65732e786d6cb5554d8be33618be17fa1f84a0478f6cc7f6d8c1f6b2998c61615b16660abd2ab69c11ab0f232b53a7652f994b7f41a1d79e7aeba1852eedcf09ccefa86427b1b34bdb65869ea4f7eb799fc7925ea72f3acec03d512d952283de850b0111a5aca85867f0ebdbc28921683516156652900c6e490b5fe49f7f96b67acbc8cd1d211a1808d166f04eeb668e505bde118edb0bd9106122b5541c6b63aa356a1b4570d5da22ce90efba11e2980a3820cc79f929201cabb79bc629256fb0a62bcaa8def65810f072fe6a2da4c22b66a8765e804bd07991f241a78e4d7aef477d382d956c65ad2f0c2e92754d4bf231dd042508972392417e1a921722d73fd3dea927220548917b6a8f0fe6692d856e4129374267d037d856ecfcad90df8ac286cc091fb2f2b4fd0edc63663c1e44795a4a2615d0a633b149c623302743c6e3fbf7fbddeffbdd1ffb8787fdee571bac31a76c3b847deb4003e8ff08dd2fad8953c64e1a677070e4a9b90c9a285118031cf6b7dbc67414e6de0e307dde7f64af15de7a7ef8e905ad64b4b22cd657539d9710686a19ba17974992c45e14c77112ccbc20e845ad0ee95454a4235506a3a1e7a4cf8941bf18e52ba92af3528fdaed510eae3c65a4d6a65cd1f59d5db56c6c0fa9b5b939795a51bc960233dbe05871d818d8923076635ff337f5e4eee4695703b1e105d7af0c3d3317ecf73f6e0da1c37680190cf4cf45de58e49f1701dc346cfbd586af882afa773e7a177dde68bf64742d38119394374a6a52ea7e7cf50cd054cfa0eed9c240573f47e150ed9dd89d88f534cfb89dbcc03e12e373bf000ed8ef7e36af63bffb6bfff0dbfee107108c9860b5a1cc5c356b0d57eb4388c75f7e7afcf3c751c3b4e2832f666855ddf8b1faa8b6d3f49ca8c1a8488d374cdf9e82191cf75f928a6eb87fca7a43efa53e648dfbd7f6b27a91ed413afdbad5fd0a368a66f0fbebc565b2bc2e7c277617b113cc48e824e162e984c1d562b92c12d777afde4d66fa33267a3f86cdb97ac1bc65264b1dc41ec8df8cbe0c4e8c817efffd0ced29f7c48fdc97a1e73ac5ccf59c20c2b11347b3d02942cf5f46c1e23a2cc209f7f08993df459e37920fe79a72c2a820e7f46fa75e7348c6fc1711e8781268fcbfe77f03504b03041400000008000000215c147670c2de010000030400001f0000006275696c74696e2d332f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1f13e7606c2f61bda17b51283ddd2bf2d816b12c2329274adfbd23a7f11642212c48a09134dffc3323654f67d991236823549fd3c80f29819eab4af44d4e7f7cdf7a2b4a8c657dc53ad5434e2f60e853f1f14376527a6f5a004b90d09b9cb6d60e691018de8264c65703f478522b2d99455337811934b06a74925d1087e122904cf4f44a48f5230c55d78243a9f841426faf100d1db3a8dfb46230379ae48fe024d3fbc3e071250744ec4427ec6584522279fadaf44ab35d87799fa339e3e4ac71c43867b730e3fe5d2429b85646d5d647f25fcdf7e9af8375c0f844bacfff214c34c7021c856be01b2a7e272b9958f11b6cf64ed86282b972e9f420aa9cfe9aaf9771b25a275eb209236fbe7a09bdcd72bbf0ca723d8bcb976db4dcac7ed322ab0476d839130d754e9f631a14d948ff29e064fe5913cb76dfa0036e01034494b8b7b9536aef0e5f712b74aec19def767c085f34a9a06687ce7e55a74f209ad62264e52f1314edba9b5697120cc7e786247f3ec928996545a6d58960e7b05c6660ee1fccd2d97f1c8b8cbbabcfeeaed35964c722f2e3240b8e288fe344d84de8953eb0063e33dd88de900eea11b4a4445f558e6bab8671857277ca5a256f568bdd00ed2c14542b656f862bc6f47d8b3f504b03041400000008000000215c188add033303000025080000140000006275696c74696e2d342f7374796c65732e786d6cb555cb8adc4614dd07f20f85204b8d1e2dc95223c9b8a7476070826126906db554ea295c0f51aa9ea813bce9d9e40b02de7a955d1609c4249fd330df915b52774b6d93c4cc9055d57d9d7b8eaaea2a7dde7186ee886aa91499e55db81622a2941515ebccfaf6a6b0630bb51a8b0a332948666d496b3dcfbffc226df59691eb5b42340208d166d6add6cddc71daf29670dc5ec8860888d45271acc1546ba76d14c1556b8a38737cd78d1c8ea9b00684392f3f078463f566d3d8a5e40dd6744519d5db1ecb42bc9cbf5c0ba9f08a01d5ce0b70893a2f523eead4b149effda40fa7a592adacf505e03ab2ae69493ea59b388983cb1109901f87e4858eeb9f69efd423910247913b6a8ecfcad35a0adda2526e84ce2c1fb08dd8f91b21bf178509c1091fb2f2b4fd01dd61061ecf72f2b4944c2aa4a1333149e011989321e3e1c387fdeef7fdee8ffdfdfd7ef7ab09d69853b61dc2be713803e8ff08dd2f2dc42963278d336b70e4295c064d9428c04087fdcdb6818e02eeed00d3e7fd47f65ae1ade7879f5fd04a462bc3627d39d509cf4653c3d0bd78962449ec45711c27c1cc0b825ed4ea904e45453a52655634f49cf43931e81750be92aa82977ad46e8e7270e52923b5867245d7b766d5b2313da4d67073f2b4a2782d0566a6c1b1e2b001d89230766d5ef377f5e4eee4695723b1e105d72f811ecc05f3fd8f5b2074d80e3083e1fc73913716f9e74508370ddb7eb3e12ba28afe9d8fde459f37da2f185d0b4ec424e5b5929a94ba1f5f3d0367aa6750f76461a8ab9fa270a8f64eec4ec47a9a67dc4e5e641e09f8dcaf908df6bbf7f03af6bbbff6f7bfedef7f42e18889561bcae0aa192b88faf7f611c4c32fef1efefc79d430adf8e88b01adaa1b3f561fd5669a9e13058c8ad478c3f4cd299859e3fe6b52d10df74f59afe99dd487ac71ffca5c56afa74c3afdaad5fd8a368a66d68f578b67c9f2aaf0edd85dc4763023a19d848ba51d06978be5b2485cdfbd7c3b99e94f98e8fd188673f58279cb204b1dc41ec85f8fbecc9a1803fdfefb01ed29f7c48fdc17a1e7dac5ccf5ec20c2b11d47b3d02e42cf5f46c1e22a2cc209f7f09193df753c6f241fce35e5845141cee9df4cbd704860fe8b08e77812cef87fcfff06504b03041400000008000000215c95b7d348e0010000030400001f0000006275696c74696e2d342f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdb89ed9c8cedc5d9d4742f0a4b4ff78a3cb6452ccb48ca89d277efc869b28550080b126824cd37ffcc48e9d34976e400da08d56774ea4f28819eab4af44d467f7c2fbd2525c6b2be629dea21a36730f429fff8213d2abd332d802548e84d465b6b8724080c6f4132e3ab017a3ca99596cca2a99bc00c1a58353ac92e082793792099e8e98590e84718aaae05878de27b09bdbd403474cca27ed38ac15c69923f82934ceff683c7951c10b1159db0e7114a89e4c94bd32bcdb61de67d9ac68c9393c611e28cae61c6fdbb485270ad8caaad8fe4bf9aefd35f05ab80f11be93eff8730d3180b7010ae816fa8f09dacd98d15bec1a277c2e637982b974ef6a2cae8af55541493282abc222e975e5cae4a6ffd693af7ca751886c562b15e14f16f9aa795c00e3b67a2a1cee87348833c1de93f051ccd3f6b62d9f61b74c02d60802925ee6d6e95dab9c317dc9a38d7e0ceb71c1fc2ab2615d46cdfd9afeaf81944d35a842cfdc50c45bbee26d5790386e37343921fdf646c986579aad59160e7b05c6660ee1f4449f41fc73ce5eeeab3bbeb74e6e9219ffae12c0d0e288fe344d855e8853eb006be30dd88de900eea11b4a0445f548e6bab86718572b7ca5a25af568bdd00ed2c14542b65af862bc6edfbe67f00504b03041400000008000000215cc6c7729f3203000025080000140000006275696c74696e2d352f7374796c65732e786d6cb5554d8bdc3618be17fa1f84a047af6c8fedd883ed90d95943202d81dd42af1a5b9e15d18791355b4f4b2eb397fe8242ae39f5d6430b0dedcf19d8df51c99e197b12da865d7a92deafe77d1e4b7a9d3eef38037744b5548a0c7a172e044494b2a2629dc16f6f0a2786a0d5585498494132b8252d7c9e7ff945daea2d23d7b784686020449bc15bad9b39426d794b386e2f64438489d45271ac8da9d6a86d14c1556b8b3843beeb4688632ae08030e7e5e78070acde6c1aa794bcc19aae28a37adb6341c0cbf9cbb5900aaf98a1da79012e41e745ca079d3a36e9bd9ff4e1b454b295b5be30b848d6352dc9a7741394205c8e4806f971485e885cff4c7ba71e89142045eea83d3e98a7b514ba05a5dc089d41df605bb1f337427e2f0a1b32277cc8cad3f607708799f17810e569299954409bcec426198fc09c0c190f1f3eec77bfef777fecefeff7bb5f6db0c69cb2ed10f6ad030da0ff2374bfb4264e193b699cc1c191a7e63268a244610c70d8df6c1bd351987b3bc0f479ff91bd5678ebf9e1e717b492d1cab2585f4e752610686a19ba17cf922489bd288ee324987941d08b5a1dd2a9a84847aa0c4643cf499f13837e31ca575255e6a51eb5dba31c5c79ca48ad4db9a2eb5bbb6ad9d81e526b7373f2b4a2782d0566b6c1b1e2b031b02561ecdabee6efeac9ddc9d3ae0662c30bae5f1a7a662ed8ef7fdc1a4287ed003318e89f8bbcb1c83f2f02b869d8f69b0d5f1155f4ef7cf42efabcd17ec1e85a70222629af95d4a4d4fdf8ea19a0a99e41dd938581ae7e8ac2a1da3bb13b11eb699e713b79817d24c6e77e051cb0dfbd37af63bffb6b7fffdbfefe27108d9860b5a1cc5c356b853dc18f211e7e79f7f0e7cfa38669c5475fccd0aabaf163f5516da7e939518351911a6f98be39053338eebf2615dd70ff94f59ade497dc81af7afec65f522db8374fa55abfb156c14cde08f578b67c9f2aaf09dd85dc44e3023a193848ba51306978be5b2485cdfbd7c3b99e94f98e8fd1836e7ea05f396992c75107b207f3dfa32383106fafdf733b4a7dc133f725f849eeb1433d7738208c74e1ccd42a7083d7f19058babb00827dcc3474e7e1779de483e9c6bca09a3829cd3bf997acd2119f35f44a0e349a0f1ff9eff0d504b03041400000008000000215cbca0c192e0010000030400001f0000006275696c74696e2d352f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb17336b6978d93d0bd28949eee15796c8b58929194c352faee1d394db6100a6141028da4f9e69f19297b3acb8e1cc158a1554ee370440928ae2ba19a9cfef8be0d169458c754c53aad20a7af60e953f1f14376d2666f5b004790a06c4e5be7fa348a2c6f41321bea1e149ed4da48e6d0344d647b03ac1a9c641725a3d12c924c287a21a4e61186ae6bc161adf94182721788818e39d46f5bd1db2b4df247709299fda10fb8963d2276a213ee7580522279fad2286dd8aec3bccff18471723638129ce36b9861ff2e9214dc68ab6b1722f9afe6fbf497d13262fc46bacfff214c3cc1021c856fe01b2a79276b7a63256fb0f13b61b31bcc97cba40751e5f457bc99c4d3d5f63918cd37b360325fcc82e7e578114ccbcd6a1597e5665e2e7ed322ab0476d83b1303754ecb84464536d07f0a38d97fd6c4b1dd37e8803bc0003125fe6deeb4defbc317dc1a79d7e8ce773b3c842f865450b343e7beead327104deb10b208e75314edbb9b56af6bb01c9f1b92c2c94dc69a395664469f08760ecb657be6ffc1381dffc7b1c8b8bf5afabb5e67911d8b384ca6597444791c27c2ae422ff49e35f0999946284b3aa807d09c12735139ac9dee8715cadd69e7b4bc5a2d76038cb75050adb5bb1abe18b7ef5bfc01504b03041400000008000000215c3593c7573303000025080000140000006275696c74696e2d362f7374796c65732e786d6cb555cd8ae34610be07f20e4d438e1afd58722c2369598f47b0b0090b330bb9b6a596a7d9fe11adf6444ec8c573c9130472cd29b71c12d825791cc33c47aa25db9277d9cd324374e9aebfafbeeaae2e25cf5ac1d11dd50d5332c5fe85871195852a995ca7f8f54deecc306a0c9125e14ad2146f69839f655f7e913466cbe9f52da50601846c527c6b4c3d77dda6b8a5823417aaa6122c95d2821810f5da6d6a4d49d9d820c1ddc0f3a6ae204ce21e612e8acf011144bfd9d44ea1444d0c5b31ceccb6c3c24814f3176ba9345971a0dafa212950eb4f75805a7d4cd2693fc82358a155a32a7301b8aeaa2a56d00fe9c66eec92624002e4c721f991eb0567b5b7fa9148a1abe91db3d787b3a452d234a8501b69521c00b62d76fe46aaef656e4d70c307af2c697e40778483c6c76e96148a2b8d0c64a6d609349208da7b3cbc7bb7dffdb5dfbddddfdfef777f58634504e3dbde1c5885db83fe8fd0ddd2809d717eaa71827b4596403318aa650e023aec6fb6356494d0b73d4ce7f71fde6b4db67e107d7e40a3382b2d8bf5e5b8ce1023c32c43ef228ae19bcce26910cf7c2f9c75e0ab833b93256d6999e2699f7394e7c4a05ba0f295d225bcd463edf62a7b5596705a1908d76c7d6b57a36a9b4319039d932525236b2509b7098e11870dc01694f36bfb9abfab46bd93256d85e446e4c2bc007a3017ecf91fb740e8b0ed617ac1fd78903f0405e74188d435df7ebb112baaf3ee9d0fda45e737c8cf395b4b41e5c8e595568616a61b5f1d03775c4f5fdd930b436df5940afb68ffc4ee44aca379c6eda445f691401f795f2107ed77bfc1ebd8effed9dfffb9bfff19f903265a6d188756b3d2a47f6fef413cfcfeebc3dfbf0c358c23de3b31a055b6c361755663a7e93951c028694536dcdc9c8c291ef6dfd0926d4470f27ac5ee9439780dfb97b659fda9cd415bf3b231dd8a369aa5f8c7abc5d7f1f22a0f9c99b79839e184464e1c2d964e145e2e96cb3cf602eff2a7d14c7fc244efc630dcab1fce1b0e5efa50ec81fcf5a04bf148e8e977e707b4c7dce360ea3d8f7ccfc9279eef8453327366d349e4e4911f2ca7e1e22acaa311f7e89193df737d7f201fcd0d13943349cfe9df8cb57049207ea208f77813eef07fcffe05504b03041400000008000000215c31f3523ddf010000030400001f0000006275696c74696e2d362f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb17336b697dd38a17b51283ddd2bf2d816b1242329274adfbd23a7c91642212c48a09134dffc3323654f27d99103182bb4ca691c8e2801c575255493d31fdf37c18212eb98aa58a715e4f40c963e151f3f64476d76b605700409cae6b475ae4fa3c8f21624b3a1ee41e149ad8d640e4dd344b637c0aac1497651321acd22c984a217426a1e61e8ba161c4acdf71294bb400c74cca17edb8ade5e69923f8293ccecf67dc0b5ec11b1159d70e7014a89e4e96ba3b461db0ef33ec513c6c9c9e048708eaf6186fdbb485270a3adae5d88e4bf9aefd35f46cb88f11be93eff8730f1040b7010be816fa8e49dace98d95bcc1c6ef84cd6e305f2e93ee4595d35fc9cb743cdbc449b05ecf37c164b55c07cbf2791ac42fe5f3625ece26ab55f29b165925b0c3de9918a873ba4a68546403fda780a3fd674d1cdb7e830eb8030c1053e2dfe656eb9d3f7cc5ad91778dee7c37c343f862480535db77eeab3e7e02d1b40e218b703e45d1bebb69752ec1727c6e480a2737192573acc88c3e12ec1c96cbf6ccff83713afe8f6391717f75e5ef7a9d457628e2309966d101e5719c08bb0abdd07bd6c067661aa12ce9a01e40734acc45e5b076ba1f562877ab9dd3f26ab5d80d30de4241b5d6ee6af862dcbe6ff107504b03041400000008000000215cd2580cc23303000025080000140000006275696c74696e2d372f7374796c65732e786d6cb5554f8bdc3614bf07fa1d84a047af6c8fed8e07db21b3b386405202bb815e35b63c2ba23f46d66c3d0db9cc5efa090ab9e6945b0e2d24b41f67603f47257b66ec49481a76a92fd2fbf77bbf273d3d278f5bcec00d510d952285de990b0111852ca958a5f0e555ee4c2168341625665290146e48031f673f3c4a1abd61e4f29a100d0c84685278ad753d43a829ae09c7cd99ac8930964a2a8eb511d50a35b522b86c6c1067c877dd08714c05ec1166bcf81e108ed5ab75ed1492d758d32565546f3a2c0878317bba1252e12533545b2fc00568bd48f9a05587249df68b3c9c164a36b2d2670617c9aaa205f9926e8c62848b01c920df0fc90b91eb9fd4deaa7b220548911b6aaf0f664925856e4021d742a7d037d8b6d8d92b217f15b935991bde7b6549f31bb8c1cc683c88b2a4904c2aa04d66629d8c46604e7a8fbb4f9f76dbbf76db8fbbdbdbddf68335569853b6e9cdbe55a01ef47f84ee96c6d82963c71a27b057648969064d94c88d00f6fbab4d6d320ad3b73d4ce7f71fde2b85379e1f7e7f4023192d2d8bd5f9b8ce10024d2d43f72c8ccd3799c6911f4f3d379876e0cbbd3b1525694999c2a8cf39ca7364d02da6f2a554a579a987daed55f6aa2c61a4d2265cd1d5b55db5ac6d0ea9b5e99c2c29295e4981994d7088d86f0c6c4118bbb4aff9976ad43b59d25640ac79cef55343cfcc057bfe87ad21b4dff630bd80be1ee40d41fe6910c075cd363faff992a8bc7be78376def90df21346578213317279a1a42685eec657c7008debe9ab7b7061a0ad1e52611fed1dd91d8975344fb81db5c03e921406ee8fc001bbed3bf33a76db7f76b77fee6e7f07fe8009966bca4cab5969d2f5d0e71077efdfdefdfdc750c338e2b31333b4ca7638acceaaed343d256a304a52e135d35747630a87fd7352d235f78f5e2fe88dd47baf61ffcc36ab17d91ca4d5cf1addad60ad680a5f5fcc7f8a1717b9ef4cddf9d409262474e270be70c2e07cbe58e4b1ebbbe76f4633fd0113bd1bc3e65ebd60d630e3a5f6c5eec95f0eba148e849e7e777e86f6987bec47ee93d0739d7ce27a4e10e1a9338d26a193879ebf8882f945988723eee13d27bf8b3c6f201fce34e58451414ee95f8db5e6928cf88d22d0e126d0f07fcffe05504b03041400000008000000215ca7e82fc4de010000030400001f0000006275696c74696e2d372f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a1fbd8b1e39c8ceda58d6bba1785a5a77b451edb22966424e544e9bb77e434d942288405093492e69b7f66a4ece9247b7200638556398d822925a0b8ae856a73fae37b355951621d5335ebb5829c9ec1d2a7e2fdbbeca8cdce76008e2041d99c76ce0d69185ade816436d003283c69b491cca169dad00e06583d3ac93e8ca7d345289950f44248cd230cdd348243a9f95e82721788819e39d46f3b31d82b4df247709299dd7e98702d07446c452fdc7984522279fadc2a6dd8b6c7bc4f51c23839191c31ced935ccb87f17490a6eb4d58d0b90fc57f37dfaeb701d327e23dde7ff10264ab00007e11bf88a8adfc89adf58f12b6cf646d8e206f3e532e95ed439fd9554d1fae3725d4dca65b2992455bc997c2817684e57eb6456c59fca2afe4d8bac16d861ef4c0c3439ddc4342cb291fe53c0d1feb3268e6dbf410fdc01068828f16f73abf5ce1f3ee3d6d4bb8677bed5f8105e0ca9a161fbde7dd5c7cf20dace2164152ce728da7737adcf25588ecf0d494172935132c78acce823c1ce61b9ecc0fc3f98a5b3ff381619f75737feaed7596487220ae279161e501ec789b0abd00b7d602d7c61a615ca921e9a11b4a4c45c548e6ba787718572b7da392daf5687dd00e32d14d468edae862fc6edfb167f00504b03041400000008000000215cb202655a3303000025080000140000006275696c74696e2d382f7374796c65732e786d6cb555cd8ae34610be07f20e4d438e1afd58722c2369598f47b0b0090b330bb9b6a596a7d9fe11adf6444ec8c573c9130472cd29b71c12d825791cc33c47aa25db9277d9cd324374e9aebfafbeeaae2e25cf5ac1d11dd50d5332c5fe85871195852a995ca7f8f54deecc306a0c9125e14ad2146f69839f655f7e913466cbe9f52da50601846c527c6b4c3d77dda6b8a5823417aaa6122c95d2821810f5da6d6a4d49d9d820c1ddc0f3a6ae204ce21e612e8acf011144bfd9d44ea1444d0c5b31ceccb6c3c24814f3176ba9345971a0dafa212950eb4f75805a7d4cd2693fc82358a155a32a7301b8aeaa2a56d00fe9c66eec92624002e4c721f991eb0567b5b7fa9148a1abe91db3d787b3a452d234a8501b69521c00b62d76fe46aaef656e4d70c307af2c697e40778483c6c76e96148a2b8d0c64a6d609349208da7b3cbc7bb7dffdb5dfbddddfdfef777f58634504e3dbde1c5885db83fe8fd0ddd2809d717eaa71827b4596403318aa650e023aec6fb6356494d0b73d4ce7f71fde6b4db67e107d7e40a3382b2d8bf5e5b84ee846c32c43ef228ae19bcce26910cf7c2f9c75e0ab833b93256d6909017dce519e13836e81ca574a97f0528fb5dbabec5559c26965205cb3f5ad5d8daa6d0e650c744e96948cac9524dc2638461c36005b50ceafed6bfeae1af54e96b415921b910bf302e8c15cb0e77fdc02a1c3b687e905f7e341fe10149c072152d77cfbed46aca8cebb773e68179ddf203fe76c2d05952397575a195a986e7c750cdc713d7d754f2e0cb5d5532aeca3fd13bb13b18ee619b79316d94792e2d0fb0a3968bffb0d5ec77ef7cffefecffdfdcf683260a2d5867168352b4de2eebdbd07f1f0fbaf0f7fff32d4308e78efc48056d90e87d5598d9da6e74401a3a415d970737332a678d87f434bb611c1c9eb15bb53e6e035ec5fda66f5a736076dcdcbc6742bda6896e21faf165fc7cbab3c7066de62e684131a3971b4583a5178b9582ef3d80bbccb9f4633fd0913bd1bc370af7e386f3878e943b107f2d7832ec523a1a7df9d1fd01e738f83a9f73cf23d279f78be134ec9cc994d279193477eb09c868bab288f46dca3474e7ecff5fd817c34374c50ce243da77f33d6c22581f88922dce34db8c3ff3dfb17504b03041400000008000000215c21361d30e0010000030400001f0000006275696c74696e2d382f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb19dc3c6d85e364e42f7a2507aba57e4b12d625946524e94be7b474e9d2d84425890402369bef967464a9fcfb22547d046a82ea3a13fa1043aae4ad1d519fdf17deb3d51622ceb4ad6aa0e327a01439ff38f1fd293d27bd300588284ce64b4b1b64f82c0f0062433beeaa1c3934a69c92c9aba0e4caf819583936c836832990792898e5e09897e84a1aa4a70582b7e90d0d92b4443cb2cea378de8cd4893fc119c647a7fe83dae648f889d6885bd0c504a244f5eeb4e69b66b31ef7338659c9c358e08673c8619f6ef2249c1b532aab23e92ff6abe4f7f192c03c66fa4fbfc1fc284532cc051b806bea1a277b2663756f4068bdf099bdf60ae5c3a398832a3bf8a62bb9a14abd0db84f1c29bcea2d85bc58badb729a6c5f665b999bfcc37bf699e96023bec9c89862aa34544833c1de83f059ccc3f6b62d9ee1bb4c02d60809012f736774aeddde12b6e4d9c6b70e7bb1d1ec2174d4aa8d8a1b55fd5e91388bab10879f2173314edba9b949735188ecf0d49fef42663cd2ccb53ad4e043b87e5323d73ff204ee2ff38e62977570b77d7e9ccd3631efad12c0d8e288fe344d828f44aef590d9f99ae4567480bd5005a50a2af2a87b555fdb042b93b65ad92a3d56037403b0b05554ad9d170c5b87ddffc0f504b03041400000008000000215cf25bd50c3403000025080000140000006275696c74696e2d392f7374796c65732e786d6cb5554d8bdb3818be17f63f08c11e3db21ddb8d83edd24cc650e82e859985bd2ab69c11d5879195a9d3d24be6b2bf60a1d79e7aeba1852dbb3f2730bf63253b899d96dd2d336c2ed2fbf5bccf63496f92272d67e086a8864a9142efcc858088429654ac52f8cb55ee4c2168341625665290146e48039f643f3c4a1abd61e4f29a100d0c84685278ad753d43a829ae09c7cd99ac8930914a2a8eb531d50a35b522b86c6c1167c877dd08714c05ec1166bcf81e108ed5cb75ed1492d758d32565546f3a2c0878317bb61252e12533545b2fc00568bd48f9a05587269df79b3e9c164a36b2d2670617c9aaa205f9966e8c62848b01c920df0fc90b91eb9f686fd53d9102a4c80db5c707b3a4924237a0906ba153e81b6c2b76f652c85722b72173c2fbac2c695e831bcc8cc783284b0ac9a402da742636c97804e6a4cfb8fbf265b7fdbcdbfeb1bbbddd6d3fda608539659b3eec5b07ea41ff47e86e694c9c3276d43881bd234bcc65d04489dc1860bfbfdad4a6a330f7b687e9f2fe237ba5f0c6f3c3ef2f6824a3a565b13a1feb7c0c81a696a17b16c6e63799c6911f4f3d379876e0cb7d3a1525694999c2a8ef39ea7364d02d46f952aad2bcd483767b94bd2b4b18a9b4295774756d572d6bdb436a6d6e4e969414afa4c0cc363854ec3706b6208c5ddad7fc6b35ba3b59d25640ac79cef53343cfcc05fbfd0f5b4368bfed617a03fd73913714f9a74500d735dbfcbce64ba2f2ee9d0fde799737d84f195d094ec428e585929a14ba1b5f1d0334d6d3ab7bb030d0560f51d8577b477647621dcd136e472fb08f248581fb2370c06efbdebc8eddf6afddeda7dded6f201830c1724d99b96ad60a26dd7bfb0ae2eec3bbbb3f7f1f348c2bbefa628656d90e1fab8b6a3b4d4f891a8c925478cdf4d53198c261ff1329e99afbc7ac17f446ea7dd6b07f6e2fab17d91ea4d5cf1bddad60ad680adf5ccc1fc78b8bdc77a6ee7cea0413123a71385f3861703e5f2cf2d8f5ddf3b7a399fe8089de8d6173ae5e306b98c9527bb17bf297832f8523a3a7df7d3f437bcc3df623f769e8b94e3e713d2788f0d4994693d0c943cf5f44c1fc22ccc311f7f09e93df459e37900f679a72c2a820a7f4afc65e7348c6fc1711e8701268f87fcffe06504b03041400000008000000215c5ec6e251df010000030400001f0000006275696c74696e2d392f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb1e29c8ceda5d924742f0a4b4ff78a3cb6452ccb48ca89d277efc869b28550080b126824cd37ffcc48d9d349b5e400c64adde5340e479440277429bb3aa73fbe6f823925d6f1aee4adee20a767b0f4a9f8f8213b6ab3b30d802348e86c4e1be7fa348aac6840711bea1e3a3ca9b451dca169eac8f606783938a93662a3d134525c76f44248cd230c5d5552c04a8bbd82ce5d20065aee50bf6d646faf34251ec1296e76fb3e105af588d8ca56baf300a54489f4a5eeb4e1db16f33ec50917e46470309ce36b9861ff2e9292c268ab2b1722f9afe6fbf417d122e2e246bacfff214c9c60010ed237f00dc5dec99adc58ec0d367e276c7a83f97299742fcb9cfe5a24a3d9982d59106f662c48e2050b96cb781eb0e5345e6fe24febf534f94d8bac94d861ef4c0c54397d66342ab281fe53c2d1feb3268e6fbf410bc201068829f16f73abf5ce1fbee0d6c8bb4677be9be121bc1a5242c5f7adfbaa8f9f41d68d43c83c9c4d50b4ef6e5a9e5760053e372485c94dc68a3b5e64461f09760ecb657beeffc1381dffc7b1c884bffaecef7a9d457628e2904db2e880f2044e845d855ee83dafe10b37b5ec2c69a11a40334acc45e5b076ba1f562877ab9dd3ea6a35d80d30de424195d6ee6af862dcbe6ff107504b03041400000008000000215c48eae9de3403000025080000150000006275696c74696e2d31302f7374796c65732e786d6cb555cd8ae34610be07f20e4d438e1afd58f25a46d2b21e8f606113166602b9b6a596a7d9fe11adf6444ed88be7922708ec754fb9e5904096e4710cf31ca9966c4bde25c9324374e9aebfafbeeaee2a25cf5bc1d11dd50d5332c5fe85871195852a995ca7f8db9bdc9961d418224bc295a429ded2063fcfbefc2269cc96d3eb5b4a0d0208d9a4f8d6987aeeba4d714b05692e544d25582aa5053120eab5dbd49a92b2b14182bb81e74d5d4198c43dc25c149f0322887eb3a99d42899a18b6629c996d87859128e62fd75269b2e240b5f54352a0d69fea00b5fa98a4d37e9247b042ab4655e602705d5555aca09fd28dddd825c58004c88f43f223d70bce6a6ff523914257d33b66af0f6749a5a46950a136d2a438006c5becfc8d54dfcbdc9ae0860f5e59d2fc80ee08078d8fdd2c2914571a19c84cad13682411b4f778f8f061bffb7dbffb637f7fbfdffd6a8d15118c6f7b7360156e0ffa3f42774b0376c6f9a9c609ee1559028fc1502d7310d0617fb3ad21a38477dbc3747effe1bdd664eb07d1e707348ab3d2b2585f8eeb84b631cc32f42ea218bec92c9e06f1ccf7c25907be3ab83359d29696299ef63947794e0cba052a5f295d42a71e6bb757d9abb284d3ca40b866eb5bbb1a55db1cca187839595232b25692709be01871d8006c4139bfb6ddfc5d357a3b59d256486e442ecc4ba00773c19eff710b840edb1ea617dc7f0ef287a0e03c0891bae6db6f36624575def5f9a05d747e83fc82b3b514548e5c5e6b656861baf1d53170c7f5f4d53db930d4564fa9b08ff64fec4ec43a9a67dc4e5a649b24c5a1f71572d07ef71eba63bffb6b7fffdbfefe27140d9868b5611c9e9a95c2675dbf7d04f1f0cbbb873f7f1e6a18477c746240ab6c87c3eaacc64ed373a28051d28a6cb8b93919533cecbfa625db88e0e4f59add2973f01af6afec63f5a736076dcdabc6742bda6896e21faf16cfe2e5551e38336f3173c2098d9c385a2c9d28bc5c2c9779ec05dee5dbd14c7fc244efc630dcab1fce1b0e5efa50ec81fcf5a04bf148e8e977e707b4c7dce360eabd887ccfc9279eef8453327366d349e4e4911f2ca7e1e22acaa311f7e89193df737d7f201fcd0d13943349cfe9df8cb5704920fe4b11eef126dce1ff9efd0d504b03041400000008000000215cc3b64d3fdf01000003040000200000006275696c74696e2d31302f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1f623b27637be9c609dd8bc2d2d3bd228f6d11cb329272a2f4dd3b729a6c2114c282041a49f3cd3f3352f674921d39803642f5399df82125d0735589bec9e98fef1b6f4189b1acaf58a77ac8e9190c7d2a3e7ec88e4aef4c0b6009127a93d3d6da210d02c35b90ccf86a801e4f6aa525b368ea26308306568d4eb20ba2309c0592899e5e08a97e84a1ea5a702815df4be8ed05a2a16316f59b560ce64a93fc119c647ab71f3caee48088ade8843d8f504a244f5f9a5e69b6ed30efd324619c9c348e08677c0d33eedf4592826b65546d7d24ffd57c9ffe3258068cdf48f7f93f849924588083700d7c4345ef644d6face80d16bf1336bbc15cb974ba17554e7f859f36cbd92c2ebdd566b6f092385e7bcb709578ebc5f3735986eb384ae6bf699155023bec9c89863aa7ab88064536d27f0a389a7fd6c4b2ed37e8805bc000134adcdbdc2ab573872fb8153ad7e0ce77333e84574d2aa8d9beb35fd5f13388a6b50859f8f3298a76dd4dab730986e37343929fdc6494ccb222d3ea48b073582e3330f70fe234fe8f6391717775e5ee3a9d457628267e34cd8203cae3381176157aa10fac812f4c37a237a4837a04cd29d11795e3daaa615ca1dcadb256c9abd56237403b0b05d54ad9abe18a71fbbec51f504b03041400000008000000215c96a746423303000025080000150000006275696c74696e2d31312f7374796c65732e786d6cb5554d8bdb3818be17f63f08c11e3db21ddb1b07dba5998ca1d02e8599c25e155bce88eac3c8caacb3a597cc657fc142af3df5d6c32eb4ecfe9cc0fc8e95ec24765ada2d336c2ed2fbf5bccf63496f92c72d67e086a8864a9142efcc858088429654ac52f8f22a77a610341a8b123329480a37a4818fb31f1e258dde3072794d880606423429bcd6ba9e21d414d784e3e64cd64498482515c7da986a859a5a115c36b68833e4bb6e8438a602f608335e7c0f08c7ead5ba760ac96bace99232aa371d1604bc983d5d09a9f09219aaad17e002b45ea47cd0aa4393cefb451f4e0b251b59e933838b6455d1827c49374631c2c5806490ef87e485c8f54fb4b7ea9e480152e486dae383595249a11b50c8b5d029f40db6153b7b25e4af22b72173c2fbac2c697e033798198f07519614924905b4e94c6c92f108cc499f71f7e9d36efbd76efb71777bbbdb7eb0c10a73ca367dd8b70ed483fe8fd0ddd2983865eca871027b479698cba08912b931c07e7fb5a94d4761ee6d0fd3e5fd47f64ae18de787df5fd048464bcb62753ed61943a0a965e89e85b1f94da671e4c753cf0da61df8729f4e45495a52a630ea7b8efa1c19748b51be94aa342ff5a0dd1e65efca12462a6dca155d5ddb55cbdaf6905a9b9b932525c52b2930b30d0e15fb8d812d086397f635ff528dee4e96b415106b9e73fdd4d03373c17effc3d610da6f7b98de405f2ff28622ffb408e0ba669b9fd77c4954debdf3c13beff206fb09a32bc18918a5bc5052934277e3ab6380c67a7a750f1606daea210afb6aefc8ee48aca379c2ede805f691a430707f040ed86ddf99d7b1dbfeb3bbfd7377fb3b88064cb05c5366ae9ab5c2febd7d0671f7feeddddf7f0c1ac6159f7d3143ab6c878fd545b59da6a7440d46492abc66faea184ce1b07f4e4abae6fe31eb05bd917a9f35ec9fd9cbea45b60769f5b346772b582b9ac2d717f39fe2c545ee3b53773e758209099d389c2f9c30389f2f1679ecfaeef99bd14c7fc044efc6b039572f9835cc64a9bdd83df9cbc197c291d1d3efbe9fa13de61efb91fb24f45c279fb89e134478ea4ca349e8e4a1e72fa2607e11e6e1887b78cfc9ef22cf1bc887334d3961549053fa5763af3924637e43043a9c041afedfb37f01504b03041400000008000000215c63e9352ce001000003040000200000006275696c74696e2d31312f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbf12907637bd96e12ba1785a5edf65e91c7b6886519493951faee1d394d762114c282041a49f3cd3f3352fe70941dd9833642f5050dfd0925d0735589be29e8ebcfb537a7c458d657ac533d14f404863e949f3fe507a5b7a605b00409bd29686bed900581e12d48667c35408f27b5d29259347513984103ab4627d905d164320d24133d3d13327d0f43d5b5e0b0547c27a1b76788868e59d46f5a31980b4df27b7092e9ed6ef0b892032236a213f6344229913c7b6e7aa5d9a6c3bc8f61c238396a1c11cef81266dcbf892405d7caa8dafa48fea7f936fd45b00818bf926ef3bf0b13265880bd700d7c43451f64a55756f4068b3f089b5e61ae5c3adb89aaa0bf93c564952c56b1173eae522f9986a9f765f6187971324d16e13a5dafe7d33fb4cc2b811d76ce44435dd0a78806653ed27f093898776b62d9e60774c02d60809012f736374a6ddde1336e4d9c6b70e3bb1e1fc28b2615d46cd7d9efeaf01544d35a84ccfd598aa25d77b3eab404c3f1b921c94fae3296ccb232d7ea40b073582e3330f70fe22cfe8f63997377f5c9dd753acb7c5f867e94e6c11ee5719c08bb083dd307d6c037a61bd11bd2413d826694e8b3ca716dd530ae50ee4659abe4c56ab11ba09d85826aa5ecc570c5b87edff22f504b03041400000008000000215cd438f59c3403000025080000150000006275696c74696e2d31322f7374796c65732e786d6cb555cd8ae34610be07f20e4d438e1afd58f25a46d2b21e8f606113166602b9b6a596a7d9fe11adf6444ed88be7922708ec754fb9e5904096e4710cf31ca9966c4bde25c932430ea2bbfebefaaabbba943c6f05477754374cc914fb171e465416aa64729de26f6f7267865163882c095792a6784b1bfc3cfbf28ba4315b4eaf6f293508206493e25b63eab9eb36c52d15a4b950359560a99416c480a8d76e536b4acac60609ee069e3775056112f70873517c0e8820facda6760a256a62d88a7166b61d1646a298bf5c4ba5c98a03d5d60f49815a7faa03d4ea63924efb491ec10aad1a55990bc0755555b1827e4a37766397140312203f0ec98f5c2f38abbdd58f440a5d4def98bd3e9c259592a64185da4893e200b06db1f337527d2f736b821b3e786549f303ba231c343e76b3a4505c69642033b54ea09144d0dee3e1c387fdeef7fdee8ffdfdfd7ef7ab35564430beedcd8155b83de8ff08dd2d0dd819e7a71a27b85764093483a15ae620a0c3fe665b4346097ddbc3747effe1bdd664eb07d1e707348ab3d2b2585f8eeb0c3132cc32f42e26711c3f8ba259e4c741085f7704ab833b93256d6999e2699f7394e7c4a05ba0f295d225bcd463edf62a7b5596705a1908d76c7d6b57a36a9b4319039d932525236b2509b7098e11870dc01694f36bfb9abfab46bd93256d85e446e4c2bc047a3017ecf91fb740e8b0ed617ac1fde7207f080ace8310a96bbefd66235654e7dd3b1fb48bce6f905f70b69682ca91cb6bad0c2d4c37be3a06eeb89ebeba271786daea2915f6d1fe89dd895847f38cdb498bec2381b6f0be420edaefdec3ebd8effedadfffb6bfff09f903265a6d188756b3d2a47b2f1f433cfcf2eee1cf9f871ac6111f9d18d02adbe1b03aabb1d3f49c286094b4221b6e6e4ec6140ffbaf69c936223879bd6677ca1cbc86fd2bdbacfed4e6a0ad79d5986e451bcd52fce3d5e259bcbcca0367e62d664e38a19113478ba51385978be5328fbdc0bb7c3b9ae94f98e8dd18867bf5c379c3c14b1f8a3d90bf1e74291e093dfdeefc80f6987b1c4cbd1791ef39f9c4f39d704a66ce6c3a899c3cf283e5345c5c457934e21e3d72f27baeef0fe4a3b961827226e939fd9bb1162e09c47f29c23dde843bfcdfb3bf01504b03041400000008000000215c6dfd72b1df01000003040000200000006275696c74696e2d31322f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1fe31cd6d85eb27142f7a2507aba57e4b12d625946524e94be7b474e932d84425890402369bef96746ca9e4fb22307d046a83ea7911f52023d5795e89b9cfef8bef1169418cbfa8a75aa879c9ec1d0e7e2e387eca8f4ceb4009620a137396dad1dd22030bc05c98caf06e8f1a4565a328ba66e02336860d5e824bb200ec3592099e8e98590ea4718aaae058752f1bd84de5e201a3a6651bf69c560ae34c91fc149a677fbc1e34a0e88d88a4ed8f308a544f2f4b5e99566db0ef33e4509e3e4a471c43827d730e3fe5d2429b85646d5d647f25fcdf7e93f054f01e337d27dfe0f61a2040b7010ae816fa8f89dace98d15bfc126ef84cd6e30572e9dee4595d35fd172b59985d1c42bd761ec25ab72ea2dd6f18b9724cbf93a9cbf2ccb59f49b165925b0c3ce9968a873ba8a69506423fda780a3f9674d2cdb7e830eb8050c1051e2dee656a99d3b7cc5add0b90677be9bf1217cd1a4829aed3bfb551d3f81685a8b90853f9fa268d7ddb43a9760383e3724f9c94d46c92c2b32ad8e043b87e5320373ff60924efee35864dc5d5db9bb4e67911d8ac88fa7597040791c27c2ae422ff48135f099e946f48674508fa03925faa2725c5b358c2b94bb55d62a79b55aec066867a1a05a297b355c316edfb7f803504b03041400000008000000215c33f33e093403000025080000150000006275696c74696e2d31332f7374796c65732e786d6cb5554f8bdb4614bf07fa1d86811eb5fa63cbb18ca410af5710484b60b7d0eb581a7987cc1f311a6fe4845cbc977e8242ae39e59643020dedc731ece7e81bc9b6e484b661971ec4ccfbf77bbf37f3e6297ed2088e6ea8ae999209f6cf3c8ca8cc55c1e42ac1bf5c65ce14a3da105910ae244df086d6f849fac3a3b8361b4e2faf29350820649de06b63aa99ebd6f93515a43e53159560299516c480a8576e5d694a8ada0609ee069e3771056112770833917f0f8820fae5ba7272252a62d8927166362d1646229f3d5b49a5c99203d5c61f931c35fe4407a8d18724adf69b3c82e55ad5aa346780ebaab26439fd966ee4462ec97b2440be1f921fba5e70527ba3ef89347635bd61f6fa701a974a9a1ae56a2d4d8203c0b6c5ce5e4af54a66d60437bcf74ae3fa35ba211c343e76d338575c69642033b54ea09144d0cee3eecb97ddf6f36efbc7eef676b7fd688d25118c6f3a7360156e07fa3f42b74b0d76c6f9b1c611ee14690ccd60a896190868bfbfda54905142df7630addf7f78af34d9f841f8fd01b5e2acb02c56e7c33a438c0cb30cbdb35114458fc3701afa513086af3d82e5de9dc98236b448f0a4cb39c87364d02e50f952e9025eeaa1767b959d2a8d392d0d846bb6bab6ab5195cda18c81ce49e38291959284db048788fd066073caf9a57dcdbf9683de49e3a644722d32619e013d980bf6fc0f5b20b4df76309de0fe7390df0705a741885415dffcbc164baab3f69df7da79ebd7cb4f395b4941e5c0e5855686e6a61d5f2d0377584f57dd830b434df9900abb68ffc8ee48aca579c2eda845f691405b783f2207edb6efe175ecb67fed6e3fed6e7f43418f89966bc6a1d5ac349ab4efed2b88bb0fefeefefcbdaf6118f1d58901ada2e90fabb51a3b4d4f890246414bb2e6e6ea684c70bfff89166c2d82a3d70b76a3ccdeabdf3fb7cdeab79469639ed7a65dd15ab304bfb9983f8e161759e04cbdf9d4198f68e844e17ce184e3f3f96291455ee09dbf1dccf4074cf4760cc3bdfae359cdc14bef8bdd93bfec75091e081dfdf6fc80f6907b144cbca7a1ef39d9c8f39df1844c9de964143a59e8078bc9787e1166e1807b78cfc9efb9bedf930f678609ca99a4a7f4af865ab82410ffa508f770136eff7f4fff06504b03041400000008000000215c16a6479fde01000003040000200000006275696c74696e2d31332f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a1fbf8ec64636c2f4bd2d0bd2894ede15e91c7b688251949392ca5efde91d3640ba110162ca39134dffc3323958f27399003182bb4aa681c449480e2ba11aaabe88fef9bd90325d631d5b0412ba8e82b58fa587ffc501eb5d9d91ec01124285bd1deb9b10843cb7b90cc067a04853bad369239344d17dad1006b262739844914cd43c984a2674261ee61e8b6151cd69aef2528778618189843fdb617a3bdd024bf072799d9edc719d77244c4560cc2bd4e504a242f9e3ba50ddb0e98f729ce182727835f8223bd8499d66f2249c18db6ba750192ff6abe4d7f192e43c6afa4dbfcefc2c41916e0207c03df50c93b59f99595bcc1d277c2e657982f9729f6a2a9e8af7cfe142ff22499e58bcda7599646cbd9327fcaf0b75ce451b64a9334f94debb211d861ef4c0cb4155d2534accb89fe53c0d1fe33278e6dbfc100dc01068829f17773abf5ce6f3ee352e45dc31bdfcd7411be1ad240cbf6837bd1c7cf20bade21e42158e428da77b7685ed760395e372405d955c69a395697461f09760ecb6547e6df415aa4ff71ac4bee8faefc59afb32e0f751c2479191e501ec781b08bd0337d641d7c61a613ca9201da09b4a0c49c554e73a7c7698672b7da392d2f568fdd00e32d14d46aed2e862fc6f5f9d67f00504b03041400000008000000215c9ffbc0d73203000025080000150000006275696c74696e2d31342f7374796c65732e786d6cb5554f8bdb4614bf07fa1d06418fda9164c9b18cac10af5710484b60b7d0eb581a7987cc1f311a6fe4845cbc977e8242ae39e59643020dedc731ece7e81bc9b6e484b661971ec4ccfbf77bbf37f3e62979d2088e6ea8ae999233c73ff31c4465ae0a265733e797abcc9d38a8364416842b4967ce86d6ce93f48747496d369c5e5e536a1040c87ae65c1b534d31aef36b2a487da62a2ac1522a2d880151af705d694a8ada06098e03cf1b634198743a84a9c8bf074410fd725db9b91215316cc938339b16cb41229f3e5b49a5c99203d5c60f498e1a7fac03d4e8439256fb4d1ec172ad6a559a33c0c5aa2c594ebfa51be31893bc4702e4fb21f911f68293da1b7d4fa4106b7ac3ecf53969522a696a94abb5343327006c5becf4a554af64664d70c37baf34a95fa31bc241e33b384d72c59546063253eb041a4904ed3ceebe7cd96d3fefb67fec6e6f77db8fd65812c1f8a6330756813bd0ff11ba5d6ab033ce8f358e9c4e9126d00c866a998180f6fbab4d051925f46d07d3fafd87f74a938d1f44df1f502bce0acb62753eac13bad130cbd03b1bc571fc388a26911f07217ced112cf7ee4c16b4a10504743907798e0cda052a5f2a5dc04b3dd46eafb253a509a7a58170cd56d77635aab2399431d039695230b25292709be010b1df006c4e39bfb4aff9d772d03b69d29448ae4526cc33a00773c19eff610b84f6db0ea613f03f07f97d50701a844855f1cdcf6bb1a43a6bdf79af9db77ebdfc94b39514540e5c5e6865686edaf1d532c0c37abaea1e5c186aca8754d845fb477647622dcd136e472db28f04dac2fb11b968b77d0faf63b7fd6b77fb6977fb1b1af59868b9661c5acd4a614bf06b88bb0fefeefefcbdaf6118f1d58901ada2e90fabb51a3b4d4f890246414bb2e6e6ea689c39fdfe275ab0b5088e5e2fd88d327baf7effdc36ab3fb63968639ed7a65dd15ab399f3e662fe385e5c64813bf1e613371cd1c88da3f9c28dc2f3f96291c55ee09dbf1dccf4074cf4760cc3bdfae1b4e6e0a5f7c5eec95ff6ba9933103afaedf901ed21f738187b4f23df73b391e7bbe1984cdcc97814b959e4078b7138bf88b268c03dbae7e4f7b0eff7e4a3a961827226e929fdaba1162e09c47f29021f6e02f7fff7f46f504b03041400000008000000215c7bb46463de01000003040000200000006275696c74696e2d31342f776f726b7368656574732f7368656574312e786d6c9d935babdc2010c7df0bfd0ee27b924df61e921cf64acf43a1f4f6ee9a49221b35a87ba3f4bb77cc76f71496c27240c151e737ff99d1ece52c5b7204638556398dc30125a0b82e85aa73fae3fb369851621d53256bb5829c5ec0d297e2e387eca4cdde36008e2041d99c36ce75691459de806436d41d283ca9b491cca169eac8760658d93bc9364a068349249950f44a48cd330c5d5582c35af38304e5ae10032d73a8df36a2b3379ae4cfe02433fb4317702d3b44ec442bdca587522279fa5a2b6dd8aec5bccff18871723638129cc35b987eff219214dc68ab2b1722f9afe6c7f4e7d13c62fc4e7accff294c3cc2021c856fe01b2a79276b7c67256fb0e13b61933bcc97cba40751e6f4d778bd1d4ee264192c17b365305aade260319dcf82e964bc8937ab64335a4c7ed3222b0576d83b1303554e57098d8aaca7ff1470b2ffac8963bb6fd002778001624afcdbdc69bdf787afb835f0aed183efb67f085f0c29a16287d67dd5a74f20eac62164164ec728da77372d2f6bb01c9f1b92c2d15dc69a395664469f08760ecb653be6ffc1301dfec7b1c8b8bfbaf277bdce223b1671988cb3e888f2384e84dd845ee91dabe13333b55096b450f5a02925e6aab25f3bddf52b94bbd3ce6979b31aec06186fa1a04a6b77337c31eedfb7f803504b03041400000008000000215c70304fbf3403000025080000150000006275696c74696e2d31352f7374796c65732e786d6cb555cd8ae34610be07f20e4d438e1afd58f25846d2b21e8f606113166602b9b6a596a7d9fe11adf6444ed88be7922708e49a536e39249025791cc33c47aa25db927749b2cc9083e8aebfafbeeaae2e252f5ac1d13dd50d5332c5fe85871195852a995ca7f8ebdbdc9961d418224bc295a429ded206bfc83eff2c69cc96d39b3b4a0d0208d9a4f8ce987aeeba4d714705692e544d25582aa5053120eab5dbd49a92b2b14182bb81e74d5d4198c43dc25c149f0222887ebba99d42899a18b6629c996d87859128e6afd65269b2e240b5f54352a0d69fea00b5fa98a4d37e9447b042ab4655e602705d5555aca01fd38dddd825c58004c84f43f223d70bce6a6ff513914257d37b66af0f6749a5a46950a136d2a438006c5becfcad54dfcadc9ae0860f5e59d27c87ee09078d8fdd2c2914571a19c84cad13682411b4f7787cff7ebffb7dbffb63fff0b0dffd6a8d15118c6f7b7360156e0ffa3f42774b0376c6f9a9c609ee155902cd60a8963908e8b0bfddd6905142dff6309ddf7f78af35d9fa41f4e9018de2acb42cd657e33a2f3132cc32f42e26711c5f46d12cf2e32084af3b82d5c19dc992b6b44cf1b4cf39ca7362d02d50f94ae9125eeab1767b95bd2a4b38ad0c846bb6beb3ab51b5cda18c81cec9929291b59284db04c788c306600bcaf98d7dcddf54a3dec992b642722372615e013d980bf6fc8f5b2074d8f630bde0fe73903f0405e74188d435df7eb5112baaf3ee9d0fda45e737c82f395b4b41e5c8e58d568616a61b5f1d03775c4f5fddb30b436df59c0afb68ffc4ee44aca379c6eda445f691405b785f2007ed773fc3ebd8effeda3ffcb67ff8018503265a6d188756b3521876efed0388c75f7e7afcf3c7a18671c4072706b4ca7638acce6aec343d270a1825adc8869bdb9331c5c3fe4b5ab28d084e5e6fd8bd3207af61ffda36ab3fb539686b5e37a65bd146b3147f7fbdb88c97d779e0ccbcc5cc09273472e268b174a2f06ab15ce6b1177857ef4633fd1913bd1bc370af7e386f3878e943b107f237832ec523a1a7df9d1fd01e738f83a9f732f23d279f78be134ec9cc994d279193477eb09c868beb288f46dca3274e7ecff5fd817c34374c50ce243da77f3bd6c22581f82f45b8c79b7087ff7bf637504b03041400000008000000215c5d3f435cdf01000003040000200000006275696c74696e2d31352f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1fe31c6c6c2fbb9b86ee4561e9e95e91c7b6886519493951faee1d398db7100a6141028da4f9e69f19297f38c98e1c401ba1fa82467e4809f45c55a26f0afae3fbc65b51622ceb2bd6a91e0a7a06431fca8f1ff2a3d23bd302588284de14b4b576c882c0f0162433be1aa0c7935a69c92c9aba09cca08155a393ec82380c178164a2a71742a6ef61a8ba161cd68aef25f4f602d1d0318bfa4d2b0673a5497e0f4e32bddb0f1e577240c45674c29e47282592672f4daf34db7698f7294a1827278d23c639bb8619f76f2249c1b532aab63e92ff6abe4d3f0dd280f189749bff5d9828c1021c846be01b2a7e276b3eb1e237d8ec9db0c50473e5d2d95e5405fdb57c8ad274b34ebc65186dbc64962ebcc74f8f732f8c9f169b380ad364b5fc4dcbbc12d861e74c34d4057d8e6950e623fda780a3f9674d2cdb7e830eb8050c1051e2dee656a99d3b7cc1add0b90637be9bf121bc6a5241cdf69dfdaa8e9f4134ad45c8ca5fce51b4eb6e569dd760383e3724f9c92463cd2c2b73ad8e043b87e5320373ff6096cdfee358e6dc5d7d76779dce323f94911fcff3e080f2384e845d855ee8036be00bd38de80de9a01e414b4af445e5b8b66a18572877abac55f26ab5d80dd0ce4241b552f66ab8624cdfb7fc03504b03041400000008000000215c0c01229c3403000025080000150000006275696c74696e2d31362f7374796c65732e786d6cb555cd8ae34610be07f20e8d20474d4bb2e4b58ca4653d1ec1c2262ccc04726d4b2d4fb3fd235aed899cb017cf254f10d8eb9e72cb21812cc9e318e639522dd996bc4b9265861c8cbafebefaaabbaa9c3c6f05477754374cc9d4f12f3c075159a892c975ea7c7b93bb33073586c892702569ea6c69e33ccfbefc2269cc96d3eb5b4a0d0208d9a4cead31f51ce3a6b8a5823417aaa6122c95d2821810f51a37b5a6a46c6c90e038f0bc29168449a747988be2734004d16f36b55b285113c3568c33b3edb01c248af9cbb5549aac38506dfd9014a8f5a73a40ad3e26e9b49fe411acd0aa5195b9005cacaa8a15f453ba318e31290624407e1c921f612f38abbdd58f440ab1a677cc3e9f93259592a64185da48933a0160db62e76fa4fa5ee6d6042f7cf0ca92e607744738687c076749a1b8d2c840666a9d402389a0bdc7c3870ffbddeffbdd1ffbfbfbfdee576bac88607cdb9b03abc03de8ff08dd7d1ab033ce4f354e9c5e9125d00c866a9983800ee79b6d0d1925f46d0fd3f9fd87f75a93ad1f449f1fd028ce4acb627d39ae13c6c630cbd0bb98c471fc2c8a66911f0721fcba2b581ddc992c694bcbd499f63947794e0cba0f54be52ba84493dd66e9fb2576509a7958170cdd6b7f66b546d732863a073b2a46464ad24e136c131e27000d882727e6da7f9bb6ad43b59d256486e442ecc4ba0077bc1defff108840ec71ea617f03f07f94350701e84485df3ed371bb1a23aefe67cd02e3abf417ec1d95a0a2a472eafb532b430ddfaea18e0713d7d754f2e0cb5d5532aeca3fd13bb13b18ee619b79316d92181b6f0be422edaefdec374ec777fedef7fdbdfff84a20113ad368c43ab59299c75f3f611c4c32fef1efefc79a8611cf1d18d01adb21d2eabb31abb4dcf890246492bb2e1e6e6644c9de1fc352dd9460427afd7ec4e9983d7707e659bd59fda1cb435af1ad37dd146b3d4f9f16af12c5e5ee5813bf31633379cd0c88da3c5d28dc2cbc57299c75ee05dbe1dedf4276cf46e0dc3bbfae1bce1e0a50fc51ec85f0fbad419093dfdeefe80f6987b1c4cbd1791efb9f9c4f3dd704a66ee6c3a89dc3cf283e5345c5c457934e21e3d72f37bd8f707f2d1dc30413993f49cfecd580b8f04e2bf14818f2f8187fff7ec6f504b03041400000008000000215ca4af488de101000003040000200000006275696c74696e2d31362f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1f623bc9c6d85e7673a07b51283ddd2bf2d816b124232987a5f4dd3b729a6c2114c282041a49f3cd3f3352f178923d3980b142ab924ec29812505cd742b525fdf17d133c50621d5335ebb58292be82a58fd5c70fc5519b9ded001c4182b225ed9c1bf228b2bc03c96ca8075078d268239943d3b4911d0cb07a74927d94c4f12c924c287a26e4e61e866e1ac161a5f95e82726788819e39d46f3b31d80b4df27b709299dd7e08b8960322b6a217ee7584522279fed22a6dd8b6c7bc4f938c71723238129ce925ccb87f13490a6eb4d58d0b91fc57f36dfa8b6811317e25dde67f17669261010ec237f00d95bc9335bdb2923758fa4ed8ec0af3e532f95ed425fd956de6f1741d3f05d972fd1c64f3e93a582c564fc17ab69e25e96a317f4e37bf6955d4023bec9d8981a6a4cb84465531d27f0a38da7fd6c4b1ed37e8813bc000134afcdbdc6abdf3872fb8157bd7e8c677333e842f86d4d0b07defbeeae327106de710f210cea728da7737af5f5760393e372485d955c68a395615461f09760ecb6507e6ff419aa7ff71ac0aeeaf2efd5dafb32a0ed5244ca6457440791c27c22e42cff481b5f0999956284b7a6846d09c12735639ae9d1ec615cadd6ae7b4bc581d76038cb75050a3b5bb18be18d7ef5bfd01504b03041400000008000000215c770c74893303000025080000150000006275696c74696e2d31372f7374796c65732e786d6cb555cd8ae34610be07f20e4d438e1afdd8d25a46d2b21e8f606113166602b9b6a596a7d9fe11adf6444ed88be7922708ec754fb9e5904096e4710cf31ca9966c4bde25c932430ea2bbfebefaaabbba943c6f05477754374cc914fb171e465416aa64729de26f6f7267865163882c095792a6784b1bfc3cfbf28ba4315b4eaf6f293508206493e25b63eab9eb36c52d15a4b950359560a99416c480a8d76e536b4acac60609ee069e17b98230897b84b9283e074410fd66533b851235316cc53833db0e0b2351cc5faea5d264c5816aeb4f49815a3fd2016af53149a7fd248f6085568daacc05e0baaaaa58413fa51bbbb14b8a0109901f87e487ae179cd5deea47224d5d4def98bd3e9c259592a64185da4893e200b06db1f337527d2f736b821b3e786549f303ba231c343e76b3a4505c69642033b54ea09144d0dee3e1c387fdeef7fdee8ffdfdfd7ef7ab35564430beedcd8155b83de8ff08dd2d0dd819e7a71a27b85764093483a15ae620a0c3fe665b4346097ddbc3747effe1bdd664eb07e1e707348ab3d2b2585f8eeb8c3132cc32f42e26711c3f0bc359e8c7c114beee08560777264bdad232c5519f7394e7c4a05ba0f295d225bcd463edf62a7b5596705a1908d76c7d6b57a36a9b4319039d932525236b2509b7098e11870dc01694f36bfb9abfab46bd93256d85e446e4c2bc047a3017ecf91fb740e8b0ed617ac1fde7207f080ace8310a96bbefd66235654e7dd3b1fb48bce6f905f70b69682ca91cb6bad0c2d4c37be3a06eeb89ebeba271786daea2915f6d1fe89dd895847f38cdb498bec2381b6f0be420edaefdec3ebd8effedadfffb6bfff094503265a6d188756b352d8bd978f211e7e79f7f0e7cf430de3888f4e0c6895ed70589dd5d8697a4e14304a5a910d373727638a87fdd7b4641b119cbc5eb33b650e5ec3fe956d563fb239686b5e35a65bd146b314ff78b578162faff2c099798b99339dd0d089c3c5d209a7978be5328fbdc0bb7c3b9ae94f98e8dd18867bf5a7f38683973e147b207f3de8523c127afaddf901ed31f73888bc17a1ef39f9c4f39d694466ce2c9a844e1efac1329a2eaec23c1c710f1f39f93dd7f707f2e1dc30413993f49cfecd580b9704e2bf14e11e6fc21dfeefd9df504b03041400000008000000215c49d5112ce001000003040000200000006275696c74696e2d31372f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbf121c9c6d85e7258d3bd28949eee15796c8b5896919413a5efde91d3640ba1101624d0489a6ffe9991b2e793ecc801b411aacf69e84f28819eab4af44d4e7f7c2fbd274a8c657dc53ad5434ecf60e873f1f14376547a675a004b90d09b9cb6d60e691018de8264c65703f478522b2d99455337811934b06a74925d104d26b34032d1d30b21d58f30545d0b0e1bc5f7127a7b8168e89845fda61583b9d2247f042799deed078f2b3920622b3a61cf239412c9d3d7a6579a6d3bccfb14268c9393c611e18caf61c6fdbb485270ad8caaad8fe4bf9aefd35f048b80f11be93eff87306182053808d7c03754f44ed6f4c68ade60f13b61b31bcc954ba77b51e5f457b429cb245caebdb82c4b2f992d97de62b95e79ab97e56a324f5ee24914ffa6455609ecb073261aea9cae231a14d948ff29e068fe5913cbb6dfa0036e01038494b8b7b9556ae70e5f716be25c833bdf727c085f34a9a066fbce7e55c74f209ad622e4c99f4f51b4eb6e5a9d3760383e3724f9c94dc6865956645a1d09760ecb6506e6fe419cc6ff712c32eeaeaedd5da7b3c80e45e847d32c38a03c8e136157a117fac01af8cc74237a433aa847d09c127d5139aead1ac615cadd2a6b95bc5a2d7603b4b35050ad94bd1aae18b7ef5bfc01504b03041400000008000000215c6d10415e0c030000ed070000150000006275696c74696e2d31382f7374796c65732e786d6ca555cd8ed33010be23f10e96ef5927d9a6b4551244b71b090910d22e12573771ba16fe891c7749415cba179e00892b276e1c4002c1e354dae7c076da2605f1a3dd93c7f3f3cd379ec924bedf70062e89aaa914090c8e7c0888c86541c52281cfce336f0441adb1283093822470456a783fbd7b27aef58a91b30b42343010a24ee085d6d504a13abf201cd747b222c2584aa938d6e6aa16a8ae14c1456d833843a1ef0f11c754c01661c2f3ff01e158bd58565e2e7985359d5346f5ca6141c0f3c9c385900acf99a1da04039c832618aa10346a97c4697fcbc369ae642d4b7d6470912c4b9a93dfe98ed118e1bc4332c837430a22e48707b537ea864803a4c825b5ed83695c4aa16b90cba5d0090c0db62d76f242c89722b326d3e1ad571ad7afc0256646134094c6b96452016d3213eb64340273d27a5c7ffbb6597fd9acbf6eaeae36eb4fd658624ed9aa358756815ad07f42fb378676476dec94b17d8dc7b055a4b119064d94c8cc056ce5f35565320a33b72d8cf3fb87f742e1551046ff1f504b460bcb6271d2af73e0107a517b3c77983ae65215e6bbdb55621bd3aad29891529b70451717f6d4b242d6a8b59983342e285e4881994db08bd80a0636278c9dd96ff379d99b84346e4a20963ce3fa6161bb00ec6bee4443682bb630ed05fd3928e882c2c32080ab8aad9e2cf99ca8cc7db59d76eafcbafb0346178213d17379aaa426b976cbc83140fd7adaea6e5d1868cadb54d846077b767b628ee601b7bd16d8914fe066fdc14cf966fd6373f57973f516041d1a982f29d354b88c63f7ddfc127cfdf1fdf5f7771dfb7ec42f6f6508154df74cceaaed563ca468300a52e225d3e77b63023bf93129e892877bafa7f452eaad57273fb2631a0c6d0ed2e847b57627582a9ac0d7a7d37be3d969167a237f3af206c724f2c6d174e6458393e96c968dfdd03f79d3dbcdb7d8cc6e9d9a8e068349cd8c97da16bb257fd6e912d8bbb4f4ddfb19da7deee370e83f8802dfcb8efdc01b0cf1c81b0d8f232f8b8270361c4c4fa32cea718f6eb8c17d14041df968a229278c0a7248ffbcaf354d32d7bf1481769d40dd7f3afd09504b03041400000008000000215c76970b26de01000003040000200000006275696c74696e2d31382f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bc7c73889b1bdb4494df7a2b0f474afc8635bc4b28ca49c287df78e9c265b0885b0208146d27cf3cf8c943f9d644f0ea08d504341c35940090c5cd562680bfae37be52d2931960d35ebd500053d83a14fe5fb77f951e99de9002c41c2600ada593b66be6f78079299991a61c0934669c92c9abaf5cda881d59393ecfd2808525f3231d00b21d38f3054d3080e1bc5f712067b8168e89945fda613a3b9d2247f042799deed478f2b3922622b7a61cf139412c9b3e776509a6d7bccfb14268c9393c611e18caf61a6fdbb485270ad8c6aec0cc97f35dfa7bff2573ee337d27dfe0f61c2040b7010ae81afa8e88dacf98d15bdc2e237c2d21bcc954b677b5117f457b2fa14a7d57aee8555187bc93a4abdd5c734f0d26a9104d187b04a57cbdfb4cc6b811d76ce444353d07544fd329fe83f051ccd3f6b62d9f61bf4c02d60809012f736b74aeddce1336e05ced5bff3ada687f0a2490d0ddbf7f6ab3a7e06d1761621cbd9628ea25d77b3fabc01c3f1b9216996dc646c986565aed59160e7b05c6664ee1fc459fc1fc732e7eeeadadd753acbfc5086b3689efb0794c77122ec2af4421f590b5f986ec560480fcd045a50a22f2aa7b555e3b442b95b65ad9257abc36e8076160a6a94b257c315e3f67dcb3f504b03041400000008000000215c82f4f3160c030000ed070000150000006275696c74696e2d31392f7374796c65732e786d6ca555cd6ed34010be23f10eabbdbb6b3b714822db55d3d4522540482d12d78dbd4e57ec8fb5de1407c425bdf004485c3971e30012081e27529f835d3b899d2268d59e76e7ef9b6f76c6e3f0b0e20c5c1255522922e81db8101091ca8c8a79045f9e27ce108252639161260589e09294f0307efc282cf59291b30b42343010a28ce085d6c518a132bd201c9707b220c25872a938d646547354168ae0acb4419c21df750788632a608330e6e95d403856af1785934a5e604d679451bdacb120e0e9f8742ea4c23366a8565e1fa7a0f206ca0795da26a9b57fe5e13455b294b93e30b848e6394dc9df7447688470da2219e4fb21790172fdbdda2b754fa43e52e492daf6c138cca5d02548e542e808fa06db163b7e2de41b915893e9f0c62b0ecbb7e01233a3f1208ac35432a98036998975321a8139693cae7ffe5cafbeaf573fd65757ebd5576bcc31a76cd9987dab400de8add0eebda1eba33476cad8aec61e6c14716886411325122380cdfd7c59988cc2cc6d0353fbdde23d5778e9f9c1dd034ac9686659cc8fbb7536089da81d5e7d983a665265e6bbdb56621bd3a8e290915c9b7045e717f6d4b240d6a8b5998338cc289e4b81994db08dd85c0c6c4a183bb3dfe6abbc33097158e5402c78c2f56966bb00ec6b6eaf86d0e6dac03402fa7790d706f9fb410017055b3e5ff0195149fdd5b6da49edd7ca478cce0527a2e3f242494d525d2fa39a01ead6d354f7e0c240953fa4c226dadbb1db11ab69ee71db69811df908ae579fcd94af57bfd757dfd6571f80dfa281d982324d85957abdfabbb9117cfde5d3f5af8f2dfb6ec48db73284b2aa7da6daaaed56dca768303292e305d3e73b6304dbfb3392d105f7775e2fe8a5d41baff6fed48ea937b03948a59f96ba3ec142d108be3b993c194d4f12df19ba93a1d3ef91c0190593a913f48f27d36932727df7f87d67373f6033d7ebd474d4eb8f4b66bcd4a6d80df9b35617c18ed0d0afdfcfd0ee721ff903f728f05c27e9b99ed31fe0a1331cf40227093c7f3ae84f4e8224e8700feeb9c15de4792df960ac29278c0ab24fffbcab354d32e27f8a40db4ea0f63f1dff01504b03041400000008000000215c04217d20e001000003040000200000006275696c74696e2d31392f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbf1214e626c2f4dd2d0bd289476db7b451edb22966524e544e9bb77e434d98550080b126824cd37ffcc48f9d34976e400da08d51734f4279440cf5525faa6a03f5f36de9c1263595fb14ef550d03318fa547efc901f95de9916c01224f4a6a0adb543160486b72099f1d5003d9ed44a4b66d1d44d60060dac1a9d64174493491a48267a7a2164fa1186aa6bc161adf85e426f2f100d1db3a8dfb46230579ae48fe024d3bbfde0712507446c4527ec7984522279f6dcf44ab36d87799fc2847172d238229cf135ccb87f17490aae9551b5f591fc4ff37dfa8b6011307e23dde7ff10264cb00007e11af88a8adec99ade58d12b2c7e272cbdc15cb974b61755417fc7f36514c59f136f365f2cbd64b29e79f37495789b384d97d3304a3fcd167f689957023bec9c8986baa0ab8806653ed27f09389a376b62d9f60774c02d60809012f736b74aeddce1336e4d9c6b70e7bb191fc2374d2aa8d9beb3dfd5f10b88a6b50899fbb3298a76ddcdaaf31a0cc7e786243fb9c95833cbca5cab23c1ce61b9ccc0dc3f88b3f83f8e65ceddd595bbeb7496f9a10cfd689a070794c77122ec2af4421f58035f996e446f4807f5089a51a22f2ac7b555c3b842b95b65ad9257abc56e8076160aaa95b257c315e3f67dcbbf504b03041400000008000000215c9814e69910030000ed070000150000006275696c74696e2d32302f7374796c65732e786d6ca5554f6fdb3614bf17d87720785728c9966b1b9282388e8000ed502019b02b2d510e51fe11283a955bf4e25cf60906ecbad36e3b6cc08af6e318c8e71849d9969c624b909cf8fefef87b7c4f4ff169c319b825aaa652243038f1212022970515cb04fe749d7963086a8d4581991424816b52c3d3f4875771add78c5cdd10a281811075026fb4aea608d5f90de1b83e911511c6534ac5b136aa5aa2ba520417b54de20c85be3f421c53015b8429cf9f02c2b17abfaabc5cf20a6bbaa08ceab5c38280e7d3cba5900a2f98a1da04439c832618a910346a7f89b37e770fa7b992b52cf589c145b22c694ebea73b411384f30ec9203f0f2988901f1ed5dea867220d9122b7d4b60fa6712985ae412e5742273034d8b6d8e97b213f88ccba4c877751695c7f04b798194b00511ae7924905b4b999d8206311989336e2fecb97ede6efede69feddddd76f3a775969853b66edda135a016f45168ffd9d0eea88d9f3276a871005b431a9b61d04489cc2860275faf2b73a33073dbc2b8b847a2970aaf83307a7a422d192d2c8be579bfce9143e8651df0dc61ea58485598ef6e5f896d4c6b4a63464a6dd2155dded853cb0a59a7d6660ed2b8a078290566f6827dc64e30b03961ecca7e9b3f97bd4948e3a60462c533ae2f0bdb05605f732f1a423bb1856915f4df494197141e27015c556cfde38a2f88cadc57db59672eaed3cf185d0a4e442fe49d929ae4da2d23c700f5eb69ab7b7161a0295f52619b1d1cd81d88399a47dc0e5660473e81dbcdef66cab79b6fdbbbbfb677bf80418706162bca3415561bbc76dfcd83e4fb3f7ebbfffa6bc7be9ff1e0ad0ca1a2e99ec979b5dd8ac7140d46414abc62fafae04c6027bf25055df1f010f58ede4abd8beae437764c0337f0a4d16f6aed4eb05234819f2e66af27f38b2cf4c6fe6cec0d0724f226d16cee45c3f3d97c9e4dfcd03fffdcdbcd2fd8cc6e9d9a8e06c369cd4c94da15bb237fd5d912d8535afaeefd0ced3ef74938f2cfa2c0f7b2811f78c3111e7be3d120f2b22808e7a3e1ec22caa21ef7e8991bdc4741d0918fa69a72c2a820c7f4affb56d324a3fe4f1168df09d4fda7d37f01504b03041400000008000000215c61795897dd01000003040000200000006275696c74696e2d32302f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b9f9decaeb1bda4eb86ee45a1f474afc8635bc4928ca41c96d277efc869b28550080b1268469a6f7ecd48e5e3518e640fc60aad2a9a843125a0b86e85ea2bfae3fb3ab8a7c43aa65a366a05157d014b1febf7efca83365b3b00388204652b3a3837155164f90092d9504fa070a7d3463287a6e9233b1960ed1c24c7288de365249950f44428cc2d0cdd758243a3f94e82722788819139d46f0731d9334df25b709299ed6e0ab8961322366214ee6586522279f1dc2b6dd866c47b1f939c71723438529cd939cdecbfca240537daeace8548feabf9fafa0fd143c4f885747dff9b30498e05d80bdfc05754fa46d6e2c24a5f61d91b61cb0bcc97cb143bd156f457bc6a9275f6a1099a65fc31c8e32c0b56699305f92acbd1b34ef2d5f237adcb5660877d3031d055f429a5515dcef49f020ef69f35716cf30d46e00e304142897f9b1badb77ef3195db10f8dae62d7f343f862480b1ddb8deeab3e7c02d10f0e21f7e1dd0245fbee16ed4b0396e3734352985f6434ccb1ba34fa40b073582e3b31ff0fb222fb4f605d727ff4c99ff53aeb725f2761ba28a33dcae3381176167aa24fac87cfccf4425932423783ee28312795f3dae9695ea1dc8d764ecbb3356037c0780b05755abbb3e18b71f9bef51f504b03041400000008000000215ce9e44b1b0c030000ed070000150000006275696c74696e2d32312f7374796c65732e786d6ca555cd6ed34010be23f10eabbdbb6bbb764822db8834b5540910528bc47563afd355f7c75a6f8a03e2925e780224ae9cb8710009048f13a9cfc1ae9dc40e1550b5a7ddf9fbe69b9df1387a5c73062e89aaa81431f40e5c0888c8644ec53c862fcf52670841a5b1c8319382c470492af83879f820aaf49291d37342343010a28ae1b9d6e518a12a3b271c5707b224c2580aa938d646547354958ae0bcb2419c21df750788632a608b30e6d96d403856178bd2c9242fb1a633caa85e365810f06c7c321752e11933546b2fc019a8bd81f241adb6491aed8d3c9c664a56b2d0070617c9a2a019b94977844608671d9241be1b921722d7dfabbd5677440a902297d4b60f26512185ae40261742c7d037d8b6d8f18590af456a4da6c31baf24aade804bcc8cc683288932c9a402da6426d6c96804e6a4f5b8fef163bdfab65e7d5f5f5dad575facb1c09cb2656bf6ad02b5a0ff8576ef0cdd1c95b153c676351ec256914466183451223502d8dccf96a5c928ccdcb6308ddf7fbce70a2f3d3fbc7d402519cd2d8bf951bfce470d422f6a87d71ca68e9954b9f9eeb695d8c6b4aa2462a4d0265cd1f9b93db52c91356a6de62089728ae7526066136c233617039b11c64eedb7f9aae84d4212d505100b9e727d92db2e00fb9adbab21b4b9b630ad80fe1ee47541fe7e10c065c996cf177c4654da7cb59d76d2f875f21346e78213d17379a1a426996e9651c300f5eb69abbb7761a02eee53611bededd8ed883534f7b8edb4c08e7c0cd7ab4f66cad7ab5febabafebabf720e8d0c06c4199a6c24a41fbddfc117cfdf9e3f5cf0f1dfb7ec41f6f6508e575f74c8d55dbadb84fd160e4a4c00ba6cf76c61876f76724a70beeefbc5ed04ba9375eddfda91d536f6073905a3fad74738285a2317c7b3c79349a1ea7be33742743273824a1330a2753270c8e26d3693a727df7e85d6f37df633337ebd474d40bc615335e6a53ec86fc69a78b614f68e937ef6768f7b98ffc81fb24f45c273d743d2718e0a1331c1c864e1a7afe74104c8ec334ec710fefb8c15de4791df970ac29278c0ab24fffacaf354d32e23f8a40db4ea0ee3f9dfc06504b03041400000008000000215cb2531f63de01000003040000200000006275696c74696e2d32312f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a1fbd88ee39c8ced85241bba1785d2c3de2bf2d816b1242329274adfbd23a7f116c24258906046d27cf36b46ca9eceb2254730566895d3711051028aeb52a83aa7bf7e6e470b4aac63aa64ad5690d30b58fa547cfe949db4d9db06c01124289bd3c6b92e0d43cb1b90cc06ba03853b95369239744d1ddace002bfb20d9867114cd42c984a257426a1e61e8aa121c369a1f2428778518689943fdb6119dbdd1247f042799d91fba11d7b243c44eb4c25d7a282592a72fb5d286ed5abcf7799c304ece06478c73724bd3afdf6592821b6d75e50224ffd37c7ffd65b80c191f48f7f77f08334eb00047e11bf8868a3fc89a0eacf80d36f9206c36c07cb94c7a10654e7fafa2e7d96c32df8ea6f364354a569be968f9bc406b9d445192c4b3e566f587165929b0c33e9818a872ba8e6958643dfd55c0c9fe6713c7763fa005ee00138c29f16f73a7f5de6fbee052e443c3bbd86dff10be195242c50eadfbae4f5f40d48d43c822984f51b4ef6e5a5e3660393e372405c92063c31c2b32a34f043b87e5b21df3ff60924ede092c32ee8faefd59afb3c88ec53888a7597844791c27c26e42aff48ed5f095995a284b5aa87ad09c127355d9db4e77bd857277da392d6f5e83dd00e33d145469ed6e8e2fc6f07d8bbf504b03041400000008000000215c9d890c010b030000ed070000150000006275696c74696e2d32322f7374796c65732e786d6ca555cd8ed33010be23f10e96ef5927d9a6b45592d576bb91900021ed22717513a7b5f04fe4b84b0ae2d2bdf004485c3971e30012081ea7d23e0776d236e92258d43dd9f3f7cd379ec9243ca93803574495548a087a472e0444a432a36216c11797893380a0d4586498494122b824253c891f3e084bbd64e4624e8806064294119c6b5d8c102ad339e1b83c920511c6924bc5b136a29aa1b2500467a50de20cf9aedb471c53011b84114fff078463f56a5138a9e405d6744a19d5cb1a0b029e8e1ecf845478ca0cd5caebe114545e5ff9a052db24b5f68f3c9ca64a9632d7470617c93ca729f993ee100d114e5b24837c18921720d7dfabbd520722f5902257d4b60fc6612e852e412a174247d037d8b6d8d12b215f8bc49a4c87375e7158be015798198d07511ca6924905b4c94cac93d108cc49e371f3e3c77af56dbdfabebebe5eafbe58638e3965cbc6ec5b056a40ef84760f86ae8fd2d82963bb1a8f61a38843330c9a289118016cee97cbc26414666e1b98daef0eef99c24bcf0ffe3fa0948c6696c5ecac5be7a046e844edf0eac3d431952a33dfddb612db984615878ce4da842b3a9bdb53cb0259a3d6660ee230a37826056636c136627331b02961ecc27e9b2ff3ce24c4619503b1e009d78f33db05605f737b358436d706a611d0df83bc36c8df0f02b828d8f2d9824f894aeaafb6d58e6bbf563e65742638111d97e74a6a92ea7a19d50c50b79ea6ba7b1706aafc3e1536d1de8edd8e584d738fdb4e0becc84770bdfa64a67cbdfab5befebabe7e0f82160d4c1794692aacd4abe7ef76f0cde78f373f3fb4ecbb11b7deca10caaaf6996aabb65b719fa2c1c8488e174c5fee8c116cef4f494617dcdf793da757526fbcdafb133ba65edfe620957e52eafa040b4523f8f67cfc6838394f7c67e08e074eef9804ce30184f9ca077369e4c92a1ebbb67ef3abbf91e9bb95ea7a6a35e6f5432e3a536c56ec85fb4ba087684867efd7e867697fbd0efbba781e73ac9b1eb39bd3e1e3883fe71e02481e74ffabdf17990041deec1811bdc459ed7920f469a72c2a820fbf42fbb5ad32423fea308b4ed046affd3f16f504b03041400000008000000215c9d2646cede01000003040000200000006275696c74696e2d32322f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb17336b69736ded0bd28949eee15796c8b5892919413a5efde91d3780ba1101624d0489a6ffe9991b2a7b3ecc8118c155ae5340e279480e2ba12aac9e98fefdb604589754c55acd30a727a014b9f8af7efb293367bdb023882046573da3ad7a75164790b92d950f7a0f0a4d6463287a66922db1b60d5e024bb28994c16916442d12b21358f30745d0b0ea5e60709ca5d21063ae650bf6d456f6f34c91fc14966f6873ee05af688d8894eb8cb00a544f2f4a551dab05d87799fe319e3e46c702438a7b730c3fe5d2429b8d156d72e44f25fcdf7e9afa375c4f848bacfff214c3cc3021c856fe02b2a79236b3eb29257d8f48db0c508f3e532e9415439fd156fe2559cacd7c1fce3f3329825e522f8b09daf82f2b95c4c2749b92ce3ed6f5a6495c00e7b6762a0cee926a151910df49f024ef69f35716cf70d3ae00e30404c897f9b3badf7fef005b726de35baf3dd0e0fe18b2115d4ecd0b9affaf40944d33a84acc2e51c45fbeea6d5a504cbf1b921299c8d324ae65891197d22d8392c97ed99ff07d374fa1fc722e3feeac6dff53a8bec58c46132cfa223cae3381176137aa5f7ac81cfcc344259d2413d80969498abca61ed743fac50ee4e3ba7e5cd6ab11b60bc85826aadddcdf0c518bf6ff107504b03041400000008000000215c282b72380b030000ed070000150000006275696c74696e2d32332f7374796c65732e786d6ca555cd8ed33010be23f10e96ef5927d9a6b45592d576bb91900021ed22717513a7b5f04fe4b84b0ae2d2bdf004485c3971e30012081ea7d23e0776d236e92258d43dd9f3f7cd379ec9243ca93803574495548a087a472e0444a432a36216c11797893380a0d4586498494122b824253c891f3e084bbd64e4624e8806064294119c6b5d8c102ad339e1b83c920511c6924bc5b136a29aa1b2500467a50de20cf9aedb471c53011b84114fff078463f56a5138a9e405d6744a19d5cb1a0b029e8e1ecf845478ca0cd5caebe114545e5ff9a052db24b5f68f3c9ca64a9632d7470617c93ca729f993ee100d114e5b24837c18921720d7dfabbd520722f5902257d4b60fc6612e852e412a174247d037d8b6d8d12b215f8bc49a4c87375e7158be015798198d07511ca6924905b4c94cac93d108cc49e371f3e3c77af56dbdfabebebe5eafbe58638e3965cbc6ec5b056a40ef84760f86ae8fd2d82963bb1a8f61a38843330c9a289118016cee97cbc26414666e1b98daef0eef99c24bcf0ffe3fa0948c6696c5ecac5be7b046e844edf0eac3d431952a33dfddb612db984615878ce4da842b3a9bdb53cb0259a3d6660ee230a37826056636c136627331b02961ecc27e9b2ff3ce24c4619503b1e009d78f33db05605f737b358436d706a611d0df83bc36c8df0f02b828d8f2d9824f894aeaafb6d58e6bbf563e65742638111d97e74a6a92ea7a19d50c50b79ea6ba7b1706aafc3e1536d1de8edd8e584d738fdb4e0becc84770bdfa64a67cbdfab5befebabe7e0ffa2d1a982e28d35458a9574fcfede09bcf1f6f7e7e68d977236ebd95219455ed33d5566db7e23e458391911c2f98bedc1923d8de9f928c2eb8bff37a4eafa4de78b5f727764cbdbecd412afda4d4f509168a46f0edf9f8d170729ef8cec01d0f9cde31099c61309e3841ef6c3c992443d777cfde7576f33d3673bd4e4d47bddea864c64b6d8add90bf687511ec080dfdfafd0ced2ef7a1df774f03cf759263d7737a7d3c7006fde3c04902cf9ff47be3f320093adc830337b88b3caf251f8c34e5845141f6e95f76b5a64946fc471168db09d4fea7e3df504b03041400000008000000215cca4ac958df01000003040000200000006275696c74696e2d32332f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb19d938ded856e12ba1785b23ddc2bf2d816b1242329274adfbd23a7c91642212c48a09134dffc3323154f27d99303182bb42a691c4e2801c5752d545bd21fdf37c19212eb98aa59af1594f40c963e551f3f14476d76b603700409ca96b4736ec8a3c8f20e24b3a11e40e149a38d640e4dd3467630c0ead149f6513299cc23c984a217426e1e61e8a6111c569aef2528778118e89943fdb61383bdd2247f042799d9ed87806b3920622b7ae1ce239412c9f3975669c3b63de67d8aa78c9393c191e04caf61c6fdbb485270a3ad6e5c88e4bf9aefd3cfa22c62fc46bacfff214c3cc5021c846fe01b2a79276b7663256fb0f49db0f90de6cb65f2bda84bfa2bcb5659b24eb360b199a5c1749ec5413699af83f9325dade3e9e6539a2d7ed3aaa80576d83b13034d499f131a55c548ff29e068ff5913c7b6dfa007ee0003c494f8b7b9d57ae70f5f706be25da33bdfcdf810be1a5243c3f6bd7bd5c7cf20dace2164192e6628da7737afcf2bb01c9f1b92c2e94dc68a395615461f09760ecb6507e6ff419aa7ff71ac0aeeaf3efbbb5e67551caa384c66457440791c27c2ae422ff481b5f0859956284b7a6846d08212735139ae9d1ec615cadd6ae7b4bc5a1d76038cb75050a3b5bb1abe18b7ef5bfd01504b03041400000008000000215c60e5c81a13030000b9070000150000006275696c74696e2d32342f7374796c65732e786d6ca5554f6fdb3614bf0fd877207857282996671b968bb88e800069112019d02b2d510e5bfe11483a9357f4e25cf60906f4de43811e7619b0a0977d1803f91c2329db9293761b9213dfdfdffbbd47ea69fca2e60cdc10a5a914298c8e420888c86541c522853f5f65c100026db028309382a47045347c31f9f187b1362b462eaf0931c042089dc26b63aa11423abf261ceb235911613da5541c1babaa05d29522b8d02e89331487611f714c056c10463cff3f201cab77cb2ac825afb0a173caa859792c08783e3a5b08a9f09c59aa75d4c339a8a3be8a41ad7645bcf5511d4e7325b52ccd91c545b22c694e1ed31da221c2798b64919f861425288c0f7aafd513917a48911beaae0f4ec6a51446835c2e8549616cb15db3a37742fe2232e7b237bc8d9a8cf5afe006336b89209a8c73c9a402c656262ec85a04e6a489b8bfbbdbacffdcacffdadcde6ed67f3867893965abc61d3b036a401f400f1e411f1f429f54466a30a3ba6278f54d603f8d6d34c76fa5ea54f387b64994b14edb8d6132b6efc3102532ab80ad7cb5aa2c09619f7203e3e3fe237aa1f02a8a934e823f6cddb95485fd747695dd6c1bd364cc48696c82a28b6b771a5921e734c65ee5645c50bc90023307b9cbd80a1636278c5dbacfeb4d79d0555d02b1e4193767450aed87eabadf8996d0566c601a057d3f29fa6e12c055c556af977c4e54e63fbcd6eaa6d36a539fd5ea278c2e0427a29370a1a421b9f1dbc5f341ddee9a5e9fdd26a8cbe7f4db64477b767b629ee601b7bd15b8379cc2cdfaefcdfad3e6f6b7cded971608cc9794192abce61fcec3bcfbcf1fefbffede12ef663c1893e552d4ed84bcd7b80d77c8ce6214a4c44b66aef6ce14b6f22b52d0258ff75117f4469a6d542b9fbbf71af55d0d529b736dfc09968aa6f0fde9f4a7e1ec348b8341381d04bd639204c3643a0b92decbe96c960dc3387cf9a1b3679fb165fd6ab49719f5469ad928b56d764bfeb2b5a5b0a334f4fdfc2ced2ef761dc0f4f92280cb2e3300a7a7d3c0806fde324c892289ef57bd3d3244b3adc93276ee31045514b3e1919ca09a3821cd2bfea5aed2559f55f9a40bb9b40ed3f77f20f504b03041400000008000000215c23292b8fe30100000b040000200000006275696c74696e2d32342f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb1ecec26c6f6b29b03dd8b42e9e95e91c7b6886519493951faee1d394db6100a6141028dc47cf3cf41f9d35175640fc64add17340e2794402f7425fba6a03fbeaf831925d6f1bee29deea1a027b0f4a9fcf8213f68b3b52d802348e86d415be7862c8aac6841711bea017a7ca9b551dca1699ac80e0678353aa92e6293c943a4b8ece99990997b18baaea580a5163b05bd3b430c74dca17edbcac15e684adc8353dc6c774320b41a10b1919d74a7114a8912d96bd36bc3371de67d8c532ec8d1e062b8934b98f1fe269292c268ab6b1722f9afe6dbf4e7d13ce2e24abacdff2e4c9c6201f6d237f00dc5dec99a5e59ec0d96bc13f67085f972996c27ab82fe5a25f374c592387859cf93207d994e82e7c7e52a58a46cf69ca4d32563ebdfb4cc2b891df6cec4405dd005a351998ff49f120ef69f33717cf30d3a100e30404c899fcd8dd65bfff88a5713ef1addf8aec741f862480535df75eeab3e7c02d9b40e21b3f0718aa27d77b3eab4042b70dc9014a657194bee78991b7d20d8392c971db8ff074986d97a064bff032873e15d16dec7eb2df37d19876c9a477b94297023f422f81c65e00d7ce6a691bd251dd423e8911273563b9e9d1ec613cade68e7b4ba582d76058cb75058adb5bb18be28d76f5cfe01504b03041400000008000000215c68ee4be63f030000d4080000150000006275696c74696e2d32352f7374796c65732e786d6ca556dd8ae33614be2ff41d84ee3db29d384d429c653219c3c2b62ccc14f656b1658f58fd18599e3a2dbd68e61d0a7d82167ad19bc22ebb8f1398e7a8243bb1b3db6ec30c86483ae77cdff98e7eb378d17006ee89aaa814310c2e7c08884865464511c3ef6f136f0a41a5b1c8309382c4704b2af862f9f5578b4a6f19b9b92344034321aa18de695dce11aad23bc27175214b228c27978a636d86aa4055a908ce2a0be20c85be3f411c53015b86394fcf21e158bdad4b2f95bcc49a6e28a37aebb820e0e9fc6521a4c21b66a436c118a7a009262a048d3a2471d6cff2709a2a59c95c5f185e24f39ca6e473b933344338ed990cf3d3988208f9e149ed8d7a22d31829724fedf2c1e5229742572095b5d0310c0db72d76fe56c81f44625d6685bba8e5a2fa11dc63662c0144cb452a9954409bccc406198bc09cb4118fefdfef777fef77eff60f0ffbdd5fd699634ed9b67587d6805ad2f67783be48ef3f99de3595f153c68e758e606b582ecc86d04489c40c40d7bfdd9626a3307bb7a57171ff135d28bc0dc2e87c402519cdac8ae2cad5a98a4d0c93e432b29fa319408fa4ae31c56ca4cacc01ec97ed605a2e18c9b5812b5adcd956cb1259a7d666432c1719c5851498d90407c41009dc198d61266b7320e061153a7523f7397536b8cb7236c6453b4967434cec41fdd99836fcdf6bed3a660a53c2d88d657c939fcc63930351f384eb9799dd76c06e9f43d74c7ed76d69da01fa6f50d083c221c8d87159b2ed7735df1095b8abca019df592d142702206a6d74a6a926a77e3ba8c68a8bfade6d98580267f4e452d3a38aa3b0a73324fb41dadc09ee918ee1f7ed9ef7e6f0f33d8ef3eee1ffeecf9c0a6a64c53e1728edcd5f009fcf18fdf1e3ffcdaeb1f223e992d23296bfa89725e6d2fff539186232339ae99be3d3a63d8f7bf2519ad79788c7a4defa5eea2fafe2bbbe18389cd411afdaad2ae05b5a231fce97af5cd6c7d9d84ded45f4dbdf18844de2c5aadbd687cb55aaf93991ffa573f0f9ea0673c40eed5306b1a8ce7153351aa2bb6137fd3db623818b4f2ddfc19d943edb370e25f4681ef25233ff0c6133cf5a69351e4255110ae27e3d575944403edd1131f2a1f05412f3e9a6bca09a3829ccabf1d5acd2299e1178a40879540fddf91e53f504b03041400000008000000215cc5d60aec09020000b7040000200000006275696c74696e2d32352f776f726b7368656574732f7368656574312e786d6c9d946d8b9c3010c7df17fa1d42defbac7b2aead15dbbf45e148ef6daf7d91835ac1a49b20f47e977efc43dbd836dcb72602093647eff99c9c4ecfedc77e8c8a4e262c8b167bb18b1818a8a0f4d8e7f3c6dad1823a5c950914e0c2cc7cf4ce1fbe2e387ec24e45eb58c69048441e5b8d57a4c1d47d196f544d9626403ecd442f64483291b478d92916a72ea3bc777dd95d3133ee00b2195b730445d73ca4a410f3d1bf40522594734c4af5a3eaa99d6d35b703d91fbc36851d18f80d8f18eebe7098a514fd387661092ec3ac8fbec8584a2b384cf8711cc32d3fa9552cfa9144ad4da06f24bccd7e9274ee210ba90aef3bf09e3855080233717f88af2dfc98a1696ff0a0bde095b2d30532e991e7895e35fe1368ed649505a9f03afb4c255ec599f924d6cb9511c7a71e92591bbfe8d8bace270c3c6194956e778e3a59b003b453609fce4eca4decc9126bbefac635433d0f03032edb913626f361f60c935aece95ef76ea8547892a569343a7bf89d317c69b560324b6ef2288db5c705a3d974c51e83820d9e1124649342932294e484eaa6a24e6290429243c31121b10bae574bf167a3af2375e64802f14ff9ae2bbb63f639ec438616e60161935c08d219a6345762c3c2065ce114a416180e4a21bfc37fa59f65fd570de9463240dfb4a64c307853a564f87ee309297b24e736d70ee54df9dd05af4b3d5420731692c88a11642cf86d1587e39c51f504b03041400000008000000215ca9839db525030000fb070000150000006275696c74696e2d32362f7374796c65732e786d6ca555cb8edb3614dd17c83f08dc6b28692cc7362405b13d0202a441809902d9d212a521c28740d153b9411676b2c90f04e8b2abb6d9745320417e47c07c4748cab6e40469839915795f87e7e89257d1a38651e706cb9a081e03ffcc030ee699c8092f63f0cb55ea4e80532bc4734405c731d8e01a3c4a1efc14d56a43f1e535c6cad110bc8ec1b552d50cc23abbc60cd567a2c25c470a211952da9425ac2b89515e9b224661e07963c810e1a04398b1ec474018922fd7959b09562145568412b5b158c061d9ec49c985442baaa936fe08654ee38f65e034f27088f57e730e239914b528d499c685a2284886bfa53b855388b21e4923df0dc90fa1179c686fe41d914650e21b62da0792a8105cd54e26d65cc520d0d846ecec2517bff2d4847487f7594954ffe6dc20aa3d3e804994092aa4a3f4c9d824690f470c7719b79f3eb5bb7fdbddc7f6cd9b76f78f09168811bae9c28171c00ef4fbd0b25cc5204da78bf0a1e7dd19df2eb58e134a8f42cf41e748227d2314963cd586b3df5f6d2aad88ebcbdbc1d8bcffc92e25daf841f8e305b5a024372ccac5506c9a5ecca70b0b33283d82da458b590999eb177890635ad4b99288e242e97249ca6bb32a514113544adf8824ca092a0547d41c70a8d86f346c8629bd34aff44531b81349d4140e5fb394a927790cf47b379ff4b0d584f6db0ea633e0f78bfcbe28382d725055d1cdb3355b6199daf7db7be736afb71f53527286f920e5b9140a67ca8e25cb000ef574eaee2dcc698afb28ecaafd23bb23314bf384dbd1eb987b1f8376fb77bbfda3ddbd6bb77fb6bb5dbbfdd06edff688ce6a4da822dc9e3ab1afe82b80dbbf7ebffdfcbe5730acf8ea7b695279d37f2a1b5566469ed2d418392ed09aaaab633006fdfe679c93350b8e59cfc98d50fbac7effd45c557f6ccec08d7a5a2bbb3a6b4962f0ea62fe70babc480377e2cd27eee81c87ee349c2fdd70b4982f97e9d40bbcc5ebc1a4bec79cb6c35577d51fcd6aaab3e45eec9efc65ef8bc1c0e8e8dbefa7690fb94f83b1f738f43d373df77c7734461377323e0fdd34f483e57834bf08d370c03dbce33cf7a0eff7e4c399220c53c2f129fdaba15737499bff21021e3a01fbbf76f205504b03041400000008000000215c285a0fdede01000003040000200000006275696c74696e2d32362f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb19da3b1bd8498d0bd28949eee15796c8b5892919413a5efde91d3640ba1101624d0489a6ffe9991f297b3ecc9118c155a15340e279480e2ba16aa2de88fefdb604989754cd5acd70a0a7a014b5fca8f1ff293367bdb01388204650bda3937645164790792d9500fa0f0a4d1463287a669233b1860f5e824fb28994ce6916442d12b2133cf3074d3080e95e60709ca5d21067ae650bfedc4606f34c99fc14966f68721e05a0e88d8895eb8cb08a544f2ecb555dab05d8f799fe329e3e46c702438d35b9871ff219214dc68ab1b1722f9afe6c7f457d12a62fc4e7accff294c3cc5021c856fe01b2a79276b7667256fb0f49db0f91de6cb65b283a80bfa2badaa45bc89b7c1645525c1743ddd04eb65b208d2f962b34d66f17ab6defea6655e0becb07726069a826e121a95f948ff29e064ff5913c776dfa007ee0003c494f8b7b9d37aef0f5f716be25da307dfedf810be185243c30ebdfbaa4f9f40b49d43c8325ccc50b4ef6e565f2ab01c9f1b92c2e95d46c51c2b73a34f043b87e5b203f3ff20cdd2ff389639f75737feaed759e6c7320e93591e1d511ec789b09bd02b7d602d7c66a615ca921e9a11b4a0c45c558e6ba78771857277da392d6f5687dd00e32d14d468ed6e862fc6fdfb967f00504b03041400000008000000215c73731540f5020000ae070000150000006275696c74696e2d32372f7374796c65732e786d6cb5554d6fd33018be23f11f22df33275953da2ae9b4ae8b3409a4492b125737715a6bfe881cb7a4202eeb852b1724fe01370e203101ff26d27e0776d236e92618dac4c97ebf9ef7796ce74d7054306a2db1cc89e021700f1c60611e8b84f059085e4e22bb07ac5c219e202a380ec10ae7e068f8f44990ab15c517738c95a521781e82b952d900c23c9e6386f2039161ae23a9900c296dca19cc338951929b2246a1e7385dc810e1a04618b0f85f401892978bcc8e05cb90225342895a5558c062f1e06cc6854453aaa9166e07c556e176a5671572dba4f2dee9c3482c452e5275a071a1485312e3bb74fbb00f51dc2069e48721b93e74bc3ded857c2052074abc24e6fac030480557b9158b055721f034b6113bb8e4e2358f4c48dff0266b18e46fac25a2dae302380c624185b494ee8c4d92f670c4709d71737d5d5e7d2bafbe97eb7579f5c50453c4085dd561cf38600dfa1fa1ab25d77142694b63ed1806fa31282c79a40d6bb39fac32dd91eb775bc35479f764cf245ab99edf2aa816dd772a64a2bf936d677390b56b18509c2a5d20c96c6e56253268824ae97b1b06094133c1113590db8acd46c3c698d20bf32dbd4af75415a9c5172c62ea2c0981fe2a8dfaed5613da6c6b98da80b78afa4d91fbc7220b65195d99c7d1b2746a638daaecc63ea664c6196e179c4ba170acaa1152f1806d55b5c647cbb38af45e9df756bb7b82dd1dd71dcd8af41ed39dd732cf3604e5fa43b9fe555efd2cd75fcbf5fb16f27441a822dc58d503ba5d79f3f9d3cd8f8f8d9076c1ad63d36c92a239b12aaacc58dbe7a731129ca20555935d3004cdfe054ec88279bbac73b2146a93d5ec9f9b77eb764d0f5ca8e7b9aa566b214908de9e8e9ef5c7a79167f79c51cfee1c62dfeefba3b1ed774e46e371d4773ce7e45d6bb83e62b456f3505faedb19e45467c98dd80df98bc617829651d3afce4fd36e73ef7b5de7d8771d3b3a745cbbd3453dbbd73df4edc877bd71b7333af523bfc5dd7fe00876a0eb36e4fd81220c53c2f13efd49dbab2f499b7f1101b737019b1fedf037504b03041400000008000000215c436cab89df01000003040000200000006275696c74696e2d32372f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1fe36413637b4973a07b51587aba57e4b12d625946524e94be7b474ee32d84425890402369bef96746ca9ecfb22547d046a82ea7911f52021d57a5e8ea9cfef8bef5e69418cbba92b5aa839c5ec0d0e7e2e387eca4f4de34009620a133396dacedd32030bc01c98caf7ae8f0a4525a328ba6ae03d36b60e5e024db200ec3592099e8e89590ea4718aaaa0487b5e207099dbd4234b4cca27ed388dedc68923f82934cef0fbdc795ec11b113adb097014a89e4e94bdd29cd762de67d8e12c6c959e388714e6e6186fdbb485270ad8caaac8fe4bf9aefd35f048b80f191749fff439828c1021c856be01b2a7e276b3ab2e237d8e49db0d90873e5d2e9419439fd957c5a86b34db4f516b3e5ca4ba2e9dc5b848bd0db24e174126dc365b8ddfca645560aecb073261aaa9cae621a14d940ff29e064fe5913cb76dfa0056e01034494b8b7b9536aef0e5f702b74aec19def767808af9a9450b1436bbfaad3671075631132f79fa628da75372d2f6b301c9f1b92fc6494b1669615995627829dc372999eb97f304927ff712c32eeaeaedc5da7b3c88e45e4c7d32c38a23c8e136137a1577acf6af8c2742d3a435aa806d01325faaa72585bd50f2b94bb53d62a79b31aec066867a1a04a297b335c31c6ef5bfc01504b03041400000008000000215cd6c1768133030000d7080000150000006275696c74696e2d32382f7374796c65732e786d6cb556cb8ed33014dd23f10f91f719276953daaa29a2ed444202843483c4d64d9cd41a3f22c72d2988cdcc3f20b184153b3648207ea7d27c07b6d336e90c8f6a46b40bdbf7de73eeb97e66f4b862d459615912c123e09f78c0c13c1129e179045e9dc76e1f38a5423c4554701c81352ec1e3f1c307a352ad293e5b60ac1c4dc1cb082c942a861096c90233549e880273edc9846448e9a1cc6159488cd2d280188581e7f5204384839a61c8926348189217cbc24d042b90227342895a5b2ee0b064f834e742a239d5522bbf8b12a7f27b32702ab94b62adb7f2309248518a4c9d685e28b28c24f8b6dc011c4094344c9af96e4c7e08bde0a0f64ade91a90b255e11b37c603cca0457a593882557110834b7297678c1c51b1e1b975ee16dd47854be7556886a8b0fe07894082aa4a374666c82b4852386eb88eb1f3f3697df3697df3757579bcbafc6992146e8ba7607c6006bd2ff486d9b52fb09a5fb1a3ba0368c477a33282c79ac07ceb67fbe2e7446aef76d4d63e3fe119d4bb4f683f078402928498d8a7c6aeb94f93c02b1fd4da796a605dd93da4617331732d587af59b29d693ca238531a2e49be30ad1205344ea5f466188f528272c1113509768836d2b1e733026a41ccc648dada2681f95b6d26749be348848db5728e04e8c89dee231175f0ef6bdc76f4d42598d233c3f73a3b98bf2a73f892c54c3d4d23a0af33b36d765d3de9db6e4d530fe09f417e030ada206d474541d72f966c8e656caf270bb45673d69ad1134a72ce70dbf4520a851365ef5c9b1fb6aba96bbb77594e95fdb33eefcff5d568ffa0247faf752fd38a3e50bab73ae69c476073f56973f5b945385f12aa08b723abee26e2facbc7eb9f1f9a02da881bd3a555a4553353d6abccfd7fa84b73a438434baacef7ce0834fde738254b16eca35e929550dba8a6ffccec7dbf6772e04a3d2b956d9da5241178773a7934989dc681dbf7267db7dbc1a13b08273337ec4e27b3593cf0026ffabef50adde30db20f875e54bf3b2ca98e92db62b7e2cf1a5b045a835abe9d3f2dbbad7d10f4bc27a1efb971c7f3dd6e0ff5dd7eaf13ba71e807b35e77721ac6614b7b78c7b7ca83bedf880f878a304c09c787f2cfdb56bd487af89722e06e2560f34532fe05504b03041400000008000000215c21eb5a28e001000003040000200000006275696c74696e2d32382f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb19decae8deda51b6fe85e14969eee15796c8b5892919413a5efde91d3640ba1101624d0489a6ffe99918ac7831cc80e8c155a95340e679480e2ba11aa2be98fefabe08112eb986ad8a01594f408963e561f3f147b6d36b607700409ca96b4776ecca3c8f21e24b3a11e41e149ab8d640e4dd3457634c09ac9490e51329bdd459209454f84dcdcc2d06d2b38d49a6f2528778218189843fdb617a33dd324bf052799d96cc7806b3922622d06e18e139412c9f3974e69c3d603e67d88e78c9383c191e04ccf61a6fdab485270a3ad6e5d88e4bf9aafd3cfa22c62fc42baceff264c3cc702ec846fe01b2a79276b7161256fb0f49db0bb0bcc97cbe45bd194f4579da5e9d373b60aeaf4a90ee6499c06d9f27e193c7fcaea6c11cf56ab45f29b564523b0c3de9918684bba4c68541513fda780bdfd674d1c5b7f8301b8030c1053e2dfe65aeb8d3f7cc1ad99778dae7c57d3437835a481966d07f755ef3f83e87a879087f07e81a27d77f3e65883e5f8dc9014ce2f326ae6585518bd27d8392c971d99ff07699efec7b12ab8bfbaf477bdceaad85571982c8a6887f2384e849d859ee823ebe00b339d50960cd04ea07b4acc49e5b4767a9c562877ad9dd3f26cf5d80d30de4241add6ee6cf8625cbe6ff507504b03041400000008000000215c2ffa49721703000007080000150000006275696c74696e2d32392f7374796c65732e786d6ca555dd6ed33014be47e21d2cdf674eb2a6b45553b4d2454202346943e2d64d9cce9a7f22c71929889bf51d90780304175c800482c7a9b4e7c076ba26dd18a0ed2ae7f73bdff1b14fc68f6bcec0395125952286c19e0f0111a9cca858c4f0e549e20d2028351619665290182e49091f4f1e3e18977ac9c8f129211a180851c6f054eb628450999e128ecb3d5910613cb9541c6ba3aa052a0b457056da24ce50e8fb7dc43115b04118f1f47f4038566755e1a5921758d33965542f1d16043c1d3d5d08a9f09c19aa75d0c329a883be0a41adae8a38eb8d3a9ca64a9632d77b0617c93ca729b94977888608a72d9241be1b5210213fdce9bd567744ea2145cea91d1f9c8c732974095259091dc3d060db66476742be16897599096fa226e3f20d38c7cc58028826e35432a9803695890d3216813969222e7ffc585f7c5b5f7c5faf56eb8b2fd699634ed9b27187d6801ad0dba1d5621ec324490e1ecd7cffcef8ee531a3f65acd36863988ccd8dd04489c42860239f2c0bd3913097b7817171ff885e28bc0cc2a893e03ea6ee5caacc3c966ee5c6341933926b93a0e8e2d47eb52c90756a6d86371967142fa4c0cc425e65fc472670cf2c8699accc9d86d70f3319f8be3b63d484ffb9ce4630f453c2d8b1457c95eff450e740543ce1fa691643b302ec295f89a6f18dd8c0340aba3d29b825c9d87151b0e58b8acf894adc937621ce6aa7d06a078c2e0427a21370a4a426a9767bcad547dd6e9adeeedd16a8f3fbf4d764075b765b628ee60eb7ad15d88710c3f5ead37af5d55c7fb0bef8b55e7d6ec1c0bca24c5361b5b0e75ed4b5dccb8f1f2e7fbe6fc97733ae1d95e193d5ed2939afb6fb7297a1c1c8488e2ba64fb6ce18b6f27392d18a87dba8237a2ef526aa959fd91b1df46d0d52eb67a5765f50291ac3b787d347c3d961127a037f3af07afb24f286d174e645bd27d3d92c19faa1ffe45d676bdf6367bb456b061af4462533516ad3ec86fc716b8b614769e8bbf333b4bbdc8761df3f8802df4bf6fdc0ebf5f1c01bf4f7232f898270d6ef4d0fa324ea708feeb8db7d14042df968a429278c0ab24bffa46b354332ea5f9a40579340ed1f7cf21b504b03041400000008000000215cf9984bcefd01000063040000200000006275696c74696e2d32392f776f726b7368656574732f7368656574312e786d6c9d94db8e9b301086ef2bf51d2cdf7308246141c02a1b12752f2aaddaddde3bc680158c91ed9c54f5dd3b260da9946d15ad84257c98efff67c6903e1e458bf64c692ebb0c4f5c1f23d65159f2aecef0dbebda79c0481bd295a4951dcbf08969fc987ffe941ea4daea86318380d0e90c37c6f489e769da3041b42b7bd6c14e25952006a6aaf674af18298720d17a81efcf3d417887cf8444ddc39055c5292b24dd09d6993344b19618f0af1bdeeb0b4dd07b7082a8edae77a8143d2036bce5e6344031123479ae3ba9c8a685bc8f9329a1e8a8e0096084179961fd464970aaa496957181fcc7f36dfab1177b848ea4dbfcefc24ca650803db70dbca2820fb266232bb8c2c20fc2e623cc964b253b5e66f867b18ca345ec074eb4f60b671aae2267113ead9cf93c5a44cbc56a5dace25f384f4b0e1db6c148b12ac3cb205986d8cbd341e0076707fdd73b3264f39db58c1a061a138cecf5dc48b9b59bcfb0e4db50ef26763ddc8517854a56915d6bbec9c317c6ebc600e4c18d66e0db3638294f05d3146e1c90dce968a32086e4a9920704cd838ae99ed84f214c20e18111bb80300da7db27690663eff166902eb588a565d86379bacf276e304bbd3dd8a6304064540affabf42afb7f2a5dab70b6de939a7d25aae69d462dab86431146ea5c82e1dd589c3fd462238d91e2326ba0db4cd91978a8a4349789d5187f0ff96f504b03041400000008000000215c8488d70b3a030000c0080000150000006275696c74696e2d33302f7374796c65732e786d6ca556cd6edb3810be2fd07720785728c996631b968bd88e8000dd2240b240afb444c944f923507456dec55e52ec651fa040d17381bded6581167d9da0798e92946dc969bb6b24f081e4cc7cdf7cc3a1484f9ed79c811ba22a2a450c83131f022252995151c4f097ebc41b4250692c32cca42031dc900a3e9f3efb6952e90d23572b42343014a28ae14aeb728c5095ae08c7d5892c89309e5c2a8eb559aa0255a52238ab2c883314fafe00714c056c18c63c3d868463f57a5d7aa9e425d6744919d51bc705014fc71785900a2f99915a077d9c823a18a810d46a97c459bfc9c369aa6425737d627891cc739a926fe58ed008e1b46532cc8f630a22e48707b5d7ea914c7da4c80db5ed83d3492e85ae402ad742c73034dcb6d8f16b217f158975990e6fa3a693ea37708399b104104d27a96452016d32131b642c0273d244dc7ffa7477fbefddedc7bb376fee6effb1ce1c73ca368d3bb406d490fe985a15cb182649cffc4e078fe6774365fc94b17da13dd818a6137322345122310bb09d5f6f4a53913087b7a17171ff135d28bc09c2e878402519cdac8a62de2d3649e6f3d1c8d174a07b52379862965265e60b6cfbb6334d278ce4dac0152d5676d4b244d6a9b53911d349467121056636c10ed14502f791c650afa83d1d078d38753fa7cd866e731c8970b14ece910013b9d37d24a209fe7e8ddb89d9ba94307665f95ee507fb57e740ac79c2f545164373a7d963b39b9a4ddf4e1b9a66817e0c0a5a50d805193b2e4bb679b9e64ba212774739a0b39e315a084e44c774a9a426a97657adcb88bafa9b6a9e5c08a8f3a754d4a083bdbabd3027f340dbde0aecb71cc32f7f7ef8f2d7fb96022cd794692a5c1aa7e721e2feef77f79fdfb692bb88071b64546475bb37ceabed457fa8cb706424c76ba6aff7ce18b6f39f4946d73cdc475dd21ba9b751edfc853ddf81bba648ad5f54da8d60ad680c7f3f9f9d8e16e749e80dfdd9d0ebf748e48da2d9c28bfaf3d962918cfcd09fffd1796e9ef0d8b817c2b431e88f2b66a2d4b6d8adf8abd616c3cea291eff6cfc8ee6a1f8503ff2c0a7c2fe9f981d71fe0a1371cf4222f89827031e8cfcea324ea688f1ef928f928085af1d158534e1815e450fe75d76a9a6496ff5104da7502b57f3da65f01504b03041400000008000000215c81c53455df01000003040000200000006275696c74696e2d33302f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a1fbd8b1e36cd6c6f6b2891bba1785a5a77b451edb22966424e544e9bb77e434d942288405cb6824cd37ffcc48f9d351f6640fc60aad0a1a05534a40715d0bd516f4c7f7f5e49112eb98aa59af1514f404963e951f3fe4076db6b603700409ca16b4736ec8c2d0f20e24b3811e40e14ea38d640e4dd3867630c0ead149f6613c9d3e84920945cf84ccdcc3d04d2338549aef2428778618e89943fdb61383bdd024bf072799d9ee8609d77240c446f4c29d46282592672fadd2866d7accfb18258c93a3c12fc631bb8419d76f2249c18db6ba710192ff6abe4d3f0dd390f12be936ffbb30518205d80bdfc03754fc4ed6fcca8adf60b377c21eae305f2e93ed445dd05fd57c913eaf57c9645a2d9693244da2c932fe94e02faad265fc3c5facd6bf6999d7023bec9d8981a6a0ab9886653ed27f0a38d87fe6c4b1cd37e8813bc0001125fe6e6eb4defacd175c9a7ad7f0c6773d5e8457436a68d8ae775ff5e13388b67308790c167314edbb9bd5a70a2cc7eb86a420b9caa89863656ef48160e7b05c7660fe1dccb2d97f1ccb9cfba32b7fd6eb2cf37d1905f13c0ff7288fe340d845e8993eb016be30d30a65490fcd085a5062ce2ac7b9d3c33843b91bed9c9617abc36e80f1160a6ab47617c317e3fa7ccb3f504b03041400000008000000215c9a4f979730030000c4080000150000006275696c74696e2d33312f7374796c65732e786d6ca556dd8ad34014be177c8761eeb393a44d6d4b53b1db0d082ac2aee0ed3499a483f31326d33555bcd9bd107c00417c01efbc11145f67719fc39949dba4fe965d029d9973cef79defcc6f27f76bcec0395115952286c1910f0111a9cca82862f8ec2cf18610541a8b0c3329480cd7a482f7a777ef4c2abd66e474498806864254315c6a5d8e11aad225e1b83a922511c6934bc5b1364355a0aa5404679505718642df1f208ea9800dc398a7879070ac5eac4a2f95bcc49a2e28a37aedb820e0e9f86121a4c20b66a4d6411fa7a00e062a04b5da2671d6dff2709a2a59c95c1f195e24f39ca6e477b9233442386d990cf3cd988208f9e15eedb5ba21531f29724eedf2c1e92497425720952ba163181a6e5becf885902f45625d66853751d349f50a9c63662c0144d3492a9954409bccc406198bc09c3411d7dfbe5d5d7cb9baf87a75797975f1d93a73cc295b37eed01a5043dafc2ed09fe955b1886192f4dc77e31caea98c9f32b62bb6071bc374627685264a24660036fdb37569aa12660337342eee3fd185c2eb208c0e075492d1ccaa288ebbc526a1fd1c4d07ba23758d29662155664e61bb765bd374c248ae0d5cd162695b2d4b649d5a9b5d319d641417526066136c115d24700735867a49ed0ef9cb42201bbac97120c2c53a3907024ce456f7818826f8cf356e3a66ea52c2d8a9e57b9eefcd5f9d03b1e209d70fb3189a7bcd6e9b6dd74cfaa6dbd03403f47750d082c22ec8d87159b2f593155f1095b87bca019df501a385e044744c4f95d424d5eeba751951577f53cdad0b01757e9b8a1a74b053b713e664ee69db59813dcb31fcf1f6fb8f771f5b0ab05851a6a970699aabe017c4f5a70fd7dfdfb792bb885f26c8a8c8ea766e9c57dbcb7e5f97e1c8488e574c9fed9c316cfb8f4946573cdc453da5e7526fa2dafe23bbbf8381cd416afda8d2ae052b4563f8fa64766f343f49426fe8cf865ebf47226f14cde65ed43f9ecde7c9c80ffde3379d27e7160f8e7b25cc3206fd71c54c94da14bb117fdada62d81934f2ddfc19d95deda370e03f8802df4b7a7ee0f50778e80d07bdc84ba2209c0ffab39328893adaa31b3e4c3e0a82567c34d694134605d9977fd6b59a4532c37f1481b62b81dabf1fd39f504b03041400000008000000215c7902cf4cdf01000003040000200000006275696c74696e2d33312f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b9f936c626c2fd91ce85e144a4ff78a3cb6452ccb48ca89d277efc8a9b38550080b126824cd37ffcc48d9f359b6e408da08d5e534f2434aa0e3aa145d9dd31fdfb7de9c12635957b2567590d30b18fa5c7cfc909d94de9b06c012247426a78db57d1a0486372099f1550f1d9e544a4b66d1d475607a0dac1c9c641bc461380b24131dbd1252fd08435595e0b056fc20a1b35788869659d46f1ad19b9126f92338c9f4fed07b5cc91e113bd10a7b19a094489ebed69dd26cd762dee768c238396b1c31ce640c33ecdf4592826b6554657d24ffd57c9ffe2258048cdf48f7f93f8489265880a3700d7c43c5ef644d6facf80d96bc1336bbc15cb9747a10654e7fcdb6e166996cb65e3c9daebcc96cb2f0169b65e86d37b397e5fc255a26e1ea372db25260879d33d150e57415d3a0c806fa4f0127f3cf9a58b6fb062d700b1820a2c4bdcd9d527b77f88a5ba1730dee7cb7c343f8a24909153bb4f6ab3a7d025137162173ff698aa25d77d3f2b206c3f1b921c99fdc64ac996545a6d58960e7b05ca667ee1f2469f21fc722e3eeeacadd753a8bec58447e3ccd8223cae33811360abdd27b56c367a66bd119d24235809e28d15795c3daaa7e58a1dc9db256c9d16ab01ba09d85822aa5ec68b862dcbe6ff107504b03041400000008000000215cac08422212030000ec070000150000006275696c74696e2d33322f7374796c65732e786d6ca555cb6edb3814dd0fd07f20b857282996631b928ad88e80009d418164806e69895288f0215074469ec12c9ace3714e81f14ddcc668029fa3b06fa1d2529db925bb40d9215c9fb383c47f7f22a7ede7206ee886aa814090c4e7c0888c865414595c0dfaf336f0241a3b1283093822470431af83c7df64bdce80d235737846860204493c01badeb19424d7e43386e4e644d84f1945271accd5155a8a915c14563933843a1ef8f11c754c00e61c6f3878070ac6ed7b5974b5e634d579451bd715810f07c765909a9f08a19aa6d30c2396883b10a41abf69738eb37f7709a2bd9c8529f185c24cb92e6e45bba53344538ef910cf2e3908208f9e191f6563d12698414b9a3b67c308d4b29740372b9163a81a1c1b66267b742fe2132eb3215de45a571f327b8c3cc580288d238974c2aa0cdcdc406198bc09c74119f3f7edcdeffb7bdff7ffbe6cdf6fe5feb2c31a76cd3b9436b401de8f7a155b54a60964d17be2dd563f1ddd2183f65ec20f414768634361da18912993980ddfe7a531b45c2346f07e3e27e125d29bc09c2e8e1098d64b4b02caac5506c962dce16170e66907a00758b11b392aa302f702fc796a833a53123a536e98a563776d5b246d6a9b5e988342e28aea4c0cc5eb0cfd86d0c6c4e18bbb2aff45539e889346e4b20d63ce3fab248a079eff693eeb786d06edbc17407f4fda4a04f0a8f9300ae6bb6f96dcd574465eefdf6d6b98bebcfe78c568213310879a9a426b97663c93140433d9dba270b036df914855d7670607720e6681e713b5881ed7bd3f3f71fb6afffe921c06a4d99a6c25d73e69ecdd719efdf7dfef4b6a73cccf8ea03191645db7f1be7d576281ef332180529f19ae9eb833381fdfe5752d0350f0f512fe99dd4bba87effc2f666e09e3469f58b46bb15ac154de05f17f3b3e9f2220bbd893f9f78a3531279d368bef4a2d162be5c66533ff4177f0f46f31306b39ba6a68cc168d63013a5766277e4af7a5b0207878ebefb7e86f690fb341cfbe751e07bd9a91f78a3319e7893f169e46551102ec7a3f945944503eed12307b88f82a0271fcd34e58451418ee95f0fada648e6f80311685f09d4ffa6d32f504b03041400000008000000215c30aa58a4e001000003040000200000006275696c74696e2d33322f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb1e39c8ced65136fe85e144a4ff78a3cb6452ccb48ca89d277efc8a9b38550080b126824cd37ffcc48e9d359b6e408da08d56534f4279440c75529ba3aa33fbe6fbd2525c6b2ae64adea20a31730f429fff8213d29bd370d802548e84c461b6bfb24080c6f4032e3ab1e3a3ca99496cca2a9ebc0f41a583938c936882693792099e8e89590e84718aaaa048742f18384ce5e211a5a6651bf69446f469ae48fe024d3fb43ef71257b44ec442bec6580522279f25a774ab35d8b799fc3987172d638229cd331ccb07f17490aae955195f591fc57f37dfaab6015307e23dde7ff10268cb10047e11af8868adec99add58d11b6cfa4ed8fc0673e5d2c9419419fd556c578bf5242ebc781acebc387c5978ebe573e1cd9fe79bcdcb66b68ec2e56f9aa7a5c00e3b67a2a1cae826a2419e0ef49f024ee69f35b16cf70d5ae016304048897b9b3ba5f6eef015b726ce35b8f3dd0e0fe18b262554ecd0daafeaf40944dd58842cfdc50c45bbee26e5a500c3f1b921c98f6f320a66599e6a7522d8392c97e999fb07d364fa1fc73ce5eeeac6dd753af3f498877e344b8323cae33811360abdd27b56c367a66bd119d24235801694e8abca616d553fac50ee4e59abe46835d80dd0ce4241955276345c316edf37ff03504b03041400000008000000215cc0abbe793303000022080000150000006275696c74696e2d33332f7374796c65732e786d6cb5554d6bdc4618be17fa1f06194a522a8f465e6d77375aa559af0581140276a18780194ba3f590f95047b3aeb621873887949273a0c7de7aeba5d090bfb324bfa3f3b15e691d5a17879ee6fd7ce679665e8dd2fb2d67e082a8864a310dd07e1400220a5952b19806df9de4e128008dc6a2c44c0a320d56a409ee679f7f96367ac5c8f139211a1808d14c8373adeb09844d714e386ef6654d84c9545271ac8dab16b0a915c165639b388371140d21c754041e61c28bff02c2b17abaacc342f21a6b7a4619d52b8715005e4c1e2e8454f88c19aa2d1ae002b468a862d0aaab4d5cf4a37d382d946c64a5f70d2e9455450bf231dd311c435c744806f97648288151bca3bd55b7441a40452ea8bdbe204bc592e75c37a0904ba1cd756e43c02f0fcb69304001f0e779284b734ca777be047b5feded45a777ef59fbc91de73df1de173f2ca5be17fac5557c737a3780590a377b65692545b7656c04d9139e3c15f24791db94e761abb2b4f9095c606622c86214924905b4914b6c918908cc89aff8f0f6edfaf2cff5e55feb972fd7977fd8648539652b9f8e1d070ffa3f42bbc56aa48cf534fa40969a09d44489dc3860639fac6ab3a3301f8b87717537542f145ea138e935b8c5ec7b2655693ecefe85fa5096325269d3a0e8e2dcae5ad6d026b536c392a525c50b2930b390571d1bc3c01684b163fb017f5feda86aabdea044764ec4d6348436a687f10ebcd6e4a7cb77a17fec02b8aed9ca4e47cf33a59d3773d59dff80d185e0a4dff058494d0aed1e2e4704f66579919fac0fb4d5cd426f6c473b8ad196ec96a763bd43751b057670cdd0fef6e2fdeb77ef7f7eb5befca5077bb6a44c5361bda19bfbeb6dbffffae1dd9b4e46bfe1daa1192a65db9d97cb6afb94ee92331825a9f092e9936d721a74f6b7a4a44b1e6fab1ed30ba937559dfdc88e2d729449ab1f35daad60a9e834787634fb7a3c3fcae37014cd46e1e08024e13899cdc36470389bcff371144787cf7b0ffa273ce7ee0d36578b069386992ab511bb217fdcc5a641cff1f4ddf919da7deee378183d485014e607110a07433c0a47c38324cc1314cf8783d95192273deec92d9ffd0822d4914f269a72c2a820bbf44ffa517349c6fd1711f0ea2660f773cffe06504b03041400000008000000215c6667b16fdf01000003040000200000006275696c74696e2d33332f776f726b7368656574732f7368656574312e786d6c9d93598bdb3010c7df0bfd0e42ef3ee21c1b1bdb0bb9e83e144a8f7d57e4b12d624946522e4abf7b474e932d8485b0208146d2fce63f3352fe7c921d3980b142ab828ec29812505c57423505fdf57313cc29b18ea98a755a4141cf60e973f9f9537ed466675b004790a06c415be7fa2c8a2c6f41321bea1e149ed4da48e6d0344d647b03ac1a9c641725713c8b24138a5e08997984a1eb5a705869be97a0dc0562a0630ef5db56f4f64a93fc119c6466b7ef03ae658f88ade8843b0f504a24cf5e1aa50ddb7698f76934619c9c0c8e04e7f81a66d8bf8b240537daeada8548fea7f93efd344a23c66fa4fbfc1fc28c26588083f00d7c43251f644d6face40d36fe206c7683f972996c2faa82fe4e56b3f92a4ed360368997c164b95e07e97ab109d2c562932c36d3d9623cff43cbbc12d861ef4c0cd4055d26342af381fe2ae068ff5b13c7b63fa003ee00038c28f16f73abf5ce1fbee056ec5da33bdfcdf010be195241cdf69dfbae8f5f4034ad43c83c7c9aa268dfddac3aafc0727c6e480a2737192be658991b7d24d8392c97ed99ff07e36cfc8e6399737f75e9ef7a9d657e28476132cda303cae3381176157aa1f7ac81afcc344259d2413d809e28311795c3dae97e58a1dcad764ecbabd56237c0780b05d55abbabe18b71fbbee55f504b03041400000008000000215cb0886e693e03000031080000150000006275696c74696e2d33342f7374796c65732e786d6cb5555d6bd44a18be17ce7f18521015d349b29b7577cda6badd060485427b40d043992693ede07cc4c96ccd2a5e582f14f15af0f2dc9dbb732358fc3b8bfe8e3393d96eb29563a5e2d5ccfbf5bccf33f366126d558c82632c4b22f8c8f1373d07609e8a8cf0e9c8f9733f71fb0e2815e219a282e39133c7a5b315ff71252ad59ce2bd238c15d010bc1c39474a154308cbf40833546e8a02731dc985644869534e6159488cb2d214310a03cfeb418608772cc290a53f03c2907c322bdc54b0022972482851f31acb012c1dde9b7221d121d5542bbf8b5250f93d19804a9e35a9bddff5612495a214b9dad4b850e43949f1f77407700051da2069e4cb21f921f48235ed95bc2452174a7c4cccf53971c4672c61aa04a99871a5af73e50276b9978d9c6ec701f63cb745a68fe9e0da0db0717363c3dbf4bc83ebb78df9f8da99e3b1755c7d3a13eab66b97adad3aedcec17507c6115cf68ca35cf0a675a08599931e3ee1e2194f4cc8f2315971543e07c7886a8f6f30524185044acbc626497b3862d8667c3b3d5d9c7c5a9c7c5ebc7ebd38f9d70473c4089ddb705073b0a0bf11ba5e8c4642694ba375c4919e4485254fb40196fbfd79a13b72fdd158983aef82eca944733f085b05f5a2fb1e0a99e98fb47db1d6154714e74a1748323d32ab12053441a5f4d0c45146d05470440de459c572a361534ce99ef9901fe66baaaabc35309e9917beda6a42cbad85b1063c5764a7cc56f9ff5b055051d0b9998e96a5531b6b5c6737f65d4aa69ce176c1ae140aa7aa7ec06a22b02dcb8afc657da0ca2f167a61b9bfa6d85f915df1ac59af515d7981195c3db47fbffafafecbd7b76f1627efc023f38dfed5423f9c11aa083756a71efff3d5ff7cfcf6e543a3a65d70eeec34a3ac6a8ead8e2af3b2ae73d41819ced18caafd5570e434fb0738233316acb276c9b150cbac667fdf4cafdf333d70a5ee97aa5ec14c9291f362677c6b30d94902b7ef8dfb6eb7834377108e276ed8dd1e4f26c9c00bbced97adf7fd175ef7fa49d637ec778725d559722976497eaff18d9c9661e9d7e7a769b7b90f829e7737f43d37e978bedbeda1bedbef75423709fd60d2eb8e77c2246c710f2ff917f0a0ef37e4c3a1220c53c2f13afdfdb6575f92367f20029edd046cfef5f17f504b03041400000008000000215c2c83f7a8e101000003040000200000006275696c74696e2d33342f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb19dc489b1bda439d0bd282c6db7f78a3cb6452ccb48ca89d277efc869b20ba1101624d0489a6ffe9991b2a7936cc901b411aacb69e88f28818eab5274754e5f7f6ebc1925c6b2ae64adea20a76730f4a9f8fc293b2abd330d802548e84c4e1b6bfb34080c6f4032e3ab1e3a3ca99496cca2a9ebc0f41a583938c9368846a3692099e8e88590ea4718aaaa048795e27b099dbd4034b4cca27ed388de5c69923f82934ceff6bdc795ec11b115adb0e7014a89e4e973dd29cdb62de67d0ac78c9393c611e18caf6186fdbb485270ad8caaac8fe47f9aefd39f07f380f11be93eff8730e1180b7010ae816fa8e883acc98d15bdc1e20fc2a637982b974ef7a2cce9efe566bd992d961b2f1cc75fbc71bc8ebdf974117a4994ac92681d4e17d3e40f2db25260879d33d150e57419d1a0c806fa2f0147f36e4d2cdbfe8016b8050c1052e2dee656a99d3b7cc6ad91730dee7c37c34378d1a4848aed5bfb5d1dbf82a81b8b90999f4c50b4eb6e5a9e5760383e3724f9e39b8c15b3acc8b43a12ec1c96cbf4ccfd83388dffe35864dc5d5dbabb4e67911d8ad08f26597040791c27c2ae422ff49ed5f08de95a7486b4500da084127d5139acadea8715cadd2a6b95bc5a0d7603b4b35050a594bd1aae18b7ef5bfc05504b03041400000008000000215c90cb5a95a102000045060000150000006275696c74696e2d33352f7374796c65732e786d6ca594dd6adb3014c7ef077b07a17b57b61b6749b05396a68642078366b05bc59613517d0459c99c8dddb4ef30d81bec6e378395bd4ea0cfb1233b89133ab6d15ee9e89ca3dff94b47527c56498156cc945cab0407273e464c653ae76a96e07793d4eb61545aaa722ab462095eb3129f0d5fbe884bbb16ec7ace984580506582e7d62e068494d99c495a9ee805531029b491d4c2d4cc48b9308ce6a55b2405097dbf4b24e50a378481ccfe0722a9b9592ebc4ccb05b57cca05b7eb9a8591cc069733a50d9d0a905a051d9aa12ae89a10556657a4f63eaa23796674a90b7b025ca28b8267ecb1dc3ee9139ab524203f8d1444c40f8ff65e9927923ac4b01577edc3c3b8d0ca9628d34b65a199c0769b1ddc28fd41a52ee49c4dd6302e3fa21515e0093019c69916da200b95994b028fa29235190ff7f79bdb1f9bdb9f9bbbbbcded77172ca8e462dd8443e7200db41e4a887321f64242dc38863174cc32a35298a0ad3d592fa0a282cbd560eabc7f64cf0c5d076174b0a01ea0ee549b1c2e737b043bd73016acb0b0c0f0d9dc8d562f880b5a0b873b8c734e675a51e190bb155b03b01913e2da5df8f7c511bb2a905aca54dacb3cc1f074dcee772608da9a0da69938fe21ad613f1b8baae298bf47d7858ee87b2f722d86f67efbfaf0eb4b8b40d3251796ab3f0806665eb55aeba875afedb80a307256d0a5b0937d30c1adfd86e57c29c37dd65bbed2769bd5da57ae5341d7d56095bd2a6d3da2a5e109fe74317ad51f5fa4a1d7f3473daf73ca22af1f8dc65ed4391f8dc769df0ffdf3cf076ffe192fbe7ea6d094a03328056499ed66b7e2af5b5f820f268dfcfafc40f6a1f67ed8f55f4781efa5a77ee075bab4e7f5baa79197464138ee764617511a1d688f9ef833f824085af1d1c072c90457ec58fee4d00b4d82e95f3641769d20edff3ffc0d504b03041400000008000000215ce165fd24dc010000fd030000200000006275696c74696e2d33352f776f726b7368656574732f7368656574312e786d6c9d934d8bdb301086ef85fe07a17becc44e9cc4d85eba4d4df75058da6eef8a3cb6452cc948ca17a5ffbd23a7ce2e844258b06046f23cf3ce8c943d9c64470e60acd02aa7b3604a0928ae2ba19a9cbefc2c272b4aac63aa629d5690d33358fa507cfc901db5d9d916c01124289bd3d6b93e0d43cb5b90cc06ba078527b5369239744d13dade00ab8620d985d1749a849209452f84d4dcc3d0752d386c34df4b50ee0231d03187fa6d2b7a3bd224bf072799d9edfb09d7b247c45674c29d07282592a74f8dd2866d3bacfb349b334e4e06bf08573ca619f66f3249c18db6ba760192ff69be2d7f1dae43c6afa4dbfaefc2cce6d88083f0037c4545ef642daeace81516bf13965c61be5d26dd8b2aa7bf9378152749f238792c93e964fe65b1f156392957e57ab35c7f8ae749fc8716592570c23e9818a873fa39a261910df45f028ef68d4d1cdbfe800eb8034c30a3c4dfcdadd63b7ff8845b531f1adec496c3457836a4829aed3bf75d1fbf82685a879055b05ca0683fddb43a6fc072bc6e480ae657191be65891197d2438396c97ed997f07711aff27b0c8b8ff152b29b243310ba245161e5018c7859851e285dbb306be31d308654907f5805852622efa06dbe97eb050e8563ba7e5e8b5380730de4329b5d66e747c1bae0fb7f80b504b03041400000008000000215c8488e5e60f030000ec070000150000006275696c74696e2d33362f7374796c65732e786d6ca555cb8ed33014dd23f10f96f7192799a6b45512441f91460234d20c125b377132167e448e3ba42016ccb0e10790f803766c9040fc4e25c46760276d938280d1cccaf67d1c9fe37b73133eac3903974455548a087a472e0444a432a3a288e0b3f3c4194150692c32cca420115c930a3e8cefdf0b2bbd66e4ec82100d0c84a82278a1753941a84a2f08c7d5912c89309e5c2a8eb539aa0255a52238ab6c1267c877dd21e2980ad8224c787a13108ed58b55e9a4929758d3256554af1b2c08783a3929845478c90cd5da1be014d4de50f9a056bb4b1aeb1ff7709a2a59c95c1f195c24f39ca6e44fba63344638ed900cf2ed90bc00b9fe81f65add12698014b9a4b67c300e7329740552b9123a82bec1b662272f847c2912eb3215de46c561f50a5c62662c1e4471984a2615d0e66662838c45604eda881fdfbe6daebe6caebe6eaeaf37579fad33c79cb275ebf6ad01b5a07f8756c532824962eae4b9eeadf19ba5327ecad85ee8316c0d71683a421325127300dbfdf9ba348a8469de16a689fb4f74a1f0daf3839b275492d1ccb228667db1b3e122992d1a985eea1eb4598c98a55499f90277726c895a531c32926b93ae687161572d4b649d5a9b8e88c38ce2420accec05bb8cedc6c0a684b133fb953ecf7b3d1187750ec48a275c9f641134dfbb7dd2ddd610da6e5b98f680fe9ee47549fe6112c065c9d64f577c4954d27cbf9d75dac475e7478c168213d10b39555293543763a96180fa7a5a75771606eafc2e0adb6c6fcf6e4faca179c06d6f05b6ef4dcf7ffaf8e3fb878e0058ae28d354ece9fc9ef0f3fde7cddb77dd9dfd047f78f840864556776fd3e0693b140f79995b3392e315d3e77b6704bbfd1392d115f7f751a7f452ea6d54b77f6c7bd36b18905a3fae74b38295a2117cbd983e18cf1789ef8cdce9c8191c93c01907d3b9130c66d3f93c19bbbe3b7bd31bcd7718cccd343565f406938a9928b515bb257fd6d922d83bb4f49bf733b4fbdcc7fed07d1478ae931cbb9e3318e291331a1e074e1278fe7c38982e8224e8710f6e39c05de4791df960a229278c0a7248ffbc6f354532c77f8840bb4aa0ee371dff02504b03041400000008000000215c797e2a61e001000003040000200000006275696c74696e2d33362f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb173728ceda5b1b3742f0a4b4ff78a3cb6452ccb48ca89d277efc869b28550080b126824cd37ffcc48e9d34976e400da08d56734f4279440cf5525fa26a33fbe3f7b3125c6b2be629dea21a36730f429fff8213d2abd332d802548e84d465b6b8724080c6f4132e3ab017a3ca99596cca2a99bc00c1a58353ac92e882693452099e8e98590e84718aaae058752f1bd84de5e201a3a6651bf69c560ae34c91fc149a677fbc1e34a0e88d88a4ed8f308a544f2e4a5e99566db0ef33e8533c6c949e388704eaf61c6fdbb485270ad8caaad8fe4bf9aefd35f05ab80f11be93eff8730e10c0b7010ae816fa8e89dacf98d15bdc1a6ef842d6e30572e9dec4595d15ff12ade948be9272f5c6d226fb62a0a2f5eaf0b6fbdd96c8a72192fa3b0fc4df3b412d861e74c34d4192d221ae4e948ff29e068fe5913cbb6dfa0036e01038494b8b7b9556ae70e5f706be25c833bdfe7f121bc6a5241cdf69dfdaa8e9f4134ad4548ec2fe728da7537a9ce25188ecf0d49feec26a36496e5a95647829dc3729981b97f304da6ff71cc53eeae16eeaed399a7873cf4a3791a1c501ec789b0abd00b7d600d7c61ba11bd211dd423684989bea81cd7560de30ae56e95b54a5ead16bb01da5928a856ca5e0d578cdbf7cdff00504b03041400000008000000215c113f9f250d030000fb070000150000006275696c74696e2d33372f7374796c65732e786d6ca5554f6fd33014bf23f11d2cdf33275953daaae9b4ae8b3469a0492b125737715a6bfe1339ee48411cd80e1cb883f802881b1724a67d9d8a898f819d744dba3198b64becf7eff77eefd97ee9ef149c8153a2722a4508bd2d170222629950310de1cb71e47420c8351609665290102e480e77064f9ff473bd60e4784688060642e4219c699df510cae319e138df921911c6924ac5b136a29aa23c530427b90de20cf9aedb461c53012b841e8fef03c2b13a99674e2c7986359d5046f5a2c48280c7bd83a9900a4f98a15a782d1c83c26b2b1f14ea3a49a9bd9587d358c95ca67acbe02299a63426b7e9765117e1b84632c80f43f202e4fa1bb517ea81482da4c829b5c70707fd540a9d8358ce850ea16fb06db1bd13215f8bc89acc09afbc06fdfc0d38c5cc683c8806fd5832a98036998975321a8139a93cae2e2e96673f96673f97e7e7cbb3efd698624ed9a232fb56812ad0ea3b410df8e016fcf683e1cb253776ca58a3ce4a31e89b0ba189129111c06a3f5e6426a33077b78229fdfee33d5578e1f94123a05c4cde895489792bcdcc956ad06724d52640d1e9ccae5a66c81ab5366737e827144fa5c0cc425e47dc231294af2c847a46e31378a38d2d58a159c7bf67586d0cf19830766cb15ea51bec8b1488398fb83e484268debeedeff5d694bcda56309580ee0ef2ee08327a9c656cf162ce274445e55b2e5d4aaded7f2ded323a159c8886c391929ac4ba1c50657ed4aca6aaedd16581227d4c7d55b4b766b72656d2dce0b6d602fb04ccf5fff6e5eaf2534d004ce694692ad6746e06fcfefaf1d787cbe5fbcfa091b819e5b537bb64a82445dda01254db19b949cea44e488ae74c8fd7c610d6fbe724a173eeafbd8ee8a9d42baf7a7f68af71c58014fa30d7e50ae68a86f0edfef05977b41ff94ec71d769cd636099c6e301c39416b6f381a455dd777f7de3526f523e674395ccd597aad5ece8c975a15bb227f5ceb42d8102afa65ff0ced26f7aedf767703cf75a26dd7735a6ddc713aededc08902cf1fb55bc3fd200a1adc8307ce7317795e4d3ee869ca09a3826cd21f37b5e6908cf88f22d0f549a0faaf3df803504b03041400000008000000215c60fe338f0302000072040000200000006275696c74696e2d33372f776f726b7368656574732f7368656574312e786d6c9d94db8e9b301086ef2bf51d2cdf73864d828055481a752f2a55edb6f78e31600563643b27557df78e49435aa595a24558f2d8ccf7cfc1267b3e890e1d98d25cf6390e5c1f23d65359f1bec9f1b7d78d33c7481bd257a4933dcbf19969fc5cbc7f971da5dae996318380d0eb1cb7c60ca9e769da3241b42b07d6c34e2d9520064cd5787a508c54a393e8bcd0f79f3c41788f2f84543dc29075cd295b4bba17ac371788621d3110bf6ef9a0af34411fc109a276fbc1a1520c80d8f28e9bf308c548d0f4a5e9a522db0ef23e0531a1e8a4e00d6144579971fd4e4970aaa496b57181fc3be6fbf417dec2237422dde7ff102688a100076e1b7843856f6425132bbcc1a237c29e26982d974af7bccaf18f60b90cc379193b511cce9d783e5b3b8b45143b711497cb0fcbb2dc84e54f5c6415870e5b67a4589de35598ae22ec15d928f09db3a3fe638e0cd97e651da386814680913d9e5b297776f305967cebeaddf96ec6b3f059a18ad564df992ff2f891f1a6350099bbb304e2b60d4eabf39a690a270e486e3c85b126861499924704cd838ae981d8ab10a590b06584890b08d372ba2ba51903fb072f49fcbf9e18b2a796b8b248eb5564872270c324f30e900585019a9370742f1c2c26e15739fc4f38be15e592c9401af689a886f71a75ac1e3f9a61a42e1519e7c6e2fcb1345b698c1457ab85e633652d88a196d25c0dab31fd2d8a5f504b03041400000008000000215c2cc9488f2503000014080000150000006275696c74696e2d33382f7374796c65732e786d6ca555cb8edb3614dd17e83f10dc6b28c992c7322c07713c0202a445809902ddd2126513c38740d153b94517992cbae8be417ea0e8ae9b020df23b46837e462f258f25679a3698d998e47d9c73eebd223d7bd248816e98a9b956290ece7c8c98ca75c1d53ac5df5c65de04a3da525550a1154bf18ed5f8c9fccb2f66b5dd0976b961cc228050758a37d6565342ea7cc324adcf74c514784a6d24b570346b525786d1a276495290d0f7c74452ae70873095f9e780486aaeb795976b5951cb575c70bb6bb13092f9f4f95a69435702a436414473d4046313a2c6dc91b4d67b3c92e746d7bab467804b7459f29cdd979b9084d0bc4702e487210531f1c393da1bf340a4881876c3ddf8f07c566a656b94ebadb2290e01db153bbd56fa3b9539174cf810359fd5dfa31b2ac01260329fe55a68832c30331704164525eb223ebc7bb7bffd637ffbe7fef5ebfdedefce5952c9c5ae7387ce403ad0ee774506f0a37bf0a307c3b74b0d7e2ec4a0cece309fc107619951191cd0617fb5ab8051c1b7dbc1b471ff13bd36741784f120a15d8077a54d017765c8dc99e633c14a0b0986af376eb5ba22ce692dcc6e3e2b385d6b458583bccbf88c4cd4deb214db0dcfaff1476d8c30b2dcc9f0cfa2244926d179e49f477138ee3ad621fc3bf5610315e54c884b47f26d7952565322b59599b4cf0b20c0c835fe6e0bbd386c3b98ee403e9d147c2209ecb4aac4eeebad5c3193b597bc0d69ad6e30fde9a9e06b25991a04bc34dab2dcb62f57cb4f86d574b53dba2cd4948fa9afcb0e8eea8ec25a9927da8e56e4ee06dc8bdfde7e78ff4b2f00adb65cc0c48f723e4ef8fbd79ffffae9fdfed51b14f6c4c3ace0fcb44b20a568fa06b5a0d63d9ea7e280ba6025dd0a7b7574a6b8df7fc50abe95e131ea25bfd1f610d5ef5fb8ef3b183b0ed6d817b56d57b4353cc53f5c2cce93e545167a137f31f1a2118bbd245e2cbd387ab6582eb3c40ffd673f0e9ef0473ce0edab0bb30ca2692d20ca1c8a3d88bfec6d291e1c3af96dff40f6507b128efda771e07bd9c80fbc684c27de643c8abd2c0ec2e5385a5cc4593cd01e3ff0a1f74910f4e2e3a9e59209aed8a9fcaba1158604c7ff2882dc4d82f47fe7f37f00504b03041400000008000000215c80419c370002000061040000200000006275696c74696e2d33382f776f726b7368656574732f7368656574312e786d6c9d94db8e9b301086ef2bf51d2cdf030142020858a564a3ee45a5aaddf6de3106ac608c6ce7a4aaefde31d9904a69a568252ce1c37cff3f3386ece9243a74604a73d9e7d8776718b19eca8af74d8e7fbc6e9c18236d485f914ef62cc767a6f153f1f14376946aa75bc60c0242af73dc1a33a49ea769cb04d1ae1c580f3bb554821898aac6d38362a41a8344e705b3d9c21384f7f84248d5230c59d79cb2b5a47bc17a738128d61103fe75cb077da509fa084e10b5db0f0e956200c49677dc9c47284682a62f4d2f15d97690f7c99f138a4e0a9e0046789519d7ef9404a74a6a591b17c86f9eefd34fbcc4237422dde7ff10c69f43010edc36f0860adec98a2656708385ef842d26982d974af7bccaf1afc85f27ab72b57656619038f3c52274e265b972e24d99c4e1227e5e94cfbf7191551c3a6c839162758ecb202d43ec15d928f093b3a3feeb1d19b2fdce3a460d030d1f237b3db752eeece60b2ccd6ca87717bb19efc257852a56937d67bec9e367c69bd60024769711f8b60d4eabf39a690a370e48ee7cb2b126861499924704cd838ae981d84f214c2161cb08c0896939dd7d9266b4f52f5a04c9520b282dc11e2bb243e1bb41947907304d6180c4a413deebf8891bbd29bdcae1bf4ab71a5c8c0fa4615f886a78af51c7eaf1d012237529c0f86e2c6e3656622b8d91e23a6ba1d74cd91978a8a534d789d5987e0ec51f504b03041400000008000000215c3a4266892103000017080000150000006275696c74696e2d33392f7374796c65732e786d6ca555cd8edb3610be17e83b10bc6b29ca9263199683385e0101d220c06e815c6989f212e18f40d11b39410ed91c7ae8bd455fa0e8ad970209f23a46823c4649ca6bc9f9c7eec126393fdf7c33438e66775bc1c125d50d533283f8248480ca42954cae33f8eb791e4c20680c9125e14ad20c6e6903efce7ffe69d6982da76717941a60216493c10b63ea29424d714105694e544da5d5544a0b62ec51af51536b4acac639098ea2301c234198841dc254143f0222887ebaa98342899a18b6629c99adc7824014d3076ba93459714bb5c53129408bc73a02adbe0ee2a59fc511acd0aa519539b1b84855152be8e77453942252f44816f9664838416174947bab6f8814234d2f996b1f9ccf2a254d030ab591268391c576c94e9f4af54ce64e653bbcb79acf9ae7e092702bc110cd6785e24a036323536764259208da597c78fb7677f5dfeeeacdeef5ebddd5bf4e5911c1f8b653474e803ad0ee7f85be093fba31bc5f1aab679c0ff2ec04f399bd10866a99db03d8efcfb7b58d28eddded60bcdd77acd79a6c71940c1cfc62e3ae942eed5b1946ee44f319a795b10e9aad2fdc6a548d9cd218dbbbf9ac6464ad24e10ef2dae3073c817f651914b4641b013fa9630c81618e4778324ad3f44e924c129c46b1fdf9a2a30ee4cbd1f71b9b5441393f73719e544799b515901b910bf3a0b4212070b5bfdeda72ecb71d4c77405f77c25f71b27252d77cfb68235654e7fe9d7b132f75bde94ff7385b4b41e5c0e0b1568616c60f2f1f1f0db3e972bb755aa0ad6e935fe78d0fec0ec43ccd236e072970cfc33e8d7ffefaf0ee8f9e00586d18b73d3fd0f9d4e1e3dfbfbfffedddeed59f60d4071e7ae1c971952c95b2ed0be4418d9b9fc7e46ce8925664c3cdf94199c17eff8bbfa0d1c1ea31bb54666fd5ef1fba2b8ec72e066dcdc3c6f8156c34cbe08bd3c59d74799a47c1245c4c82784493204d16cb2089ef2f96cb3c0da3f0fecbc114bfc50cf783d7f612c7d3865b2bbd4f764ffeac97657070e8e8fbfa59da43ee69340eef25380cf2518883784c26c1643c4a823cc1d1721c2f4e933c19704f6e38eb4384714f3e991a262867921ed33f1f4a6d93ecf11b49a0eb4ea0fe8b3eff1f504b03041400000008000000215cc42cf049ed0100001b040000200000006275696c74696e2d33392f776f726b7368656574732f7368656574312e786d6c9d934b8f9b3010c7ef95fa1d2cdf810021090858ed268aba874a555f77c70c600563643b2f55fdee1d9386ad941ea295b0e4b199dffce7e1fce92c3b72046d84ea0b1afa334aa0e7aa127d53d01fdfb7de8a1263595fb14ef550d00b18fa547efc909f94de9b16c01224f4a6a0adb543160486b72099f1d5003dded44a4b66d1d44d60060dac1a9d641744b3d922904cf4f44ac8f4230c55d782c346f18384de5e211a3a6651bf69c5606e34c91fc149a6f787c1e34a0e88d8894ed8cb08a544f2ecb5e99566bb0ef33e8773c6c959e317e18a6f61c6f3bb485270ad8caaad8fe4bf9aefd34f8334607c22dde7ff10269c63018ec235f00d15bd93954cace80d16bf13b69860ae5c3a3b88aaa0bf16cb78337f09236fb5dd3e7bf3551a7bcfab34f5d23859afe328d9aca3f8372df34a60879d33d15017741dd1a0cc47fa4f0127f3cf9e58b6fb061d700b1820a4c4cde64ea9bdbb7cc5a399730dee7cb7e3207cd1a4829a1d3afb559d3e81685a8b9095bf4c50b4eb6e565d3660388e1b92fcf92463c32c2b73ad4e043b87e5320373ef20ce30db9191fa88b0ade0fb17654761ffe325982b7788b563b8dfcafc58867e94e4c11165735c18e496c035eac01af8cc74237a433aa847d292127d553feead1ac61d6ad8296b95bc592d7609b4b35068ad94bd19ae48d3b32eff00504b03041400000008000000215c5b2faf75fb020000a9070000150000006275696c74696e2d34302f7374796c65732e786d6ca5554f6fd33014bf23f11dacdc33276953da2ae9b4ae8b3469a0492b125737715a6bfe13396e49411cd80e1cb883f802881b1724a67d9d8a898f819db44dcab481b64becf7eff77ecfcf7e09f60b46c102cb9c081e5aee9e6301cc6391103e0dad97e3c8ee5a20578827880a8e436b89736b7ff0f44990ab25c567338c15d0103c0fad9952591fc23c9e6186f23d9161ae2da9900c292dca29cc338951929b2046a1e7381dc810e15685d067f1ff803024cfe7991d0b962145268412b52cb12cc0e2fef1940b892654532ddc368a41e176a4070ab949526a6fe56124962217a9dad3b850a42989f16dba3dd88328ae9134f2c3905c1f3ade4eed857c20521b4abc20a67dd6204805573988c59cabd0f234b629b67fcec56b1e1993eef0da6b10e46fc00251ad712d3808624185044a67c6c6496b3862b8f2b8b9ba5a5dfc585dfc5c5d5eae2ebe1b638a18a1cbcaec1905ac40abef04de0bdf7a307cb9e4da4e286dd459290681be100a4b1e6901acf7e365a633727d772b98d2ef1fde538996aee73702ca45e79d0899e8b7b2c96c0eb3520d028a53a5032499ceccaa44068d5129ddbb41901034151c5103b989586f346c8c293d33efe955ba535591023e671153c74968e99769aadf6c35a1f5b682a9047877907b6710405946972fe66c826554beb45a6b4ea7968665542d1f5032e50cf346c0a9140ac7aa1c27251fd8acaeaaf5d16582227d4cbd55b4bb65b72556d2dce1b6d5027361f565fdf6e5e6fa534d004ce6842ac2b774fe0ef8fdf5e3af0fd7abf79f41bb4edc8c727bbba7a4a924457d4025a832136d979c4e9de014cda91a6f8da155ef9fe384cc99b7f53a250ba1d65ef5fec45c57b76372e0429de4aa5cc15c92d07a7b347cd61b1d459edd75865dbbddc2beddf38723db6f1f0e47a3a8e778cee1bbc65c7dc4542d47a1eea5dbeee7547bc975b16bf267b52eb41a4245bf3c3f4dbbc9bde7759c03df75eca8e5b876bb83ba76b7d3f2edc877bd51a73d3cf223bfc1dd7fe0f475a0ebd6e4fdbe220c53c2f12efd7153ab9ba4c57b8a809b4ec0fa1f3bf803504b03041400000008000000215cc169d681de01000003040000200000006275696c74696e2d34302f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1f7358dbd85e96a4a67b5128db6eef15796c8b5896919413a5efde91d3640b61212c48a09134dffc3323e58f47d9933d6823d450d0c80f298181ab5a0c6d415f7f565e4289b16ca859af0628e8090c7d2c3f7fca0f4a6f4d076009120653d0ceda310b02c33b90ccf86a84014f1aa525b368ea3630a306564f4eb20fe2305c069289819e0999be87a19a4670582bbe9330d8334443cf2cea379d18cd8526f93d38c9f476377a5cc911111bd10b7b9aa094489e3db783d26cd363dec768ce38396a1c31ced925ccb47f13490aae95518df591fc4ff36dfa6990068c5f49b7f9df8589e65880bd700d7c43c51f642daeacf80d36fb206c7985b972e96c27ea82fe5e2561f5947e09bd6499aebcf92aa9bc34ac126f9956789454e15314fea1655e0becb073261a9a82ae621a94f944ff25e060fe5b13cb363fa0076e01034494b8b7b9516aeb0e9f712b74aec18d6f353d84ef9ad4d0b05d6f5fd4e12b88b6b30849fc87058a76ddcdead31a0cc7e786247f7e95b1669695b95607829dc3729991b97f30cb66ef389639775757eeaed359e6fb32f2e3451eec511ec789b08bd0337d642d7c63ba1583213d3413e881127d5639adad1aa715cadd286b95bc581d7603b4b35050a394bd18ae18d7ef5bfe05504b03041400000008000000215c4fce70b535030000c4080000150000006275696c74696e2d34312f7374796c65732e786d6ca556dd6ed33014be47e21d2cdf674eb2a66baba6685d17090910d286c4ad9b38a9857f22c71d29889bed862700f1065cc10d1288d799043c06b6d33629bfd5a648b57dcef9bef31dff767cafe60c5c1055512962181cf8101091ca8c8a22864fce136f0041a5b1c8309382c470452a786f72f7ceb8d22b46ce16846860284415c385d6e508a12a5d108eab035912613cb9541c6b335405aa4a45705659106728f4fd3ee2980ad8308c78ba0f09c7ead9b2f452c94bace99c32aa578e0b029e8eee17422a3c67466a1df4700aeaa0af4250ab4d1267fd2d0fa7a99295ccf581e14532cf694a7e973b444384d396c930df8c2988901feed45eab1b32f5902217d42e1f9c8c7329740552b9143a86a1e1b6c58e9e09f95c24d66556781d3519572fc00566c612403419a7924905b4c94c6c90b108cc4913f1edcb97ebcb4fd7979fafafaeae2f3f5a678e3965abc61d5a036a489bdf39fa33bd2ae6314c92e4f868e6fb37cee19acaf82963db620f6163988ccdaed04489c40cc0ba7fbe2a4d55c26ce086c6c5fd27ba50781584d1fe804a329a5915c5c94eb1a1fd1c4d07ba25758d29662e55664e61bb761bd364cc48ae0d5cd162615b2d4b649d5a9b5d3119671417526066136c105d24700735867a41ed0ed9598823f7396d36749d634f848b7572f60498c88dee3d114df09f6b5c77ccd4a584b133cbf734df99bf3a0762c913aeef673134f79add369bae99f475b7a16906e8efa0a005855d90b1e3b264ab474b3e272a71f794033aeb31a385e044744c8f95d424d5eeba751951577f53cdad0b01757e9b8a1a74b055b715e664ee68db5a813dcbe61cbf7ff7edeb9b5600982f29d3546ce5fc0af8f1fef5f70f6fdb9c5d4018ee4e905191d5eddc383e6d2ffb5d5d266b4672bc64fa7ceb8c61db7f4832bae4e136ea31bd907a1dd5f61fd8fd1df46d0e52eb0795762d582a1ac397a7d3a3e1ec3409bd813f1d78bd431279c3683af3a2dec974364b867ee89fbcea3c39b77870dc2b619631e88d2a66a2d4bad8b5f8b3d616c3cea091efe6cfc8ee6a1f867dff380a7c2f39f403afd7c7036fd03f8cbc240ac259bf373d8d92a8a33dbae1c3e4a32068c547234d396154905df9e75dab592433fc471168b312a8fdfb31f909504b03041400000008000000215c332dac6ddf01000003040000200000006275696c74696e2d34312f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdb899ca3b1bd6c1242f7a2507aba57e4b12d624946520e4be9bb77e434d942288405093492e69b7f66a4fce9ac3a7204eba4d1051dc7234a400b5349dd14f4c7f76db4a0c479ae2bde190d057d05479fca8f1ff293b17bd702788204ed0ada7adf6749e2440b8abbd8f4a0f1a43656718fa66d12d75be0d5e0a4ba848d46b34471a9e98590d94718a6aea5808d110705da5f20163aee51bf6b65efae34251ec1296ef7873e1246f588d8c94efad7014a8912d94ba38de5bb0ef33e8f275c90b3c5c170a6d730c3fe5d24258535ced43e46f25fcdf7e92f9365c2c58d749fff4398f1040b7094a1816f28f64ed6f4c6626fb0f49db0d90d16ca65b383ac0afaeb99ad969b6d3a89d2e9761e4d16b3345acea6cf115baf466cbe616cb5defea6655e49ec70702616ea82ae194dca7ca0ff947072ffac89e7bb6fd081f08001c69484b7b933661f0e5f706b145c933bdfedf010be585241cd0f9dff6a4e9f4036ad47c8229e4f5174e86e56bd6ec0097c6e488a2737191bee79995b7322d8392c97eb79f8076996fec7b1cc45b8ba0e7783ce323f96e3984df3e488f2044e845d855ee83d6fe033b78dd48e74500fa03925f6a272587bd30f2b94bb33de1b75b55aec06d860a1a0da187f3542316edfb7fc03504b03041400000008000000215c8512f08100030000ac070000150000006275696c74696e2d34322f7374796c65732e786d6ca555cb6adb4014dd17fa0fc3ec959164cbb18de510c71104d212880bdd8ea5913d641e62344ee5966e9245775d86f60f4a29745368e8ef04423fa333926dc94dd3960483e73ecf3d771e5783bd8233704e544ea508a1b7e34240442c132a66217c31899c2e04b9c622c14c0a12c225c9e1def0e99341ae978c9cce09d1c040883c8473adb33e42793c271ce73b3223c27852a938d646553394678ae024b7499c21df753b88632a6085d0e7f1ff8070acce1699134b9e614da79451bd2cb120e071ff6826a4c25366a8165e1bc7a0f03aca07855a1729ad77ea701a2b99cb54ef185c24d394c6e42edd1eea211cd74806f961485e805c7fabf7423d10a98d1439a7f6f8e070904aa17310cb85d021f40db66db67f26e42b11599739e155d47090bf06e798198b07d170104b2615d0a632b141c622302755c4edf5f5cdc5b79b8bef37979737175fad33c59cb265e5f6ad0155a0d53f457f8657b36908a368b7fc3db846b9e4c64f196b345b198603732b345122320a58c9936566ba12e602573065dc3fa2670a2f3d3f6824948ba93b952a310f665dd9ee68651a0e1849b549507436b7ab9619b24eadcd010e0709c5332930b390eb8c95606063c2d8a97d542fd3adae8a1488058fb83e4a42689ea7ed7e2d1a422bb182a914747f92776f12c059c696cf177c4a54543eb7da6a77a7d6466556adef333a139c8846c289929ac4ba9c29251fd4ecaeeaf5d16d82227d4cbf55b6b761b72156d2dce2b6b1027b61cd65fdf4f1f6c7554d004c1794692a36747e4ff8f9f9cbed87f7b757efeab2cd9ca0b5bd47864852d4db53426a3bd4b6a999c20949f182e9c9c619c25a7e4612bae0fe26ea849e4bbd8aaae5637b59bd8ead410a7d9ceb72050b4543f8e670b4db1b1f46bed375475da7dd2281d30b466327681f8cc6e3a8e7faeec1dbc6687dc4602da7a13949afddcf998952ab6657e44f6b5b081b4a45bfdc3f43bbc9bde777dcfdc0739da8e57a4ebb83bb4eb7d30a9c28f0fc71a73d3a0ca2a0c13d78e0007691e7d5e483bea69c302ac836fd49d36a0ec9a87f6902ad4f02d59fd9e12f504b03041400000008000000215c40511abbe001000003040000200000006275696c74696e2d34322f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb1e3c459637bc9261bba1785d2d3bd228f6d114b329272584adfbd23a7c91642212c48a09134dffc3323158f27d99303182bb42a691c4e2801c5752d545bd21fdf37c18212eb98aa59af1594f4152c7dac3e7e288edaec6c07e00812942d69e7dc904791e51d4866433d80c293461bc91c9aa68dec6080d5a393eca364329947920945cf84dcdcc3d04d2338ac35df4b50ee0c31d03387fa6d27067ba1497e0f4e32b3db0f01d77240c456f4c2bd8e504a24cf5f5aa50ddbf698f7294e1927278323c139bd8419f76f2249c18db6ba712192ff6abe4dff217a8818bf926ef3bf0b13a7588083f00d7c4325ef64cdaeace40d367d276c7e85f972997c2fea92fe9a2c5759b6d92c83389d67413a4d9f83e5fa390e9e164f499c6d92384ed3dfb42a6a811df6cec44053d25542a3aa18e93f051ced3f6be2d8f61bf4c01d60809812ff36b75aeffce10b6e4dbc6b74e3bb191fc217436a68d8be775ff5f11388b673085984d90c45fbeee6f5eb1a2cc7e786a430bdca5833c7aac2e823c1ce61b9ecc0fc3f98e6d3ff385605f75757feaed75915872a0e9359111d501ec789b08bd0337d602d7c66a615ca921e9a11945162ce2ac7b5d3c3b842b95bed9c9617abc36e80f1160a6ab47617c317e3fa7dab3f504b03041400000008000000215c09e15d0402030000a8070000150000006275696c74696e2d34332f7374796c65732e786d6ca5554f6fdb3614bf17d877207857282a966b1b9683ba8e80026d512019d02b2d510e11fe11283a9337f4921e06ecd64b817e8161976197012dfa758206fd187d946c4b5e916d487421dfbfdffb3d3ef2697a522b89aeb8ad84d109a64721465c6726177a95e01fcfd3608451e598ce99349a2778c32b7c32fbe1d1b4721bc9cf2e387708207495e00be7ca09215576c115ab8e4cc935580a63157320da15a94acb595ef9202549148643a298d0b84598a8ecff8028662fd765901955322796420ab769b03052d9e4d94a1bcb9612a8d674c03254d3a18d506d77491aed777994c8aca94ce18e009798a21019ff9eee988c09cb3a2440be1f128d49181dd45edb7b220d88e557c2b70fcfa685d1ae4299596b97e008b07db1934b6d7ed2a9374187b75eb369f533ba6212341493d93433d258e42033f74ea0d14cf1d6e3f6d3a79bebbf6fae3fdebc7d7b73fd9737164c09b969cd91579016f46e68bb5a2638852f84efdef8cd52815d48d92bb455cca670231cb73a05016df7e79b122ad270795b98c6ef3fbc57966d6814f7029a05f22e8dcde1b1ec32fbd36c55b3a9e48583002b56177e75a624dee81c346f36cd055b19cda487dc456c37009b7129cffc837a5d1c54551748af55aadcb33cc1f0347df5bb2d10da6e5b9856207707d13b83102b4bb979b9564b6ed3e6a9755a7f3a9d346fa23af989142badb8ee05bcb2c6f1cc35f3a4e143fad5b5b53eb84c54170fa9b78da67b767b620dcd036e7b2df217162eeb1f1f6e3fbfef08a0e55a4827f49ece3f03befef9fb9777bfddbeffb54bdb8fa1f4f08c80485e77c7d3403a3fd00ea941e29c176c2dddf9de98e06eff82e762ada2bdd72b7165dcd6abdb3ff797950e7d0e5ebbe7956b56b4b622c1bf9cce1f8f17a769148cc2f928181cf33818c7f345100f9ece178b741c46e1d337bdb1fa80a1da4c42e8241d4c2a095e765bec96fc59a74b704f68e937e707b4fbdcc7d1307c12d330488f431a0c866c148c86c77190c6345a0c07f3d3388d7bdce37b0edf9050da918f274e282e85e687f4cffb5a681288ff5204d9758274bfd8d937504b03041400000008000000215c88d2d8f2de01000003040000200000006275696c74696e2d34332f776f726b7368656574732f7368656574312e786d6c9d935bab9c3010c7df0bfd0e21efeaeade453d9c6aa5e7a1507a7bcfc651c31a2349f646e977efc4ed7a0a4b6139904026c9fce63f3349f274961d39823642f5290dfd1925d0735589be49e98fefa5b7a1c458d657ac533da4f402863e65efdf2527a5f7a605b00409bd49696bed100781e12d48667c35408f27b5d29259347513984103ab4627d905d16cb60a24133dbd1262fd0843d5b5e050287e90d0db2b4443c72cea37ad18cc8d26f92338c9f4fe30785cc901113bd1097b19a194481ebf34bdd26cd761dee770c138396b1c11cef92dccb87f17490aae9551b5f591fc57f37dfadb601b303e91eef37f08132eb00047e11af88a8adec85a4eace815367f236c35c15cb9747c10554a7f3d975119e6b3d28b8a62e52df2f283b75de685576ec3e770bd29571ff3d56f9a2595c00e3b67a2a14e691ed1204b46fa4f0127f3cf9a58b6fb061d700b1820a4c4bdcd9d527b77f8825b33e71adcf996e343f8a24905353b74f6ab3a7d02d1b416211b7fbd44d1aebb717529c0707c6e48f217938c825996255a9d08760ecb6506e6fec13c9effc7314bb8bb9abbbb4e67961cb3d08f96497044791c27c26e42aff48135f099e946f48674508fa03525faaa725c5b358c2b94bb53d62a79b35aec066867a1a05a297b335c31a6ef9bfd01504b03041400000008000000215caec8b9f13103000043080000150000006275696c74696e2d34342f7374796c65732e786d6cb555dd6adc4614be2ff41d06399424541e495e6d76375aa559af0581040c76201706339646eb21f3a38e665d6d432038ef10489e2077815288c9eb1842f216999ff54a6bb77571c8d5f9ffe63b738e46c98386517082654d041f7be166e001cc7351103e1b7b4ff7337fe0815a215e202a381e7b0b5c7b0fd29f7f4a6ab5a078ef1863053404afc7deb152d508c23a3fc60cd59ba2c25c474a211952da9433585712a3a236458cc22808fa9021c23d873062f9ff0161483e9f577e2e588514392294a885c5f200cb478f665c48744435d526eca11c34615f46a091178758ef957318c9a5a845a936352e146549727c95ee100e21ca5b248d7c33a4308641b4d67b236f88d483129f10333e2f4df89c654cd5201773aef438572ee0c4a362ecf5220fb8fbdc1685bea6c3dbbffc3e17eafe2d27ee828d5f373682c33bf7af040e6edbd0c13f849cf49db0b5bf1ddef1609ac025a53429056f99690e7610a3e75cfcc1331372744d569ad47f821344b5273418b9a04202a56f059b24ede1886197f1f9ececfcf4eff3d38fe7af5f9f9f7e30c1123142172e1c590e0ef407425b617a2494767a748e34d18baab0e49936c052df5f54fa44aebf290763f3aec99e49b408a3b85360853ef748c8427fc3ddb93b579a505c2a5d20c9ecd848252a68824ae99d4a9382a099e0881ac88b8aa5a261734ce99ef9ce9f956b5d3565679f02b34e7ca56a424bd5c138035e2a724be8aac27fad02a8aae8c26c47c7d2a9ad35b1d9adfd90921967b85bb02b85c2b9b2ef9b2502bb6db926bfbb3fd094d7377a6d79b8d671b822bbe26959af515d7981595cbdb4efdf7efef4a6e5038ee6842ac257ec2e177c7df5eecb5fef3b0c3a05f7d6af4b93289af6a62c9c326fed3a2d7d68814b34a76a7f151c7badfe041764cea255d62e39116a99d5ea8fcdc2867d73066ed4e35a5909e6928cbd173b937bc3e94e16f9836032f07b5b38f687f164eac7bdedc9749a0d8328d87ed979f1bfe3bdb78fb41e6ad81bd55467c965b34bf27bad6fec750c47dfde9fa6dde53e8cfac1c3380cfc6c2b08fd5e1f0dfc417f2bf6b3388ca6fdde6427cee20ef7f886ff850086614b3e1e29c230251cafd3dfef7af590b4f91f4dc08b49c0f6ef9f7e03504b03041400000008000000215c11d5d961de01000003040000200000006275696c74696e2d34342f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a1fbd8b1735a1bdb4b7330dd8bc2d2d3bd228f6d114b329272a2f4dd3b729a6c2114c282043392e69b5f3352f67c921d3980b142ab9c46c19812505c57423539fdf1bd1c3d51621d5315ebb4829c9ec1d2e7e2e387eca8cdceb6008e2041d99cb6cef569185ade826436d03d28dca9b591cca16b9ad0f606583504c92e8cc7e379289950f44248cd230c5dd782c35af3bd04e52e10031d73a8dfb6a2b7579ae48fe02433bb7d3fe25af688d88a4eb8f300a544f2f4a551dab06d87f73e4553c6c9c9e088714eae6986f5bb4c5270a3adae5d80e4bf9aefaf9f8449c8f88d747fff8730d1140b7010be816fa8f89dacd98d15bfc126ef84cd6f305f2e93ee4595d35fabb29cae933819959bf97c342dd1fa942c66a3cd66b25926d172b6592d7fd322ab0476d8071303754e57310d8b6ca0ff1470b4ffd8c4b1ed37e8803bc0041125fe6d6eb5def9cd175c1afbd0f02eb61c1ec2ab2115d46cdfb9affaf81944d33a843c058b198af6dd4dabf31a2cc7e786a4607a93b1668e1599d147829dc372d99ef97f304927ff092c32ee8faefc59afb3c80e4514c4b32c3ca03c8e136157a1177acf1af8c24c2394251dd403684189b9a81c6ca7fbc142b95bed9c9657afc56e80f11e0aaab57657c717e3f67d8b3f504b03041400000008000000215c1ba478573a03000052080000150000006275696c74696e2d34352f7374796c65732e786d6cb556ed6ad44c14feff82f730a4f2a2623a499aacbb6b367ddd6e038282d00a824a992693ede07cc4c96ccd2a82d47b10f40afc2788a0783b05d1bb7026b3dd64ad5aa9bcbfce9caf679e33e7cc24f166cd2838c4b222828f1c7fdd7300e699c8099f8e9cbbbba9db7740a510cf11151c8f9c39ae9ccde4c23f71a5e614ef1c60ac8086e0d5c83950aa1c4258650798a16a5d94986b4f2124434aab720aab5262945726895118785e0f3244b86311862cfb131086e4a359e966829548917d42899a37580e60d9f0e6940b89f6a9a65afb21ca40edf764006a79b249633db50f2399149528d4bac685a22848864fd31dc00144598ba491cf87e447d00b566aafe539914228f12131ed739298cf58ca54053231e34ab773690256dccc474e183ac09ee796c8f531ed5dfaf7f14ca8eb17adb802d6aeaead79eb9eb777f9fa29df834b27de073ff15ae95ab1b9d900fcb777d981490c17d492b810bc6518e8fa4d43868fb878c253e3b2b44d5412574fc121a2dae21b8c4c502181d2a7834d90b670c4b08df8f2e9d3f1d187e3a38fc72f5f1e1fbd33ce023142e7d61d341c2ce8ff08dd085323a1b453a33524b11e5885254fb50216ebdd79a977e4fa6e599826ee8ce8a944733f883a098dd0fbee0b99ebbbdcedbf352531c585d209924c0f8c54a284c6a9949ead24ce099a0a8ea8813cc9582c346c8629dd31f7fd5eb152555d74e6ca3363c5974b4d68b1b43056813f24d961b459fe2fb3002a4b3a37d3d1d17468ab8d9be856bf41c99433dc4db82385c2996adeb98608ec96658bfcebfa405d9c5de899e9fe4ac5fe92ec9267c37a85ead20acce0eaa17dfbfacbe7572d1fb03f235411be64f763c2b7176fbebe7f0bee9bbbfdb043a49317ae9e9ae692d7ed8135a8ca3cbdabecf4de392ed08caadda573e4b4ebdb382733162ca3ee9043a11651edfa96995bbf67f6c0b5ba55a94682992423e7d9f6f8da60b29d066edf1bf7dd700347ee201a4fdc28dc1a4f26e9c00bbcade79d0fc05f3cffcd9bad7beb87c38aea28b92876417ea7b58d9c8e62e937e7a76977b90f829e7723f23d37ddf07c37eca1bedbef6d446e1af9c1a4178eb7a334ea708fcef999f0a0efb7e4a3a1220c53c2f12afdddae553749abbf29029e7402b63f03c977504b03041400000008000000215c9a46f37ce001000003040000200000006275696c74696e2d34352f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1f623b27637bc9a1a17b5158da6eef15796c8b5896919413a5efde91d3641742212c48a09134dffc3323654f27d9920368235497d3911f52021d57a5e8ea9cbefedc78334a8c655dc95ad5414ecf60e853f1f95376547a671a004b90d0999c36d6f6691018de8064c6573d747852292d994553d781e935b07270926d1085e124904c74f44248f5230c555582c35af1bd84ce5e201a5a6651bf69446fae34c91fc149a677fbdee34af688d88a56d8f300a544f2f4b9ee9466db16f33e8d12c6c949e38870c6d730c3fe5d2429b8564655d647f23fcdf7e9cf8379c0f88d749fff43985182053808d7c03754f441d6f8c68ade60f10761931bcc954ba77b51e6f477b8992fc3249e78ab7839f1922f9ba9b758cc165e186d56b365324ee2f9f40f2db25260879d33d150e57415d1a0c806fa2f0147f36e4d2cdbfe8016b8050c30a2c4bdcdad523b77f88c5ba1730dee7c37c34378d1a4848aed5bfb5d1dbf82a81b8b90993f1da368d7ddb43cafc1707c6e48f2939b8c35b3acc8b43a12ec1c96cbf4ccfd83388dffe35864dc5d5db9bb4e67911d8a911f8db3e080f2384e845d855ee83dabe11bd3b5e80c69a11a40534af445e5b0b6aa1f562877abac55f26a35d80dd0ce42419552f66ab862dcbe6ff117504b03041400000008000000215cc24952aa150300001b080000150000006275696c74696e2d34362f7374796c65732e786d6cb555cd8edb3610be17e83b10bc6b29692dd7362c0771bc0202a44580dd02b9d2126513e18f40515bb9452f1ba0c8130428fa02b9e512a0415e6781a07d8b0e29db929b6c5beca217939cf9e69b6f34e478fea895025d335373ad521c9d85183195eb82ab4d8abfbfca820946b5a5aaa0422b96e21dabf1a3c5d75fcd6bbb13ec72cb984540a1ea146fadad6684d4f996495a9fe98a29f094da486ae16836a4ae0ca345ed82a42071188e89a45ce18e6126f3ff4222a979d95441ae65452d5f73c1edce736124f3d9d38dd286ae05486da311cd511b8d4d8c5a7348e2ad9fe5913c37bad6a53d035ea2cb92e7ec73b953322534ef9980f97e4c5142c2f8a4f6d6dc9369440cbbe6ae7d78312fb5b235ca75a36c8a63e076c5ce5e2afd83ca9c0b3abc472de6f58fe89a0ab044982ce6b916da200b999903814551c93ac4a70f1f6e6fdedfdefc7efbead5edcd3be72ca9e462d7b96367201d69f7bb26ff13bd5f6af0732106757686c51c2e846546657040fbfdd5ae828c0aee6e47e371ff82de18ba8be26410e017c8bbd6a680b732ccdc991673c14a0b01866fb66eb5ba22ce692df46e312f38dd684585a33c44dc1d89fce34ab1dd72d7d5938f37f2b20074603f800bddc0b5ff32bc437e59c67e03d5e54c884b47f6a23c29b12d916a6426edd322c530205c130e5bf82efb6d47d31dc8dd41d11d4160a7552576df3572cd4ce61fbc8778ab6b527f7a2cf84649a60680e7465b965b3fc57c7e32aca6abedc165a1b67c487d5d7474547714e6659e683b5a917b27f046defefae9e39b5e005a375c58ae8e72fe1ef0e76fbffcf1f6759f7318b0bfda7d66b8186dff6d3c9f7533f45417642d58491b61af8ece14f7fb6f59c11b191f51cff9b5b67b54bf7fe6ae79347639586b9fd5d6afa8313cc53f5d2cbf99ae2eb2389884cb49303a6749304d96ab20193d59ae56d9348cc3273f0f26f903e6b81fbed0c66834ab05a0ccbed8bdf8cbde96e2c1a193efbf1fc81e6a9fc6e3f071128541761e46c1684c27c1647c9e045912c5abf168799164c9407b72cf791f9228eac52733cb25135cb153f957432b34098eff5004397482f4ffea8bbf00504b03041400000008000000215c44151b22fa01000063040000200000006275696c74696e2d34362f776f726b7368656574732f7368656574312e786d6c9d94db8adb301086ef0b7d07a17b9fe3756c6c2fa943e85e144abbedbd22cbb6886519493951faee1d398d53485bc28205d661beff9f19d9f9f349f4e8c094e6722870e0fa18b181ca9a0f6d81bfbd6e9c2546da90a126bd1c5881cf4ce3e7f2fdbbfc28d54e778c1904844117b83366cc3c4fd38e09a25d39b201761aa904313055ada747c5483d0589de0b7dffc913840ff842c8d4230cd9349cb2b5a47bc106738128d61303fe75c7477da509fa084e10b5db8f0e956204c496f7dc9c27284682662fed2015d9f690f72958108a4e0a9e1046749599d6ef9404a74a6ad91817c8bf3ddfa79f7aa947e84cbacfff214cb080021cb86de00d15be9115cfacf0068bde087b9a61b65c2adbf3bac03fd22af1d360bd7636e9b2721655103babc56ae9ac825598247158c549f4139779cda1c3361829d614b80ab32ac25e994f02df393bea3fde9121dbafac67d430d00830b2d7732be5ce6ebec0926f43bdbbd8cd74173e2b54b386ec7bf3451e3f32de7606204b3789c1b76d70569fd74c53b871407217b38d3531a4cc953c22681e544c8fc47e0a5106094f8cd40584e938dd7d906632f6375e0ce9528ba82cc31e2bf34319b8619c7b07b04d6180c8ac14fd57e9558eff54ba55e1627d242dfb4454cb078d7ad64c87128cd4a504d3bbb1387faac5561a23c575d641b799b233f0d04869ae13ab31ff1eca5f504b03041400000008000000215c0ed89a7a03030000b3070000150000006275696c74696e2d34372f7374796c65732e786d6ca555cb6ed34014dd23f10fa3d9bb63bb7148a23855436a090950a51689edc41ea723e6618dc7c501b1693e00b14162cf02b161011215e26f2cf53b98b193d8694541edc6739fe79e3b8febf141c91938272aa75284d0db732120229609158b10be388d9c0104b9c622c14c0a12c225c9e1c1e4e18371ae978c9c9c11a28181107908cfb4ce4608e5f119e138df931911c6934ac5b136aa5aa03c530427b94de20cf9aedb471c53011b84118fff078463f5aac89c58f20c6b3aa78cea658d05018f474f16422a3c67866ae9f5700c4aafaf7c50aa4d91da7aa30ea7b192b94cf59ec145324d694c6ed21da221c2718b6490ef86e405c8f5777a2fd51d917a4891736a8f0f4ec6a9143a07b12c840ea16fb06db3a35742be16917599135e474dc6f91b708e99b178104dc6b16452016d2a131b642c0273d2445c5d5e56173faa8b9fd56a555d7cb3ce1473ca968ddbb706d48036df02dd0eefde19bf5e72e3a78c751a6d0c93b1b9119a28111905ace5d365664a0a73791b983aee1fd10b85979e1f7412eac5d49d4b9598c7b2a96c77b3314dc68ca4da2428ba38b3ab9619b24eadcde14dc609c50b2930b3909b8cb5606063c2d8897d502fd39daeca148882475c3f4942689ea6ed7e231a426bb1816914f4f724efaf490067195b3e2ff89ca8a87e6aadd5ee4eab4debac563f64742138119d8463253589753d4f6a3ea8db5dd3ebbddb04657a9f7e9b6c6fcb6e4baca6b9c36d6b05f6c286b05abdaf2e3e57ab0fd5ea77b5fa5aadbedb2bbb4504f382324d85d506f5cdbf967ff5e5d3d5af8f6d03dd846bdb65382565bb53b557dbd9b6cbd2602424c505d3a75b67085bf9194968c1fd6dd4313d977a1dd5ca4fedbdf5fab60629f5d35cd72b28140de1dba3e9a3e1ec28f29d813b1d38bd7d1238c3603a7382dee3e96c160d5ddf7dfcae3361ef315feba1680ed5eb8d7266a2d4bad935f993d616c28ed2d0aff7cfd0ee721ffa7df730f05c27da773da7d7c70367d0df0f9c28f0fc59bf373d0aa2a0c33db8e31c7691e7b5e48391a69c302ac82efdd3aed51c92516f69026d4e02b57fdbc91f504b03041400000008000000215cc5f87cf2390200009f040000200000006275696c74696e2d34372f776f726b7368656574732f7368656574312e786d6c9d945d8ba3301486ef17f63f48eed56a756ac53a74b5c3cec5c2b05ff7693cd6d09848927eb1cc7fdf13bbed14cac230602027f13c79cf7ba2c5e3b117de1eb4e14a2e48144c880792a986cbcd82fcfaf9e467c43396ca860a2561414e60c863f9f95371507a6b3a00eb21419a05e9ac1df23034ac839e9a400d2071a755baa71643bd09cda0813663522fc2783279087bca25391372fd1e866a5bcea0566cd783b4678806412dea371d1fcc85d6b3f7e07aaab7bbc167aa1f10b1e682dbd308255ecff2e78d549aae05d67d8c12cabca3c627c631bd1c33aedf9dd473a69551ad0d90fc4ff37df9f3701e527625ddd7ff2e4c94a0017bee1af8868a3fc84aafacf80d36fd20ece10a7376e97cc79b05f9532771b5cad2c44fe379ed27c92af5bf2c1f56fe328db2e56a9aa6f5247b2565d170ecb04bf634b40b52c5242c8b91fe9bc3c1dccc3d4bd73f4000b3800744c4737773add4d66d3ee3d2c4a58677b94fe34578d15e032ddd09fb5d1dbe02df74162159304b51b4eb6ede9c6a300caf1b9282e42aa3a696968556070f3b87769981baef609a4fff935816ccbd5ab9779dceb2d8975110a745b847790c07c22e42cff4ee3480165c6ecdcdfc6a88a77367a97e6eb0e8869b41d0d3b957069b0547da0f02022ef754f0265447ee1b7b12e00f5aade1a6255155cd577595f9599cc57e1255333f9b574bbf5ed6b3d9349b6775f6f43a7a78ab67a01bf846f5864be30968c72267a8e9ece038b76a186768e55a59abfa4bd4e14d01ed2234ab55ca5e0277c8f5d752fe05504b03041400000008000000215cedff0b4f9b170000c819000006000000332e786c73787d5805501ccbda5ddc83bbbbbb4b823b09ee1a6071772748160bee1e3c976521102cb8b3b805b7e041824bf0c7bdb7fecabbbcf7fe999aeee99e3a67aabafbb3a3a60c078f070000909f1e6a40b166efd84b98a7113c0080fb346328edece40174f230d5f27501ba1b73f8383a4092879cbab8b064af526f30d31a98b83dd4b5f143642987d210ee01b3795868ed9bdc780f6db8d2cd9f986a435f57586eafb85bc4f74fc57e71c040797d8c41392d3dda01fe186bca77e7f860b4ec0ad2f763773c1e3f66a7ca7f5359d577e6086f597c3977ccb1e3c3095ffe22a74744e658cb56da8d67cade2092695a834362093da2410a21bf7387e58a228027285ca7d2c14a95f4a64539a983c61ab3b92f6fda85b8885fc9aa3ca66e569c693a4f2db9e6dccc9ae6c5a79098b0f0b65351b32aff1288a21c5cf6408a6971114775f53a6df1963ff2d04de340484a81632c2cf9b7c1c4e2be0c09bb0340cd174f7d7bc658ca9ced742b3c20b1b110b4e1318a2c7394d46bec8c162f1b5762d810cd67d791b3b41f4a97538295c820d8f9b86b5a340f062bc825d45cd326568c3d18ff2833097bd541b045a1fa0a46ed1fab5da7cd45bbfff4a6020b00a03df5a66e4007774e8e3f5b48d2885d3717fabba3b0d6b08956f5854ea2a2379c16e38b44f37036f5a7d23843734ee96df72ddd73b0c6bb6fe58726cb54a51697c562f7a0d497eb7c15313878a2b4f5de1050c38def058085c12d4dceb562ad07db6bfae7c865aabcd25726afd678164da36fe3259b94d845bb3e857a91d6e9c12428b82577e8ec7e3c70751fb26b5afa8fb361a643ffb8d4919e5b1455bb1838e377b0cd5a394ecee8eee1c8b50d1163f44afb39186144a9915fa6ceff3e2d1991759b3e8236e94a560e2e4f70c1c8f9fcaa56c89546396a5ce1fbd02b53e2f4f099c7af85c0bef811b1f588f03563cb5f5e9dbd185af9ff5c131b6a89bd423800201b0500c07c9af171e0f47676b3377776b6ffebf4e92c3a6d086005728e07639d8f46a630ed870aa1194f0006685c5a14d188f4b870c8c113103ca0a8dee6aaa816dbe2fc66e7ebd9cfbee4e47999c2d2d77743f52c75fc84c613df347373de1a6f78ce6ccade0b4db78f686eee1930eae77ea9f9e35a2b783bf7616bfd6a755430d6c7cf268b1103b0e7545e55ec10d8fda306bf4acf7ba6b605940ba4656178cb42115b899fb3b51cedae9f0a8a3ae9f9a4a7be5f85dc268450a4cf11f3a1fff58c6e4b5a155568ba0aecbd9376ed72a40eb0ac435b45ec827d30ab1c2132a2906df30c506eafbd6dfa6a26d60c93beb195bebe1eff38b723decc66f8846ececf5b4bdbb27037ab440cee07f9aef703ae03d62903fce215b710469414d6ccfbc13518bb53c58a010a7b3700edafe022ec8077bce2515647132af7eb01fa297787da4d24f68b55151a992c9e10cb5c9553a9d38072512e4781bb91d01f8b9f399532f4e604c8971be786aee56c844d6bda52dca904ba543d71b309fa0671c2b1539262b21429f8ebe0c91f684630e626ca6166eb881fcb38e18f10773b5fd4b29dcd4b7b776f2aedcb0a4fd3069f40e082d04e961e8dd942eb63332d63c00c165be6a360af0907b4da20339bee265420ba10f5b185d4675902f953e091ef2312cc1715d9de39cd60f247329a63895f16a74ec5e36601c4a692854ef3249388eb506fed40145fd7f647e4ee6f7162844554a8e632d2d95484cd04d11a3973cc2f60555a098d538bf3f92bd2c1c69578db5a65a34886b30ea287580757b241428f482b81e34823bf7cd5f3585297f003a6c8658a4a172edb3e9d59f14e63737766ef344c8d703573ba7d85e5f6cd389c7df8debb814a84bba80e52238bce34c7ebf95eb65f082da6284c2c935a43806a0d25c839301e7640850af92cad0feafc98a20cf9195ce2c126b2847d5dbad6914339e8c81b1654b9e84a129e6105f29f7799d1da527573c9fcd44c61ce917b43c25e46bb98cf4736e54519d96532155667cebdc1612cb83f65e51c2840be2b921ad151817e359bc76d81580510d7c4b1eea448779c6538d83453d7bfa379ad18cd14a2075a0ba7117dc3be48ed0a9f2492a07dc8293e30cb0f2a134e7e995245f3723870bab479fa7e7dd421bd4c10e9d7173d61b7d035761fd353dcd8a9665c8ca2aad9b37d5cc7aaa4ebabdb73ad8def221fc2a67e86cdb3fdb2cfbb13a6781b40349e8f4b81bbf796152501288ba7cee899906d4eaaffad20f17577b8d94ec2b15b32443cdd3999a488a6688334d07be3d31dab4bf015a1f27ea3588be60b25febe9b8522e33bb47f9a736cc482cbc2d31bfb938b23f9db9cfff672ff6ed47f7bbcc4e5e8a7b8f2fe88f092bc6bc9794a47cf92fb428ec08ff502464ae4be53002553bfced9d9a89312eba40bbca692719433c09616e18a258afe4d144ca5ac8165130bf65f6499d36a3775c7ea5998f17321c05751f8ccf64a9cc09e8caf9f7acf4f9546838df947c67d7c8aa508193ffd68512c672c5ad13693346bab80e172e1f0d4b921c81011cf5b457d06554a7f4c422bb95f77aed2d62f8cd5fa41aef6ae430a4755da48424ba4168a3a2a12459610fff3cc7bc13da7177cdb2e26f8c59ab8c6db6aaef973c98bc42a610ec82fc9323714daa33823b2674e7f2998cc61f529c4c23d8558a2df0ecedd0608f470e7fcabe3fe7351729317a317b9b0404768814805fe8bd5b8a271d5ad9f155f5f15aad547f8cb522cd2a401e9b664769bbd37f9e6a598c21150f892b6b383ad8aef76e9fcdd008ee124a82437bc4a66dfcb09a40dc7295759394b7af404be55e8c2e19da3835ea5528a6fca977897c27d86470963b6b1fe998110b246ae6015c0dff58e317632499fcf9334431d0eccc8388f34e190069f141562829c19145e9025e732c7d496ce358726233dc6b627984b3492ca704d2b3470ee24ee6734808d6d3881e69ff7314521afb5366cd261d162a5cca55348d8960c7bf49a7fb836985011b532553df622f14ef72cf0066c86cf1544bbbcf388c5606406f3a28bff1803bf35197f556f82d4e1e18d9e5bd857b75d07cebdd007a557bddaa9afe44d328a531b14ba7a0c6577170c7ba679a236f449e8c7da6d336761450f72a240a51ff7231181af26825185b282677a6a7e0afe0831ec0050d31f3a3aa52e7ced265cca129efd3eda9045d1a5fbdace66aeada16aef17b1cca27e78f1038fdc4465b37ee0cabbb55f4b099b9c4e3c02c3353cb37b0a9fddf5387879ae30b7e7efc4e380a3cbd375cdfb1e69d705e8f74ca36170831b42d85ef87e05f115ef39551accb98a23ac60d999270853a716ca5d0d0a9620353a03e0e9b78212a26808fc4af3e0b568d7dbb62dca7f1e8a9fdadfa0bf1001007c9abff3aea743e161037404feddfe751e7e1a18c690091204611e04635dac542a7b5ff4363ade90f4e755476456138a9783a78dddc04aef8bf33219884291607d51e07312d28d2f1d29d38018dc0e7a0497fde83d0e4994d8a9e54d4ddf20a7f4143b525624a5ca93de71af72dd3d3ccacb9d9744629085243f589078b35f6559c0e02179446ff8cefab98855d6b177207c284b1827f284e0afcf40b2836fbe23b67048e151536d5904917b41d422379b1ccf24bca483621998d22c780769982c93477e3287956938cb388cb96679c1bb3a8410c969fcbc9f47474236ca09f6737d588d396b37109cc5fd1079478896e7051f4e8e60375393d2f586d0e9a6573740824828a4d87ee06be9f939512e0a1a16f43dd90f83b89b2f07d98207529191a8f3494b7af75b6e5f3b3cd6988505f2f14247a1f6824b52ede9bbabbdb10bbb65e365002ee44da565f28a7dc1dcfa740be58f07931f9ba7dcf645da8adbdbc0ed5307fe1818a6abdf499bedc9bce5a44dbb05057c829156dd5b82ca2ad7ee31dabe86397ff063772e5ec367a213323928cc8678356716a1413f242dcaf994cd7b187493b549ce97fc18dcb450c7b7c70e5099d7834d712fe8e0c602c38f9851b9b6caa8bd006530c257b2257464b8cdfff4a96485ab5af3e995d7273391ff4c97eb891050c6ba05e7d3e142d33443fec7348b64dbede5624c192747dec3edfaddddfa6e7b07455e4417953769df59cd1266f0e37a7f7b006cdbe3b6b3b8d8ede4871de0dd5070d0e5a9f8a37faa5fc1c4cddef510e158fbedcdd9e3e34626cc8a858b06887203d9d5053337549a640081844102f7d20ba79fba270b1e9d7e124016a506b7622869de7591e8d415a162858a7bdcbd6511bbaf0e4d83257de7ddad0077a8a97493429cee2e980b6ec9018a09aa8ea60197a8c3194bbf2219bea060c7253e9d2b76c3a289dd86495c01b9e3d1c24c72374940a92e912d462a6f85cc52a63201f15c3fa41df806b8f390bf8c3b9229b657a8c09780f9170fc4e1039554f6227ec8c80f3ac24429d2d364118b872bc3d0d25a1025f2b861468fcb9cdaf4c28e7c3752501dc32e30e393cdc9b63cfc922a77c591c23cf4e332b026da830ed7e7add4a1a4d21094da185d8a885e6e54e8c5d05cfc2f2910133c921691a25a6044b1e32e12916ed32db5dcfacffa0bb8cc906198a438b64c5b65aaf2a37efc4c494b8d158bc434637f74d2a2a2f61cfb82d608ac903297682c9fe34414555c3b8640c614fd2d019ef9ed17df2cf81dfb23693fee91845970cf4a5d228fd822e4df4febaceb770a8556289db5bea7e02942e9eed3f2cb8747634f354f7332e08dba150b752ebea00a37d02b71748a9bc58f59f58a57ccec1797466cadfba072e0ec906da190206c16478de85feac12a9b6695e821ca5c5da2ee54eabc104b7a00f163ec3ad98fcef74fa8aef579e0b7cbbfd2b9300a6ad54cd5ad07e7b02c1d7dae27ee0206bcdb7475d35e304a1508ee992cb5e334c5e7d34518d1963c8bc1e7cb26e9e310df5337281cdc79c5ab024dd4c3aeedd7bee8de5ac98f0396d93115ac736be20c0e058860085aab19c3c9f5e65723c74b65406d8df8bb7376ca77c8e852862607cabf41f6aa80b5aa65d79a62def7969aa812d5bbde7785a63af634fb8ef502f1926817e5fc3b40d8368d9b6d3aa5e45dba3d441cc84d76a24bee90f904f7679be62af3b7e92d34988c8029a48d205a0bbaeed7a073be0b4d86f6cbc312ffa6c18c9b9a97dda722b1ca67b57285784e22511a44a0d3e3b9c3364b536f112b5d7f3912c8e5ed715d6b36a942454387ede01fa97b2866937556a7338a2672515ad0292d8401b143831028fbbdbb8672572391148515177f0a3155172cb7840b5d58eb01124e3ad473b3f41a9274a6c17837039d5f3491fb428c2a233b56cadccf43df37e10d5f86d194521cdfb5cb9c91402f1a3ea91634f4ba55b4d708af32cf5c27fa3016bfe154bb8db08e5022fb25aa224ed79d02b3f5197a65259a48892753e922b8e63543ce707fbaeb419b890dabbd4e0e156490eff2e1cd350eb82933d559c52bb7fe6ccf627d59351ca7ae3ed3605905b277dcd813fd91cff84b97934989e0ea89d05c9c41b3965ef9cc68b3a3882f1b6d30d3d034fd809f029b61b49b5b07de154a6ee5a972d717e324886d2ea24240a4154075cc72908f9831d8d788aebadb21f4fc98053e56671ac1fd8ee104afeb70ff3d5a94e7880932b866a95822079fd7fad7f05bd919283b30bb82e9e89e88acc2f4a7d5aed645a5e679264019d43cd31fb76a8f2e16ace6bef0f069e693608ec1e2d1b4fdcbd5aa66da554f50e05154316317f4821729ee6df800cb2346f8deea35b94c6ddbdbaf04e3d0d23da72e9dae3d6fac4aeb1bf21e57112745b082c10ad4d1e7a5b31a29fab215640d23bbce0bbc02c668d91edf1f505921bbcad3fb2e13b2fce02244716b02114e68044d9dd9b70605aad9d7cb073a1fc49148cb87bacbe7445d5c89c8e157658b3fcb9ecc6ccb1bf99fca438fa721c6df81d2ddc3d701e8fe67886cd519895b14c06a23848a2237b9ff216ec72ead6366488045258b5a81763e98cacc891d8dc76447db00059ebd40b8416cddc2f928696a1d1218f781ee11aa98cc2e20ab4a363a2678861191b2bee3c85c61586a5fb939ecc549b668cea34bcad1c07bbbe30962a8d7266511d4621ab0ba8c9bbe3cdb9cc77475f40a355ee6b2627b977031dcc65d9a656eb42358517cf1be3c035eb9c04311c3e1826036d5ca43d35bb2a4236f23bcb1d86801aeab76f8114341f162bf54ea2b0babdd2f7ec2a5033fb64596b3dd18885696091a539d275c962184d46eccee825ab1ea9e4675c01d62a79d81d6d15bcee433dac626d8855d7a8d8292900fdac439f0b15e32bc972906d87b0d356f7c496e549bfca65349626b558f39473ebf6bffc70ab482b713e5a835a9f161baa90496af3236594857ca7648c26a4638446e3209830293527c6535b0b1fd76ff61b9f9b6f92ab7fa233d6173e78127aad8bb87e0f1b560e4654efeb9af58fd97be971f15cc3378bb6b87cd2c7e6e5d54867ec0a9ec014cddbe5c6f9df6d8f1b3c41be74cb832d8c530ea94de3efc80a88d83a643843c1ee03f0591d36ee42581a34dec217dd3a0a4312149417309dbb1ad12093ecc7ad0f800a2895aec4a7a9d99badd6b65d5fdfe688e5286c986f305573762f04be8ad5d822c58e9a0e9ab3ffc7ab6ef49466f87ad4cbfff53b5cf4eb1756153eb2d37fe72c68fed0be74dc5893c643a7677380821192cef03c91320eb594db3f4158ee720afcd6a844790dc2bb84e928132bec11b991ace877f587c800d0035064d8933bffc280a8b4e80669dc92e8d87d8232f49126e13249c4fcb69841024b73d4a677c4ffbbd3b3f58eceefef60f8b19cfeef76b6eed43d9240caedc3ffa8c89a0dde1f565dd7bb78e4dfdd72dfcefbebc45700cd7a78c95d8627a840ab430b716cdaadee964b6ce2a06cd1b27aee99b417cf5b383ea4846421eed5c894bc0c3d2b8d6dc922163c8d1501a593a3d8e49be18b231fd36f2409ab60db889f63d2e5d272e0882cfeecbf9c0135dc6e5610a47d0e9ed83e4fcc6022da7c7768fa7dab62807aa948864f23823136d653aa8d35c9687a73c57ec447add6cf625be6a29285dc5656074c834bece45e1f33d224a80104ac08db1c27349aa0a430433e2a93a9978aad7b09f662c9d2dd4dc9c5ddc392d9cdd807f093049aacadd5c447d47a1ab059b6d25cb7309939e1fd70742becb9c104c7a1b56bf56c659f62225450dfd68028ca0a6b88343f5d388306578d30eb25dde96c1a40827c3c9dbb96f75ceeb616ee8ea9883e3b88b4c4d48e54f84f9209737b6475fab6e3cc04625add025862383aef409033675f95a38a24f2056a8e284099123100bc4c0fd76aa319c44a34fa02f54808a8e064cae1253171921b3475bb591314eae8194c33b42f34212275e2114d78c210f67826877829967654b12f59809049032d33063b55fe3ac82a7883645d300f611dfd4907757cd44097936848bf30b648f38f0e61b5cdc11ac94575496e98efc621b888675238f5f48814bc4f6d6ded97474794942d1fe626c85d344eb4ae302b1fcf65393f7409b7fa5df58b977895fe0b430bf5c4384f315665158e0f46ecbeab9697e1c99189c7228666402febd1c3f654befa5f871304fae6b427e6027af07e0d2da0817c8db5e6b642ce9343a8ccf9b56a23bcdf3b32bd498c981913618fc080bda6008a633f032c18de1ed41e978bdf3f080b28cf9cf5d5b990f8c8f7fda35e227cf88f5efbbf6d6c5e5af5a52a3dae9a9965c463ba7843fe42ea945460d33571362e7a9fd04233a5ff56d80462911de17fb20ee64b27d60ae2478831285be3b7ac963eff270656363e3a4e7a29e5f3f82dace5a5967d82dad40bb72d24bb3a6f9622706932d06be1e76832dcd2122d178a8c1b98747283e84af8f4d7f4eaf06041d138e2fef2458679b10e0ae43635763e9063537cda03ae7f8d94ce0b40f9fb1c6194a19bef55c9397f6f2c8f13e6f2f4dd50c6cf3695fb9de64ec953f8ad591d84d3d05eb74caea6a5eda82c7915fd1cbf21814f8216779f110061844a7c286c558b2d973612304db461a8607d9288f532b4d4cb448cb7258aa3faa58345bce7b47cef533eb234986d17ba590c7c090523243bb1f763f3fbafb0488883d1c763ea47fa715eed8cd649e39027223e308119e72ab75eda8cf66a1f7395fe0c0ded3fa72bf7e6569965c01464c8cd6bd7e2378bfd5ea0241ca461c903f975da43c19ad5ac6c0caebf35bc10323c2eaec32f655c763b866bb214ced1362cc61e8308ed8179a86de6e940eaddba5b50f9dad1da9beec34f5327805a7a60c03cb0ef8dfaafbff5def6000ff5d837f4ef05c48fe4de004f30f59f939f0b9dafa1b180afb1fdaeb73f0736de737581df1ff537a9ef33c57447ef35820fd6f7de439cbf312fa378b0fca7f2da89f133c4f2d7e1314603d4b349e439f7bcddf5018bcffe2439fc39f9bef6f7803fe7f1ab39a3202e29f5f519eee574f3ff420fc73f42f504b010214001400000008000000215cf234fb71171900005b220000060000000000000000000000800100000000302e786c7378504b010214001400000008000000215c0ee789309c170000c719000006000000000000000000000080013b190000312e786c7378504b010214001400000008000000215c3eeeb64b9d170000c51900000600000000000000000000008001fb300000322e786c7378504b010214001400000008000000215c65f3f38a32030000250800001400000000000000000000008001bc4800006275696c74696e2d302f7374796c65732e786d6c504b010214001400000008000000215c8911d159de010000030400001f00000000000000000000008001204c00006275696c74696e2d302f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c8238381f330300002508000014000000000000000000000080013b4e00006275696c74696e2d312f7374796c65732e786d6c504b010214001400000008000000215cbbc21563de010000030400001f00000000000000000000008001a05100006275696c74696e2d312f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215ce262518733030000250800001400000000000000000000008001bb5300006275696c74696e2d322f7374796c65732e786d6c504b010214001400000008000000215cc568676bdf010000030400001f00000000000000000000008001205700006275696c74696e2d322f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215ca23be1d1320300002508000014000000000000000000000080013c5900006275696c74696e2d332f7374796c65732e786d6c504b010214001400000008000000215c147670c2de010000030400001f00000000000000000000008001a05c00006275696c74696e2d332f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c188add0333030000250800001400000000000000000000008001bb5e00006275696c74696e2d342f7374796c65732e786d6c504b010214001400000008000000215c95b7d348e0010000030400001f00000000000000000000008001206200006275696c74696e2d342f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cc6c7729f320300002508000014000000000000000000000080013d6400006275696c74696e2d352f7374796c65732e786d6c504b010214001400000008000000215cbca0c192e0010000030400001f00000000000000000000008001a16700006275696c74696e2d352f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c3593c75733030000250800001400000000000000000000008001be6900006275696c74696e2d362f7374796c65732e786d6c504b010214001400000008000000215c31f3523ddf010000030400001f00000000000000000000008001236d00006275696c74696e2d362f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cd2580cc2330300002508000014000000000000000000000080013f6f00006275696c74696e2d372f7374796c65732e786d6c504b010214001400000008000000215ca7e82fc4de010000030400001f00000000000000000000008001a47200006275696c74696e2d372f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cb202655a33030000250800001400000000000000000000008001bf7400006275696c74696e2d382f7374796c65732e786d6c504b010214001400000008000000215c21361d30e0010000030400001f00000000000000000000008001247800006275696c74696e2d382f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cf25bd50c34030000250800001400000000000000000000008001417a00006275696c74696e2d392f7374796c65732e786d6c504b010214001400000008000000215c5ec6e251df010000030400001f00000000000000000000008001a77d00006275696c74696e2d392f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c48eae9de34030000250800001500000000000000000000008001c37f00006275696c74696e2d31302f7374796c65732e786d6c504b010214001400000008000000215cc3b64d3fdf0100000304000020000000000000000000000080012a8300006275696c74696e2d31302f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c96a7464233030000250800001500000000000000000000008001478500006275696c74696e2d31312f7374796c65732e786d6c504b010214001400000008000000215c63e9352ce0010000030400002000000000000000000000008001ad8800006275696c74696e2d31312f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cd438f59c34030000250800001500000000000000000000008001cb8a00006275696c74696e2d31322f7374796c65732e786d6c504b010214001400000008000000215c6dfd72b1df010000030400002000000000000000000000008001328e00006275696c74696e2d31322f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c33f33e09340300002508000015000000000000000000000080014f9000006275696c74696e2d31332f7374796c65732e786d6c504b010214001400000008000000215c16a6479fde010000030400002000000000000000000000008001b69300006275696c74696e2d31332f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c9ffbc0d732030000250800001500000000000000000000008001d29500006275696c74696e2d31342f7374796c65732e786d6c504b010214001400000008000000215c7bb46463de010000030400002000000000000000000000008001379900006275696c74696e2d31342f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c70304fbf34030000250800001500000000000000000000008001539b00006275696c74696e2d31352f7374796c65732e786d6c504b010214001400000008000000215c5d3f435cdf010000030400002000000000000000000000008001ba9e00006275696c74696e2d31352f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c0c01229c34030000250800001500000000000000000000008001d7a000006275696c74696e2d31362f7374796c65732e786d6c504b010214001400000008000000215ca4af488de10100000304000020000000000000000000000080013ea400006275696c74696e2d31362f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c770c7489330300002508000015000000000000000000000080015da600006275696c74696e2d31372f7374796c65732e786d6c504b010214001400000008000000215c49d5112ce0010000030400002000000000000000000000008001c3a900006275696c74696e2d31372f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c6d10415e0c030000ed0700001500000000000000000000008001e1ab00006275696c74696e2d31382f7374796c65732e786d6c504b010214001400000008000000215c76970b26de01000003040000200000000000000000000000800120af00006275696c74696e2d31382f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c82f4f3160c030000ed07000015000000000000000000000080013cb100006275696c74696e2d31392f7374796c65732e786d6c504b010214001400000008000000215c04217d20e00100000304000020000000000000000000000080017bb400006275696c74696e2d31392f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c9814e69910030000ed070000150000000000000000000000800199b600006275696c74696e2d32302f7374796c65732e786d6c504b010214001400000008000000215c61795897dd010000030400002000000000000000000000008001dcb900006275696c74696e2d32302f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215ce9e44b1b0c030000ed0700001500000000000000000000008001f7bb00006275696c74696e2d32312f7374796c65732e786d6c504b010214001400000008000000215cb2531f63de01000003040000200000000000000000000000800136bf00006275696c74696e2d32312f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c9d890c010b030000ed070000150000000000000000000000800152c100006275696c74696e2d32322f7374796c65732e786d6c504b010214001400000008000000215c9d2646cede01000003040000200000000000000000000000800190c400006275696c74696e2d32322f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c282b72380b030000ed0700001500000000000000000000008001acc600006275696c74696e2d32332f7374796c65732e786d6c504b010214001400000008000000215cca4ac958df010000030400002000000000000000000000008001eac900006275696c74696e2d32332f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c60e5c81a13030000b9070000150000000000000000000000800107cc00006275696c74696e2d32342f7374796c65732e786d6c504b010214001400000008000000215c23292b8fe30100000b04000020000000000000000000000080014dcf00006275696c74696e2d32342f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c68ee4be63f030000d408000015000000000000000000000080016ed100006275696c74696e2d32352f7374796c65732e786d6c504b010214001400000008000000215cc5d60aec09020000b70400002000000000000000000000008001e0d400006275696c74696e2d32352f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215ca9839db525030000fb070000150000000000000000000000800127d700006275696c74696e2d32362f7374796c65732e786d6c504b010214001400000008000000215c285a0fdede0100000304000020000000000000000000000080017fda00006275696c74696e2d32362f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c73731540f5020000ae07000015000000000000000000000080019bdc00006275696c74696e2d32372f7374796c65732e786d6c504b010214001400000008000000215c436cab89df010000030400002000000000000000000000008001c3df00006275696c74696e2d32372f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cd6c1768133030000d70800001500000000000000000000008001e0e100006275696c74696e2d32382f7374796c65732e786d6c504b010214001400000008000000215c21eb5a28e001000003040000200000000000000000000000800146e500006275696c74696e2d32382f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c2ffa49721703000007080000150000000000000000000000800164e700006275696c74696e2d32392f7374796c65732e786d6c504b010214001400000008000000215cf9984bcefd010000630400002000000000000000000000008001aeea00006275696c74696e2d32392f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c8488d70b3a030000c00800001500000000000000000000008001e9ec00006275696c74696e2d33302f7374796c65732e786d6c504b010214001400000008000000215c81c53455df01000003040000200000000000000000000000800156f000006275696c74696e2d33302f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c9a4f979730030000c4080000150000000000000000000000800173f200006275696c74696e2d33312f7374796c65732e786d6c504b010214001400000008000000215c7902cf4cdf010000030400002000000000000000000000008001d6f500006275696c74696e2d33312f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cac08422212030000ec0700001500000000000000000000008001f3f700006275696c74696e2d33322f7374796c65732e786d6c504b010214001400000008000000215c30aa58a4e001000003040000200000000000000000000000800138fb00006275696c74696e2d33322f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cc0abbe793303000022080000150000000000000000000000800156fd00006275696c74696e2d33332f7374796c65732e786d6c504b010214001400000008000000215c6667b16fdf010000030400002000000000000000000000008001bc0001006275696c74696e2d33332f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cb0886e693e030000310800001500000000000000000000008001d90201006275696c74696e2d33342f7374796c65732e786d6c504b010214001400000008000000215c2c83f7a8e10100000304000020000000000000000000000080014a0601006275696c74696e2d33342f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c90cb5a95a1020000450600001500000000000000000000008001690801006275696c74696e2d33352f7374796c65732e786d6c504b010214001400000008000000215ce165fd24dc010000fd03000020000000000000000000000080013d0b01006275696c74696e2d33352f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c8488e5e60f030000ec0700001500000000000000000000008001570d01006275696c74696e2d33362f7374796c65732e786d6c504b010214001400000008000000215c797e2a61e0010000030400002000000000000000000000008001991001006275696c74696e2d33362f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c113f9f250d030000fb0700001500000000000000000000008001b71201006275696c74696e2d33372f7374796c65732e786d6c504b010214001400000008000000215c60fe338f03020000720400002000000000000000000000008001f71501006275696c74696e2d33372f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c2cc9488f25030000140800001500000000000000000000008001381801006275696c74696e2d33382f7374796c65732e786d6c504b010214001400000008000000215c80419c3700020000610400002000000000000000000000008001901b01006275696c74696e2d33382f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c3a42668921030000170800001500000000000000000000008001ce1d01006275696c74696e2d33392f7374796c65732e786d6c504b010214001400000008000000215cc42cf049ed0100001b0400002000000000000000000000008001222101006275696c74696e2d33392f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c5b2faf75fb020000a907000015000000000000000000000080014d2301006275696c74696e2d34302f7374796c65732e786d6c504b010214001400000008000000215cc169d681de0100000304000020000000000000000000000080017b2601006275696c74696e2d34302f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c4fce70b535030000c40800001500000000000000000000008001972801006275696c74696e2d34312f7374796c65732e786d6c504b010214001400000008000000215c332dac6ddf010000030400002000000000000000000000008001ff2b01006275696c74696e2d34312f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c8512f08100030000ac07000015000000000000000000000080011c2e01006275696c74696e2d34322f7374796c65732e786d6c504b010214001400000008000000215c40511abbe00100000304000020000000000000000000000080014f3101006275696c74696e2d34322f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c09e15d0402030000a807000015000000000000000000000080016d3301006275696c74696e2d34332f7374796c65732e786d6c504b010214001400000008000000215c88d2d8f2de010000030400002000000000000000000000008001a23601006275696c74696e2d34332f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215caec8b9f131030000430800001500000000000000000000008001be3801006275696c74696e2d34342f7374796c65732e786d6c504b010214001400000008000000215c11d5d961de010000030400002000000000000000000000008001223c01006275696c74696e2d34342f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c1ba478573a0300005208000015000000000000000000000080013e3e01006275696c74696e2d34352f7374796c65732e786d6c504b010214001400000008000000215c9a46f37ce0010000030400002000000000000000000000008001ab4101006275696c74696e2d34352f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cc24952aa150300001b0800001500000000000000000000008001c94301006275696c74696e2d34362f7374796c65732e786d6c504b010214001400000008000000215c44151b22fa010000630400002000000000000000000000008001114701006275696c74696e2d34362f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c0ed89a7a03030000b30700001500000000000000000000008001494901006275696c74696e2d34372f7374796c65732e786d6c504b010214001400000008000000215cc5f87cf2390200009f04000020000000000000000000000080017f4c01006275696c74696e2d34372f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cedff0b4f9b170000c81900000600000000000000000000008001f64e0100332e786c7378504b05060000000064006400ec1b0000b56601000000";
+        let bytes:Vec<u8>=ZIP_HEX.as_bytes().chunks_exact(2)
+            .map(|pair|u8::from_str_radix(std::str::from_utf8(pair).unwrap(),16).unwrap()).collect();
+        bytes
+    }
+
+    fn native_named_font_alias_packages() -> Vec<Vec<u8>> {
+        let mut zip=zip::ZipArchive::new(Cursor::new(native_named_font_alias_zip())).unwrap();
+        (0..4).map(|i|{let mut bytes=Vec::new();zip.by_name(&format!("{i}.xlsx")).unwrap().read_to_end(&mut bytes).unwrap();bytes}).collect()
+    }
+
+    #[test]
+    fn builtin_font_ownership_matches_all_native_templates() {
+        // Actual Excel compares each of initial47 styles plus Hyperlink
+        // after applying it, saving, and then changing Normal11 to26.
+        let expected:Vec<(String,bool)>=serde_json::from_str(r####"[["20% - \u30a2\u30af\u30bb\u30f3\u30c8 1",false],["20% - \u30a2\u30af\u30bb\u30f3\u30c8 2",false],["20% - \u30a2\u30af\u30bb\u30f3\u30c8 3",false],["20% - \u30a2\u30af\u30bb\u30f3\u30c8 4",false],["20% - \u30a2\u30af\u30bb\u30f3\u30c8 5",false],["20% - \u30a2\u30af\u30bb\u30f3\u30c8 6",false],["40% - \u30a2\u30af\u30bb\u30f3\u30c8 1",false],["40% - \u30a2\u30af\u30bb\u30f3\u30c8 2",false],["40% - \u30a2\u30af\u30bb\u30f3\u30c8 3",false],["40% - \u30a2\u30af\u30bb\u30f3\u30c8 4",false],["40% - \u30a2\u30af\u30bb\u30f3\u30c8 5",false],["40% - \u30a2\u30af\u30bb\u30f3\u30c8 6",false],["60% - \u30a2\u30af\u30bb\u30f3\u30c8 1",false],["60% - \u30a2\u30af\u30bb\u30f3\u30c8 2",false],["60% - \u30a2\u30af\u30bb\u30f3\u30c8 3",false],["60% - \u30a2\u30af\u30bb\u30f3\u30c8 4",false],["60% - \u30a2\u30af\u30bb\u30f3\u30c8 5",false],["60% - \u30a2\u30af\u30bb\u30f3\u30c8 6",false],["\u30a2\u30af\u30bb\u30f3\u30c8 1",false],["\u30a2\u30af\u30bb\u30f3\u30c8 2",false],["\u30a2\u30af\u30bb\u30f3\u30c8 3",false],["\u30a2\u30af\u30bb\u30f3\u30c8 4",false],["\u30a2\u30af\u30bb\u30f3\u30c8 5",false],["\u30a2\u30af\u30bb\u30f3\u30c8 6",false],["\u30bf\u30a4\u30c8\u30eb",false],["\u30c1\u30a7\u30c3\u30af \u30bb\u30eb",false],["\u3069\u3061\u3089\u3067\u3082\u306a\u3044",false],["Percent",true],["\u30e1\u30e2",true],["\u30ea\u30f3\u30af \u30bb\u30eb",false],["\u5165\u529b",false],["\u51fa\u529b",false],["\u60aa\u3044",false],["Comma [0]",true],["Comma",true],["Normal",true],["\u826f\u3044",false],["\u898b\u51fa\u3057 1",false],["\u898b\u51fa\u3057 2",false],["\u898b\u51fa\u3057 3",false],["\u898b\u51fa\u3057 4",false],["\u8a08\u7b97",false],["\u8aac\u660e\u6587",false],["\u8b66\u544a\u6587",false],["Currency [0]",true],["Currency",true],["\u96c6\u8a08",false],["Hyperlink",false]]"####).unwrap();
+        assert_eq!(expected.len(),48);
+        let mut zip=zip::ZipArchive::new(Cursor::new(native_named_font_alias_zip())).unwrap();
+        let seed=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let mut failures=Vec::new();
+        for (i,(name,linked))in expected.iter().enumerate() {
+            let mut parts=BTreeMap::new();
+            for part in ["styles.xml","worksheets/sheet1.xml"] {
+                let mut data=Vec::new();zip.by_name(&format!("builtin-{i}/{part}")).unwrap().read_to_end(&mut data).unwrap();
+                parts.insert(format!("xl/{part}"),data);
+            }
+            let package=replace_package_parts(seed,parts).unwrap();let book=parse_xlsx(&package).unwrap();
+            let cell=book.sheets[0].rows.iter().find(|r|r.index==2).unwrap().cells.iter().find(|c|c.col==2).unwrap();
+            if cell.style.normal_font_link!=Some(*linked) {failures.push(format!("{i} {name}: Normal ownership {:?}, expected {linked}",cell.style.normal_font_link));}
+        }
+        assert!(failures.is_empty(),"{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn named_font_updates_respect_disabled_groups_and_resource_identity() {
+        const ZIP_HEX:&str="504b03041400000008000000215ca615f9dfce180000152200000d000000302d6265666f72652e786c7378ed5975509beb9b0d0ea5b84b4bb116280e25058a6bf1e2ee418a6b704a8abbbb162d2e254029eec51d8a170fae29bef4fe76f7dedbedefefdd99bd27335fbe4ce67933f3e59cf7bccf79946491900901a800740000400dc853e91a56400000d091010002003aa28e989dad33c8d6d940d5dd1ee4a4c7ea6663fde403322243360011f00ffe5fa334ae5fa1831d57022e7d2db6c612ba502d8cfe620fd283ff9981caf0fb6be34936f7f9b15b01027895700ed15b6095f1f0bc930057e600cf14a155705153c94c72942642f9b94c23d4382bacee388628394f65cc0d8d680eb17af6f4dcac7a06b51552fd48bd5496f115869f0b9a3a0d1c8132835b503b650b08a5e9f560d4c185e78ebe2f6a925d564ef1c0e2c9f8224cabf194a882e2db226f886134d170636ba61a071964b4566e4db534e35282118eac90c28bcaffe830d29a9d437a4bf11675f744b088fbcd73860dce02b0655fe00ce9d1deea71ff15bd100be7f21830a25ce4c203f41191520cf9632592f4d4e117c7e7b5fc3f04db86db188e399bab636e7db47e844789dfa0c6b424e9f4729abf4b86a21e7e030d7f28ec9da8703f45b074a4bdcef2211d146c7c4887cc61f9127b53292e4a3cf532ac02f3a651391b7586a665751be7fe49dedd210194fe26c35a3576dad3fb3bb97b9561decbd0c01164edc4c6faf3fa8ffcfec14f94c6ca2b76b03f0c3c90be0eea854f2e44e38aca8245a41ba9557ddebd9ec7a98dc8a5a35868794689ab4afe1e49cab7c9e7faebdcc2ab08582ff5f977eed2307c427e5a28b82c30e9d2c1058de9a963a2a443e94a279eebe4d9e4798a948c3b836b531453497d518e6cdf12ade4f8917815ee30ab063906413e6520b1408a9f76b7bcd6a2f18f7284495195bdb2c0ca3a60362c6e38cd773ab1601b4b2898576e772c85a8d7c9d87cb6dcabd79afaec825c4dc582d7b2d238d3918fc6ddc0d4baf5443cad85e0c68b4521bd5799861bff07e7b0540f7df699aff627eea3fe0cf74e20464749ef611f248caa6811e1772279366e873e8c0400a46100003f65e466cd06b673b432b6b3b3fae953a5ea5676252f716f9ac76ed13ac124140fe98ab689146df2cf8bdf3acde9318e2520297410b35bc9c5167fbef3ee599bec799bb0b7c0d036f3387278209dccf116a4a2d11dda5f4e38d849673ec3ed1617f6c1faf1b38d3acb40c98251c629c2527cacace4e12f5c2dbad797fd17dabd850db88aa800ee854e5da649d4c4c97559fd9a7db94f5ffc3202a25fa8b02744a94fcb0c85daf635143fefef9ea979abceb3414c1d5d6818dcf561c09de6b87923e21b445a9f03e5b41134ebeaf9894f08a5dcecf8a3dd1b5618f1930d905af126c20437ec55bd97b5bfe9c983f945dce919e91f1e87b4a4ace7b7743397f6aa7a1bcacec63943806fdf626f9785da88a9ed442b2f48df8f4717d15f144ff0beaa8c5d7ca6e58ec67c802e79a8988b173d959d0080c05f73c35b0779d88648405d0775632f34e77c40b543aa2072a21d55edf8501282f1a08f9a2740cc6abbdce652c3e9b6f2bdb4a92e9121e018c30fc859422a241a7e4830de0d7d5f054536f24ff85e6d14daf3e14d7647868150490302bffe03a57a87fe3b986c5f4ea5b0c1f2735dadc795eee08e89b12dd00b8e55c3f33224b8f971c35d4d7a804d1a7b9799068df9a4f5d71dd7a73cf4da8364da35e592bcefc7c49783a42ac5cc2ad6fa05a7befae2b2f7bba832a3f7275e9edf7a07b72291ed4a78e4e621c093fa88e86091654f6c9e441a6b4c2645278dc24976eb5f5b7b6287561ed0c2c2734866f503296151d21b9ecef1d154cb01a710dd4a7d16b0f24832419ce8a290b55ecda04fd072365bd8ea059b1b5cc4c30b3c7b703392092b001b1cbb80092332c9d382aa193b3d8c698cdf0387ed0a778c4e729827f03bb9bb09e5a0562d47c70e18e1213b3b9bd92fb96b422ef02f1d7667a9257d608dc11e2141ed6f4873a2a3edb9a1b460c231bf98b3d0b1117dbf6fece4834af8e0cfebf85bab1e13a3019e645b5c6b2091c0dd3d2aa4ed3525440fd2873dc87326366d4058b14a073aecb9dfe39c97a747c934e97cc238a439782ed684e39d0a7a42f263bd9317a31541cb7716b16278c857f048b306536579fafeac651b977e12bc1de1d73a41ef0eacaa714bd1f98563cce8c4e2c3394269a268807d94d3cf5ea77f9e8d2975f53dea237e511d58c8ab22105f513e6ff478cb0aaa23c0cc0ac56c7cd5c4f8799967d46149e0c62e10bcecdda5c83db4afc81ddea2af58a1f8a949a67089aa5a25a263870143b10ec7ceae43a860fbe08ab6d4f761d119eb0a468ec96e1eb5637a320dcc5c901c3433b9f0be9b3542197263d25ee2d27ca9db6cf3768f88ace596a4ca4a92ef8efcd5cc4d17275fb9abce086ae01845b0d5a598f7a311d65bd4df693f22e89bfdf2fd1dcbbd0f9203d011eeb5ff2f8ffceb0ef05f7e8970ef9708ffab9bf5ff0194c6f4bffde3b81670fb3ed95bc0f5417e7cef6cbc28b4eb06401d45d599e86f163be56bb002591096e699452f475d70a2b3010bad662b1036c015c462d6b37bb50ce0e593876adeaf9a20c61ce53cefc1794634817a173f2a6ff2daa4f93af5a834f3897bc8f9620e037ba1b9a3f61b480ddc965e941179a43a0fbb1fcbc9d6f79d9084dff167bfda51bdd2169b9f1ece2e66a43bdeb35de26eca07db45d1f236bc134eb49426514a086109096c49a7976aedff312870149b19a07e49e9a01f6685dd25f0a8d9fb95bd145d494f75d74b4562b257576bc724bfe3470cd426e4e8fe3fc7baef634801ffed0d4e162090b313db1f6f1c3f29921e271f36c78e1b7810708b96e3c93c1b020ca96ab28ec35a10cb39dd29ef35d1e9ac0ecff362cebf6ba20d32c5dca666d65c8e1118fe5261162f94e92c856d98c1e92db21aac82d8c49d004b83dc5e57a5303338e89f266cc9e1a078a34851f547511de756f14f23ba41fc17893e9df9f4923a55a3b0e89aa26e1dc9da94123f169b63076ae24e26e7f127dadfb67e52121020e0f4c4e998a88dade471acc8819b070728b84d1c68bfa8c794eff7b4d79e59f04996ce4513b7562bbcde41cf17efdfcddf8e209ac3f6cefa9e12bd667af4da5e9e0dd47d9326a3fdda2afda3b7bfa9eb9497956f5fa25ceff3eda93bbd64b76e664a558b650a26f7acbc974dd5b1c099d38ccaa0e7cc944983e7c54c5b079bf49be38a5e82eefa15717dd60979715d6f03de9f7766b9e1f79cac5b9f0425bae75776b411552991382728a96fac1e5e2bdb3bdf7d2160832ee5206d236076c6fbcfce93d7600a352f13e37cdc7d0ae61adad090652aea6a3e591a38e22a2a3843d7123f2194082a379fdc214fef741053e66efcaa89c9f6753e95b66d68c5a141c4df937d70c4c690cef2d4573c74df545a541199cb381c0744496f3984cda0fa5d7457e2b861e809f90f1aeb5c0f29be22291627995d2db6a8c385346a8687ed75dd9eb96c6fc2a6b12b1f472969db84b720af689693345c63fe8e267b6a13bd5d68000011cdcf76f70f9a385b806c40ffbafec1905ded052bba063c5f9c355fdc1b41fe05812533f3a80bdda5f2bd173bb3587086618b825af53af2d7269ee868465868707c745d517dfce3c4205cc7e8f794d4d142dd95b28e17b4caca70b9ba57a973673ef6498657f93a2725631525326a93ca4b776b9c665be9e8afddc7ce209ecd41d29ceb5ca9cc9f176bfaeac7cea3555fa61875138c9da98b7b64bdfab1adb8bf2a401493fc245a71edf1be478cf2b67e2d53217bf8ba40662cb24f9a139e094a9df19b0c0c2f040f13752cef16ad080ef957f1cba4138229c3dbf1d93b256ce515b70ede679e076d1e10bcf75af8f467adf1210465999acaa8fcfc98dca2e56bef309c23b5a6df37985d1b8bb2260491263ef0d9f268be3829c6d9d738d267ed9cc09e8d9d9fb95e776c68dd65e6760aedda3653f62584eeb449b620b0d74650d49edd4966212c6f136672af2a4f9171a7faf00f54d12bb96e8f2c58a2bca030183398fb4ee99c7a5369bb0dcc96f3f5be22ebc918ad345ac162e800420f058476c16f8917df717a39611a509d69aff4b65328755a3842236ca1dff6cc22178537d2f7f85732ccc6edb09cdcfc201633e24999c64304b5cfa78caf21611c00ee682309823c75c694554671473635dd0fd4098c1dcf71f25faee007deb0a33f3985f9d45f00897b3c9193f25eb019d2d4057253d115420a8a770410cbf4318e61737615063e4e37c776d31a1ad36c7710ec2d1ae51426595baa6761d5f360dfeb495f1f38e6e941cbed4a6385cf5e773fe7ed59568bd70ddcd727cb43f36d00a3fecdc6cef492d70dacaee57a3aabd9d1e200c34b3b50d1428e8e8f86648b316a052182d1fa764d755ec118dfe8edeb6574677ed52855538428f5e4067b6fe3b4c38677ccab8882bacd95f599e2c61f8b4c367ade5823e0f09a7bb3a6a3ba956e3269b955cb11eff77555877b861e3558ed232830a3452532e669c094798383254e9257c457505e078b5e027d248357b7057327aa77a8331eb05ee8e60c33c04c60dc7dfe99da7eaae87be3a4d7d58e78c81a3a505eafc8cbf4864c0fe9211b3a66cc01cab567fe5a665ec1490f7a581308286baadb702a4375e914d58db5bb23f21015d9d0572db869953f9b66a2bb2dc68e5399485b2bd45155ab59d3067c3067cd404b3ee174ec1d46c58b5479669e2a0eda2d3c7e284a986b52ae7b28665b81eb8de3d3daa700162aec7484a711b47149db836424de6d1924b6aff407f9cfed38746d24d757cb2976aabbee61c0c2236f1d8d02ce11a81f1a2c93516fcd1662a37a676af3b0490b853e29d925d0301468772d855df94b43e40c6a3268708a3e899efb33ffc0160c2aa108310f88230dd34b8d6add51dfca7ca0191eb9e9d55e600e5ac60b20c6fdde6519ff0cdf391ee2f94976c7c1bfec5bfe413ebfbe46fbf1d25c298766129b6d23ab48e0bc362afe95ce9c1924e585081e3b81dca8dff30548f0faada8f8b41a2dd4f9ebe09e844e3d02396dc95288e571c1c6263a661b9b4ff2e266ae8b806dd7c1f8c1eed7e757c0cfe97af5776d8b66c1497d1c7e8ed519f5fbda698d53dd572d7636ae65eb8d811be5390d5616ba158654f9398c1ea41676a1658f6b8e080ee6e1292add0a13a1314896501fba2f5303ddec16e77903dd6b6654ec11cbca423872862bc488146474f597646aa3affd5566a81e0cb06e886e1493e0e7ebb64363c8783c8bd7026d6b2e3e85e35c30cfed735fc9fa988986a871ec030d57192982ca981272d2cabc944e745480d62466252ef2c2fd8b81e2969c69e283221f6a1f7b216134399d1b693a53327fd3bef9a6a65300784b51d1ea0984d49d954f1799871b4a617b9ca69cab6cc06ac1b54e82458560b2b8045a0094b84e606154172c98e9f3997962b17d9c1863359eb9d41abf5ba3a02d0eef0bd6e6a8d622f8aef95d6359057f802c8bc737c29d49a5118b5aa1c00a17fc86180a4de52142661192ca6e314de7c7a9df3fed0c1a2d91b2ae1242a46060b601627b00971a8dced141acb632f5246e3f434d7d1f5f8aaf7171b07078b79ea2d0dd534a4de35869c9722459788f0ceb04e67e8f24f6175bcf94814dd3e2af3e6c1116b2e675d1df6b4c57ae27835bf835658fe9ebafe852f5b255a0848a1cfe9ab94416074345feabef9f389d85b7bbcf3c8d233a02e772aecf2ef1ad311d739859fa9fc42a0f6d90cd13c6633d72aaab12d966f53563df826228927c6e6f06cf7a3b954d253e87991432a4aa6b8f82c633e485f413d8aa988a8bba98fa17804eb6e619bb4f943240df6fac7c43b4395224e4b916873af82c3773796a7166f0e28b159d82167824da2d43c02c374fc05c6f5d023481894f0f0757dc2facd3b29adfad71f8ab74d2f72b346a21820b6ae5a2028ef618b3ca8e659fd688c75de802f3b5987c65368287581bf5b76094271dab5f280c31b2e587319f5bd36eed9e5b8be8ed3a8e5ab7d9fad7f09c4bb6bcc5b4a39bea29a530aaa9ddfa50c63afd0cf65903c865150452b419abac22d4b5d1c18bbc43099ce2e51f1874645b4b914d007fb30f4884b836655d45e87be3f2a012b52c90aac16a3f1b58023d6a652a468b5072259771ae56368515251c467a9b7d483b2c7175d69784938fca0e9e7c3ff39b6e628c2a99f7da547ab1085c1241ced9e10f0eb9ed6d4392422cb3279ce8d07f59f43050a44619276850a6516d470dd5c889f43cdb02d8d3342ce06cdb2ae2fb92328ac2289f17a0bb70f082a9c9c746c9122a75634f190e13a36a75bf68f0af23cd7072d269cd5f395b6e01fccef5252a2a7f90210100fef7ce8ff52fd7777276b70639fd111ba80dbe9d67c76d26b9c46e07f7249a34ee74b96edf923e60218c15add0d6590cfe1a1bb33e3137267b8c1dd02c62d744a87dc9e7f74a4a0a0adc193188d59f1a0bdf48b3f301faccab5166a84cb233e2635235107fa049422198ebf4704f9de5c27c911a0cb167b430deb3301150a0120ca6685a3d5d0b578e00887287b814b80880d39f0ae51259469acaa358c87c64fab0520c5550792e13da4daa367fa40b74666af77ff164a0e4da4098e9837e5d6d467ff1d3541b52738f6913ada2af9b8a75a24cd52bc2b51d827d6f82c4d67314f6324ec7b2ae559935aa63f2051175a512e9fbb7879d699f394afb0823ae3552afb43a34e954816191d2cdb95bbc5ceb3563f5f1a24086a4b2919075843771900b2beaa5e081a2ecf6d5126edbc50f4eed22109667114e7df9a2e43268293bf410556737879bbdb9c9aea492b00a8da4240d92acc19358d5f003d45a73e4480701dc64e1a03bbccff0917798dd1774dd22d1dd230f539962fc882336c7f5b0dad0b7e6fca88b6e2f3d4a7ab13ddb3a5bb71f151c4916236e9866e9c5f58ac477a727923b66cf9c0f78d596ae80696b03f5655621316584fe69cc7b2cdd48fe712a438a03cc4d4c76129309d29fd4d4b70b258cdb5453aff7a3707bdd280f033197ef86d0dfdf5444e07eb46ae61a34fa421aaa228ad4e4c925a6e74e15fade65295e807f99ab6faeac74215aaac09b60e754be45df031eedaf30a8837ae1054797da1971493a2700f2416fe8b1f7521ab1f740f5ce37ec0fec89030fae361692cc91bfdc9e1e5d5ea10993d38aa6253a0c766a467db1c9de0a13e1c11ea3ce156edcc206ed9f940d56c328969fe216b98ac88e397a7be4fa2bd90e0d5bb67d7bd0ede97506c9905d10a39b5ab91e70a6dd7f16ed7aa985348e6130c1847a544112f56192efe409ac6be03ccad250aacd188476eb58a50d8ad969e887c725b84705ccdab959c8ef0e53605ba945b445ae29625777a6eaa25e7a4b21ee31c27b31179e21b8eeedce7441a962530430a390f8312beb1edc74f1f54230e0cb9161932eec8fd53f51530dbc286130373628f10e285066c0d7bdc3f5afa9f077fa7125e7fb5b0d198ee7e647de3758a3f70d38de7d036e6a67a2e46867efc46662e708facf31d13f7d37e0674e3b2883c4411800871cb09b2e99157c530edc46672a27447e1eda183d0f7dcf95421d32b52f13067952a4e340fdbd9d4a692441e80767d525b9d97d630193f1678e9d77121a120801d610044cf1a093757e81a47f89605ee63643a8d01879eb42ad2199a8eacf85df4dc95484823ff8238ee0b1bc2e39a626b103a228ca1316b1ef63f9af515ec4cbe886d3db088b9b2e32d4334e19e3e181223f441288025f3fb26f83cabe4494207d835cd8aacb49f7012176949a7316df08d590500c1dcf9ebe2a0e7c58a7ee17bc5681a505122743294e484e4175959a0d3f0f133b8b7c18d86e569362a700e209f745ab60632937cddd40cc349340b8789ccb4a24accaecb520e821d4b8df44d9dc94eea5fb053694bf9fb93d94bb3f9f7f35d4b02fb8b39fb09f093baf9a6c5cf06df1dddadb83b95ead6e9cee6db776d05672ff8896ae355d2c2206a4d9dc20f9a65b5e9b3b9c0501cc5200f33eba0609b51f1b2e6088c798ae39f14e9435c5917bc4fdb60e1eb4b5d7b9425879be7858e177293f500e055e9d63dc28027e47e2c559efa88c7b86fe3403dcbf92d8c8defe1f0eff89f4d82adb9f29091cd11bcdcf538e170bd29a4d4aa810f690f16dabab6b209f963863ec1336c80287fe250f59cda9cd350defeb60daba8ccf0b0bbed717476edf3de6664a0392c3c128690a8e897ee3cddcb62a9567b09d59a27e7c260da69d4784d668217afd51549d3497003cacbc70665d26cd0852b3f4677a62b963fea65232eb26b9d163f52bcdc5e18114155414f6bdc327d7b11dc46d094a9901b9d41494e62cb71596db2e3d49fb1a8dc2adca5ed86de465d1fa8c2d648fbc8f89cc0ca0e4a5cb266f7017f04f4db8ebe31a965755996babd99f996831a6091fc221f528935836397272ca9f5e5a89e44669710a595a6f327b2a61f0a5436a99c8d7a32b3f43a9b74d28f025dd6784a8ce5b701487830a935867eef0d3c9d1aa707accbbab1aa2c79bfd20e3dd4386009a154217d088e8a53e8b6aa76fb462cf9a4047abc032b31580729ff2e44cb130edf630f3ea29431ded0ae902199cb6ace3eb12837f5d55267157b53a9ecc65c8ea4c148a832c4104942b65faab4db6d7ce85ce56e2b2cf8c336f53fa5a96e3e5d21bf94378466205e0bf288d80c802f87723fc5ff19b81feaf0bfc7df8f85704ddebe42fa3c85f0b7f1dc8fc8952d4ff319ef9b5f8ef89ee5f51f4e08fe27f93effebaceafc9df9fe87df8ef73c05f57f93518fa1307d8bf8d897e5de0d733e69f5827fee5c4f96be9dfadf5af60bc7f30ffc3687f2dfffba6f657ec53fea5fc3fb738255914d49fdf61dcbf04ef7fb08deae7a7ff00504b03041400000008000000215cf127b9f0e4180000252200000c000000302d61667465722e786c7378ed5975501cdb9b1d1c42700996e009163c4c08ee1a20b8bb3b0c30e84c3238c1dd215808eeee4e0810820797e0ee36b0e4fd76f7bd97cdefefddaa7da7abba6f57d777bbaafb9c7beef77d4a7248c8840054003a0000a006e4a8740f2b200000e8c8000001001d5147ccc1dec5ccdec540d5c3d10ca4c7ea6e674b95858cc890094004fc83ffd7288a1950e864c7953897be115b7d1e3257218cfe6217d68bdfc04069b82c633ccee631fbed5680e0bc5cf8039135b0dc78781624c095fe856782d02628bfb9702a314213a1e44cb6b1c638e37ded511451628eca377734a219c48ae99333f38a29d43658c563f52239467e8c77ae68ea34e7081469dc82da491bc01a9a3e4f461ddcf3ec11dffc66b945e5244f2c9eb426615a8da744a5e4dfe779830d2389861bdbd2d538486123d5f2abaa456957128ce7c80a49bca87c8f0fc26dd939a437146f51778e05f3b9df3033ac71e681adfa03a6480e77578e06aee9859e732e7e038695885c7a9a7d42a41043fe5486243d71d0e4cc5ccd7721d83edcce70c4d95211750bd1ba088d1087a346b526e8f4715abc4dac413df86e369cf5b16facd4e304c1ca99f62603423228d8f8900e99c3ea25f6ba524c8478f2d5fb524c78a37226ea144debca26cefd97bcbb430228fd4d86d56aecb427f723f97b9561decbd0c0d9cc16c4c6faf3fc8ffcfec14f1445bf56ec647f18b02f7d13d8773e3e17892b2a0716916ea45685bc9599c5a90ecba6239f6b7d4681ab4ae68b24056d86dc7c9e99e30fdbeaa33e5be62e7a8f4fc8475b032e0e48b8727245637aea1c2fe954b4d485e7367e3a7e962425ebc1e0d61cc1545897ff41ae7f815672f450bc1c779855830c83209722805820e99d76cf6bad79e38b1284715195dde280b25a60e656cc700a74323e6f134b2888577ee75b12511fc8d862bac4bbcf96faf4924c4dc592d7aacc38ddf9158d8781a96ddbb1784a2b01dcfbb9426a9f320d37fe05e7b0542f7de62954bb8afb7020cda30b88d159d877d00f7b4f993f8ff03b91e88ebb497e450200523000809f3272b765033b38db183b38d8fcf4a922752b87151e5cb87ee69dc857b0648ef863e26516972c84688948f71862f63243ba57e6d98584667ce867ad6006cafa908ec1893299280ac196240fb1cb9381bc9250a28466cb944f320a65560779967223fcf2830e9514287923cc13b145d6e4822f32dc1d20bcd7a709a3aecc94fb33672380b77919c972b90d5f2bae8cfb6d2632aa1e3b189a8d7c4e6624f98c56b84f6761d6baaa3b1e6766b2a3f58220ac5e02fd0707c9ae31f583f49a6ea563493b11bad244c42bb8b20bfc49316bf8bbc2246f8a57aa55ae68b8e759f85b56c82fc21ad0872993d52bae1fcccee34e4e495f781ed092907941f1597c5e1610fbdb5ebb7d50007cff1e7dbb28d44e4ced205a7649e2bb12994f7f29bb41f14453663fa6a80929fe1c51f240311b2f72223f0e17762ec37dde36c833acf0286bb9566793ac68bba542dba280332ce49489d97ff9c7d889d154c9650a06afcb211593a66b99cd759eab5be4711cb76c8ba158ae39d5aac0cd5855f9ae61d173119237b975b689cb32330c5f97864a33c66783d2587494ea9c06efc8fc56953433d90e88b4d5fd765a5a8dadad1e562427cbbcbc9bf0bd065d72df30aebd99cc952fbf94d029b3165c71053a00118bf748b52b5b24517cbf892f064a9589ad95ae0e084e7c86e2b233bba8b2a00fc45f9d5dfa04b52191ee4978e6e6200caf6fa2d06d051453d951853b6b8caf47262c5e8342ca335065de223e4ba34afe888c1225f566ef2b5d089757b4e211e5a2ff49479699aff65e4e26c7c7a7fe4d50cd06d314f883f625aacf09c719877bbe2e7725d3a5f0afe95b72fbea07ae77346402dc3ce02cc699d331f12e5487f479ecc995e5348671fc2eee7642f91a50abd36119724fd7e9a92003f6a0adb5a01424daddcd2f2ae392354b7feb03439031211e3e0a019f9b6f50786891466ccf36517e58f34828bd5376a92ee279dd9eabcb9256c0d5430ffd680eaf6b3baa3444596170f6929fa157d6f30b49bd13eb1d111fc40dbc105a4a45868e24a493b7780ff24db2fdf2dcd6aeb492bb4b862220027e77bdf4bcc42275d07dcb78b9a7e3f215cb78f3ea93de78954f62ab5cd12f5a9e62b6879423115a29388bf72367bf44e5a8b7daab139489f9f2b8bb8abe70cec0fb28e4419113d0c2faedd1781c5fb8d8dc5ae374e7aa315ff9c0684a1666a9cae3f3b93d285713c23e3324c709e295637474eaece691b32bc1730d49a0b4a1d0ebb17269f271f1790ce718802c501ac14d848bc1188a186986cfde47aed011be113a7f1369f28877ec63b0dc4aa8e19d44da7883a60feb024ff55988bcfeddfb293dc9577764fcb3f06e4ecf12373947acd05c20fee449efd5abcc3438d6efc41f16f8dd71f17ef4fcde08c900e808f7e2ff9749fe7509f82fc344b8374c84ffd5d5faff008aa206acffd8aff9dffa26fa08b83dc88ded9b8e15ade98603a82328bbe2fdcca327a0064bb03961699e69f412d439109d1d5868255381b0fe5c412cea47669f96c179c9f8819a0f7f33cc98a384c7179c634413a077795106cf69977ed5a547a9994bdc4bf62aea20a0af267bc4710da99edbca9b222c8744e761cf1379b9bafee347a1777c99fcdbaad7da62b393c399058c7447bbf60bdccdb96087085adefab7c2f156d28f94e2829f0707b4a6d24bb50d5c0c0a1c46a7fbab5f5138e9bfb7c1ee1678dce2c3ef284557d85bd1fd52919894ff7af5e8d1eff8115563177c78ffcfb1ee131912c07f9b03c8d2cccc05c4f6c785e3274552635ebf9f61c70dd8f7bf45fbe0c5321d0c0c2e6fb68dc19a13fb70b25dd267a2d355119ae3cd927bd74c1b688ab949cda2b9182530dc546a1e2b94ee22856d98c6e923b212a482d8cc1db79502bbbd294f626170d23f89db90c741f14191a21c88a03cca2ee79b447487f9cd13559d42fa48401528cf754d51370ee5ec8a889f88cdb0033571c71373f8e21d6fdbaa9404040838bd703ac7aaa3cb789c4b3f9c5b04f92bb88fed6bbfa8c37c3de0e5a83d35074994ce4613b755fb78b38d9e2b3eb093bb19463483ed93b19c14b96a7a28e3f89acdac079e22ab2d6393fac9c7cfd46dc2db06da1f2fdfc7bc3971a797e8dec342a16ab948cee49191f3b2b9221a3875925616c8cc4291307856c0b4b1bf4ebf3eaae82de8a15f1ad36f1b9713d36dedef7bd695e18edf7bfcc3f63830de23b7acb39da85ce9914b9c92fadacac18db2a3cb5d13015bcdc207a44d04ccae58bfe959b24a4ca19645629c4f3b4fc15c436b1a724cf9dd2dc70b5f0eb9f2f34ed1b5c48f0925024b2cc6b7c952bb9cc494b91b3f6b62b27d9e4da66d1f5a72aa17f1f3621ffc6a6748677502150fd93395165544e6320ec531a3a0b71ac266505d16dd9138aa1fa222bba0b1cdf6947a952ff51c24bba3c51671309742cdf0b0a3b6c72b9bedcdfb49ecb227114ada76a1adc84b9a258fea6f307f47935db5b1be6e34008088e667befb074d5c2ccdecccfe75fe83213bda733674f578509c55282e5c906f4e60c1dc22e25277a164f7c5f634d639c3b0655eb57a2d998c89173a9a1116da393ebaaea83efe517c20ae73a42f0575a4504f999cf325adb2f2b97c2d7ff2cc29c431c1f03a57e7b8f05b69a1acdab8f2c2dd2aa7f9462aba8cc7b75398574ba034e70fae649686f9cafeba6f6791aa2f938c7a08be9daa8b7b66f05f6c2aeead0810452552452aae3ed9f38c52ded4af66fac81efa43203d1a199202c23341a9357e9386e18de069a28ee5d3aa15c6f19a3f7691644c306978333673bb90ada4f4d6c9e7d46bbfdd1386e7ab854f7fda161b4c509caea98ccac787c92d5ab2fa16c3255c6bd2b7defcc65894352e9024fe0164c3b3e5f2b800674fe3509fb56b0c7b3a7a76eae687737ddb0e0b3728a47bd35c194a58b3dd2ed98ac05e1d465e7d7a279981b0b84998cebda23c41ca9d0ce1fb524eafe4b6f975ce0ae505b9c1378399650a97647899fd2630531eea734dda9b365266b484c5d009ac391010da015b13cfbfe5f406611a509e6a2ff575902b75593ad784d9d77cdf350f9f175e4bdde55b4a331f75c002b9bf83594e8927a41b0f1154334f18dfc0de7300b8238d240872d419935618c59dd9d474b3a8e3183b9971725f2ee107c0d9d1a94eb620759740e25e2fe4849c176c8634b501dc94741f617905db0288c5fa18475b330ea5061010fcc86152436392ed0e86bd41a39cc424674ff9ec7dc52c187a330e859c639eecb7de2e359642767b06386f4f335abde1e7504886a7a6b53fa33e7c6d7b72c11bbe55db7a3399d1e26cb98fe1ad1da068294ff78ae6d10663c4124218a3ededaaeaac8231be91b5cc22ba0b9f6a84aa2942847a62bda38f71ca41fd5b96154441dd96b2ba7471e34ff9266bbd6f6c1170782d7c585351dd8bd699b4dc2be489f7fabb2b42bd420eeb6df6101458d022e2197334b694798382248e1397c49750648244af8010c9a0954dc1ecb18a6deab407ac97ba1f8619b64cb6b8fbfdd2b5dfa9a2ef8e92dc5438e3216be8d4f07a875fa5d6a77b4a0fd9d1b1607ea1587de6a765ee1d94f0a097358e80a2b2a21da72c44974e51dd58bb272c0751910d7dc5929b56b9c1341ddd7d3e7a94d244da56a196b242cd96d63fcb82350d2df198d3b96f18152f5ce59945b2b8d9cec7a387a284d92625ba0762f6a5b83e3890b67e05b0d0c72ee7f31482762e6947335989b71b06f11d4b03817e33db4edd6b897515f28a5dea6ebb185ba1e1b7ce46fe6708d40f0d1649a937a63f62a3faa46bf3b0490b855015ee1068180a74b8156d5dfb49c3e40d2ad36870f2ab44cffc582eb005030bc9832dfc6348deeb2547b46dab6fa43fd00c0d5ff7eec8b3305bc4f327c65deeb68a7d86ef120bf3aa92db76f22bfe9ebb9fcba7afd171b43053c4a199c066dfc82a1230ab8d8a7fad33630e4b7a2182c74e203ff28e790e16f4e356547c528db6c6e5f3e0ae844e1d02196de142b0d551deda3a3a663b1b24717e3ddb55c0be7b7f747fe733f335b02155afeeae7dde3c28a19fe39d73455add9e764ae344cf75ab839d5bf18fc680b5920ff53696baa58694b91f183d492c1d428a9f541e12eccf9e27a9f4288c85442159d540e89a26bef4b05b9ee57ce95935a7640f5b5416c291375c22462427a5abbb22551b91f15399a27cf085754d74ade0117eae6e474d14298f57c16a807de5655528ce25cbcc1ef7b51cc45c34588d630f68b8c2481e58cc14f721a5d85be958470568fbc8bcd0f5b5f0c07c80b815678af8a04856f5136f248c66d09991a60b05cb776df877359d3c803579699b1710567b5a32996f116a2885ed799274a6b2b6550dae0609e67f0493c6c4d1026a886b05e64674c182e9900696b1f98e51628c955896225bfc1e8dbcf618bc26acf511ad79f05dcbdbc6e2523e7fb9e79edf09b7c795be5a560b0594bae2d747916b2a0f11b2883c2aeb11d3747992bc5cb53d68b440c2ba420893da02b37d21760470a9d1e81cee476b2b538fe30e3054d6f5bf4a821a17040987f6e8290add3da5d0348e96962c41923bef95651dc3dceb95c46eb2f74afab26e5af019c216662967511bb95c69ba74331ed4caa72977445f774d97ac97a95243a8c8e1a7994d64b93f94efb7e24b053a0dedf0987a1a437408cee6fc31bdf06a95e988c3dccaef385a79688d74963016eb31a8b65c6493156acebe5183a1f8a8a1a3053ced032a9e8867de32f9c890acae3d62369af65a483f8ead9ca920bf9b69600e08b2b748dba1524a335b86db4083b53992245e73cd0f75beb25acfe6a9c699c28b2d500405cef148745805839fc3a9c05cd6aefe9ac0f8a707834b1e97b629192d6f5739fc54bae807141ab510c179d5f211fe87bb8c19c547724f2bc5632e7581b95a4c50d9b5a021d646fd8d2d8ae3ce952672438cccd7c398ccb6b41b3b67b6227a3bce23b6edf67e953c6792add6980e7413bd45e44695d51b59c5ac93cfb61a34805c3681668a76dfcaca0975ed74f0c2ef50022678f9be0c3ab3ad26c9c581bf3bfac7c3dc9a33aec3f47d707950895ae748d4b6aa1b0cac809ed5b2a523f928d9928b38d74bebc28a124e5ffb5a20249d56b83a3f1684130f8bf7a9964fdf4d36334614ce7aaf2bbd98072e88207fd8e60b0abeed6b4792422c76241cebd47f99ff3040a45219277050b6516d5b0dd5084472966909ec6d1e1670b16f1381bea4882037cae505e8ceedbf606a86d82959d548c11d2942b7c428db3c2eebfd6a49d240209db6dca5d3c556c0ef5cff490cb107031200b070effc58ff727d908b87ad19e8a7df57a90d86ccbec46d413b7becb7ffe4ae6ab78a7c861a6e824e879b88b1a36637204053616aeab1acd067b6f618d1c3b779973e32729234717d2a7a67ef2cb2d5acc26b335eb640d1605c434d21fde4859886788deac1d8d1902e269e7e50f4919e757343df6ebdbfb6bf4770d2225df5594e75ba29945f56bbda62f5261ad71f00abfde4fa49b5d231b5a68eee85fdb0b8d8cb5455d109cd76f5bdd49a28e48462b782a49546fbd5b144671b61cdb1ee56844fe5de732fdca8b750991b72430b9adb2b94f458d277eb22dd07de5aefa3d409373f92a13c3d3a082a871c2bbcc664d47ef389abcd555c6d04e62d077433467bf48c4e184212fde8550994ed4c5f1097d191ae3e4b5b90598ea95dedfd8311a7386d2eaa029532f7c16ef2f46d5a25f7a638fa5d1d177f524dfe81fe685176ea28c44d2a504f87d3eb0072b041cbac3eb4a1f9d6db0b04f282d7b6e82f2557c01d776c7cb3339ea0cb6766df617dcf80077e0df0c6dc6134e93db97ca562d8879fcf2541376ce4db73daddf28edfc93298da1db4ffa8168cbf2f2094faf2e55a3bcbf4032d51cc277ea36458792c4639ca91fa32e0842b83605448ad2823c3280b23e33c467812f1e222072b552a8cddad64e664784b5fd5c7df5d63bdda533d8f98bb297eafcc4fb8e7c75ba02de04e4a41f002ba80b19467e4a507be227aed246b99793ef345c9001e9d756e12e25bfb09dc897d217fe4c6662375240d96b4d66be28819e0c7613b711e79d3b7ded8abdf14ac0b3613725d497a5cd4d497de98d2a72fc10c0c5afe3a90bdd1cc38efcb4fbb386740b9df0201e470d054ed32a8c4467812ea6166b1a1cd4c657f0c45dcad10eab73d2a3ea1e046717c883cc62ae3cf97c71a1e88fbd9090e8bad2a14193d9c90f3a48f7d275d3c7a555f2239cc0ddc1c3f2626a3bc7df38cb1ab554b307c326536303f01c49718f535bcf3c7776cdf71e7e6219349b0c6feb3d10ba079f9a5bbb095677b96197bf90f921de9db1b53b9e27ef34c07267c4bc5fa5ec8aa2096c0e4904589051a5efaccb125f1778f8dcb6d064dfb0efe54471cca97957abdc7019ba5fd819812361d0c4296ae4a96d6285186d73154a9bef8439b03a970a4df49ca70343b37fc3edf1ab9cfc7f1eef37153071325670747109b8983b3d97fb68dfe49c3013febb683b2481c84fee7b07d76d305f3bcefca019be84c2584c8cc218d91b335be5c49d4c1137bb2ef6154f93a4ed4cb1d944a5fe3842e38cbafc8cceff38c2d593f96e85990d0904030b092c07f82079db4ab0996da14c6b2c86d8e50aaf1d5da955a43325ed58f0bbf8782291f057ff02286e0c96b5d324c4d6227445114aae762cbdf7265505ec4caea86d2db098b9bce33d4314e18e3e199856785138802651e3bb6d7c8bd4494207983fcb14d97932e0b217a849a731adf08d590500c1dcf91be3c067c50abfe2e68b5144bcb4c9c14a5202e3109d54d6a3af4ecbdd869f8c3800ef3ca240705339e50285a29dbf312d3ec35c474730984cb27d9ac44c2aa2cde73829e428d7bcd142dcda9deba4d5b43b97be99b43d97bb3b9d743f57b82db7b717be95b67e5e38d73d056e8c6eeee96dbf5cadac9ee665b276d19f745a474b5e97c3e3120c50e8e044db5bab1703a0d049827016621ba0671d59fea2fb7108f30dd3ec482282a0bc2778907ec9d3c69ab6fb285b072a07858a1774917280702fc67187045c0ef483c3fed139176cf50d27b8ae3fe95c4468e8eff70f84fa44697dbff2c9a9c23faa0bdf392e7c582b56592102abc7fc868dde6e616f04a4b9c319a8a0d36c7a17fc5435a79627743c32b13445b9bd6303707bdb93c745ff69c992af24f0c05a3a42838c7bf1b6de1b657293bddda9e261ac067d260da7e4c688b16ac371041d9457305c0c3ca0965d165d20c23314f7da62796fdcdcf544af6874976e4b7baa59682d000f2524a72c7bee1e39be84ee2f638a574ff6c6a720a8be7b7a5569baebd097b1a8dc26dcaded8ed64c591fa8cada48f7d8e88cc0d6ac88a164ddee0cee19f9870d7c5d42faea8b25457b03f33d1624c113e3887d5a18c63d97d909757ae7a6923921da1c5296465bbcee2a584f12a1556cd44f623b2aca1867ad3841c5fd2634a88f2ac15477138f06302ebd41d7e2a195a394eaf454f797de468cb3bd868cf9021806689d0d5ecabe895fe73d52e68a462efaa40679bc0228b0d80628fe2f854f163caed41faf553865ada259239d273dae2cecf0b0c7eb5e5e9c4dd15ea78b257c12b5311284e720461355c49939fed32bdb72f7536e21721532ebccda9ab19ce570b6f5e1f9ca7c59702fe8bd20888cf01ffaea5ff2b7ed3e0ff7582bf3723ff8ac07b9dfca535f96be0af0d9a3f5184fa3fda35bf06ffbdc0fb577c7af047f0bf29f7fe3acfaf85c03fd1fff0df97057f9de5d73ad19f38c0fe6dd5e8d7097edd72fe8935e25f36a0bf86fedd5aff0adefb0ff33f8cf6d7f0bf2f6a7fc52dc55fc2ff738953924341fdf90ce3fe10bc7fe108e5cfbbff00504b03041400000008000000215c94a9240ea0170000cb1900000d000000312d6265666f72652e786c73787d5805501ccbda5ddcdddd2d41826b7097e0ee814597c5598206091a34b806cf65714d70d7e0eec18313dc79dc7bebafbccb7bef9fa9e99eeea973a6aabb3f3b6a4a70f0f8000000f9e9a101e46b768fbc86791ac10300784f3386528e603720d8cd54eb9d13d0d598ddd30154fa6910dcf10a5be632f1062ba99e99d34d5d9b2040866a3009e11e3093858dd6bac189ffd08227d5f885b92650a5c4726bd9d522a67722aa1a8481a2728c41352535dc06fd1c65ca73e7f060b4e41ca2efc5e6703c7acc469dfda6acbce7d401de32ff62f6987ddb9303be1833a34b48fa58cb56ca856bc2de208c794a835d7c113db45e1221bb7dfbc525a50f975fb04e19c84a95eca64929be8dd61aabb1276bca89248f57d1aa38b276468c792a4bed53d59999352de69780c8a0e0961361b372ef82520559b8f4fe04d3fc3cf6caca35bafc4d6fe4c19baffd0109390e51b014930371f93d29e276fb80aa6a777d7ba628aa8cad642b7c2089b1405ffd633879ea3099c7c8291d7e3a9ef8774334cf1d078ec2de3efa8c02ec3846fef6c71dd3bc3928545e36b6ea9a2eae64e4c1f867914990681be126a5aa288cda3f56bb56fb15ddded39b322c0080f6d49bba0041ae1cec7fb6a5f143769dafd0df1f0535078d35abcfb713e7bde1b0185d209e83b3a93b91c21d9c0527b7dc3775cec21aef98cb0d8e17a94a2e2c8944edf6d15cacf19444e2e20bd3d5414a43ea6fde9d035e30ba24c93a97ac76e1784c1d0c5d24ca297e63f6688e79a16934395ab0418593b7e399ab17669dec4f8a82577087cee6c50557fb31bdaaa9f7381d662af08f0b1da9d90561b5f3fe535e906ddaf2f1a794ce2ef64cdb0011268fa4838150232a8dec2275de0f499f105f6e3184d2c55fcac8c265f1cf1b399e5dd60838d32a858fcaff18143525490e9e7efc960bec891912590b0d5e35b6bcf268efc6d0cafee79ad8d088efe6c20100e9280000d6d38c278803e2e862ffd6d1d1feafd3a7b3005ee7c3f6e518f5c73e1b0e4b60de0b1440331e03f4d33a3529a011ebbdc2a5808e95e20385f5365684b55817e636da55662ade515064a50a4a5ddf0dd6bda8e525321e9bd4cccc30375e779fde90b917986a1dd2dcd83560d2cfacaefae35acb7f2bf36173ed7265983fcad3cb268d0903b00b2e2ecf07f976feac2228d7834cd734856402e95e309abfa08c2a23c8d85c8a70d54f0c09ffd5f5454f7daf1cb94500214f9f3df263afcab46e5352397560b232ec3d58bb66294c0758d4a6ad2c72ce3690568c10169acbba710a28b6d7de32159d8e32c362f8dacc505747709cd9166366f3fd17fdac17444bdb327727ad4004ee27c50ee4010f847dc208bf70c92980112e893dfd616015c6ee44a1a49fd2de054077e59f87e3f39e5b2cdcea684cf97ecd473fe1ee50bb81d47ea1bc4423f5857ba965a6f289e4894fb1f02b07bebba1c09f0b151c8a297ab37c144b5f6707af656d044dab5a125ca9f93a54ddf1d2097b0670837112e223d31428796be1291e68873066c78a61666a491e8b38e08f1077da316b584fe7a4209d1b8a7b32825374febf4ae1fcd07e2d3e1ab306d645a55a4642192d36df0e433dc64068357e66369d0da84074019a630bc90a1942b913e0d1bb4724986a6599ee594d7f8a4772da63f12b8b1370fea8990f89a9442e788e741c71ad0fa2ed8bf2ceb9f511b973325a84288f1af5adb4543a355123618446c62c0b26ac72339171627e366f4932d4b80c7f4bab6818c97006247c88bd7f29e327f088b4ec3b8a3474f54e3deb45e22281cf0485745ee1fc45cb97532bee291ccef6f4edfa89a1578d1c2edf6039dfa51cce3cfce85e4725c65b500f51238f487d8bdff5a3682fb72f9f3237ae487215a14f6b305616c474d8d62790cb6369bd5febc51c6ec8cbe81403359121eae9d0b50e1bcc40475eb7a0ce445714770fca91abd861416b49d4cd24f75233853943ee0e087a1de1f4762eac212bdcc82e9539b73275f60d2e53cefdc94b8efe1ce4bb3cc9211de5be6f6673784da5563e2455d12fb713a4da4e5340368d3475ef695514229803f44256836985dfb02dd038c3c70bc56a1f7288f5cff08614097e7a9d504efbfabbef5461e3d4fdda3028b9881fe9aa5a4fd0257095cdd3f4042f6aa2110f23af7ce6740fcfa13cfefaf2f64c6bfd87d0c7a08983a039d62bfbac3b414a731fe2d16c3c4abc5df39728b140197c7526f7d8f4b764fa9339712a9dc166dbb1c72e9f4ac5921d3f91e6d1e6ad93f942d6bfdcbd74f2bf2452dafb2ad2a489a9c8db73339f677c87f64f738e0a9d779a7f7a637b7271a47f9bf3df5eeedf8dfa6f8f17b714f114573e1c115d50742c3a4ee8e859729ecb127abd3c879114ba6fe74349d5af7574346aa7c2fed5015d554e39cae8674d0a75c616469f1486522b6960db4441bd175ecc6ab59aba6277cd4f7b39111228cb57b08a8a11da93f3f4d2ec7aa9d26ab0b2fc4cb98f49b01422e76518ce8be28842cbdb62967ad9cc67b894fb7de2cc30c410111fa2ac3e8d2aa93f22aef5a95777b6ccd62be8a5f5836ccd5d9b24aeaa9491b896504d1feab05038796cccc12964de35a31b7adb2ac25f6d4d5205b19a6dac28c08c2b17642fbd92287241a13b8a36227fe6f417fdc9412b4f2116ee29c412ff7670ae3640a09b2bc75f1de79f8b92f9692162e11576c8119a2f528ef742259e707465738582ca65ae5a5da8b70ce5026d12907e537aa711b2c13327c91c8c80c213bf95ee6f957fb743efed027008264525bde15634fb514c2865384ab5f292a3a04b8f6fb244170eff0c3d4434914a6c43ae00520857018f12c462637d908210b04a216fe5c3dbf19e296a3c5e9fc79d2c451d0ecac4348734064a828f0f0f30414ef50bce4993759a656e497e358b262d35c2bacb9f493c94c8784d27d07f0616f332eac7c1311c43f3cefa9c209fd55c13340e5ab0582e726a1710b425c719bee6fd5ee34fa4805a96a81e751e77a77bea7b03352378e547b7b4fd88cd68640683d9c17b8c41d0fc8960456f8c0cf4f046cf25e89bcb0e886337f04151b45b3b5154ce24253fb15ebea3cb506667deb06b8a2b7c5d9f9461a4d536750656783f233ca4f0f35e18225074cc1f5520cd7fbaabea80ff6780611b8086e1d0019c38ffad9368314d70e6c7707d1a6587ae8a9dcd6c4b7df9ee1589f4827e70fe0397ec5859a3beeff2fbd5abc5d80d0e3017dff72aae995df90a573d766eae4bacadb93bb168e0f0d2546de39e5bd2750efa3df37010dcc0ba008e0781574e4cc9070ee5fab7aff243ad60d958c6881227e68b9d0d72164bab74faa153e6fce2c26808bc8a73d0d508e7db964daa7f1e8a03edc9be2b44008080f6efbcebe950b8d9001d807fb77f9d870303c348727e423fac7d7fecf3e53225c879f757871bd2deaccad0d44a22b162e894b10b54f1437e562a23712012ec3b14f88cd864e30b07aa24200627488ff0a217bd0b144f859358dcd030597ac240b92d69455aa8340e8916cd7475732b2e765c148a441690f868410a61bb4cb380c147728b587f37e3e5245256cbd686f0b1287694d8bd94606dba34ddffe6076213bb243e0df5a6851f8547a95ad84683c3a9b887945f1423739205f7002db3e5a7a10396a0220d4769d088739a07bc3328805856e3e07e0e1d09d928c3dfcbf96125f2b4d5807f06ef63d81d115a96077c300582dd745542c71b22f04db7ae8f38b14040be7dffb7c2b333e24c1434ecbe0fe43f0da26faaf7d3f9f725c3c250e7e217f5ee375dbeb5b9adb208f265e3070ef7d9f32f4ab626efac7447cdef148d16015e216f282e5194ecf167d6255b287dde1fffdc38e1b227d492dfda026d9dd8f7c6c0305df941d6684f0e919532ede4e7f3f4475a716df22b2a5bbdc768f916e4f8d18bcd317f9580995ec0643f37bdd4a331350fadef63fc82ac67d19c9b4127798bc45cc1cf810d0b75027b1c1fe5393dd804d79c364e6c28fc9019b573b3b41a66480a137c196b6c5b8acbdc8167d94bb8f255cf6e397d7213b90afa4c77049fa2979b709e6d4eb40dd3147f4cbd9068b9bd58882ce260cf7ab85dbbbb5bdb696da3cc0aeda08690f59c562d62f93faef5b6fac0b63c6e398a89dc8e7fdc06de0dfafb5d9c883d7a277ae58cddec5e0f128db4dede9c3e3eaea7c22c5b38698450ad233b3b6165064a91f62390328ae35d78e0f6d274a5c1a3338c03c8c3d5e0960d25de769cc7813b4295ad50f18e3b372da2f6d4fb9260c9de433ae5e10e35156f1248925df933a14d1940117ed5e124e0224d3053e13724434c4a363c9293d97c176cdaa82d98b8e510577c3a9871ce06f13eea0b648ba1b25b01b384895440ccab9f52209e7ece2ce4ea51077285d61265f80228efc2be18bcafa2f26ee84f69b9010798700506da3412b16025183a3a0be2382e17ac8851e9139b6ed8a11f46f2aa233839663c3219e99687d589b297ec092c833f2f7cab22dce8f13ccd250f251407fb688cd125891964870530076763ae244398e191b48815d47c43f31d769088751b6e6964d70eeacee15203bec3c447b3a6da2a51171ff512a44a586a2c5bc425197ba393e5e5b566d8e734876207143945607b1ec7a1a8e2d931fa3225e86ff271cd6d614e5af03af486d17dde250db2e09c91bc401eb245c8be9fd259d36f17082c513c6dfe40c99587d2d9a3e5950d8fc696f836096cc01d7e2b12e8987f4e1d6ca057e0008e9e21885cf1885148ed1593426caefda8bcef084ab7908f15348ba641f42e747b29936415e726cc5259a00e2e749c8f22db2ff562eaf8b51791ed1d5b59e3f9c06b977da9736ee4d7ac99a85b07cd78b178545147d201f479bfe1eca23d6f94c8e7df355e68c7614ac0a38b30a42d711a49c0934edac32eb6ab6e903bb02dcaaddc17a78753d3ab7ddeb9b99c1d0d2cb263ce59e3d4c41d18f411c2e0b756338693edceae448e914ce9b335e2edccd82ede26a74f181cef2f9e2cdd2d07d6a8165d6b8a40ee2d3551c52b772077b9a63af6b47b0e757c311268e7c5bcdb40d8168d9b2d7ac54f3bf4bb88b8a537e9714e99836fc7382b6c1acbdf9a2737d16231012690d6fde82ce83b5542ce78ce35195b2f0e0bbc1b06526eaa5e779e0845299dd6c8e6e28385c23588434e8e670f5b2c4d214256badeb2a4a517b7c7b5cde964f225f56db6037f24eea2988dd75a9d4c2b98c8866bf54d6821f48b1c1a04f4b1ddbb6a28757c2596a4b47ac59b4042dd01cb29ee441fd4bc8f849bdce7be51785d1a7faac17437dd37b760225b4d822a2d3352c8d2cbc5d03306812fc26848c88fe9d861498965100e1e57f31b546916ee36c22fcb7aab13711845507fa2dd42544b249efe1a5501b7e34e9ec5fa14bdac0c4da8c09db970015aa5c298f1bd37d979bfc5c4e6a5bd4e0675e900cfc5c39b6b5c68436aa2a3b24766dde9aec5da926a306e6d5daac19272e9eef1d7ae88cf3cc6d51d609302fe955f02b3d1068d5a7ac5d3c38d0e42ef58e9fc9907a718fabde4590d235c5cdaf02f5132cb4e943aaa8de34b6d3311e57dc2ac00aa2396033c244cfeef8ce82b3b418167c72fe0a374a6105cef187fe1771cee7d400b771f324186562de68b6710705b5f7d379799ee6303a697301fdd139397981e58ed689d97699ea50294421aa77ba357ecd145fcd55ce71fbe4c7fe1cf3058389ab27fbd52de48b7e21ee27b149ecfd4d177ce8d146d1edcffe211237877e59a42baa6c5fc1be1685fe12eb843a76317825d667d43d1e52c045680ca1b2cf73978be765423435fb22a5dc548aff5802e43319ab646f7fa9597c92fb3f47e48072c3d380950de9a940ac67e0d9938b56ff6f355b3af93f375dc8f2695920b7495cb083fbf149225284f177b963df51783d5059eca43b7a721c6df81d2d5ed1d08e8fa67886cd6198a5ee0c36e21fa298cdce0fa87981d9b948e99212136b50c6a09dad940220b074e043eb3175d7d1ff01413e106b1f95ce3b384a975806ff4473fd0a0021f1928324b2023db718b0c93a59b234d43af5e79c6a83ff5c044a0aedbb28ccf086c7da1ba87ae0282f26981bfa8c50fedbf861e10f55fae74d7cea179b877a6540224a7b96f7b52ec229c33572ae2a7898adfe2b27e1867e0ad983234d24d1b5359424c84f58ec65b8b77b1bd449ee07a248c8ddfe56f44dd2c2ef9b23a63e4547d5401827e2fe2a8d7b0f562fb3cd9836103e6057f790d1d0ba5cfbca8166118a92dd63667071041737f08de362d22cba56c31d18bfb51c62b55ac673a3b9e71c7c196ccb139c68cbc599354d034fc36afc05deddb06ee7fb3227fae63558af2c6f35871ed86682f0975f42bdf9b3523940236b854fd3d785205a5696f119faba7747ee67e69e5f2686565e57e8e14cdc0a5f268c804daf6fae72312c543e8e8924650269a3328dbfa32823e44905b79109d6f9abafc92c032c189c12b65f808e5a8b4d07b862eef3d38a06946d1f1072a2557bdf524345eafa243fcfdd642ba076f7147e918317138fdb25383767c04e109362732209d9ba66cdefec6959334821e8caa743850c2c3c1cf4dc6ee33f8402d291134db794676e7197b69132b0355dc5ff8e60ddb716f60226235e64a3af62b4ba6d72e82e9dd6b9349ec834c1cb7985acac1fd0851fb3b75fb5a0ba16ad3ce8d5d1c93bc2261ccb572a5aaa60cb9644c0315a3c040eaf3511f05da0d3ca6882ddb2d55d84763088ca88451eb4156c25b332778744234eb5436297cc42e3909d2601b3fc16c3a0e23043fd9ad617a635f9ce3d59815aa87eb8349ce3dafde0fab2eb39b8da48cce637b3dc63ffb3b83f98a3a776f1ce67baf9b78df579b232ca1548b92060ca83f04385c959d459b889d180211cb3fdd1537d3de57b7919e16f32dd91df0203d40bb8109655c582a19ddf008a274ccb491f87166dfe427585d44acafc167e15744546187daa1df5c826cd9da94b02c43d7cadf34a4be9e3fdb84dc0755f5d6ca99fcfc1ebef7f93bc4083fd82d903147554dd6880323a83bc2d2524bf8dd5668577b99f78b2c650c8ed41ff199c9ad94f6abb166b704b8574eb857678db13ef0ff34b1720c21acd0a70265eca964c3799ab174b45073717472e5b0707401fea5c1c4ab2a75be22ee390a5cc9d96829589a8d1d77ffbcd61ff043fa17e138c4b052450977c9838c0c35f0b309309486f20e0ed54b23d494f14d6b88edd29634166530396ed6f67db36356174b7d47db2c1cfb5d58626c226f1ccc47d9ac915d861a75e37e566a29f90e115c6974c52f18b0894bd782a13d7c510225bf9811d97db1431839cd27be06936af4f0f504f251d3d3422994236bc342a577e9cad7534629349032b8876831257063e403f1cc18b370c78877c658b8963725508f99430092661a662fed5739cae129234cd134803d243755149de5d3e102eef5c162bc7ce94320ee6c83f33bc2e5e292b222dda12bd6fe0858178a98f904b8381c88f6f68683d36b52ca56cc91650e13ad4b8d73c4e2db2f0d90fe16ef32af9162488197ef9420af6c7da8e325565e90efd44ed3ca99697634b9089c522056582cc1bd2c2f5553f785d8b13f57a6736cb66f3bb71be0c2da080fc8dd5a63642c011efe4ec09d54a03bc575d01168cc0c62a2f3873ec286ac33fad31b7898e0457277a1b4a96c3f3ca02c61fd73d796e77c63629e768de4c93962fffbae993b39fd554e6a54829fcac925b4332af843ce821a64d4a0b76a026c5c355f6084e7ca27fb6915e3e0dfe1ec47ff1a6fed9f2df05fa74261e88c5874dbbd385c5e5f5fffd5755ec7ab1f4a6367ada4f3dd252947bb6cdc43b3aaf17c3b128b3512be0e769d3509141a673c58efd8c5251013c0d3c3aa3fab5715d237221853dc4eb8c63ac6c7598bc6a6f6a233a4b1611ad531c3cb660cb7f5fbe9cb6843494373f75539290fb70cc8596b61a2a66f8b67ebf2f50653b7dc51948ef84ee20954a75d4657f3c2163a8a2cca20c36590e3859ce6c145e4631091081b1469c96aff0a07c1df36cc30d8cf46699446716cac494a86dd52fd51d9a2d1720e1236dbcba28f2411c4e0914011094346c5d2d7f9b053f1e8eae92324f270d8fe90fc834eb06d279565fa08c8898c2b4074c2a9d6b1ad3e9386dee3788e0b7b4ff78e5345d4d2ec530914312e42f7fa0dfffd66b35329523a62bfdc99cc02d5afe1f2250cecac1eaf657c2822acce0e534f650c8673ba0bc2c41e11c62c860ed3907dae69e0ed7ae1e09a5d52ebe0e9ea91eaeb76530f0351383525185836c0ff16deffef7a0f03f8ef32fc7382e75af26f0230cc3f94e5e7c0e782eb6f6020ec7fc8afcfc1cfe59ddf6075c4ff4fec79cef35c14f9cd6381f4bf2592e72ccfabe8df2c9e28ffb5a67e4ef03cbbf84d9083fd2cd7780e7dee357f43ff34d2fff0a1cfe1cfcdf737bc81e03f8d594d0901f1cfaf284fb7e8d30f21447f8efe05504b03041400000008000000215c5d9302961e190000642200000c000000312d61667465722e786c7378ed5a65505c699b6d1c42708726688204a703c13540707709eeda487068dc82060b6e21b835ae8120c18243701a7727f892f9767766b2f97eef56ed9caeba525dcfdb55b7cf79cf2357510601111f800c4005000054803c952fc3f27000002a220080074085d711b3b77336b573365075773005ebb1bcb5b5a1cc4184a7cf02c003fec1ff6b94c4f7cb77b261bfba90ba115b650e9faf12467db107e9c16da4a778b3f2da6882d57d6ef44e00efa252389bc08abbd268780e2cc09931c035896f1d5ad8523c9d1cad0957762edd546b941951771c4b909ca732fa16856016be6ae6f4dcac6a1ab91d5245ae5e22c3c08fe6ef82a24e7d01074c07096aa76c72d752f77a30e8605fe48e0414b6c82c29a7786070a5370bd3683c232827fbbec013f6268660b8a93d438d9d043202955d552d49bf7ac57081289fc283cc477ef8ce868d5d6a53e10e79f744b010a4f49c7e9da3c0cdb22f789af8680f76dc7ffd5488996369943baa4ce4d2c3f4133c500cf1530582d4e461b3d37328df0fc18ee10efa638ed6aad83b1fad1f91d1e2b7c8b16d493abd1ce67ec9b5c887df4d87733ef68e97bb9fc2593ad1dc64fa100f0a363da64564b77c89b9a1181f2d9e7a15518e7edba49c853c4ddd06dbc27a7892f7f70800c5bfc910aac64673fa7025fba032f407191a3899da8059597e1eff91df3ff889923839854eb6c7c107523721bd1713f331d8a2326e22524d54aa3e7eafe7b0a051b9b464f36d74406c55d2000449df169f9bafb3f3fc51dbbd54e72ba092085c7c3e9a5ab7d2e0a42b471714c6674e89128e25cb5d38ae136713e72992d2eef4ae2dd18cc5f585d9327d8b34126347e295d8c32c1aa46878f9c0604281147fed6e39ad05a31f657013a22a7ba5c11575dc59dbf1c31f7ca7120bb63084427964774753087ac146e633655ebd36546797a46a2a163c961546194ebcd4ee062636ed27e21fdaf06ebd98e5d37a95a941b83f3886257b9e669df96ad7808efad3ddbbb8d13a8b7b0ffb201114850b70bf1309ef9e30d5300200f0010d00f829a3b736ac6ef64ed646f6f6d63f7daa44ddd21ec6857dab9f752ff2cd4d220f7347382d481e245c858a6b3f0a8f4c1829de6343ab944f3f2b5271df2276d9ab866f571b2c17be7a78343840f6f5a301979c6d49f26e83c5c7673c1d051ddf95559bbd935317cd901ec9e66ad4945a306b73bdc8d4b4f7e1b93e4b1a83c6445f88f29302be9dab803fa91269a91bb068895de38d5412aa138a72a976280a6a7ad391945e3d352efac44c060b9b505c48d509947a12404588ae5f259b20d6a90d458a2d2978b47921b370e65953c08f5c967decb8a9c8908a49b9ef3e3831866a452a47922e54233a7a4d3ab7803d3c2df5437e49920d747e47ab79e5a0da29c3e051a94807b0b57ded7b98f92622869b6ada2bb2c351aaece94cf80ef089665f1f9d961ca6663c111bc49734caaf46a2541cbb5921c71dc5aed6ddb571e945d3bcf45496dec57b2e5e15a8e5788d86fb1782e282022cb14a33fb67abdf9e22941b4e7464ec7d989c1119d2182d9c86604253fd632e0e55c6ba6b032a6b110dbba04655f9e1f9396a599de90642c50d387c7a8f14eb1d07ef48eb4d1435b3580f09b4b5254e5bdb72ac2c1f5765a45a82ee2703aec197a09bbe0dc72953d591cb207a4b81ccca820f111892c59ee19335f68aafb341383fd8a9a6a94e348ef329acd784509313791909034d65bcaf6f04c597fc23cfa95b9447fd364e76e1715dc43462b8b025a1c5dbe05e99c3db1985f464da0544774b1c4a6e2c30be496d745cfb33f7c40d5ad95d8aa5a034f1fcac00edfdbc2cf68f05e8eef715ceafb9af0920b9fe1aac1b42b07994ad3bbd6a83eb6c8189a40566f39dbb57200f0b9bfdb73a6167e3e25dc8f6190b9853b015f2f271dc2e7c2322d95a701bfb5d056277d7c999203de6a08d9520ece5c92320223d741ebbc13254292d98bdea0c9487e3e9cec651a5af445aae91c5752ec197d815d5ea8436076b9c1a093227d9e25c757fd5bdbb57e7ef2c4d0f371f154cd5e15ac83c2da1776ab52be20ddcc421ea11c4d40b04f788d9617fa7772027cbb733dbc8c06290e64fa7b8f508bd8b9671628258dc2f8c3025a916a5e4add1349796cd50670bd05bee601f7acb711d4110f9844798a5fc75e12b65e3c2229a4b1cf8334d2cf709584da0d7110afa4afe2ff6cd5431145b1b9d7a1cf3668db83d93756de85cdd3d549c475c0a60adb3b7f6c1dc4bde83ef402c76d120d936fd2196e89a965ef3c58370e328583f6d44745d7479394cc8ecf2e09aa6c4f771e119cb3289a3d8ee2abb53daf8ab32831ff4f41521c0293795613927c86d52e0d48ed35983d76c1954c3e4eacaa06b9f63f4726a69649f35718413aa03b17ec3d4125b5f20343905b7b76b0ff89df6a342be3b2c3d5c313ff820290015ee41fbfff2c8bfee00ffe597700f7e09f7bfb957ff5f40496cbfd51fe95ad05d40b2b780eba3fc84de9904d1da2fb700aa688aaec440b3b8495f8365c8bcb014d70c6a19f23c98d6d64d0896258fdf70212f16bb96d5ab6570513671a8e6cddf0231622fe30a70cb33a40ed6bbfc51719bd721c5dba547a1994fd843ca1b7b18dc5b9b3be2b08ed000b2f40246e511eb3cee7e222b53df77421479cf97c5bfa37aad2d3637359c55c4407bbc67b7086ac977b38fa6e169f0134eb49422527c1fc61c16dc96f654b2bdffc7a0c0515c4690fa15d0513fc21af38b0079ab37bf83246d714fd597970a8424fcd7abc744bfe3c7192194f6f0e13fc77aa8638801ffed0d600b53536730eb1f27f69f14498b97899865c3ee3908f241c96eca0c23ef99d69f9693bb50a4f79e2770b789d04c8c4d20ca5f6ca1093141dfa262d2cc8a7dd176196d56f096b7cf1f284c96dd1d27e1238516a9fbc26857faea4472cf3481b8bf3b18c32a302ea3e3dbc76d58c84ae1e9d0292091d210f474af34fd9892ad19a52fb2fc19f19142718d09a1dc3c92d9687beacc6b4c1160b025650af15650cc8e2471912d5248d48a275a6e8b30e8f1408ecf58449fae659c10245ef6e03cbee77d1a76254140c5068974d8eaa53537e3602dc2ba777862647c7c376b37b43e3865f880fa750794a3082a181710b17e7d3ad5c1fbe646a271f89e4ab6e6310818f87c898cd127338fbea172857b7a25bde214193c9c7fd262217dc5779b30ee720ef4544a9d58e08852b62737675de0f8a4611917a89526789fad36825a52d11f6e612173853b96c5b8be7ef974c9e26e06afbf76d110600787209e50bf30c7080513191cd13b9775a4db0b5cac6bc8915accf8542c8e1f718696d5a1f6dda84172f4264ed69be13a2be7635659ed39b806aa8abe6d4b5538fdd03533b2c324e431db218e1888be1f16765673d808d6c2390dfb26a88ab3c00a41905eabc7f622f00e035562b6b2cd878dc4c07dd71a0cc7f556025ed5d7593991a69f9656a9f7154fc096e0bad1bdf1a7184dcb833d9367e9357c7f9b41eca98df77e41010008a87f56bb7fb0c4d9c2d4d6f45fc73f08b2ab3d6f4ddb80e38bb5ea8b7d2bc8372fb068661e7da9bb58b6f7626706e3827ed8a200aa5e47fadad81315c51003e502175557541ff7383104db292600481523d45d21e37449a3ac7c215bc79f3a7be6e390f4e63a5fe7a478b4bc585a6d4279f17e95c36c330df5b5fbe819c4b335448a638d3395a971a1baaf7ef43c46f5658a6137dee899bab84726ff8f2d857d9800416c32658cc2ea937d8f58e52d7d28e347b6c835818c38449f0f601c63a43a23a574342f380f63750cef36ad287639fe8425e271c194e1ad84ac9d62d6b2f23b47ef33cf830e0f084e8016eed3b3f68430bcd20c4d65643e3e749068d9aa1f9af33bada98006b31b235196f721c4898f7c363d5a2f4f8ab0f6358ef459bac63167e2e6a66fd69c1ada779940e0f02f5b66cabef8b53b1d126d706cd02832e8d9bd4426dcd2167e0608a63c49024af5e11ba87caae8baf56dde12e90599c1a8c1ec0ad039f5b6c26e8b3b4bd6d7fb9aa4277da4c2701983be93bbf6504068d7cd8a70c18fc30b8c6e4071a6bddcfb994cb1cbc2a936caaef6fb9ed9bb05e1f5b43dbee574b3317b0cf05b7f88c5b4785286d1101ef4f9a4d10d24821d008a317c8597a7ce90026310776255d3cda17acfd0f91c2bffe5326ef02d1b2ae5e9b64ffd2537618f276252de0bd637d475c1200ada8f9082a21d01f8527db4e3ed59fb72031ff0edb1fd9486c614eb3d0473935a398551c68e822ea26acecdf766c2d7e702fdf4a0ed6eb9a9dc67afbb9fe3ee2cb3cdebf6c2d727d343d32a8841ff767d676ad1eb76bbaeed662ab3d5c9e200cd4b3b58c1429696979a6893217a192e8ac1e66e55754ede08d7d0eaf512aa339f6ab4aa095cb47a728383b7d187c3063f2618bca06e6b457d86b8d1a742e3f51e251b382c1e736f9634e4b7251b8c5a6fab6409f7fbbe54457a861f3558efc3c933a1442732e4696c2bf38486be3a495e165f467a1d2a7ac5ed23110adb12cc1dafdaa14a7fc472a99b3d4cbf6dbc0dea0bccd0f65745dd1b23bea972c241d4d0a9e5f17a7795d690e12135644bcb843e005ca50bd432f30a4d7ad4c3f21e0f585dd5815511ae4baba06ea4dd1d9507afc08a0ab300d128379a64a0be5d881ba33096b291afa3a852b3a109ca31674947493ee170ea1d46c679a742679e2a6ebafbf1f8b1287eae7199eea1985d39b637964f7b9fbc9bd0c72ea78b0f781d9c520ea6d2affc360d123f2ff78704ceee387e594faeaf9255e85277dd43db8e7c77e76418740e47f5d86089846a73e62326b277863617ab94503865f12e9ec61b81cfae25dbd78152105983ea746aacc21ad1f340a61f988221c56461e641f1c4117aa9d1ed3bea9b198f3423df6d787d2e30375dc20922c45ef962994087eb9c00f1ac91d9710c2cfd9e7f90cfa7aff1f97871b6845d3389d5ae894524784e1b19f75a67d60c92f24204870d4f76c4fff93c2474ed4e547c4a8da6d6f9ebe0de2b9d7a38529ae2c530cbe382f50d54f40e569fe4858d5c1701bb2f076307bb5f9f5f7337a6e9d5df772c988526f5b1fb3b55a5d7ef6b7f689aecbe6eb3b7752d5d6b0a5e2fcb6eb0b6d02d7f43919fcde0416c611f5efaa4fa08ef60ee2245a55b7e3c3c16c1b2d687b67972a09bcde23c6fa07bd58c822d6a4959084bf6cd32213c19096dfd1589dac8eb4095698a47032ceba2eb4544b8f9ba9f6b6349b83c8b5683edaa2f6b22b12e9966f741d7323e66a2616aecfbdc6f600c6421a58cefb33f947a299ee8a870db109915bbc809f72f048b5b727c101f14c9813ef142406b019f1b6a3a0399be6bdf7e57d32900589195b77b7243eacecaa60acd23df48627a9ca69cabac6f43dda060c1c28f6e24f1ef6900b5847502f323ba6e82193e8d4ce30b9fc708d160094c2536b8dd1a051df138cd181b235a0b6ef7ad7e4da5e57c4132cc1edff1772614bf59408582cb5d701b62c9349587f09944882abac5349d9fa4aed4ec0c1a2e12b3c0f02192db6eac03840e004e356a9da383386d65aa09ec7efaeafa3ede145fa3a250e1c86e3d05a1fb67404da33829893204998b1e699671f4fd1e09cc663bcf94810d93a2af3eac511632e675312bd526cb3713a16d7c9a32c74febaf6953f5b2546af115d8033573092c0e860a03610194e0b3c8cfeed3cfe2098edc7239d666167957198fd9cd2c034fe29487d649e6f01330c8c17595225b2cbe666c9bb5680a448d9f5bdd66bcc1a59389cfb78d3fd2a7aa6b8f988ea5cb09e9bf67ad642c2afcc2d83fcf0db6334fdfa5544c375db9b5f60dd3664f7925c7b930d4c96bb991cb05c59ac64928520087cc73bdfa6c19e6c67c4be9c669e512a4c99df8ec7070d9fdd2e64366abdf2a7ba04ad7d37ef9262d78b702a86c74d0d11e4366e9b1ccb36af1f84b5dee7c2d465fe9f5d0219626fdcd6de04927ac99ec0d5a96dc30fa731b9acddd731b11bd5da7119b0ebbc0ea8732a4cd0add9e76b2a784ccb01aba9953ca3245b7dda8c1cd691d62aa603b5a5189af6bab83f3ee1e297892876f60d089753545e6bddb7787a044886b4be67594be3736173241db3cb1da36b4d1c092db032a5d3e5288942bb18475bdbc21acf0caf15b6fab0f71a725b6cedaa270f251e901e5ca99ff540b4374f19cd786e28b05ee4511c4ec1dbed0b0bbde0e0449f85207fcf14efd97858f8345aa95b14206a59bd476d4900dc1c4e75916dc3d2dc302ce76ed22be2f81d16486f93c00ddf983178c2d3eb68a96b592b70ec0c86d318a76f7cb86c03ae2743058a73d7ff96ca90df03bd727ae70ea37420000cc1e6e31fee5fa6067771b53f04fbfaf511f7c37cb85dd4ab4c987da083e2b873e7eed6fab25ec87cf5c4196a5a19dd32c4eaf9cb51935479d34c887bf49763a29e38fec9e8e74cec33b1e5d4a397363331bf10ab3cfbe35c5fea5f34d49718aa38c890c9282ecc6672e8ccfe84acaad0a0349533cdac912c56cacec7869b4ebb135ebd5a7d7072beae4240d8d54e224808ed9ae66a5222d6d759db918d23aa21c2aa03a239575c91bc60bf5592948bf3a4551cada77578b896427b0b0e6e49729bf71cd565e5021b64b00c1bc92c444650f4754a3a6e02298eae81ddcc4d091a3a1b33cbd5e6e7c7cfcc2556c662aa1724d8e32919f7558510ed265b29dc92b42962129bf1b102d5d85cd45c034dfa538ed62dc6aa2d5e500a80c51a354291441236c0b4e291db2f69c45ff4497d5ff33ac0c64e7cb6ec78e1061ac6da98bfa2c2f5b98b757d77eb9fe59e7bb10b783fd83bbc6b6ebebbbbdd9eb26a1b3f3475309e421a61a644c7b1e946c0198f7dc1653d758d99ec7cc151f23d34737b665fda9a2b287f063f943c2d8df954763ac8675be27861c5c781b5ee8afe4c290ab11d40fd8a2dc44131d90e8966b240218a2483ee1e7698cde46dd318eb41fc8d32399a6763ffde2d9c13e062f4bd70d17a882dd5d76fae2b62195e015a9dbfb0e2c17fde20d53a3cf4153a37262a82640ccb79d8887147cabed970a141c0e6315b9657c7b6b9cd8fbb9d8bc65eef862b2d50e35528b4fde8da81944ee382ac3b6b2775ff02d71ca9ca37c128ce53e75911ea0580ede521fbf46214ad77d425f78b8f36c5ab72c4786cc9648decf4b083c628527de8bbe4baf6dda5077d8c2eddda790f32e74aafc1af93b0284904ed8b7a596fbf2997836c5dbdee11bec52168de7abc13a8bfd01ef5b7a6b3311bd7ec02e422edae480d9fcae285ff1d78cb5f04308adec05a6bbd51d275171955c37ac764c351ac92f5cde4a636425e67d462928538808737f722f2ced514825042bcbdc2c55141037cae8613dcd77b87a22c67b961374876000a364a0756e6a8dacb2ddcf096ad1a75ca4810b87b804c3fb560f55f157e9799e989dd3df44d065fb76666192fbce70bc7db94abc2b75b76d2333306392b558879025b0f1a421bbe511906c2d638f52a80bbd06b505b0e60f33cb6e5b407667833de13fdaaa60ee2179422527a8c9a88d2771993791f76dee1175c729a788663ceee42596e8d5ef3bdd0c45a504ef1f92f39187421ee7a19037b1375674b27700b31adb3b99fee7b8e99ffa1df0b3df3b288dc08e1f740139603359342b186534e485843f47ea085f61a19de27d194f1267b15756438f0a692420a266b98143d2bb0c60c52b2e3734d3b67e45c412c8143707161a1208136a20971c229422789613de9c1301c4665ace2ed41851b6ad65f307e67f5a024923aa2ae1e1a73e9690f44ac44d94d28c79fd4839240b28831b5e51133e099547eb0e2f1593551b610c642e7bca51f0fd8929f9c704db6fbc4b713bea0e8f539d8a1886fc829c85c5bd69cd114c1a197281ed24c1a846d8da86e59bcbaca5c824c50664c75f6338305d38a19c677b98d53c3b0428dbb60498815112b9d3c4fdb69af74ff453327506249903a9fbc3e11e790da1c60bbb50238cf17af1b56c0b52340b52b465b6259f076da5a59e07582e9a5d9fa76cf1a70ce56fa5254fc68eb5cc7836351decef27abefdc5ead9e392ef6885530fd086514b05fb46046149cb841b9532838cbec992083af3746a06ca9177cde6f3cc609d5c24f9853ce5f72779de04f4aa0936a684ed5ba9bcc441a6d0abdeebe9762c2a913fd0a13eb52105e825164b2fd00fc8ecb0b33ded1e90f4425793017ecbf72d9d0c1e11f2aff89b4b84abb5936ece00b786f147f4f591e0c487b1631be7cc46306ab7657d7605e2d7186384a56c83cbbfe151749f5a9ed0d35cfeb509abaf4c6f979df9bcba3b72b1eb3d32541c9916e481fe49d12fdc75a41762a1567db3b3304fdb88c1a8c3be4f83628617afdd1145dd457001c8cbc48265d46cd2862b3343a3db1dcd1401349e935e3dc98d1fae5d6a2c860b2720a3287dee1939bb84ec28ef78a1941b954644073e6bb72cb2d979ea47d8d26e176652fcc0ed2d2187d86361272ef630233835ad292256325ec79dc5363507d7cc3124c95095ac54667acc5f041f8f002528f3481619b2d2bab5cf3d25a24375a8b43c8d26683c953118d370d0265245d8ba968aca5da3226c395709f16a2386fc352180ef998c4327d8f9b468a5289d563de5dd91033d6ea0f19eb1e7a03a05ec67731fd267aa5cfacdae51ba3d0b32ad0d92eb0c4640d00ee034fce143e7eb83bccb87e465f47b34c3c4f724153daf975913eb0ae3283f04b953a8ef455186c3a1ac951062faa963365eaab6d96d7cea5ce66e292cfb4334f4bda6aa6d3d5a292dce1457a6239e0bf280d07cf0cf8776f04fc8adfbc1ff0eb027f9f65fe15210f3af9cb64f3d7c05fe73b7fa204f97f4c7b7e0dfe7b83f8af287cf447f0bf6917ffbaceaf8dc43fd1fbf8dfb7157f5de5d746d39fd8c7fc6ddbe9d7057ecd59ffc42ae12f19ecafa17f77d8bfc2f1e1c1fc0fbffd35fcef9bda5f2140fe97f0ffdce2146590907f7e87f6f0117cf8416cca9f77ff01504b03041400000008000000215cedff0b4f9b170000c81900000d000000322d6265666f72652e786c73787d5805501ccbda5ddc83bbbbbb4b823b09ee1a6071772748160bee1e3c976521102cb8b3b805b7e041824bf0c7bdb7fecabbbcf7fe999aeee99e3a67aabafbb3a3a60c078f070000909f1e6a40b166efd84b98a7113c0080fb346328edece40174f230d5f27501ba1b73f8383a4092879cbab8b064af526f30d31a98b83dd4b5f143642987d210ee01b3795868ed9bdc780f6db8d2cd9f986a435f57586eafb85bc4f74fc57e71c040797d8c41392d3dda01fe186bca77e7f860b4ec0ad2f763773c1e3f66a7ca7f5359d577e6086f597c3977ccb1e3c3095ffe22a74744e658cb56da8d67cade2092695a834362093da2410a21bf7387e58a228027285ca7d2c14a95f4a64539a983c61ab3b92f6fda85b8885fc9aa3ca66e569c693a4f2db9e6dccc9ae6c5a79098b0f0b65351b32aff1288a21c5cf6408a6971114775f53a6df1963ff2d04de340484a81632c2cf9b7c1c4e2be0c09bb0340cd174f7d7bc658ca9ced742b3c20b1b110b4e1318a2c7394d46bec8c162f1b5762d810cd67d791b3b41f4a97538295c820d8f9b86b5a340f062bc825d45cd326568c3d18ff2833097bd541b045a1fa0a46ed1fab5da7cd45bbfff4a6020b00a03df5a66e4007774e8e3f5b48d2885d3717fabba3b0d6b08956f5854ea2a2379c16e38b44f37036f5a7d23843734ee96df72ddd73b0c6bb6fe58726cb54a51697c562f7a0d497eb7c15313878a2b4f5de1050c38def058085c12d4dceb562ad07db6bfae7c865aabcd25726afd678164da36fe3259b94d845bb3e857a91d6e9c12428b82577e8ec7e3c70751fb26b5afa8fb361a643ffb8d4919e5b1455bb1838e377b0cd5a394ecee8eee1c8b50d1163f44afb39186144a9915fa6ceff3e2d1991759b3e8236e94a560e2e4f70c1c8f9fcaa56c89546396a5ce1fbd02b53e2f4f099c7af85c0bef811b1f588f03563cb5f5e9dbd185af9ff5c131b6a89bd423800201b0500c07c9af171e0f47676b3377776b6ffebf4e92c3a6d086005728e07639d8f46a630ed870aa1194f0006685c5a14d188f4b870c8c113103ca0a8dee6aaa816dbe2fc66e7ebd9cfbee4e47999c2d2d77743f52c75fc84c613df347373de1a6f78ce6ccade0b4db78f686eee1930eae77ea9f9e35a2b783bf7616bfd6a755430d6c7cf268b1103b0e7545e55ec10d8fda306bf4acf7ba6b605940ba4656178cb42115b899fb3b51cedae9f0a8a3ae9f9a4a7be5f85dc268450a4cf11f3a1fff58c6e4b5a155568ba0aecbd9376ed72a40eb0ac435b45ec827d30ab1c2132a2906df30c506eafbd6dfa6a26d60c93beb195bebe1eff38b723decc66f8846ececf5b4bdbb27037ab440cee07f9aef703ae03d62903fce215b710469414d6ccfbc13518bb53c58a010a7b3700edafe022ec8077bce2515647132af7eb01fa297787da4d24f68b55151a992c9e10cb5c9553a9d38072512e4781bb91d01f8b9f399532f4e604c8971be786aee56c844d6bda52dca904ba543d71b309fa0671c2b1539262b21429f8ebe0c91f684630e626ca6166eb881fcb38e18f10773b5fd4b29dcd4b7b776f2aedcb0a4fd3069f40e082d04e961e8dd942eb63332d63c00c165be6a360af0907b4da20339bee265420ba10f5b185d4675902f953e091ef2312cc1715d9de39cd60f247329a63895f16a74ec5e36601c4a692854ef3249388eb506fed40145fd7f647e4ee6f7162844554a8e632d2d95484cd04d11a3973cc2f60555a098d538bf3f92bd2c1c69578db5a65a34886b30ea287580757b241428f482b81e34823bf7cd5f3585297f003a6c8658a4a172edb3e9d59f14e63737766ef344c8d703573ba7d85e5f6cd389c7df8debb814a84bba80e52238bce34c7ebf95eb65f082da6284c2c935a43806a0d25c839301e7640850af92cad0feafc98a20cf9195ce2c126b2847d5dbad6914339e8c81b1654b9e84a129e6105f29f7799d1da527573c9fcd44c61ce917b43c25e46bb98cf4736e54519d96532155667cebdc1612cb83f65e51c2840be2b921ad151817e359bc76d81580510d7c4b1eea448779c6538d83453d7bfa379ad18cd14a2075a0ba7117dc3be48ed0a9f2492a07dc8293e30cb0f2a134e7e995245f3723870bab479fa7e7dd421bd4c10e9d7173d61b7d035761fd353dcd8a9665c8ca2aad9b37d5cc7aaa4ebabdb73ad8def221fc2a67e86cdb3fdb2cfbb13a6781b40349e8f4b81bbf796152501288ba7cee899906d4eaaffad20f17577b8d94ec2b15b32443cdd3999a488a6688334d07be3d31dab4bf015a1f27ea3588be60b25febe9b8522e33bb47f9a736cc482cbc2d31bfb938b23f9db9cfff672ff6ed47f7bbcc4e5e8a7b8f2fe88f092bc6bc9794a47cf92fb428ec08ff502464ae4be53002553bfced9d9a89312eba40bbca692719433c09616e18a258afe4d144ca5ac8165130bf65f6499d36a3775c7ea5998f17321c05751f8ccf64a9cc09e8caf9f7acf4f9546838df947c67d7c8aa508193ffd68512c672c5ad13693346bab80e172e1f0d4b921c81011cf5b457d06554a7f4c422bb95f77aed2d62f8cd5fa41aef6ae430a4755da48424ba4168a3a2a12459610fff3cc7bc13da7177cdb2e26f8c59ab8c6db6aaef973c98bc42a610ec82fc9323714daa33823b2674e7f2998cc61f529c4c23d8558a2df0ecedd0608f470e7fcabe3fe7351729317a317b9b0404768814805fe8bd5b8a271d5ad9f155f5f15aad547f8cb522cd2a401e9b664769bbd37f9e6a598c21150f892b6b383ad8aef76e9fcdd008ee124a82437bc4a66dfcb09a40dc7295759394b7af404be55e8c2e19da3835ea5528a6fca977897c27d86470963b6b1fe998110b246ae6015c0dff58e317632499fcf9334431d0eccc8388f34e190069f141562829c19145e9025e732c7d496ce358726233dc6b627984b3492ca704d2b3470ee24ee6734808d6d3881e69ff7314521afb5366cd261d162a5cca55348d8960c7bf49a7fb836985011b532553df622f14ef72cf0066c86cf1544bbbcf388c5606406f3a28bff1803bf35197f556f82d4e1e18d9e5bd857b75d07cebdd007a557bddaa9afe44d328a531b14ba7a0c6577170c7ba679a236f449e8c7da6d336761450f72a240a51ff7231181af26825185b282677a6a7e0afe0831ec0050d31f3a3aa52e7ced265cca129efd3eda9045d1a5fbdace66aeada16aef17b1cca27e78f1038fdc4465b37ee0cabbb55f4b099b9c4e3c02c3353cb37b0a9fddf5387879ae30b7e7efc4e380a3cbd375cdfb1e69d705e8f74ca36170831b42d85ef87e05f115ef39551accb98a23ac60d999270853a716ca5d0d0a9620353a03e0e9b78212a26808fc4af3e0b568d7dbb62dca7f1e8a9fdadfa0bf1001007c9abff3aea743e161037404feddfe751e7e1a18c690091204611e04635dac542a7b5ff4363ade90f4e755476456138a9783a78dddc04aef8bf33219884291607d51e07312d28d2f1d29d38018dc0e7a0497fde83d0e4994d8a9e54d4ddf20a7f4143b525624a5ca93de71af72dd3d3ccacb9d9744629085243f589078b35f6559c0e02179446ff8cefab98855d6b177207c284b1827f284e0afcf40b2836fbe23b67048e151536d5904917b41d422379b1ccf24bca483621998d22c780769982c93477e3287956938cb388cb96679c1bb3a8410c969fcbc9f47474236ca09f6737d588d396b37109cc5fd1079478896e7051f4e8e60375393d2f586d0e9a6573740824828a4d87ee06be9f939512e0a1a16f43dd90f83b89b2f07d98207529191a8f3494b7af75b6e5f3b3cd6988505f2f14247a1f6824b52ede9bbabbdb10bbb65e365002ee44da565f28a7dc1dcfa740be58f07931f9ba7dcf645da8adbdbc0ed5307fe1818a6abdf499bedc9bce5a44dbb05057c829156dd5b82ca2ad7ee31dabe86397ff063772e5ec367a213323928cc8678356716a1413f242dcaf994cd7b187493b549ce97fc18dcb450c7b7c70e5099d7834d712fe8e0c602c38f9851b9b6caa8bd006530c257b2257464b8cdfff4a96485ab5af3e995d7273391ff4c97eb891050c6ba05e7d3e142d33443fec7348b64dbede5624c192747dec3edfaddddfa6e7b07455e4417953769df59cd1266f0e37a7f7b006cdbe3b6b3b8d8ede4871de0dd5070d0e5a9f8a37faa5fc1c4cddef510e158fbedcdd9e3e34626cc8a858b06887203d9d5053337549a640081844102f7d20ba79fba270b1e9d7e124016a506b7622869de7591e8d415a162858a7bdcbd6511bbaf0e4d83257de7ddad0077a8a97493429cee2e980b6ec9018a09aa8ea60197a8c3194bbf2219bea060c7253e9d2b76c3a289dd86495c01b9e3d1c24c72374940a92e912d462a6f85cc52a63201f15c3fa41df806b8f390bf8c3b9229b657a8c09780f9170fc4e1039554f6227ec8c80f3ac24429d2d364118b872bc3d0d25a1025f2b861468fcb9cdaf4c28e7c3752501dc32e30e393cdc9b63cfc922a77c591c23cf4e332b026da830ed7e7add4a1a4d21094da185d8a885e6e54e8c5d05cfc2f2910133c921691a25a6044b1e32e12916ed32db5dcfacffa0bb8cc906198a438b64c5b65aaf2a37efc4c494b8d158bc434637f74d2a2a2f61cfb82d608ac903297682c9fe34414555c3b8640c614fd2d019ef9ed17df2cf81dfb23693fee91845970cf4a5d228fd822e4df4febaceb770a8556289db5bea7e02942e9eed3f2cb8747634f354f7332e08dba150b752ebea00a37d02b71748a9bc58f59f58a57ccec1797466cadfba072e0ec906da190206c16478de85feac12a9b6695e821ca5c5da2ee54eabc104b7a00f163ec3ad98fcef74fa8aef579e0b7cbbfd2b9300a6ad54cd5ad07e7b02c1d7dae27ee0206bcdb7475d35e304a1508ee992cb5e334c5e7d34518d1963c8bc1e7cb26e9e310df5337281cdc79c5ab024dd4c3aeedd7bee8de5ac98f0396d93115ac736be20c0e058860085aab19c3c9f5e65723c74b65406d8df8bb7376ca77c8e852862607cabf41f6aa80b5aa65d79a62def7969aa812d5bbde7785a63af634fb8ef502f1926817e5fc3b40d8368d9b6d3aa5e45dba3d441cc84d76a24bee90f904f7679be62af3b7e92d34988c8029a48d205a0bbaeed7a073be0b4d86f6cbc312ffa6c18c9b9a97dda722b1ca67b57285784e22511a44a0d3e3b9c3364b536f112b5d7f3912c8e5ed715d6b36a942454387ede01fa97b2866937556a7338a2672515ad0292d8401b143831028fbbdbb8672572391148515177f0a3155172cb7840b5d58eb01124e3ad473b3f41a9274a6c17837039d5f3491fb428c2a233b56cadccf43df37e10d5f86d194521cdfb5cb9c91402f1a3ea91634f4ba55b4d708af32cf5c27fa3016bfe154bb8db08e5022fb25aa224ed79d02b3f5197a65259a48892753e922b8e63543ce707fbaeb419b890dabbd4e0e156490eff2e1cd350eb82933d559c52bb7fe6ccf627d59351ca7ae3ed3605905b277dcd813fd91cff84b97934989e0ea89d05c9c41b3965ef9cc68b3a3882f1b6d30d3d034fd809f029b61b49b5b07de154a6ee5a972d717e324886d2ea24240a4154075cc72908f9831d8d788aebadb21f4fc98053e56671ac1fd8ee104afeb70ff3d5a94e7880932b866a95822079fd7fad7f05bd919283b30bb82e9e89e88acc2f4a7d5aed645a5e679264019d43cd31fb76a8f2e16ace6bef0f069e693608ec1e2d1b4fdcbd5aa66da554f50e05154316317f4821729ee6df800cb2346f8deea35b94c6ddbdbaf04e3d0d23da72e9dae3d6fac4aeb1bf21e57112745b082c10ad4d1e7a5b31a29fab215640d23bbce0bbc02c668d91edf1f505921bbcad3fb2e13b2fce02244716b02114e68044d9dd9b70605aad9d7cb073a1fc49148cb87bacbe7445d5c89c8e157658b3fcb9ecc6ccb1bf99fca438fa721c6df81d2ddc3d701e8fe67886cd519895b14c06a23848a2237b9ff216ec72ead6366488045258b5a81763e98cacc891d8dc76447db00059ebd40b8416cddc2f928696a1d1218f781ee11aa98cc2e20ab4a363a2678861191b2bee3c85c61586a5fb939ecc549b668cea34bcad1c07bbbe30962a8d7266511d4621ab0ba8c9bbe3cdb9cc77475f40a355ee6b2627b977031dcc65d9a656eb42358517cf1be3c035eb9c04311c3e1826036d5ca43d35bb2a4236f23bcb1d86801aeab76f8114341f162bf54ea2b0babdd2f7ec2a5033fb64596b3dd18885696091a539d275c962184d46eccee825ab1ea9e4675c01d62a79d81d6d15bcee433dac626d8855d7a8d8292900fdac439f0b15e32bc972906d87b0d356f7c496e549bfca65349626b558f39473ebf6bffc70ab482b713e5a835a9f161baa90496af3236594857ca7648c26a4638446e3209830293527c6535b0b1fd76ff61b9f9b6f92ab7fa233d6173e78127aad8bb87e0f1b560e4654efeb9af58fd97be971f15cc3378bb6b87cd2c7e6e5d54867ec0a9ec014cddbe5c6f9df6d8f1b3c41be74cb832d8c530ea94de3efc80a88d83a643843c1ee03f0591d36ee42581a34dec217dd3a0a4312149417309dbb1ad12093ecc7ad0f800a2895aec4a7a9d99badd6b65d5fdfe688e5286c986f305573762f04be8ad5d822c58e9a0e9ab3ffc7ab6ef49466f87ad4cbfff53b5cf4eb1756153eb2d37fe72c68fed0be74dc5893c643a7677380821192cef03c91320eb594db3f4158ee720afcd6a844790dc2bb84e928132bec11b991ace877f587c800d0035064d8933bffc280a8b4e80669dc92e8d87d8232f49126e13249c4fcb69841024b73d4a677c4ffbbd3b3f58eceefef60f8b19cfeef76b6eed43d9240caedc3ffa8c89a0dde1f565dd7bb78e4dfdd72dfcefbebc45700cd7a78c95d8627a840ab430b716cdaadee964b6ce2a06cd1b27aee99b417cf5b383ea4846421eed5c894bc0c3d2b8d6dc922163c8d1501a593a3d8e49be18b231fd36f2409ab60db889f63d2e5d272e0882cfeecbf9c0135dc6e5610a47d0e9ed83e4fcc6022da7c7768fa7dab62807aa948864f23823136d653aa8d35c9687a73c57ec447add6cf625be6a29285dc5656074c834bece45e1f33d224a80104ac08db1c27349aa0a430433e2a93a9978aad7b09f662c9d2dd4dc9c5ddc392d9cdd807f093049aacadd5c447d47a1ab059b6d25cb7309939e1fd70742becb9c104c7a1b56bf56c659f62225450dfd68028ca0a6b88343f5d388306578d30eb25dde96c1a40827c3c9dbb96f75ceeb616ee8ea9883e3b88b4c4d48e54f84f9209737b6475fab6e3cc04625add025862383aef409033675f95a38a24f2056a8e284099123100bc4c0fd76aa319c44a34fa02f54808a8e064cae1253171921b3475bb591314eae8194c33b42f34212275e2114d78c210f67826877829967654b12f59809049032d33063b55fe3ac82a7883645d300f611dfd4907757cd44097936848bf30b648f38f0e61b5cdc11ac94575496e98efc621b888675238f5f48814bc4f6d6ded97474794942d1fe626c85d344eb4ae302b1fcf65393f7409b7fa5df58b977895fe0b430bf5c4384f315665158e0f46ecbeab9697e1c99189c7228666402febd1c3f654befa5f871304fae6b427e6027af07e0d2da0817c8db5e6b642ce9343a8ccf9b56a23bcdf3b32bd498c981913618fc080bda6008a633f032c18de1ed41e978bdf3f080b28cf9cf5d5b990f8c8f7fda35e227cf88f5efbbf6d6c5e5af5a52a3dae9a9965c463ba7843fe42ea945460d33571362e7a9fd04233a5ff56d80462911de17fb20ee64b27d60ae2478831285be3b7ac963eff270656363e3a4e7a29e5f3f82dace5a5967d82dad40bb72d24bb3a6f9622706932d06be1e76832dcd2122d178a8c1b98747283e84af8f4d7f4eaf06041d138e2fef2458679b10e0ae43635763e9063537cda03ae7f8d94ce0b40f9fb1c6194a19bef55c9397f6f2c8f13e6f2f4dd50c6cf3695fb9de64ec953f8ad591d84d3d05eb74caea6a5eda82c7915fd1cbf21814f8216779f110061844a7c286c558b2d973612304db461a8607d9288f532b4d4cb448cb7258aa3faa58345bce7b47cef533eb234986d17ba590c7c090523243bb1f763f3fbafb0488883d1c763ea47fa715eed8cd649e39027223e308119e72ab75eda8cf66a1f7395fe0c0ded3fa72bf7e6569965c01464c8cd6bd7e2378bfd5ea0241ca461c903f975da43c19ad5ac6c0caebf35bc10323c2eaec32f655c763b866bb214ced1362cc61e8308ed8179a86de6e940eaddba5b50f9dad1da9beec34f5327805a7a60c03cb0ef8dfaafbff5def6000ff5d837f4ef05c48fe4de004f30f59f939f0b9dafa1b180afb1fdaeb73f0736de737581df1ff537a9ef33c57447ef35820fd6f7de439cbf312fa378b0fca7f2da89f133c4f2d7e1314603d4b349e439f7bcddf5018bcffe2439fc39f9bef6f7803fe7f1ab39a3202e29f5f519eee574f3ff420fc73f42f504b03041400000008000000215c404cddc21f190000642200000c000000322d61667465722e786c7378ed5a755494ebb71ebabb4b52e9740001e994161cba7ba4193a06185a5a919094128121a5a51b4494902ee96e46fae2f9dd7bcf395e7f7fdfbbd63dcfacf5c59ab5df59eb9be7d9cfbbf7fe345550504901e8004c0000c008c8d7ee1e5647020030510100120026b2a1acb393bbb593bbe9331f176b88318fb7a303432e2a325b0e0019f00ffe5fa3f4d5a07a271fa13c42e94a7685fbc55c9514a6e02eac97b8918ddeecfb138b715e9fd9911b711244a5d45bb2e7c29516c3b310f187599f84be91da471635974ca6c6eb21959d2937d55a6447d71d2592a5e66b8f786390cd20574d9d9cd9544da2b7c1aae8744a55d81f63057b60e83021906833811206691bc2b54c7dbeec868488bcaf2145cd2a8b5a69be7842991fa598751f9095d34ccf8b449925900d37b56581f8a9605f6b54579e95665ec8b32350d5d344d0c5e80ee21cf8f89536346ed0778e258a804f39d9d6040abdc0fde1939487bbcb478397f725b90516478463cba4cf7daddf23d3caa2beaf4051fa76f0d18db346ec8744fb703bdb91404b55e20d54ff474cbcdc357a626b8a619f806d506a2dfac1b4f570eebbbeb1729f1324b01bf35536947248a2099705951ffc087f5df355bcdc9b8be8729ceb26ad1cf449a6d6e54d82bb27797b8b02d0fc9b0c6b407ccc277757aa772ac3b993a1a99bb5038497e7e7f11ff9fd839f287da9a6d1c9871bbeaf7415d187189f4b209451f192566a627c060d7a324b50139bc74233d7ca4a4bf88c3a044531b0197a353033f73876ab8ff1ec3bb0349a98548cb9d60b1e9e72e1ea81c1f1c02d59c1b574a98bc873fc74fc2c4d51d987cdb3399ea3a4bee8ad4aff02b3c2e8a15c25e1308f2e351649016d38b9785ab0418f9afebcc58f32a47119ed5d7878459d70ced6abe1f4c089e4c24d3cc94811d59d9134b23e8885ed54997f9f03e3e9393548db4e045c6191e526cae4636ae5d0762c97de4a72edcfad9ed1a7c50424fe2130acd87b3fe734d0e003f07030d3a74b18abb3a4efa01f164d5f348ff43b914079678447500080742c00e0a78cbc1d78bd9cddec2d9c9ded7ffa54a98ebd73c923c2eb96911b8c2e2f8a744586a24db2a5b7f0311310d8a98953bed1ad1dfc11ed13f5abfce2bdc0057e964de61250ad571eaaa5df238987109bbef3144710b5fd03439eada8279f2bc015a21468e5f4ac6b753ee1c8a37664701c83176fd43ed97e7b63ca03bd5ef5675e190d21d440078ced7619b18f87268faf71ea7c3d530596866716249081f85ec7ebcc2829447b76a7162b0ff6785b819226d6820807b4f9badcfa21c9911f4bf4e0e884fdcac541d0a6ef6a4d8a2547da8b1c1cd98de8abb9cf01df83538cc41139854f5797562db95902d8da77b90f63e0a1fb9850d4ceeef96c54434545d0e3945c32150ff42fdfa42efa0261dc32f361667eb421a309462a558213228f2b5ee6695451d35528949ba1de02a991c0a706588cded972c7f8b30ec7dffdfb553c85952672d48e5feb886a1780933e80c0ed649c0f0a09b42bcdf7c9ad2654c54c3aca42c46784e1d12119cef94f2beeef2a0b6230ee2fb116c63a62583a6275442a775ba99145cbc3a522c45aa13a1071cf8fc4392e963d375bf5569a7a39bc07646540824d593fd9f1810d2b11fe659743381a82e2a8e1f2156f6ee193a2dc68cec451377e5b5035a161dc370252473bc3b7193260a6034bb90a5972e7159578fb5549ccd435510ef250eb1c89d9405c226f86ce6625e724e0e28d40034c6e6e44301fafebe94ef105f111b17f606526c380c04e0e904abe8fce9200ad455c6113a8cc1411930bb8946cc311c186488bd54c3f91b65457a538827ef050abbba48375c65194afb72ece616c1e765ab72264fd8ad3e7e96cd3cf4040dfe70efb3ec691435d725de8ce590b1ac2d76be2bc63d85dc01e9e545cfb56fe9b7ae49eaee3538826ed9ba92efff6a7dfad1f616a3a3459aef458c6e47ad3321af2ca5257a6a08b336fe315b43423d740815b2d2c4e1e83f7bff49e16e5e12004c66cfb066127533392e823fd6f514fbed0c461d5f64ec31cc74125174463bdc1f75c5d57962ba35db6bcfbf07a84b08d7a152ad327dfafbf7b227aea0e3dd966bc927c63658aba74d39ca75f56f40cf2e498d5db7068d24dd950736491f02040c5730b4d7b07202fcc4ce586d5e5264ad7d0a722d07bfc84f89dc999b24e53eb95553476e90d580184b15ac259971d71f1665787207ad0dc3ce59d973cc567623ac4dce8ad8d37ce7cca8edcf2ce9e5ce78fedd3ab0bb99912f79b6b09b1f1478d590fbe6e9e7d7520bfe6d7085ca037bfb6948213606960bae3b2c6262c77f1b85d7f529446e7ee720d103e9b052b87eff11755cfae6c0fafce78c29b9996eb6e993c8794d64d43229a5af51406c79c70a6a54c7dc55dd55acbcb51a6bb1700bf937f6cc4b4cbe2dd15f79d1552033091eee4ff2f9bfc6b12f82fcb44bab34ca4ffcd74fd7f01a58983cfffd8b185dd84a406887b621724f54d25c9d4765f0318e3e9bb92436d5e7e0b345d82cd4929094d6196a1cf41581cbd249773d4491b10eab289ab397dfaa688b2f10350c0e36698057f99508857be3953b8f1f98f8aebfc7625d12e637abd02f25e6ad1c483f0bedabcaf2e6b280d40b03f6d6c3ea5216ecf3d5595fafe638a985bb19cc7dbcf2e0d64672786738ad9598e769d1680cd055ecef1cc220d4152c960250acdd751dc51e1ad19f715db067f0c891fbecc0ad3b9a0753589b6c7ef16a76b0978eca2c852d25bd5fd48839ceaf1e5ca11c5eff831cc4c31b17bf79fa3dd95329480ffb607889db5b53b84f78f13ff4f8a64bc528b4fe7230cdf7f7d41cfb5d02e85cc88a90716969f932d2836f5eac53543e3abcae4055defd391dc37641797e334ef17cab29d9f78f8395b5d56033f27f699a5b4ac640eaac2dbe722b568d7e779475aca31ab96437e8232d2c3661bdae787b2d067beb6a2009504be3730cf6fea54960aee7c2ecb25580a57a36ce22ed12a73020fc18ba7b4c0132e6c58289e51dc894cdf0933ee3850ab4d21ea1a90d72c053c99cd858ef6f71b8143bc51855d9a6734b2343b4323e13b05e2c39acae889cdb57923fe3379fbdaf52bb00c209428ae5b70e863600a384186338f7a9b39cd18b830635a2db8fc5da111714bf8c048000f6313fb47f88b7956f618e7d20dbc5a6f56ae86f6598f4d07de6dd88dba4437e8b584a2496afeeb3ad58e2e43c5cde8ba98121071af34f5fde140bbb40962ce1d23223c356953a681017fa72c53e2b8b56c914aff4b3a5f42723e69a5a8ed21b89698d701591d32c5c09e45498370eb732dd94e44f375615cb6746d26f786c0912eff0b4fd0f0d6317a4c9ba7eccbec1e613a1a279f347b0f163dd18fbc0f5d1184e469d5970b7d02147b5cbe8cde7c7229110227798f6c3148d95c1876394e61d9de38a6f54eab764a0443a5e6f2512d1bb8fe19868222d6ea073afa25e1dbc59debe8a9bc074f9fe62535f3cc7accde7339ff2d457641637ddd18000019d3cf6af70f8ab8db593b5affebf8073b760ce6ec591a880209560209ef52dd9cf8828d6dfcb9d142d9aee0f6141e826dd8aeb046a78efa89a51f2686391e068218d348c684f8283982d02d2184963141b2a742c5ed9c594b0ba15af7f8cdcc29d425c5ecb2c0f0b864a4bc441934aeb570bb2260b39181f9c467e414e6d712a124b0faf00d57e37c757ffdc859c2b34769e63d2423a73a72bed98f7f6c6aec2d8b9325a6322468acdcdbf34dd4da34a9e178c717b32a9ef512159a0e21b244abb3789a89e58fe46ba98317d0aa1fcbaff6386991724c226d78332967bb84b7acfcc635e0d46fbfdd174614a24f7cffb42d298a049ea5a7852e26860394295b09c2728fd39f0869b0b9b290e1791d41998c0dddf06d393f2e26d8d33d34e1e91ac39f7a393b79b5ead6d0b6c30584bce8deb4d10a24addd6e576845e2ab89a5a939bd55c8465adc24cd022e6b7da302be818a7daabcafe9b9f9650e8c2648633a623af39dd6fdcd7585d3a6708e6a60c025556fe6d70af3253cb64ee1da0371c91dafe7e4f34102fe101c53fa5383a5be0e1acd2e3bb7da58a7dae95d9bb879a9b58c5db1a54c9b51673c887730cc6e522e25cbe233490de7378b2b58343f0098602e4f92afc39eb6cc2ee7c60b32ca657ccddec94950f0688938fc9a0f93e1640b5a7f2e4cdeeb879a922fc86bc654170ea46779072b2cde1647869b601d6dcd38979b4221d747ce13baba13bcb730fc0d26ad340e15277ad6e8aa59afc0abf1402802e764bff566a9a91cbadb332870739addea7f8d088466fbea3d0f6337b95edb9e58f0bfdeaa6bbd9ac86e71b3dbc7f23708d7b053651165a2d8608f5f428a6577b8597936ab6e416cfefcc922a6bbd8b3f8675648f13aa90d2e0116e9070d415ccbc812462d15f5597216ef8b2cd77a9f3a201188d806f064a07b97ae73e87b57a992eff57757c5f8bd386cb0df4352e7c2884f66cfd7ddd212898c943f4e5d925b427b122973210c55885cde94c81babda66ccc4e639377a3bccb665b905ec0fcd32087e86b93b4a7955e54684aa6b582be21f7791d190e5abf4d991850be713ed0a6ba8be8d7f640a762fcf6b12daeaaa76828a17462c1a3a16063db1f9c81abc98cb764066ad46ab2c4ceff997a3f4964a0eea75f4552007e6b05c5b9e4c8cd46301b7be6174a2386d56db3772d63bef8e706548f32ccb8c0e649dca090308a06dfdea5e92efbadc10e924ed0f955cac95e583364c933b9606234267b65dbbd752ebab5435ba743c77b1b662e26edcccc3ce9018714d17a91837a6dee1a307641908f12a49be6028d921d13513eff02cddba0c5582a99a56673211147d90390be5fa812f11514213651bf68a32daf84d7cdbb6ce4616b65e4cdcba7f47a1adf522511839e1f76e70122bb17b12ccef83cab66b287cba60bf40cc44b7e36861a6945f2f85d7a989473a7cd6009df8d270c6069626284dc447a2fa3598730e16b97a2323370162ae751f18da9537ac47a2662e5988021f15aead63e2b4f34253e7d7f33cc49dbaf747f77706382f851b338ceb6fdbe76d2253faf983ddaa32ebf70cd29bbef55cb63a3b7ac2579bc2d7cade36d8db19959bd117bc65f7a5b4737e01bf577d48b23f8b48d3ee511f7b918802ae85b27cfcf6a987cfee2cff53cf8a0d3d5feca2962481aad91239320d154bfd0515e8eb9350ed497aec4f3c6b326bc514c405461db58954427ec52be14ed5e71f6208ceb966f680972a501b992810ff9eb0d9323b4d049ce3f5db74b8bfe6b1a1b6b003854d89879ad4e07cb81c58205d6e483ab7e69e3f0a5633e4cc5ccf9d966bdae07a1a645808784e53dee6270cab3b2d9b28b28d3153c4f73d493bd35edbaaf1aa814814bdf3a27af59a19504b5e273ef7d5c84b220bdac83536df314a8eb59cc455ea40dca35bd8fe8ae823defa57fd79afdb96a02678b958980ab7ef34e9f6b8e617bb1ac9f0720fe286441a3dadcfa45cd214153db27aeef7de7cffb03d64be40c9b34c0a53dcf2e2fd44ee02780862323cdc7f69a0c5384e38c8565ddf2f9a1668511c2915d363ac2179fb8056cfe2a59242198a0aa25799670c67af5701ffa3935fdaa775abe201286fac9d8a6d5dc2f76aaba5abf1c856313d95a3fbf5972c6f8c73b46b4935f843f5f2c8ecf63f17852e8730404e633a7c261fbc223bf4ca13589d5a105de138e2b701871ebfd4fabc46354b9a844707a9ab94dee409b4e1dba8c5d2a068ec68f19a0a80c0bf25736e59be637ba363f0d57a34534dd2e4356f2547715137c7e09c30c4c93673874133d3fafbb57d6094017f9abcdac3f9cf9da2e0f53ca11a8249a2a4620d48c49c907c0738ca8bfb9ac1ebe1738f303de1e40707434b3ee70ee9d92d412bfca1da5df707d59bf491bd0a6b54e3c30e77d9b3e1472a0faae55e9d1b0917e873042aaf457ee66932d9d8a23dee5cfe48638695a3368cc3e9c0bcb173e6206dbce3f6d5a1dd29b45ae84ca1f5398e33cbb7de521af3ea9a8d5c38cf04eb56a3aef043fb086b0dc7918a4a52234743a2b85bb4f06f22629f86dc7857d2545e7b4dbb8425c33c9bb32f634d020885d0c95ae728415b358da66061df1ae5f2af4568790a8b04974beb521af2ae5ffa5aa0949d6042c3d505a9d443f83ec3f7d3e08966f6f89259ff754dc179e10569d4b7db629151377ded288ac87017d2b14e934745b8e1d2d55a041143ca4da06d10ba3984f22cc74eb8b77958dcdda94d3af0116d3c8d798108c0686e5f90a319eaa809ae55bc76a18dd992a56ff3396f08ada3cc84400cdb0a964e175b01bf73fd32d9c7f316280080cddd2ddebf5c1fe2eee3600df9e9f71f7486e26684085b2836c4303fda9f96d7e03e0976d4970a22e5aea0c9d135c8fd28c7a695b3113bcb94322446ba4173f24d2518dd2713ed4c44742c1ece3075e530132d8fdfefdc92e61cee7e555a92e6aa62a582a6910031670e3990494ada2739391215a6e8b3235bbb6f037b854af7243aab602190a26eabaf6f1c8f71008039ff6043e1bd0d58dfd155f6f9ac4964b88bdefbd0d24ad8fb594347662c1ec380229b64fb99b720cb81af4115a5d1e548ef2bfd3dec3ec98ce1e9b82b52817aefe1507954fab7accb7ca74329ce5c5eeed8c8d06c546065656d3e659614e4ceb7932fe0014c1083e4718ef8e7fa5e7019652402cec14aea66537b18955e47514a2df7fbb9c78fde02cb5075e14f235174b18e828ad4db8fc828ca7dca52a4965c75a9eb5a29eb52eff7e125beee093393a1c6ce0ff92432dde1aa164e47b03f3fb770ed1188405ccfd421bc02b7bab12792e814018e151fb683dba8a6cf6f738cf725ade65e39078b5bef2449e8da62e382713d0a23574454635cfd031c1834680d2c305b161061737e51f171349ff0f59a3b81f358fa3238ea1de058746dea875aec4ae5f99734d7a0dce0854c4dec0160acca0b04ccb2102d553d0605f31d438cf1a6d075c31b32796aafd7ed041e2625ebd6b09ca51af7514264aa0894793ea4ab5e7c11979bd108dc59e04ed1b6badf396ee8255b689cfdbd6ec2512e5aee91ba084bf7718a65df8c31efe9ddb0b19da061ae29fafc0bb9f92fbb4939f46f3b4f40639718149946f7d88a0eb61f4c1a95e5aaccccf264b49d5c7f12d44d6710686e8bcb0525fbe12cf88da65cb16c457a5f37b64af9497df98eba513e71f66021d46603236bd3166a57c6a3cb398a57d79282c1e997e82889f5e3a0779f603f30fd918ccf0e7e12fb406f151b3ef7d8bc6f45ac6eb73eb392dc5466093cc57873bbbebc53fb39a086854c82cf23c040f58bcf150afbe6dbf0ab9826686e9dcc29219668bce94621e51ee5c87b0aee59c90341fc97323275db836c336b650d151338a30825338576d1872881d59fab1e5719fb1ddb9cb15d45b3be0decccc1a70b9c12f07eb442b9a374b3e5a0f2c541e0cb7e09a6dd7083a2935d3972af1064d85355b20b0742e41b9c8611971e76e34bb3d21ee377d0f5aeb396d6d63b14786ef6de4e8d72f595ce2b19086724eae830aab99ab2deba24e6a6e46fc5d8714378f6faae4afb7a57c513dd55f156ce969a6ece2e105e4b6737ebff1c37fd53bc037ef67b879451f849c310b07d3eab059b4283447351d80b4eb4f617df7958ea3c5c1e3c64f93a6d0c7e4a88eac1694ceaba44c0b63140ef9f367926f849d51ebed1119620ffd26fafb781f570ed2cefcb340a63486a4ac2abba44b48c1eaec57162035ede559bc4fb644b31a1fc11c4c52172909b95504592941e641df98c204d24a5c1847a77b096cc8cf27d9e9e974eb27256f36cf5ec3a164444d671b92f4864bc94c85cda6b6d5d505ff0e562aa073758c9c9c9b2e4315b557176e0b6b18513322d2a5bb0ee2ff2c29189fa4d69aa065205b09f89f33fc4db8daba6a22355dc0aa08a09ad31e0364d1f70a0bcc59f37d237195418427b3cf402f9485cc19823a848ef47a3ebf4f6acbba9c6bce9f0658a73a34f8121dd9cffc8d0a5fbc2c72f708ab9c66ff05aa70cfdb9a6bcf94e4bc4819430f5f5ccd9e5716544af19f88031f179f7c7a7f70142a6b718371a8587d9dd8294c8a9d6c82e18ae013a4285e4e4832a7dbc93616919cba9204f87ba47dbe4d186ef579dafc10c21d1767657f15d30fb9cd1cf9487248b7e3f7a594f7ecfe5f9a980f8cc3ba252dd990be15fb96ceee2f20f95ff44c6cb4aa7193ec27004720046b09faa081eac2d8792543d1a97fd799ba767b8a8be1cfb4b065ed81cbfc9851055f589e31593c89348e6baccc6b9b9c0abf343efefbe3393a561a9315e68e9ea6ec9c1a32d4027ed8ad3aded29b241620e5d8e6d3a52078c28e3c178fa2ea60b00115e7e0c9711875e2ca54d06abb16cde48a895a2f2aa655ec248fd524b714c384d393d8d4bdff0f1d5cb4ef2f6d79a5961798c34b4b6dc37e5e04d8fde943ddd26a9362d7ffc766a7882097b2b155dc011998d692d75e9a2e553c239e2134b60fdab86c5e5675c35557cac96faece9520708583dda389ee35b5555ad0f8feca5f3e2f50524c10eeb5c7e9a58a219b01a0eead5848ac65ac64d4b1a62059f4949fab356028de18877293c93b7c419d4189504bdb63d950d09a32dc1b0d19ecf6600a625520feb2f321726dccfba0213347a57c43bdbc417b9ec01b47bb4c7a71aefd26f0eb22e1fb0d5312f51ce512198e19d030b6ca1759559e4dd553a44ca1751cb93f168ae2a24b1b50fd326061c73fcb7cf0d379217a193ee22cd192bd96e170b4fd50e1099c9e580ffa234123237e0dfbd11f02b7ef37ec0af0bfc7d96f95744dce9e42f93cd5f037f9deffc8952f4ff31edf935f8efdde1bfa204fb8fe07fd32bfe759d5fbb887f6210f7dff7147f5de5d746d39fd8c3ff6ddbe9d7057eddb3fe8915f25f76b0bf86fedd61ff0ad7bb07f33ffcf6d7f0bf27b5bf429cee2fe1ff99e23455d0d07f7e8775f791b8fb4142869f77ff01504b010214001400000008000000215ca615f9dfce180000152200000d0000000000000000000000800100000000302d6265666f72652e786c7378504b010214001400000008000000215cf127b9f0e4180000252200000c00000000000000000000008001f9180000302d61667465722e786c7378504b010214001400000008000000215c94a9240ea0170000cb1900000d0000000000000000000000800107320000312d6265666f72652e786c7378504b010214001400000008000000215c5d9302961e190000642200000c00000000000000000000008001d2490000312d61667465722e786c7378504b010214001400000008000000215cedff0b4f9b170000c81900000d000000000000000000000080011a630000322d6265666f72652e786c7378504b010214001400000008000000215c404cddc21f190000642200000c00000000000000000000008001e07a0000322d61667465722e786c7378504b050600000000060006005f010000299400000000";
+        let bytes:Vec<u8>=ZIP_HEX.as_bytes().chunks_exact(2)
+            .map(|p|u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect();
+        let mut zip=zip::ZipArchive::new(Cursor::new(bytes)).unwrap();let mut failures=Vec::new();
+        for (i,name)in ["Twin","Other","Other"].into_iter().enumerate() {
+            let mut original=Vec::new();zip.by_name(&format!("{i}-before.xlsx")).unwrap().read_to_end(&mut original).unwrap();
+            let mut expected=Vec::new();zip.by_name(&format!("{i}-after.xlsx")).unwrap().read_to_end(&mut expected).unwrap();
+            let mut editor=XlsxEditor::new(&original).unwrap();let mut book=editor.workbook().clone();
+            let before=book.sheets[0].rows.iter().find(|r|r.index==2).unwrap().cells.iter().find(|c|c.col==2).unwrap();
+            if before.style.named_font_link!=Some(true){failures.push(format!("case {i}: matching-resource attachment {:?}",before.style.named_font_link));}
+            if i==2 {
+                book.named_styles.iter_mut().find(|s|s.builtin_id==Some(0)).unwrap().style.font_size=Some(26.0);
+                book.default_style.font_size=Some(26.0);
+            }
+            book.named_styles.iter_mut().find(|s|s.name==name).unwrap().style.font_size=Some(23.0);
+            editor.apply_workbook(&book).unwrap();let saved=editor.save().unwrap();
+            if let Some(directory)=std::env::var_os("OXI_NAMED_FONT_BOUNDARY_EXPORT") {
+                std::fs::write(std::path::Path::new(&directory).join(format!("definition-{i}.xlsx")),&saved).unwrap();
+            }
+            let actual=parse_xlsx(&saved).unwrap();let native=parse_xlsx(&expected).unwrap();
+            let cell=|book:&crate::ir::Workbook|book.sheets[0].rows.iter().find(|r|r.index==2).unwrap().cells.iter().find(|c|c.col==2).unwrap().style.font_size;
+            if cell(&actual)!=cell(&native){failures.push(format!("case {i}: stored cell {:?}, expected {:?}",cell(&actual),cell(&native)));}
+            assert_eq!(actual.named_styles.iter().find(|s|s.name==name).unwrap().style.font_size,Some(23.0));
+        }
+        let mut original=Vec::new();zip.by_name("0-before.xlsx").unwrap().read_to_end(&mut original).unwrap();
+        let mut editor=XlsxEditor::new(&original).unwrap();let mut book=editor.workbook().clone();
+        let base=book.named_styles.iter().find(|s|s.builtin_id==Some(0)).unwrap().clone();
+        let mut normal_cell=base.style.clone();normal_cell.normal_font_link=Some(true);normal_cell.named_font_link=None;
+        normal_cell.format_reference=Some(Box::new(crate::ir::CellFormatReference::for_style(base.source_id)));
+        book.sheets[0].rows.iter_mut().find(|r|r.index==2).unwrap().cells.iter_mut().find(|c|c.col==2).unwrap().style=normal_cell;
+        let normal=book.named_styles.iter_mut().find(|s|s.builtin_id==Some(0)).unwrap();
+        normal.style.font_size=Some(26.0);normal.style.format_reference.get_or_insert_with(Default::default).font=Some(false);
+        editor.apply_workbook(&book).unwrap();let saved=editor.save().unwrap();
+        if let Some(directory)=std::env::var_os("OXI_NAMED_FONT_BOUNDARY_EXPORT") {
+            std::fs::write(std::path::Path::new(&directory).join("normal-disabled-raw.xlsx"),&saved).unwrap();
+        }
+        let parsed=parse_xlsx(&saved).unwrap();
+        let cell=parsed.sheets[0].rows.iter().find(|r|r.index==2).unwrap().cells.iter().find(|c|c.col==2).unwrap();
+        if cell.style.font_size!=Some(11.0){failures.push(format!("disabled Normal stored cell {:?}",cell.style.font_size));}
+        let mut archive=OoxmlArchive::new(&saved).unwrap();let xml=archive.read_part("xl/styles.xml").unwrap();
+        let nodes=style_xml_nodes(&xml).unwrap();let fonts=named_style_children(&nodes,named_style_section(&nodes,"fonts").unwrap(),"font");
+        let sizes=named_style_children(&nodes,fonts[0],"sz");
+        if style_node_number(&xml,&nodes[sizes[0]],"val").unwrap()!=11{failures.push("disabled Normal must keep physical font0 at11".into());}
+        assert!(failures.is_empty(),"{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn named_font_aliases_keep_native_normal_ownership() {
+        let mut failures=Vec::new();
+        for (i,package) in native_named_font_alias_packages().iter().enumerate() {
+            let book=parse_xlsx(package).unwrap();
+            let cell=book.sheets[0].rows.iter().find(|r|r.index==2).unwrap().cells.iter().find(|c|c.col==2).unwrap();
+            assert_eq!(cell.style.font_size,Some(11.0));
+            if i==3 {assert_eq!(cell.style.format_reference.as_ref().unwrap().font,None,"matching resources import with the redundant apply flag reconciled, as native saves do");}
+            assert_eq!(cell.style.named_font_link,Some(i!=1));
+            if cell.style.normal_font_link!=Some(false) {failures.push(format!("case {i}: Normal ownership {:?}",cell.style.normal_font_link));}
+        }
+        assert!(failures.is_empty(),"{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn named_font_links_survive_fill_edits_and_snapshot_creation() {
+        use crate::ir::{NamedCellStyle,CellFormatReference};
+        let font_ids=|package:&[u8]|{
+            let mut archive=OoxmlArchive::new(package).unwrap();
+            let sheet=archive.read_part("xl/worksheets/sheet1.xml").unwrap();
+            let xml=archive.read_part("xl/styles.xml").unwrap();
+            let mut reader=Reader::from_str(&sheet);
+            let index=loop {
+                match reader.read_event().unwrap() {
+                    Event::Start(tag)|Event::Empty(tag)if tag.local_name().as_ref()==b"c"=>{
+                        let attrs:BTreeMap<_,_>=tag.attributes().map(|a|{
+                            let a=a.unwrap();(String::from_utf8_lossy(a.key.as_ref()).into_owned(),a.unescape_value().unwrap().into_owned())
+                        }).collect();
+                        if attrs.get("r").map(String::as_str)==Some("C2") {break attrs.get("s").map(|v|v.parse::<usize>().unwrap()).unwrap_or(0)}
+                    },
+                    Event::Eof=>panic!("missing C2"),_=>{}
+                }
+            };
+            let nodes=style_xml_nodes(&xml).unwrap();
+            let cells=named_style_children(&nodes,named_style_section(&nodes,"cellXfs").unwrap(),"xf");
+            let cell=&nodes[cells[index]];let parent=style_node_number(&xml,cell,"xfId").unwrap()as usize;
+            let parents=named_style_children(&nodes,named_style_section(&nodes,"cellStyleXfs").unwrap(),"xf");
+            (style_node_number(&xml,cell,"fontId").unwrap(),style_node_number(&xml,&nodes[parents[parent]],"fontId").unwrap())
+        };
+        let export=|name:&str,bytes:&[u8]| {
+            if let Some(directory)=std::env::var_os("OXI_NAMED_FONT_ALIAS_EXPORT") {
+                std::fs::write(std::path::Path::new(&directory).join(name),bytes).unwrap();
+            }
+        };
+        let packages=native_named_font_alias_packages();let mut failures=Vec::new();
+        for (i,package) in packages.iter().enumerate() {
+            let mut editor=XlsxEditor::new(package).unwrap();let mut book=editor.workbook().clone();
+            let cell=book.sheets[0].rows.iter_mut().find(|r|r.index==2).unwrap().cells.iter_mut().find(|c|c.col==2).unwrap();
+            cell.style.bg_color=Some("AABBCC".into());cell.style.pattern_fill=None;
+            editor.apply_workbook(&book).unwrap();let saved=editor.save().unwrap();
+            export(&format!("fill-{i}.xlsx"),&saved);
+            let before=font_ids(package);let after=font_ids(&saved);
+            if (before.0==before.1)!=(after.0==after.1) {failures.push(format!("fill case {i}: font refs {before:?} -> {after:?}"));}
+            let mut noop=XlsxEditor::new(&saved).unwrap();let restored=noop.workbook().clone();noop.apply_workbook(&restored).unwrap();
+            assert_eq!(noop.save().unwrap(),saved);
+        }
+        let mut editor=XlsxEditor::new(&packages[0]).unwrap();let mut book=editor.workbook().clone();
+        let id=book.next_named_style_source_id().unwrap();
+        let normal=book.named_styles.iter().find(|s|s.builtin_id==Some(0)).unwrap().clone();
+        let mut definition=normal.style.clone();definition.format_reference=Some(Box::new(CellFormatReference::default()));
+        definition.normal_font_link=None;
+        let mut assigned=definition.clone();assigned.format_reference=Some(Box::new(CellFormatReference::for_style(id)));
+        assigned.normal_font_link=Some(false);assigned.named_font_link=Some(true);
+        book.named_styles.push(NamedCellStyle{name:"Created".into(),builtin_id:None,source_id:id,number_format_id:0,style:definition});
+        book.sheets[0].rows.iter_mut().find(|r|r.index==2).unwrap().cells.iter_mut().find(|c|c.col==2).unwrap().style=assigned;
+        editor.apply_workbook(&book).unwrap();let saved=editor.save().unwrap();export("created-snapshot.xlsx",&saved);
+        let pair=font_ids(&saved);
+        if pair.0!=pair.1 {failures.push(format!("created snapshot: font refs {pair:?}"));}
+        let mut noop=XlsxEditor::new(&saved).unwrap();let restored=noop.workbook().clone();noop.apply_workbook(&restored).unwrap();
+        assert_eq!(noop.save().unwrap(),saved);
+        // The new definition's font is also introduced by an independently
+        // formatted cell. Equal values cannot replace the attachment identity.
+        let mut editor=XlsxEditor::new(&packages[0]).unwrap();let mut book=editor.workbook().clone();
+        let id=book.next_named_style_source_id().unwrap();
+        let mut definition=book.default_style.clone();
+        definition.font_name=Some("Calibri".into());definition.font_size=Some(16.0);
+        definition.font_reference=None;definition.font_family=Some(2);definition.font_charset=None;
+        definition.format_reference=None;definition.normal_font_link=None;definition.named_font_link=None;
+        let mut independent=definition.clone();independent.normal_font_link=Some(false);
+        independent.format_reference=Some(Box::new(CellFormatReference::for_style(0)));
+        independent.format_reference.as_mut().unwrap().font=Some(true);
+        let mut assigned=definition.clone();assigned.normal_font_link=Some(false);assigned.named_font_link=Some(true);
+        assigned.format_reference=Some(Box::new(CellFormatReference::for_style(id)));
+        book.named_styles.push(NamedCellStyle{name:"NewFont".into(),source_id:id,style:definition,..Default::default()});
+        for row in &mut book.sheets[0].rows {for cell in &mut row.cells {
+            if row.index==2 && cell.col==2 {cell.style=assigned.clone();}
+        }}
+        // This native alias fixture contains only C2. Explicitly add the
+        // independent earlier cell, rather than silently skipping missing A1.
+        let mut row=book.sheets[0].rows.iter().find(|row|row.index==2).unwrap().clone();
+        row.index=1;row.cells.truncate(1);row.cells[0].col=0;row.cells[0].style=independent;
+        book.sheets[0].rows.push(row);book.sheets[0].rows.sort_by_key(|row|row.index);
+        assert_eq!(book.sheets[0].rows[0].cells[0].style.font_size,Some(16.0));
+        editor.apply_workbook(&book).unwrap();let saved=editor.save().unwrap();export("created-new-font.xlsx",&saved);
+        let pair=font_ids(&saved);assert_eq!(pair.0,pair.1,"new named font and assigned cell must share a resource");
+        let mut noop=XlsxEditor::new(&saved).unwrap();let restored=noop.workbook().clone();noop.apply_workbook(&restored).unwrap();
+        assert_eq!(noop.save().unwrap(),saved);
+        let mut editor=XlsxEditor::new(&packages[1]).unwrap();let mut reattached=editor.workbook().clone();
+        reattached.sheets[0].rows.iter_mut().find(|r|r.index==2).unwrap().cells.iter_mut().find(|c|c.col==2).unwrap().style.named_font_link=Some(true);
+        editor.apply_workbook(&reattached).unwrap();let saved=editor.save().unwrap();export("reattached-implicit.xlsx",&saved);
+        let pair=font_ids(&saved);if pair.0!=pair.1{failures.push(format!("identity-only reattachment: {pair:?}"));}
+        let mut editor=XlsxEditor::new(&packages[0]).unwrap();let mut detached=editor.workbook().clone();
+        detached.sheets[0].rows.iter_mut().find(|r|r.index==2).unwrap().cells.iter_mut().find(|c|c.col==2).unwrap().style.named_font_link=Some(false);
+        editor.apply_workbook(&detached).unwrap();let saved=editor.save().unwrap();export("detached-matching.xlsx",&saved);
+        let pair=font_ids(&saved);if pair.0==pair.1{failures.push(format!("identity-only detachment: {pair:?}"));}
+        // Actual Excel retains the live link after Save, but a cold
+        // reopen loses it for the stale disabled font. Logical-only state
+        // must not create a spurious stored style.
+        const COLD_ZIP:&str="504b030414000000080012a86b5d391a91f2c41800000b22000009000000636173652e786c7378ed5965505d59977d3884e06ec1dddddd9de0ee1a1e1220bc600f091adc5d820777d7e02184105c1e12dcdd6d487f33d3dd997cbf67aaa6d7adba52a7f6b955f7ae75d6d97bab29c2c06203e001880000801c90afd137aa02050020c202005800446803492747372b4737134d0f672b572396b70e40b25c5868ba1c0034e01ffcbf4659fcb04a0f1bbaf4a5dc9de41af37b488d1822f77ec000660b1da9e90f79f349568f85ef0fc25897d5621f705ef1569b8f2eb80a73667de199c2b60f2d6e2f9d4989d685aab850686d30cf0e6f3c89c549c9d7f8fe1601671eba66f6ecc2ba6606be2ba08644bb4c915e08c9ff0d8236c52514712697887eea166f03c5a027bd01fa65ded8bbe276c565f5544f149ecc36314a1d1a9c4aa2b945fe30d3189cd1d6ae2c2d768280b17aa535cdb2cc1b69fa4b5895547e784192a328201bbbdc96ea03fcdea94831d74b46ba0d8e4290dd50f00cfef1feeac9f02db52833c7f277dec80af16b4fab8fd0c492b01fab60e4a68eda5c18eb05af44ba47bbe94e383a6a621fc07a5711d152f7f0b19dc906831c367e290df0477356a3b9458313951e6750762e9477d960fc1191d6e754b0ec767ca89b6af1d1526937e195c8f7adea39f033149dabdb684f5ff2f11106a0f63719d66bb1519e3ddd293da90cf94986262e56405756969fe77fe4f70f7ea22c4e59b587ed79f0a1dc5dc8e0e52424065d4211242ed74aae09f6935f40ab8fcca3228274d212a36b12be8391f56d07df7d9e870845ee0c925ffce02a0bc7c416a46c00950727dfbc7e83c040e39224f3ba6ca517c37df27cf2225556c183cebd3d9aa1b4a9f883e2d012a5ccf8b15435fa288b0e211256017130ae70aabf7ebfb2dea2f95505d4a484c67e797055236fce4efc68baef7452e1368a6828bfd2def7549c4157739bd90aef4120f9f935a196862dbf5d9579968b0085878925b0eb542abd13ebde9b592563509d820bf38a635476803ae7dc57bf8eeb7838d3a39717a9a774f06828209cb47811ea7722718496641c850100d29100809f327a0b640539b9d89b3b39d9fff4a9326d3ba7551ef47be39c47f16f20997c47a4d7b8026380210ab93679647cdd6f9824b5635aef6b48606f9704132a89a557aced6772e5a25e2c7d6923b8be1b2eaca8c3c112764a0f53f95a55515d68abb828a472e6344e7cdd32a5389750f78a88672c5bafd2b7f9ea3cf9f40d63d686c36d3e94d8b8ea594182912dbe4fb525f7fee85c147755adadb432b5525fde182860acc6848366f7331bbb7b64da89cc1245e00fec08f7ea6538c579f3623dca46b2002d4de87bf0502b385a1bafa86b525308858461ae052694bfb2c9fb85f89b72964fc30385386ec6fef3443f6c89a04cf0c0b03d7d0bd9b006a451251ee4731d46839c7e3c0df9a257aa55e283e9e84091fe652eaa7974609f162a5a59e0adbcf601d4b07000c6ddb82d6c3ef72beac0651fcc117e67cef3f053b8ca997bed16c2fd96ca3aedd412b7f2dcf62f0a2c7afc63c2290df617d6e2cf8d848e9eb933efa564391a12af7953d6c5316fa90dd1237aa0898e2903f5f11915d16534e5690819f4bef360ba359deeda70f39ad30ee36257406a3ae159f0b171b790bd83189925040e9d8a0d5fbd2ba6f1c4fcda71befca02484e67ba237f1863ed1cd7d12b72e4d590f323287225bca2f6d3f375d9ca3968678e78cd430b897e8bd3da07f8d065d18f4fe3d94d9acfad262271ac65bb24fed724ef9df961f38da03a4206338f928bd2f0f4a6e304f7ef8fa1e57afa6f3f50cd63860cd3663e5d1a9320542888b08ba3bb27545bb905782a515119a17e4c5cd54dc884e1ecc76d31c2f0461436058a3373b9721081f8f21569d97921e25698bc236bb0f7484dc933c686df4f3e752b2bdb04e594b2ad3ab1b30aceb98bdd8a6444a0df69dec0f4db0fdbdc713ae6ac4ef67a57cabc7bb4e8d46a5a01aa02dbdf8a4fdb30be8dee7764562d222e7beb5b46ccbe56ad0c9e189d2e74ceacd7cd50c7bd344a8e5b6621cb8f3fcb55e1cbbd7ed8098005c821fa14c8f9f29a71a2e90b2d2933f2a4704f52c3492120d81e753ea3ad93c9ad2da7c5218a62037e7c0f07726774df0c42ef99d68da9a2eecca437b9e2ecbc7180df170dab706901a69252fb5ef53e4cbb769c0bd2b76a997dba16b83345032aff7e606e55d878fe5d22c55c054a50b26de35d2d7fd575c792e7e275a89825f25df8c804a43fafadccd928b78a5f1160b190e5a8b1e478e50db2a67c2faafefc38287a677b7cfc31a7466cf6e25c125afdd488ac6b62fc6f61dce06b86e7d7c038fa3a1b817a985a879129471c987158074590b92e028125b9aac4c3ef7e728bd82346dfa78a5a3ebf37591ed14f1d38f14ee2372eb26fe21ad9dbafaa36b8ec8735dba9e94afa57dcb2a61e6fa9600bfd37e64c89cf3f2d31df3930f120210a19eb4ff2f8ffceb0af05f7e09f5e49750ff9b6bf5ff0594c50ebffa63bb16f4f02ec547d8fd5941c2e06c824443df3d803c9ab43729d03a6ecad76425002226c7338b58010f71a5720089aee6a860375faa48c6aee70cea995c564c1e69f908b50798b357f0bc03e59b51041b5d5f55dde777cb09f41a91ea16e00e100ac41e050f36e48d396fc03473d9791347e6e31b3cef7fa1a4d834748a17f1289823b4ab79ab2fb9303d9a53424f75b2efb8c4d55e00728aa6e46ff6134bb293c3534b0c630e0beecca096ed1abe1a113e8ecb0ad2be217e6d1c6e8fda274cd2e123e42c4b553a50d3c7a78a4b2074bb7682f73b7e6c766c921c3dfd73d4a73c061ff0dfdee06a6b65e5e6cafac785fd274532e215c3e7d9d0070e83c0081f5a99e75f1bf75f48f0b4baa105d5f82ce07800c375936213f00a96da2943a882ced07199be0da62dddc972c68b9268c95e98964df888afb2e5c27a7e609ce585bbbf5ee5d655332739645cdc7ef1cc135a31fbf368f6c93b1e837968be80c045dcba378e83f8b5b9707d0ec5085bc7aae5913f5095c7d904f19727b7f20592a4c622e859bc3c692c3730822bece94dcbfb54c40fbfa2c390808a971a5caaf0d230a397b179e721e888e5f052404b5a885da07aaed4c5d4d9dc91728807e96a02b20bd71575134d32dbeab5111575d098f6348b1487a07d87aaef50524438e3b6c86308dbebcfcff70a58975112bd95d485da6be2888027e2337bcf4e47ad6a32cb9edd78b5a4140d279f53e89615d692296f0e9bb287e59179aae09d6e51eb4b979e93ea6f24f63ebb2d0bf56fc91945b2b212e119654542b81dcde2ebb846254144c0272becbddc90d92defbc0a968d0559813a2a2d9cc09cf90169870297156826623ce5927284341ad8fba5595a45dcbafefbc1f94734162324acae7968b08c21a35608079ba671660d59b1cbeb8f9c34295947c629d8e2c9f8fb3e04abe719fb2f3f76052d846fb8e6f8f31e25a6cb5c24b9a9459b6f24a4d42ed3f5b68fbf4be61b2826dacfd0c62bed6b8689c00b2a2e9f9a337afec8322dcff208fd3b96ec6b4d0cf621000038143fb3dd3f58e2666be560f5aff31f04d9d387d8533563f8a2adf9a2df8b08428497ac6da2af0d972af6b97767512ee9466d0bebb51b09e52dbc1011cc50102e31110d258c314f9242d05d62de1193c788f65729ba5c53aaab5f2a350aa5cd9f839d934d6f0b0c4e4bbf57962a684daa2f3dae71586f6520ca7b7c3f0ff0ea0891e358e74c636a59ac1d6afa7e11a3c9976ad68ff5fd5c5bca335be86a5bf56055182736852c4675edc58167acfab6713d43115bc4ba70561c2c38dd15c302aed1fc6526923794a785368a4fa75e24bbb250c232fe8448eae87642ce6e296b45e5c36b9f73afc36ecf008c777a98d4e75d096158e559baeaf08282c85c12156b7e486e517ad3ef9aadefcc25581243f0939e81b73c3bae4f4bd00e748e8d597a275067e31666eed65d9abbf698b85cdff76d5babfb6237ec76cb7442b1d54712d59f3fca64432d6f636771adaa4f1170a58105bf5453abb96f7f83d8c17113997c3799ff41ec96765fe5b8cd9ba3e4eb734b3090395665b68242d7c3db70242cba077a85bbe8c7e1ed8a6c427aaebf32f88948add7d6a521d2b1616edf3a6a516c23635f7025d37adc09c5f5ad7f80ed8c547296f957ac7ac629f3bb80707600578c993456be367dea2abd940bab96612e79227d0f235a01df0a66f03d1b22d9d90eb8e99a1777c00b36399f9bd594a231988b94aa28a0b0645718badc18e96467dea9d204ec7a7fe234ada333cdfa1880ba45a19ecaa0e8484a1b5eb300f2bd9bf4055f229f1d763eacb45682f7fb87391eceb33bbdef2f7dc1d99ebaaf82e88def3776a797bcef771a3befa6b33b5c6c0f91bcf583556d95a80428f0b6e8a357a022e9810f6b9a0b2ae69866afe49711dd0435a3352da1a2b5539a9d7dccd38f9afd9856a1450c3baa9ab2a4cc3f165b6c0cbc0442a1f1dbf8b064c0bf2ddb64d07b5ba3847b30d45713e1f5feb8d9fe004a8509213a893e5f67479d3f3454fa3465456a054e3e54e286172c13baba2d923751b34b9ef98ce5daf0c328dd8ec50ed7506096bebf26e2fe38fe5d8d0b06ac8e4103bf77d44d467396a7dc57072a26e42fc46bb4817ad6dea1c9cf065812b1886b6bbad1aade1b52a96a9bebf747e643abb222aeda7251aab7586621be5d8c1b27b59003aa3492d668012983726d583211524e395c0647e131a234686dd2a4acf68a4e9e4b60e75954181e493a56a2fba081bb865440a245bd2e97e958dd9c72ce560ad27e5b26499f56864302e7775ff76da434d528a9f66abbef23ed44443db898055d40913f37592620df9a2d4285f7c9d2e76195137d4f56ba87a5632afcc9bd6ce736502e40c9a4369302adb84ee22290e90a5524a49428cc26281e3fdc282dba6b577b2beb996e44d4a6f7a7421bab658c205cf41f7d7609b4986e09015e758abbaf03cbe70a0e0b048d753e9d2ccd97b1eb26b33ab6b288072fe8c363de1acc5b07a4728b63b061298df933420242d71f24a4a6b5281bdc3e8fec4b1b34411152962e85d99d146e6c222277b382531637f3de083bf61d8e1fee7d66bce56dc9306a7aec5eb40e4d1e62f777a9c96c3ad04f6f9deabfed7472702f5f6f0ddea8f8d06c6f6b58694a5af081de13dfd6e97df98bda63acc385cb548d7e9589f7b130760d60aab6a92ffd6cb617f95ffad7ac49d92297d545d1944c5770a18908a89a6e08b4c6e4033566489f7d61d990d828c1c32c30fcd4104bc0e355b216ec587b5d178176cd347fc075ab08b69608d3623fe0355da5270a296748fc905eeead766aa0c10bc4b32e7da32c36bc182c65c7912e35229e5bffc21b06a9ddf5c24cd78d98694eff7e4ecba010f08aa8b2cb8b37a0f1bc62bad826c25416d5f32cf5426363a71e54ef2a525c0422884fa40434e0360a43c60c412259e016a689c54fe3b848ab094c6540cc7e9dc2ee788c3694cd31bd45d063875f6b79a5609022b3e71cf6eea4da37db7ad1e0ca3798cdb144baea5fb199c4f1aafa2575dd5ea4fda8db1d315bc26759c50e90dd01b17ec17506706a51181c1fc6e9ab934fa20fd3d5360d09a4fa9a97848a45f41ba98a3ed210eb9ac7c9c954c0285e0e28b04c201f0cc8a0b6397aa57ed9b42cf90c668db455b4698cf9516bb9723719da29a8ab7842dd744b956694a3d180adca1ea89b87637bf8b53870f51d99eb79c4278f199a789c63501ec7faec92c01ac309bbb55de0699cfad70d8205ec041412d7c66af16d165f6bb6ad062455bc964f1da0591fd7f2a924c61d8b22ba346dfd31abf14c6551e344d66a8692e23e866108afaba34de61e995aa6d58f7b7bdf307df6546965cec5af3d02769b793cf56833180925aaae21101ee94f766120e67b3210e7ab3741babc493447232b1ed7c0f4ec0ebf35f6408d5eea6195563d685061bd5274d0f13e7d76f989224dad54fcb5216f811e83afc246e8579656e3ad1de2d39ed5362253a41ce551644620e5d6de0550dc68cf650cd8ed1858cb7321d3f90ad9896a6aa08cc8acb67e2bb79c659a76a7458797d33ec44ad5e17b5535b6a1830146d4235cf014bfe0971117d6b554c544d09c735052807b7bf66da4b10f3a0f3c4e27045f6ba7bec5c48ed7b35ea172ac182e4f6619ed7665534c55faf5b7c10e307e8f1dbac1fa9258ca71f921d98f73ffe976fae8d205ef4d35ee45de2571d80fbb82a1610f83dd30b2d0e5ced8133dc67cc5cf83c56bd5d14246145ab576b5e0cd5cf12f726c7907da4785dd1cbbc47df988a389cc0af8018690436e8676b0839a5d83ecbd3371c48e246997c7757360237ea6abab4157c1caf97227e077ae7f3422828c010300743f393fcabf5cdfd5cd0368e5fa47d540cbc831830d1d5c3921a8db8605c6456c85ce850063280ad40b80051d9eddc032422282f89a72cf488576f1d16f30ebc42444eec9c5a21fe33afc84df765c5b771cc7189e714b5e4a35681e4d9c7c3544c6300e8d3b317ad53ebfe60efca06d666c4ec3275f2e6c571ebe775e9aafe525e37888f81291ec6dba3e48811b79c02e5c507df542892bb0275961909071e673e6384fdc72cda40ab7abf7746406a186230a6278cb155e0ce1309a91055eae6355aec1e7e2392226e4c9be1f9e0341bd06f09a5eac5d703bed7237c5c92164fd378a1969b8ea75b9ea367ebba125b970d789070ba9824d7ce45027a7316ddf5edfcb365f9ea4caf9530e094f9ee8e9a92355e86b8646954ea441bd340ae84360113931f4850e1ad0d0fb0e96b84cf1efabcd60a287c5c2a48f4165b061229eb6e4ab4ec0e6f429fec46d75dbbd65ff2e0f06d58cd66fcc17fe0c82074398cbcc56104182bcb6abef47ae98138f1d2b148242389dee0393b8fced4c32776301ab088479282c9ac1c747639a040c625a8923c91f63785ec86496afaea6200f02dd944bc18c96ab3d23645754780f0ab0280cf739c2c78b5111c76f9dc43bf639a72bed90682b3dd5374afe08a7a33feca62b41b1ead245c4e3f7484b4b7ae77b18e83c5ed57ec04422ad918149b8d59e42b0534a4befe95bc8f7363d8a67cf6f34df31bac49d2adaedb0686a232f559946486a6b3d374f6d7454c7830b3979a5d9e785718b7b55169c3b716bec3e2b84ac2922f9e58b6c5f7666af181b58efab87fd95011d31424e89f9280ee9eb62d9b17ab29b5755918d479a2f738c2e685395db13b3dc0aa1a2c2fce6a83f3a0f4c6c5c61a8f3572cc5c4b973db0a64792a1e0671a07f7ca3bfb4e578f6459aa6bdc56e25ae87e84ddcce9dcee6e9b9d6c17c75ebfb7d531909af171553eef8861553bbde073707ebc9436d3edd75dc9d08b6caacba75cfad6b88e3498696b2801fb9679f9f29cb42efd35f3693360f7f73ddf7def074475f99891257164413f625812b2d6543a35de8b151b19a3e6e33ebb03f5991184b63fb8ca64f829da62f4e35f3408db49913e87a73692dfadb9a5b2b761638f26964ec693f8df194775b3a59a8b93839bbb25a38b958fd6777e89f741bf0b33c3ba200c38e1d741970c866b95438ae306626009758c184a88d0d226f9eea4efd1223650f2a9016479f286f427fbd8246b7a5c0dca134774368fd9450b8514be0ca1f34936e66f5321f06f9d7234bdc60b0920ba64be23a13b2674f2bdad66b0f7da15064f8448044814a3d011bf679f12c41d12244063a491afb9d9a88dc704c939bada18481421f6a7f9ca3b89ce5145d13bda30c05d5676269928140c77881656f169d5e72ba4fa1147c50d63fd831226322a2628fa310d50179f8d088fe8c61fb65919d75cfa4e87c1de418b13e7fd31999f9c255233864eda64b5c7a992f8acb431809cc8b99637b70683336d297971db9121a7a0f7d622843c2e0572cf7b6e50d4753d33e28da0b527b59ca0be998ca448680a7f6432c973a26327520cd6399ae1081fa9bcb907703450fdd1d8ef58b875fbd586559b2fca8bb11a44a4a3cf2944967bc4f49af4453fb7d09a79d114d9390ba08facff5f4189998a6180687374ffa221cd2b56a1d6c0ab7b037783087976ee2c582f15606afb2c3b201a37da2221f2e7fcbe1c5599fe8cca71182270f40ff2b87cd9c9dffa1f09fc888ab769c67430fbe84f641f0f752e24709e8cac1c756097f4effaacbdd3d58404f8a3e8e8c3500c26e7cc343507be67047c12f1f4ad998d90281f8de5d1fbffde1393f5316941201824b577149f21fefe072d4a83adfd99dc519c664d061d825c1062284190d4793f652dc003050f223980c197423f1ad33688d24f3be075aca2aac5be4c57c6f5ae928890826aa2425721e1c3dbd8bebc1ed4e54cb0aca232722b6617ea8b4db7e33907ca0d32ad6a5ee8dda4d581e634cdf4940e27382636dd24058b66cf1121d827966c1d514dfbcbcaac9545fc3466ba1479f2e767419d0043789e2f0414949bd8ecf5e3c2f5a8f43d40eb8c9e4a58624901150cf40b81e53d5d240be6d418429e331234a7ad189a63a1a5294cc32f388994188508d3660d35fdd1c33dee11f30deffd51440b182fdc6ea9bc48d31b366af6f8ceac09a704f97f032933d80f880f8f45cb528fde128eb9686ae9172051f42704959def379892eb0b13a0bb7af461b43e1266c75261aeeb52256640367eaf467871cefdd6b83ada465f08c1b7f7bc65ab6cbcdd24be5a3cbcca44ac07f511a0a9a19f0ef1af7bfe2376dfc5f27f87bcbf1af0879d2c95f1a90bf06feda86f91365f0ffa329f36bf0dfebb87f45f1b33f82ff4d55f7d7797eadf7fd89c1e7ffbefaf7eb2cbfd683fec401ea6fab43bf4ef0ebd6f24face1feb2d1fc35f4efcefa57903d7d98ffe1b3bf86ff7d51fbdb9b89ff12fe9f4b9c9a221cfccf31a4a743e4e9858da43f9ffe03504b0102140014000000080012a86b5d391a91f2c41800000b220000090000000000000000000000800100000000636173652e786c7378504b0506000000000100010037000000eb1800000000";
+        let bytes:Vec<u8>=COLD_ZIP.as_bytes().chunks_exact(2)
+            .map(|p|u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect();
+        let mut zip=zip::ZipArchive::new(Cursor::new(bytes)).unwrap();let mut original=Vec::new();
+        zip.by_name("case.xlsx").unwrap().read_to_end(&mut original).unwrap();
+        let mut editor=XlsxEditor::new(&original).unwrap();let mut live=editor.workbook().clone();
+        let cell=live.sheets[0].rows.iter_mut().find(|r|r.index==2).unwrap().cells.iter_mut().find(|c|c.col==2).unwrap();
+        assert_eq!(cell.style.named_font_link,Some(false));cell.style.named_font_link=Some(true);
+        editor.apply_workbook(&live).unwrap();assert_eq!(editor.save().unwrap(),original);
+        assert!(failures.is_empty(),"{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn named_font_history_preserves_native_saved_links() {
+        // Actual Excel styles/sheet parts from nine before/after histories.
+        // Other package parts come from our existing seed; this checks the
+        // serializer's resolved IR contract, not execution of Styles.Add.
+        const NATIVE_PARTS: &str = "504b03041400000008000000215c56d3cf34f0020000760700001b000000302d6265666f72655f7061636b6167652f7374796c65732e786d6cad55cd6adb4010be17fa0e4277652559522c632bf84f1048a110177a5d4b2b7bc96ad7ac568edc924bf20e85be416fbd141afa3a863c47473fb6e584a625e969e7f79b6f343babfe5991326d4d6446051fe8d689a96b844722a67c31d03fcc42a3ab6b99c23cc64c7032d03724d3cf82b76ffa99da3072b924446900c1b381be546ad543288b9624c5d98958110e9e44c8142b50e502652b49709c95492943b6697a28c594eb35422f8dfe0524c5f22a5f1991485758d13965546d2a2c5d4ba3def9820b89e70ca816968323adb03c696b85dc15a9ac4feaa434922213893a015c24928446e4295d1ff908470724407e1992e522d33eeabd902f447290246b5a8e4f0ffa89e02ad322917335d06dc02e9bed5d7171cdc3d205136ea2827ef6495b6306164b47413f124c484d416552068185e394d4110ff7f7dbdb1fdbdb9fdbbbbbededf7d299e094b24dedb64b03aa411f417bff11ba3a32f053c65a3dd686a00f974111c94350b4469e6d565091c3bdad61aab8bf442f24de58b6db4aa80ea83b1732863dd9552e3f646d0afa8c240a12245d2ccb5389152a9d4ac1dc827e4cf14270cc4ac85d4623006c4418bb2c77e96372d45591683c4fc3549dc7031db6b2ec7e2702a146ac616a05fd39c97a2e09b529d4845ecd452b9257906ab2ad3dbb3db18ae611b7bd552b6fd5409f5d574bd500c0e2f7720ae267cf9e8643cf9a18e3e9706a38fed43786a76ec770c353bf6387ee78329edc54d7f511e0c3b7af0fbfbe1c3ad2e639658af2468bf20cc63caa6d6dce3555187f71f898d5f750e5f374dc08e0c424c13953b3bd135ad9cbef484cf3d4de47bda76ba19aa8837c51debf7ae748a12e32559d5a2e29f43f1d9dfa9369681b5d73d4359c0e710ddf1d4d0cd7198f2693d0376d737cd37a245ff14456ef1accdd727a198328d934db90bf3cd8067a4ba9e957df0f68b7b9fbb6670e5dcb34c28e69198e87bb46d7ebb846e85af6c473465337745bdcdd173ea526b2ac0379b7a7684a18e5e498feac6d852181fa4c1368370974f86106bf01504b03041400000008000000215c72133eade60100000d04000026000000302d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d934b8bdb3010c7ef857e07a1bb1f71ec3c8ced25d924740f85d26e7b57e4b12d625946525e947ef78e9c26bb901ec282041a89f9cd7f1eca9e4eb22507d046a82ea7233fa4043aae4ad1d539fdf9baf1669418cbba92b5aa839c9ec1d0a7e2f3a7eca8f4ce34009620a133396dacedd32030bc01c98caf7ae8f0a5525a328ba6ae03d36b60e5e024db200ac3492099e8e88590ea4718aaaa048795e27b099dbd4034b4cca27ed388de5c69923f82934ceff6bdc795ec11b115adb0e7014a89e4e94bdd29cdb62de67d1ac58c9393c615e11e5fc30cf77791a4e05a1955591fc9ff34dfa73f0fe601e337d27dfe0f61463116e0205c03df50d10759c98d15bdc1c61f844d6e30572e9dee4599d3dfebf1248ca265ec2de69bc88ba78b95374be2b5375e8493cd6ab65cac67cb3fb4c84a811d76ce444395d3e788064536d07f09389a776762d9f607b4c02d608011256e36b74aeddce30b5e85ce35b8f3dd0c83f04d93122ab66fed7775fc02a26e2c4266fe3441d1aebb69795e81e1386e48f2e39b8c15b3acc8b43a12ec1c96cbf4ccfd83718ad93a4694f8ff4724981d774ecfcecb292eb24331f2a3240b0e2894e346ec55f2254ecf6af8ca742d3a435aa806d094127dd13b9cadea871346dd2a6b95bc5a0df605b4b3505aa594bd1aae2cb78f5cfc05504b03041400000008000000215c9d08c876f1020000760700001a000000302d61667465725f7061636b6167652f7374796c65732e786d6cad55dd6adb3014be1fec1d8cef5dd94eecc62171c99fa1d0c1a019ec56b1e5445496822cb7cec66eda7718ec0d76b79bc1ca5e27d0e7d891ed24cecabad1ee4ae7f73bdfd1d1cfe0accc98714d644e051f9ace896d1a84c722a17c3934dfcd23ab671ab9c23cc14c703234372437cfc2d7af06b9da3072b922441900c1f3a1b9526add47288f5724c3f98958130e9e54c80c2b50e512e56b497092eba48c21d7b67d9461cacd1aa19fc5ff0292617955acad58646bace88232aa361596696471ff7cc985c40b06544ba78b63a3747ce91aa5dc15a9ac8fea6434962217a93a015c24d294c6e431dd000508c70724407e1e92e321db3deabd94cf44ea2249aea91e9f190e52c1556ec4a2e06a68ba80ad9bed5f7171c323ed82093751e120ff605c630616c744e120164c48434165a283c0c27146ea8887fbfbededf7eded8fedddddf6f69b76a638a36c53bb5d6d4035e831b4dbf98fd0d592839f32d6eab1368403380c8a481e816234f27cb3868a1cce6d0d53c5fd257a29f1c671bd5642b540dd859009dc935d65bd91b5291c30922a489074b9d2ab126ba49d4ac1dcc24142f15270cc34e42ea3110036268c5deabbf43e3deaaa4c0d5e6451a6ce93a109b75277bf13815023d630b582fe9ce43c9584da146a422fe66294e90b4835d9ce9edd9e5845f388dbde6ae8533534e737d5a56a00e0e2f70b0ae247df9d4523df995a93d96866758359608d4ebd8ee545a741c78dbcc97432fd541dd7df001fbe7e79f8f9f9d091b128285394375a5ce430e6716d6b73aea9c2f8cbc36656fba1f4f374dc08e02424c50553f3bd135ad9cb6f48428bccdd47bda5d742355107f9429f3fc7d73548a92e7255ad462129f43f1b9f06d359e45a3d7bdcb3ba1de25981379e5a5e77329e4ea3c076edc9a7d623f98227b27ad760ee4eb79f3388924db30df9cb836d68b6949a7eb57f40bbcd3d707d7be439b615756cc7eafab867f5fc8e67459ee34efdee78e6455e8bbbf7cca7d4468e7320eff515cd08a39c1cd39fb7ad3024509f6802ed26810e1f66f80b504b03041400000008000000215c827dd939e50100000f04000025000000302d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d934b8bdb3010c7ef857e07a1bb1fb19dac636c2fc926a17b282c7ddd15796c8b58969194c752fadd3b7236d9427a080b166824cf6ffef350fe78921d39803642f5059df82125d0735589be29e8cf1f1b2fa5c458d657ac533d14f4150c7d2c3f7fca8f4aef4c0b6009127a53d0d6da210b02c35b90ccf86a801e6f6aa525b368ea26308306568d4eb20ba2309c0592899e9e0999be87a1ea5a705829be97d0db334443c72cea37ad18cc8526f93d38c9f46e3f785cc901115bd109fb3a4229913c7b6e7aa5d9b6c3bc4f93847172d2f845b8e24b98f1fc2692145c2ba36aeb23f94df36dfaf3601e307e25dde67f17669260010ec235f01d157d9035bdb2a27758fc41d8ec0a73e5d2d95e5405fdbd8e6761142d136f31df445ef2b05879e934597bf1229c6d56e972b14e977f689957023bec9c8986baa04f110dca7ca4ff127034ffec8965dbefd001b780012694b8d9dc2ab57397cf78143ad7e0c677330ec28b2615d46cdfd96feaf80544d35a84a4fec31445bbee66d5eb0a0cc77143929f5c65ac986565aed59160e7b05c6660ee1dc41966eb1871ea47ff6720baccb9737b727e4e73991fca09fe9f070794ca7121f822fa1c69600d7c65ba11bd211dd4671225faac78dc5b35bcf1c95659abe4c56ab133a09d85e26aa5ecc57085b93ee5f22f504b03041400000008000000215c7aee49d60a030000f30700001b000000312d6265666f72655f7061636b6167652f7374796c65732e786d6ccd55cd6adb4010be17fa0e42776525597264633bc43f82400a85b8d0eb465ed94b56bb627795c82dbd24ef50e81bf4d64ba1a1af13c8737456926d39a149492e3d69767ebef966677634382a33665d12a9a8e043db3b706d8bf0442c285f0eed0ff3d8896c4b69cc1798094e86f69a28fb68f4f6cd40e93523672b42b405105c0ded95d6791f2195ac4886d581c809074b2a6486351ce512a95c12bc50262863c877dd2eca30e5768dd0cf927f01c9b0bc28722711598e353da78cea7585655b59d23f597221f13903aaa517e0c42abdaef4ad526e9254da4779329a48a144aa0f00178934a509794cb7877a08273b24407e19921722d7dfabbd942f440a902497d4b4cf1e0d52c1b5b21251703db43b806d8aed5f7071c56363820e375ea381fa645d62061acf46a3412298909686ccc4388186e38cd41ef7b7b777d73fefae7fdddddcdc5dff30c6146794ad6bb36f14a8067d00ddfd7fa13b55fc0a4b05135c43fa512b5df551104319db5ea96fd78ad100664f13c96338588d3c5fe7c082c333a9612abf67bc9712af3d3f6c05541fc87b2ee4029ee526b3e95bad1a0d1849350448ba5c99af16393246ad614c468305c54bc13133909b884600d8843076669eeec774afaa32b57891c5993e590c6d5802a6fa8d08841ab186a90fe8ef41de5341a84da126f46a2e56993e4bca7f2e1a58e33c676bf3529a69420dbbd6bded31dd6a2d3377437b7e55bde80d5c29fb0505f173379878913fee39f1b11f3841701838c79137750e279359343d8c7a33eff84b35900f00efbf7fbbfffd75579f755e50a6296f4e49a1a0e9e35ad7e65c5385612877575bdd8e36bb71bf10c0599014174ccfb74628652bbf230b5a64fed6eb3dbd14baf1dac9a7661aeb57494a7daa74f5b50a49a1fed9f8b0379dc5be13b9e3c8093a24747ae178ea84c1643c9dc63dd777275f5a1bfa15fbb95aaa30055ed0570cbc64536c43fe6ca71bdaad434dbfba3fa0dde6def3bbee71e8b94edc713d27e8e2c889ba9dd08943cf9f7683f12c8cc316f7f0857bdc459eb7231ff635cd08a39cecd39fb7b5d024383e5104da7402edfed6a33f504b03041400000008000000215c9b8ac75ae50100000d04000026000000312d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d934b8bdb3010c7ef857e07a1bbedd889f330b69734ded03d1496beee8a3cb6452ccb48ca8bd2efde91d3780be9212c48a09198dffce7a1f4e92c5b72046d84ea321afa134aa0e3aa145d9dd11fdfb7de9212635957b2567590d10b18fa947ffc909e94de9b06c012247426a38db57d120486372099f1550f1dbe544a4b66d1d475607a0dac1c9c641b4493c93c904c74f44a48f4230c55558243a1f8414267af100d2db3a8df34a237379ae48fe024d3fb43ef71257b44ec442bec6580522279f252774ab35d8b799fc319e3e4ac7145b8a7b730c3fd5d2429b8564655d647f25fcdf7e9af8255c0f848bacfff214c38c3021c856be01b2a7a272b1e59d11b6cfa4ed87c84b972e9e420ca8cfe5a6cb79fc2695178d355fceccde6f3d05b16c5dadb3e87eb75546ce268b3fc4df3b414d861e74c345419dd4434c8d381fe53c0c9fc732696edbe410bdc0206082971b3b9536aef1e5ff06ae25c833bdfed3008af9a9450b1436bbfaad36710756311b2f417318a76dd4dca4b0186e3b821c99f8d320a66599e6a7522d8392c97e999fb07d304b3758c28f6ff8f88313bee9c36cecb29ced3631efa519c064714ca7123f626f91aa767357c61ba169d212d5403684189beea1dce56f5c309a3ee94b54adeac06fb02da5928ad52cade0c5796f123e77f00504b03041400000008000000215c984e67fb0e030000f30700001a000000312d61667465725f7061636b6167652f7374796c65732e786d6cad55cd6adb4010be17fa0e42776525597264633bc43f82400a85b8d0eb465ed94b56bb627795c82db9a4ef50e81bf4d64ba1a5af13c8737456926d392149497ad2ecfc7cf3cdceec68705466ccba245251c187b677e0da16e1895850be1cda1fe6b113d996d2982f30139c0ced3551f6d1e8ed9b81d26b46ce5684680b20b81ada2badf33e422a59910cab0391130e9654c80c6b38ca2552b92478a14c50c690efba5d9461caed1aa19f25ff0292617951e44e22b21c6b7a4e19d5eb0acbb6b2a47fb2e442e27306544b2fc089557a5de95ba5dc24a9b40ff26434914289541f002e12694a13f2906e0ff5104e764880fc32242f44aebf577b295f881420492ea9699f3d1aa4826b6525a2e07a687700db14dbbfe0e28ac7c6041d6ebc4603f5c9bac40c349e8d46834430212d0d998971020dc719a93dee7effbebdf9797bf3ebf6cb97db9b1fc698e28cb2756df68d02d5a0f7a0bbaf84ee54f12b2c158c590de9478fa6f33bffb192eaa3c04e19db5ea96fd78ad100664f13c96338588d3c5fe79091c333a9612abf67bc9712af3d3f6c05541fc87b2ee4029ee526b3e95bad1a0d1849350448ba5c99af16393246ad614c468305c54bc13133909b884600d8843076669eeec774afaa32b57891c5993e590c6d5802a6fa8d08841ab186a90fe8f120ffa920d4a650137a3517ab4c9f25e53d170d0e38cfd9dabc94667250c3ae756f7b4cb75acbccd8d09e5f552f7a0357ca7e4141fcdc0d265ee48f7b4e7cec074e101c06ce71e44d9dc3c964164d0fa3decc3bbeae86f71ee0ddf76f777fbeeeeab3ce0bca34e5cd292914347d5cebda9c6baa300ce5ee6aabdbd16637ee1702380b92e282e9f9d608a56ce57764418bccdf7abda79742375e3bf9d44c63fde049a94f95aebe562129d43f1b1ff6a6b3d87722771c394187844e2f1c4f9d30988ca7d3b8e7faeee4bab5a15fb19faba50a53e0057dc5c04b36c536e4cf76baa1dd3ad4f4abfb03da6dee3dbfeb1e879eebc41dd773822e8e9ca8db099d38f4fc693718cfc2386c710f5fb8c75de4793bf2615fd38c30cac93efd795b0b4d82e31345a04d27d0ee6f3dfa0b504b03041400000008000000215c9b8ac75ae50100000d04000025000000312d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d934b8bdb3010c7ef857e07a1bbedd889f330b69734ded03d1496beee8a3cb6452ccb48ca8bd2efde91d3780be9212c48a09198dffce7a1f4e92c5b72046d84ea321afa134aa0e3aa145d9dd11fdfb7de9212635957b2567590d10b18fa947ffc909e94de9b06c012247426a38db57d120486372099f1550f1dbe544a4b66d1d475607a0dac1c9c641b4493c93c904c74f44a48f4230c55558243a1f8414267af100d2db3a8df34a237379ae48fe024d3fb43ef71257b44ec442bec6580522279f252774ab35d8b799fc319e3e4ac7145b8a7b730c3fd5d2429b8564655d647f25fcdf7e9af8255c0f848bacfff214c38c3021c856be01b2a7a272b1e59d11b6cfa4ed87c84b972e9e420ca8cfe5a6cb79fc2695178d355fceccde6f3d05b16c5dadb3e87eb75546ce268b3fc4df3b414d861e74c345419dd4434c8d381fe53c0c9fc732696edbe410bdc0206082971b3b9536aef1e5ff06ae25c833bdfed3008af9a9450b1436bbfaad36710756311b2f417318a76dd4dca4b0186e3b821c99f8d320a66599e6a7522d8392c97e999fb07d304b3758c28f6ff8f88313bee9c36cecb29ced3631efa519c064714ca7123f626f91aa767357c61ba169d212d5403684189beea1dce56f5c309a3ee94b54adeac06fb02da5928ad52cade0c5796f123e77f00504b03041400000008000000215c45afb0f8f8020000840700001b000000322d6265666f72655f7061636b6167652f7374796c65732e786d6cad55cd6adc3010be17fa0ec277479663bbeb65774bf6c75068a1902df4aa78e58da82c19594ebc2dbd24ef50e81bf4d64ba1a1af13c87374647b77bd29fd21e949a3f9f9e61bcf683c7a5ee7025d305d7225c70e39f21cc464aa565caec7ce9b65e20e1c541a2a575428c9c6ce8695cef3c9d327a3d26c043b3d67cc208090e5d83937a618625ca6e72ca7e5912a98044ba6744e0d5cf51a9785667455daa05c60dff3229c532e9d166198a7ff029253fdae2adc54e50535fc8c0b6e360d9683f274f8622d95a66702a8d624a029aa49a47d54eb6d9246fb4b9e9ca75a952a3347808b5596f194fd4a37c631a6e91e09901f864442ecf907b5d7fa814801d6ec82dbf6399351a6a42951aa2a69c68e0fd8b6d8e13ba92e65624dd0e1ce6b322adfa30b2a40431c3c19a54a288d0c6466d6093492e6acf5b8bbb9b9bdfa767bf5fdf6fafaf6eaab356634e762d39a7dabc02de83de8e83f42374709762e44afc6563119c13018a6650217d4c9cb4d011925cc6d0bd3f8fdc57bade986f8612fa03920ef99d22b7827dbccf643b6aac948b0cc4080e6eb737b1a55606b3406fa3619ad385d2b498585dc467402c0a64c8853fb96de660755d51992559ee4e6c56aecc0abb4d56f4520d4892d4c7bc1bf0f22bf0d42b428c4c60e470781fb845a7a8f6686eaec3114db68b263b723d6d03ce0b6d3223b63636779d93cb10e00d6c0b0e2207e7846e245e47933f7c48b8fdd60462277e02d227716cdbc208a439244d1c76678ef01de7df97cf7e3d3be2274567161b8ec6e695542d3a7adaecfb9a50ac350ef3f66f33d8c5d56878500ce8a65b41266b93342293bf9155bf12af7775eaff985329dd75e7e69a7b17d81ac362f4bd39ca8d21cea5f4c9fc5f345e243d5d3811b1cb3d08dc3e9dc0d83d9743e4f62cff7661f7b2bf3110bb3d972d077120c4b015eba2bb6237fbad78d9ddea5a5df7c3fa0dde71efb91771212cf4d8e3de206111db883e838749390f8f328982ec224ec710f1fb8583d4cc89e7c38343c67824b76487fd9d74293e0fa8722f0b61378fffb9cfc04504b03041400000008000000215c91b66d89e40100000d04000026000000322d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d934b8bdb3010c7ef857e07a17bfc4abc498ced659b6ce81e0a4b5f77451edb22966424e545e977efc869bc85f4101624d048cc6ffef350fe78921d3980b142ab82c641440928ae2ba19a82fef8be992c28b18ea98a755a4141cf60e963f9f1437ed466675b004790a06c415be7fa2c0c2d6f41321be81e14bed4da48e6d0344d687b03ac1a9c64172651f4104a2614bd1032730f43d7b5e0b0d67c2f41b90bc440c71ceab7ade8ed9526f93d38c9cc6edf4fb8963d22b6a213ee3c4029913c7b6994366cdb61dea778c63839195c09eee935cc707f13490a6eb4d5b50b90fc57f36dfacb7019323e926ef3bf0b13cfb00007e11bf8864adec94a4756f2069bbe13f630c27cb94cb61755417f3d2fa368fa299a4f9ed7eb64325b25e964b15ae1a03d454f5112c7f3e56cf39b967925b0c3de9918a80bba4a6858e603fda780a3fde74c1cdb7e830eb8030c1053e26773abf5ce3fbee055e45dc31bdfcd3008af865450b37de7beeae367104deb10b208e6298af6ddcdaaf31a2cc7714352301b65ac9963656ef49160e7b05cb667fe1f4c33ccd6339234f83f22c5ecb8775a792fafb8cc0f651c24691e1e5028c78dd8abe44b9c9e35f0859946284b3aa807d09c1273d13b9c9dee871346dd6ae7b4bc5a2df6058cb7505aadb5bb1abe2ce3472eff00504b03041400000008000000215c1e931679fe020000df0700001a000000322d61667465725f7061636b6167652f7374796c65732e786d6cb555cd6ed43010be23f10e56eea9e36c1236abdd45dd9f484820217591b8ba59676bd5b123c769b3202ee51d9078036e5c9040bc4ea53e07e324fbd70a8a5a38797e3f7f93997186cfeb5ca00ba64baee4c821479e83984cd592cbd5c879b348dcbe834a43e5920a25d9c859b3d2793e7efa64589ab56027678c190410b21c3967c614038ccbf48ce5b43c520593e0c994cea90155af7059684697a54dca05f63d2fc239e5d269110679fa372039d5e755e1a62a2fa8e1a75c70b36eb01c94a783172ba9343d1540b526014d514d22eda35a6f2e69ac77eec979aa55a9327304b85865194fd95dba318e314d774880fc30241262cf3fa8bdd60f440ab06617dcb6cf190f33254d8952554933727a806d8b1d9c4b752913eb820e7751e361f90e5d500116e2e0f13055426964e0666683c02269ceda889b1f3faeafbe5d5f7dbffef8f1faeaab756634e762ddba7d6bc02de82de8e8bf41fbbd7f08dd1c25f8b910dbcfe73bad613c8439334ccb0414d4c98b7501374a588916a689bb277aa5e99af8e15e4273c0bda74a2f61053737db1eb5a6f150b0cc4082e6ab337b1a5560eb340646623c5c72ba52920a0bb9c9e804804d991027764ddf660755d51992559ee4e6c572e4c0c2dbea372210eac416a655f0ef93fcdf26215a14626de7ae83c0fb845a7a8f6686eaec5e8ae4be6cb265b725d6d03ce0b6b5223b63236771d96c6f07002fcca0e220be7f46e279e47953f7d88b7b6e302591dbf7e6913b8da65e10c52149a2e84333bcb7006fbe7cbef9f96957113aadb8305c765a5a95d0f4496bdbe7dc528561a8771fb3f91ec6be83878500ce9265b41266b17542295bf9155bf22af7b751aff985325dd44e7e69a7b15d6e569b97a5694e54690ef5cf27cfe2d93cf1a1ea49df0d7a2c74e3703273c3603a99cd92d8f3bde987bdd7f8116f71f38042df4930280544e9aed88efcc9ce3672f694967ef3fd80f63ef7d88fbce390786ed2f3881b44b4eff6a35ee82621f1675130998749b8c73d7ce09bed614276e4c381e139135cb243fa8b7d2b3409d43f1481379dc0bb3ff3f817504b03041400000008000000215c91b66d89e40100000d04000025000000322d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d934b8bdb3010c7ef857e07a17bfc4abc498ced659b6ce81e0a4b5f77451edb22966424e545e977efc869bc85f4101624d048cc6ffef350fe78921d3980b142ab82c641440928ae2ba19a82fef8be992c28b18ea98a755a4141cf60e963f9f1437ed466675b004790a06c415be7fa2c0c2d6f41321be81e14bed4da48e6d0344d687b03ac1a9c64172651f4104a2614bd1032730f43d7b5e0b0d67c2f41b90bc440c71ceab7ade8ed9526f93d38c9cc6edf4fb8963d22b6a213ee3c4029913c7b6994366cdb61dea778c63839195c09eee935cc707f13490a6eb4d5b50b90fc57f36dfacb7019323e926ef3bf0b13cfb00007e11bf8864adec94a4756f2069bbe13f630c27cb94cb61755417f3d2fa368fa299a4f9ed7eb64325b25e964b15ae1a03d454f5112c7f3e56cf39b967925b0c3de9918a80bba4a6858e603fda780a3fde74c1cdb7e830eb8030c1053e26773abf5ce3fbee055e45dc31bdfcd3008af865450b37de7beeae367104deb10b208e6298af6ddcdaaf31a2cc7714352301b65ac9963656ef49160e7b05cb667fe1f4c33ccd6339234f83f22c5ecb8775a792fafb8cc0f651c24691e1e5028c78dd8abe44b9c9e35f0859946284b3aa807d09c1273d13b9c9dee871346dd6ae7b4bc5a2df6058cb7505aadb5bb1abe2ce3472eff00504b03041400000008000000215c84466a23ff020000df0700001b000000332d6265666f72655f7061636b6167652f7374796c65732e786d6cb555dd6ed33014be47e21dacdc678ed33a6babb6d3b22ed224909056246ebdd4e92c1c3b729c2d057133de018937e08e1b2410af3369cfc17192fe81c6d0802b9fdfcfdfc939c7191fd5b94457dc9442ab89470e020f7195ea8550cb89f7729ef8030f9596a905935af189b7e2a577347dfa645cda95e4e7979c5b0410aa9c7897d616238ccbf492e7ac3cd00557e0c9b4c99905d52c715918ce16a54bca250e8320c23913ca6b114679fa27203933afabc24f755e302b2e841476d56079284f47674ba50dbb9040b5267d96a29a442644b5595fd2587fb92717a9d1a5ceec01e0629d6522e5bfd21de22166e91609901f8744280ec2bdda6bf348a43e36fc4ab8f679d371a6952d51aa2b65275e0fb05db1a3d74a5fabc4b9a0c35dd4745cbe41574c828578783a4eb5d40659b899bb20b02896f336e2eedbb7db9b2fb7375f6fdfbfbfbdf9ec9c19cb855cb5eed019700bfa1374f4dfa0c3e01f423747097e21e5e6f3855e6b988e61ce2c372a010575f27c55c08d0a56a28569e21e885e1ab62221dd49680eb8f7429b05ace0fa66d7a3d6341d4b9e5948306279e94eab0bec9cd6c2484cc70bc1965a31e920d7199d00b02997f2dcade9ab6cafaa3a43aaca93dc9e2d261e2cbcab7e2d02a14e6c615a05df9f14de9b845851c8959bbb0e02ef126ae9fd353354670f52240f65930dbb0db186e61eb78d15b9199b78f3eb667b3b007861469500f1ed49120f4ee971e09328a27efff024f68f0f93c427bd219d517a4c06f1c9bb66787f02bcfbf4f1eefb876d45e8a212d20ad569695542d3e3d6b6cbb9a50ac3506f3f66f33dac7b07f70b019c05cf5825ed7ce3845236f273be10551e6ea25e882b6dbba8adfccc4d63bbdcbcb6cf4adb9ca83202ea3f8d0f87b3d324f407413cf0fb3d4efd218d673eed9fc4b359320cc200eadfbec67ff116370f28f49df447a58428d315db913fdfda26de8ed2d26fbe1fd0dee53e0ca3e09892c04f7a01f1fb111bf883a847fd84927016f5e3539ad01deef4916f768009d992a7232b722e85e2fbf4e7bb566812a8bf2902af3b81b77fe6e90f504b03041400000008000000215ce9654399e50100000d04000026000000332d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d934b8bdb3010c7ef857e07a1bbedd88ebd89b1bde4d1d03d1496beee8a3cb6452ccb48ca8bd2efde91d3640be9212c48a09198dffce7a1fcf9243b72006d84ea0b1afa134aa0e7aa127d53d01fdf37de8c1263595fb14ef550d03318fa5c7efc901f95de9916c01224f4a6a0adb543160486b72099f1d5003dbed44a4b66d1d44d60060dac1a9d64174493491a48267a7a2164fa1186aa6bc161adf85e426f2f100d1db3a8dfb46230579ae48fe024d3bbfde0712507446c4527ec7984522279f6d2f44ab36d87799fc229e3e4a47145b8e36b98f1fe2e92145c2ba36aeb23f9afe6fbf4e7c13c60fc46bacfff214c38c5021c846be01b2a7a272bb9b1a23758fc4e587a83b972e96c2faa82fe9acdd345b25aaebd74156dbce96699788b45bcf6c2e5a770b9daa4719c2e7fd332af0476d839130d754157110dca7ca4ff147034ff9c8965db6fd001b78001424adc6c6e95dab9c717bc9a38d7e0ce77330ec2ab2615d46cdfd9afeaf81944d35a84ccfca70445bbee66d5790d86e3b821c99fde64ac996565aed59160e7b05c6660ee1fc41966eb1851e2ff1f916076dc39ad9c97535ce68732f4a3240f0e2894e346ec55f225cec01af8c274237a433aa847d01325faa2773c5b358c278cba55d62a79b55aec0b6867a1b45a297b355c596e1fb9fc03504b03041400000008000000215cd9ee697bf1020000760700001a000000332d61667465725f7061636b6167652f7374796c65732e786d6cad55dd6adb3014be1fec1d8cef5d594ee426c149a99b1a0a1d0c9ac16e55474e446529c872eb6ceca67d87c1de6077bb19acec75027d8e1dd9cedfcabad1ee4a47e7e73bdfe723c9d151950be79ae9822b3974f181ef3a4ca66acae56ce8be9b245ecf750a43e5940a25d9d05db2c23d1abd7e15156629d8c59c31e300842c86eedc98c500a1229db39c16076ac1244432a5736a60ab67a8586846a7852dca050a7c3f4439e5d26d100679fa2f2039d557e5c24b55bea0865f72c1cdb2c6729d3c1d9ccda4d2f45200d50a7769ea5438d48153e97593dafba84fce53ad0a959903c0452acb78ca1ed3eda33ea2e91609909f878409f2833ded957e2652176976cdedf8dc519429690a2755a5344337006c2b767025d58d4c6c0826dc668da2e283734d0578b08b4651aa84d28e81cecc268147d29c35190ff7f7abdbefabdb1fabbbbbd5ed371bcc68cec5b20907d6811ad07de8a0f31fa1eba5803817624763e3184570180cd332818dd3da93e5023a4a38b70d4c9df797ec99a64b1c909d827a81be974a4fe19eac3bdb0fd9b8469160998102cd6773bb1ab54036680ccc6d144d399d294985855c57b406c0a64c880b7b97de677baaaacc91659ee4e66c3a74e1565af56b1308b56603d36cd09f8bf0534568974243e8c55c9c2a7b01a9b61a6fd86d88d534f7b86dbc8e3d55437772535faa16002efea0e4607e3c49e2de2939f63d1c86c4eb1e9ec4def1619278b8d32763428e712f3ef9541fd7df001fbe7e79f8f979abc8b92cb9305cb6bbb42c60cc71e3dbe5dc5085f157db8f597f0f639fa77d21803365192d85996c82206563bf61535ee6c126eb2dbf56a6cddadae7f6fce1d0f66095392f4cbd3aa5e6a0ff343eec8f4f93c0ebf971cfeb7618f1fa241e7ba47b128fc749df0f7cd0bf7d245ff044d6ef1acc1d770785802cdd8a6dc95f6c7d437767d3d0afbf1fd0dee5de0f42ff9860df4b3a3ef6ba21ed79bdb043bc84e0601c76e35392901deee4994fa98f30de922703c37326b864fbf427bb5e18126c9f1081d69340db1fe6e817504b03041400000008000000215c27ce0a12e40100000f04000025000000332d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d934b8f9b3010c7ef95fa1d2cdf8100094d10b0caa351f75069d5d7dd310358c118d9ce4b55bf7bc764c3564a0fd14a58f2d8cc6ffef370f674962d3982364275390dfd0925d071558aaecee9cf1f5b6f4e89b1ac2b59ab3ac8e9050c7d2a3e7ec84e4aef4d036009123a93d3c6da3e0d02c31b90ccf8aa870e6f2aa525b368ea3a30bd06560e4eb20da2c9240924131dbd1252fd08435595e0b051fc20a1b35788869659d46f1ad19b1b4df2477092e9fda1f7b8923d2276a215f6324029913c7dae3ba5d9aec5bccfe1947172d6f845b8e25b98e1fc2e92145c2ba32aeb23f955f37dfa8b6011303e92eef37f08134eb10047e11af8868adec99a8dace80d16bf13968c30572e9d1e4499d3dff345b29cad571b2f59475b6fba5dcdbce532de78e1ea73b85a6f93384e567f689195023bec9c89862aa7eb88064536d07f0938997ff6c4b2dd7768815bc00021256e36774aeddde5331e4d9c6b70e7bb1d06e14593122a7668ed3775fa02a26e2c42e6fea7198a76dd4dcbcb060cc77143923f1d656c986545a6d58960e7b05ca667ee1dc42966eb18f1dc8ffecf40749171e7b6767e4e73911d8b10ffcf82234ae5b8107c137d8dd4b31abe325d8bce9016aa2b89127d553cecadea5ff964a7ac55f26635d819d0ce42719552f666b8c28c4fb9f80b504b03041400000008000000215cf9fb8b7af9020000920700001b000000342d6265666f72655f7061636b6167652f7374796c65732e786d6cad55dd6adb3014be1fec1d84ef5d59aeed252149599a180a1d0c9ac16e55474e4565c9c872eb6ceca67d87c1de6077bb19acec750a7d8e1dd94ee2b4741dedae747ebff31d9f2379785065025d305d7025470ed9f31cc464a2165c2e47ce8779ecf61c54182a175428c946ce8a15cec1f8f5ab616156829d9c31661040c862e49c19930f302e923396d1624fe54c8227553aa30654bdc445ae195d14362913d8f7bc0867944ba7411864c9bf8064549f97b99ba82ca7869f72c1cdaac67250960c8e9652697a2a806a45029aa08a44da47955e17a9ad0fea643cd1aa50a9d9035cacd29427ec21dd3eee639a6c9100f9794824c49ebfd37ba59f891460cd2eb81d9f331ea64a9a0225aa9466e4f8806d9b1d9c4b752963eb8209b751e361f1095d500116e2e0f13051426964a032b341609134634dc4ddcdcdedd5cfdbab5fb7d7d7b7573fac33a51917abc6ed5b036e40ef4147ff11ba3e0af073213a3d3686f11096c1302d6350502bcf57395494b0b70d4c1df744f452d315f1c34e427d40dd53a517704fd695ed876c4ce3a160a98104cd9767f6342ac7d6690ccc6d3c5c70ba54920a0bb9ce6805804d981027f62e7d4c77baaa5224cb2cceccd162e4c0adb4ddaf4520d48a0d4ca3e0c793c8a34988e6b958d9e5682170975043efc5cc50953e49f1c96cb2c3956cb86e68d6a477986eacc86edcc8995fd6176e0d57e941c941fc1cf5fc28389cf6ddc0f3891b8401717b84c46e3f98c5133f9ccc0e03ff4bbdcaf700efbe7fbbfbfd75db1f3a2db9305cb65a5216b00293c6d6e5dc5085d5a8b69fb6fe3ac63e5dbb8d00ce82a5b41466be71422b1bf91d5bf032f33751eff985326dd4563eb6bbd9dc475699e3c2d4272a3587fe679337fde92cf6dd9e37e9b9c13e0bdd7e3899ba617038994ee3bee77b875f3a0fe80b9ecffacd832d20c1a01010a5db665bf2275bdbc8e9280dfdfafb01ed2ef7be1f796f43e2b9f1be07b38b68cfed45fba11b87c49f46c16416c661877bf8cc67d6c3846cc98703c33326b864bbf4e75d2b0c09d4bf3481d793c0db9fe9f80f504b03041400000008000000215c662da9a5e00100000304000026000000342d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb1e56437c6f692c32edd8b42e9e95e91c7b6886519493951faee1d394db6100a6141028da4f9e69f19297f3aaa8eecc158a9fb82c6e18412e885ae64df14f4c7f797e09112eb785ff14ef750d01358fa547efc901fb4d9da16c01124f4b6a0ad7343164556b4a0b80df5003d9ed4da28eed0344d640703bc1a9d54172593c92c525cf6f44cc8cc3d0c5dd752c05a8b9d82de9d21063aee50bf6de5602f3425eec1296eb6bb21105a0d88d8c84ebad308a54489ecb5e9b5e19b0ef33ec62917e468702438d925ccb87f13494961b4d5b50b91fc57f36dfaf3681e717125dde67f17264eb1007be91bf8864adec99a5e59c91b8cbd1336bbc27cb94cb69355417f3dafa78b155bb0802d1e9e8394a569305fb224582ed9329dc50bb64827bf699957123bec9d8981baa0ab8446653ed27f4a38d87fd6c4f1cd37e84038c0003125fe6d6eb4defac357dc9a78d7e8c6f7657c085f0ca9a0e6bbce7dd5874f209bd621e4317c98a268dfddac3aadc10a7c6e480ad3ab8c3577bccc8d3e10ec1c96cb0edcff0396b1ff3896b9f05757feaed759e6fb320e93691eed519ec089b08bd0337de00d7ce6a691bd251dd423e88112735639ae9d1ec615cadd68e7b4ba582d76038cb75050adb5bb18be18d7ef5bfe01504b03041400000008000000215c96abc807f8020000840700001a000000342d61667465725f7061636b6167652f7374796c65732e786d6cad55dd6adb3014be1fec1d8cef5d59aeed252171597e0c850e06cd60b7aa2327a2b264643975367ad3bec3606fb0bbdd0c56f63a853ec78e6ca77156d68e76573abfdff98eceb13c3caa326eada92a9814231b1fb8b6454522174c2c47f68779ecf46cabd0442c0897828eec0d2deca3e8f5ab61a1379c9eae28d51640886264afb4ce070815c98a66a438903915e049a5ca8806552d51912b4a168549ca38f25c37441961c26e100659f22f201951e765ee2432cb8966678c33bda9b16c2b4b06c74b211539e340b5c23e49ac0a87cab32ab52d525b1fd4c958a26421537d00b848a6294be843ba7dd44724d92101f2f39070805c6faff74a3d13c9478aae99199f1d0d5329746125b2147a647b806d9a1d9c0b792162e38209b751d1b0f864ad09070bb651344c2497cad250999a20b00892d126e2eee6e6f6eac7edd5cfdbebebdbabefc699928cf14de3f68c0135a0fbd0dee17f84ae8f02fc8cf34e8f8d211ac23268aa440c8ad5caf34d0e1505ec6d0353c73d11bd546483bda093501f50f74caa057c27dbcae6221b5334e434d590a0d872654e2d73649c5ac3dca2e18291a514841bc86d462b006c42393f35dfd2c774afab2ab54499c5993e5e8c6cf82a4df75b1108b56203d328e8ef49f8b124d4a5d0107a3117ab4a9f24f56436b02679ce376675dbcd412dbbcebded31bdb75a66c746f6fca2fec4b670951a940cc4cf61cf0bfdc9b4eff8ae871d3ff0b1d3c33876fafe2c1e7bc17836f1bdcb7a79ff00bcfbf6f5eed7975d7fd659c9b866a2d592b280a18f1b5b9773431596a1da5d6d7d3bda3c56fb8d00ce82a6a4e47a7eef8456eee57774c1caccbb8f7acfd652b7513bf9c46c230e4d0d5ae99342d7a7552a06fdcfc66ffad359ec393d77dc73fc431a38fd603c75027f329e4ee3beebb993cbce93f98207b37ee5600bb03f283844a9b6d996fce9ce36b23b4a43bfbe3fa0dde5def742f76d805d273e74617621e939bdf03070e2007bd3d01fcf8238e8700f9ef9b0ba08e31df960a059463913749ffebc6b852181fa4813683b09b4fb7d46bf01504b03041400000008000000215c662da9a5e00100000304000025000000342d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb1e56437c6f692c32edd8b42e9e95e91c7b6886519493951faee1d394db6100a6141028da4f9e69f19297f3aaa8eecc158a9fb82c6e18412e885ae64df14f4c7f797e09112eb785ff14ef750d01358fa547efc901fb4d9da16c01124f4b6a0ad7343164556b4a0b80df5003d9ed4da28eed0344d640703bc1a9d54172593c92c525cf6f44cc8cc3d0c5dd752c05a8b9d82de9d21063aee50bf6de5602f3425eec1296eb6bb21105a0d88d8c84ebad308a54489ecb5e9b5e19b0ef33ec62917e468702438d925ccb87f13494961b4d5b50b91fc57f36dfaf3681e717125dde67f17264eb1007be91bf8864adec99a5e59c91b8cbd1336bbc27cb94cb69355417f3dafa78b155bb0802d1e9e8394a569305fb224582ed9329dc50bb64827bf699957123bec9d8981baa0ab8446653ed27f4a38d87fd6c4f1cd37e84038c0003125fe6d6eb4defac357dc9a78d7e8c6f7657c085f0ca9a0e6bbce7dd5874f209bd621e4317c98a268dfddac3aadc10a7c6e480ad3ab8c3577bccc8d3e10ec1c96cb0edcff0396b1ff3896b9f05757feaed759e6fb320e93691eed519ec089b08bd0337de00d7ce6a691bd251dd423e88112735639ae9d1ec615cadd68e7b4ba582d76038cb75050adb5bb18be18d7ef5bfe01504b03041400000008000000215cbf4d1e4afa020000920700001b000000352d6265666f72655f7061636b6167652f7374796c65732e786d6cad55cd8ed33010be23f10e56ee59c769d33fb545b44d24249090b6485cbda9d35a3876e438250571d97d0724de801b172456bcce4afb1c8c93b44d77058b164e9edf6fbec98c9df1b3321568cb74ce959c38e4cc731093b15a71b99e386f96913b70506ea85c51a1249b383b963bcfa64f9f8c73b313ec7cc398410021f389b331261b619cc71b96d2fc4c654c8227513aa50654bdc679a6195de5362915d8f7bc1e4e29974e8d304ae3bf0149a97e57646eacd28c1a7ec10537bb0acb41693c7ab1964ad30b01544bd2a5312a494ffba8d4fb2295f55e9d94c75ae52a3167808b5592f098dda73bc4434ce32312203f0e8904d8f34f7a2ff52391ba58b32db7e373a6e3444993a35815d24c1c1fb06db3a37752bd979175c1849ba8e938ff80b654808538783a8e95501a19a8cc6c1058244d591d717b7d7d73f9fde6f2c7cdd5d5cde537eb4c68cac5ae76fbd6806bd03bd0bdff085d1d39f8b910ad1e6bc3740ccb6098961128a89197bb0c2a4ad8db1aa68a7b207aade98ef8412ba13aa0ee85d22bb827fbcaf643d6a6e958b0c44082e6eb8d3d8dcab0751a03739b8e579cae95a4c242ee331a01606326c4b9bd4b6f9393aeca04c9228d52f3623571e056daeef722106ac41aa656f0ef93c86f9310cd32b1b3cbd140e036a19ade3f334365f220c507b3c9095772e07aa059913e617ab022bb711367f9beba707bb8528f0a0ee2c73ef1e7641086ee2cf443b7db9b79ee20f442b7e30de79d79375c04fdfea76a95ef00de7efd72fbf3f3b13f74517061b86cb4b8c8610566b5adcdb9a60aab511e3f6df5758c7dba4e1b019c154b6821ccf2e084560ef22bb6e245ea1fa25ef3ad324dd4517e6977b3be8fac342f73539da8d01cfa0f67fde1228c7c77e0cd066eb7c3027718cc166ed09dcf168b68e8f9defc53eb01fd87e7b37af3600b4877940b88d24db30df9f3a36de2b4949a7ef5fd80769bfbd0ef79cf03e2b951c723303b3a7007bd4ee04601f117bdee2c0ca2a0c53d78e433eb61428ee48391e129135cb253facbb6158604ea1f9ac0fb49e0e3cf74fa0b504b03041400000008000000215c3cd62cbbdf0100000304000026000000352d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93598bdb3010c7df0bfd0e42efb663e7f081eda59b83ee4361e9f5aec8635bc4b28ca45c947ef78e9c265b0885b0208146d2fce63f3352fe74921d39803642f5050dfd0925d0735589be29e88fef1b2fa1c458d657ac533d14f40c863e951f3fe447a577a605b00409bd29686bed900581e12d48667c35408f27b5d29259347513984103ab4627d905d164b20824133dbd1032fd0843d5b5e0b0527c2fa1b71788868e59d46f5a31982b4df2477092e9dd7ef0b8920322b6a213f63c4229913c7b697aa5d9b6c3bc4fe18c7172d238229cd36b9871ff2e92145c2ba36aeb23f9afe6fbf4d3200d18bf91eef37f0813ceb00007e11af8868adec99adf58d11b6cfa4ed8e20673e5d2d95e5405fd952ea2e4791ec5de6ab95e7bb3f526f2d2f839f6e6691c4ec2345c269f92dfb4cc2b811d76ce44435dd0654483321fe93f051ccd3f6b62d9f61b74c02d60809012f736b74aeddce10b6e4d9c6b70e7bb191fc2ab2615d46cdfd9afeaf81944d35a84247e3c47d1aebb59755e81e1f8dc90e4cf6e3256ccb232d7ea48b073582e3330f70fa6d9f43f8e65ceddd5a5bbeb7496f9a10cfd689e070794c77122ec2af4421f58035f986e446f4807f5088a29d11795e3daaa615ca1dcadb256c9abd56237403b0b05d54ad9abe18a71fbbee51f504b03041400000008000000215ccbeb3620fa020000920700001a000000352d61667465725f7061636b6167652f7374796c65732e786d6cad55dd6adb3014be1fec1d84ef5d594e9c26214959121b0a1d0c9ac16e55474e4565c9c872eb6ceca67d87c1de6077bb19acec750a7d8e1dd94ee2ac741dedae747ebff31d9f23797454a6025d329d7325c70e39f01cc464ac965caec6cefb45e4f61d941b2a975428c9c6ce9ae5ced1e4f5ab516ed6829d9e33661040c87cec9c1b930d31cee37396d2fc40654c8227513aa50654bdc279a6195de6362915d8f7bc1e4e29974e8d304ce37f0149a9be2832375669460d3fe3829b7585e5a0341e1eafa4d2f44c00d59274698c4ad2d33e2af5a648657d5027e5b156b94acc01e06295243c660fe90ef000d3788704c8cf432201f6fcbdde4bfd4ca42ed6ec92dbf1399351a2a4c951ac0a69c68e0fd8b6d9e185545732b22e9870133519e51fd1251510d673f064142ba134325099d920b0489ab23ae2fef6f6eefac7ddf5cfbb9b9bbbebefd699d0948b7503600db806dd8726ff13ba3a72f073215a3dd686c90896c1302d235050232fd6195494b0b7354c15f744f44ad335f18356427540dd33a597704f3695ed87ac4d939160898104cd57e7f6342ac3d6690ccc6d325a72ba52920a0bb9c96804808d9910a7f62e7d48f6ba2a13248b344acdf172ecc0adb4dd6f4420d488354cade0c793c8a34988669958dbe56820709b504defc5cc50993c49f1c96cb2c7956cb96e6956a4f7986eadc86edcd8595c55176e0357ea61c141fc7448fc19e987a13b0dfdd0edf6a69edb0fbdd0ed78835967d60de7c1e1e1e76a95ff00bcfff6f5fed7975d7fe8ace0c270d9687191c30a4c6b5b9b734d1556a3dc7ddaeaeb18fb74ed3702384b96d04298c5d609ad6ce5b76cc98bd4df46bde397ca34513bf9c4ee667d1f59694e72539da8d01cfa0fa787837918f96edf9bf6dd6e8705ee2098cedda03b9bcee7d1c0f3bdd9e7d603fa82e7b37af3600b4877980b88d24db30df9d39d6decb4949a7ef5fd80769bfbc0ef796f02e2b951c723303bda77fbbd4ee04601f1e7bdee340ca2a0c53d78e633eb614276e483a1e129135cb27dfa8bb6158604ea5f9ac09b49e0ddcf74f21b504b03041400000008000000215c5f1c6326e10100000504000025000000352d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb113c7b1b1bd7473a07b51587aba57e4b12d625946524e94be7b474e932d84425890402369bef96746ca9f4eb22307d046a8bea0a13fa1047aae2ad13705fdf17de32d283196f515eb540f053d83a14fe5c70ff951e99d69012c41426f0ada5a3b644160780b92195f0dd0e349adb464164ddd0466d0c0aad14976413499cc03c9444f2f844c3fc250752d38ac14df4be8ed05a2a16316f59b560ce64a93fc119c647ab71f3caee48088ade8843d8f504a24cf5e9a5e69b6ed30ef5338639c9c348e08e7f41a66dcbf8b2405d7caa8dafa48feabf93efd344803c66fa4fbfc1fc284332cc041b806bea1a277b2e21b2b7a834ddf099bdf60ae5c3adb8baaa0bfd279b4788ea3c45b2dd76b6fb6de445e9a3c275e9c26e1244cc3e5e2d3e2372df34a60879d33d150177419d1a0cc47fa4f0147f3cf9a58b6fd061d700b1820a4c4bdcdad523b77f8825b13e71adcf96ec687f0aa490535db77f6ab3a7e06d1b4b6a0b3c84f6214edba9b55e715188ecf0d49fe22bee95831cbca5cab23c1d661bdccc0dc479866d3ff799639777797eeb2535ae68732f4a3380f0e2890e344da55ea053fb006be30dd88de900eea919450a22f3ac7b555c3b842c15b65ad9257abc57e8076162aaa95b257c395e3f681cb3f504b03041400000008000000215cc54295a9fe020000ed0700001b000000362d6265666f72655f7061636b6167652f7374796c65732e786d6cbd55dd8ad34014be177c8721f7d949d2244d4a5bb1b6014141d80ade4ed3493b38990993c99a2adeecbe83e01b78e78de0e2eb14f6393c93a47f2eebca2a5ecdf9fdce7732e74c864fea9ca30baa4a26c5c872cf1c0b5191ca2513ab91f57a9ed891854a4dc4927029e8c8dad0d27a327efc6858ea0da7e76b4a350208518eacb5d6c500e3325dd39c9467b2a0023c995439d1a0aa152e0b45c9b2344939c79ee38438274c582dc2204fff042427ea6d55d8a9cc0ba2d98271a6370d9685f274f07c25a4220b0e546bd72729aadd5079a856bb228df5569d9ca54a9632d367808b6596b194dea61be31893f48004c80f437203ec7827bdd7ea81483e56f48299ebb3c6c34c0a5da25456428fac1e609b66076f857c2712e3821beea2c6c3f23dba201c2cae85c7c35472a99086cad4048145909cb61137d7d7dbcb6fdbcbefdbababede557e3cc48cef8a6757bc6805bd0ff071dfe43e8e628c1cf38df7f3ecf6a0de321cc99a64a24a0a04e9e6f0aa82860255a9826ee9ee895221bd70b8e129a03ea2ea45ac20aee2a9b3b6a4de321a7998604c5566b736a5960e3d41a46623c5c32b292827003b9cbe804804d29e7e7664ddf64275dd51912559ee4faf97264c1c29bee772210eac416a655f0dd49de9d49881405df98b9eb20f031a196de5f334375762f45f7be6cf784abbbe7baa7d9903e61bab7223371236bfeaed9e51d5cad061503f1431487a1ef45b11dce12c7f6fb4164c7fd5edff6fcfed49f453d27089e7e6c46f917c09b2f9f6f7e7c3af4871615e39a894e4bab124660d2da8e39b7546134eac3a76dbe8e36afe2692380b3a419a9b89eef9dd0ca5e7e4997accabd7dd42b7621751775905f98d96cf791d6fa45a99b13558a41ffb3493f9ece12cf8e9c4964fb3d1ad8713099da81ff6c329d26b1e339cf3e1ebdcd7ff13237cf294c81eb0f4a0e51aa6bb6237f7eb08dac23a5a5df7c3fa07dcc3df642e769e03a76d2735cdb0f496447612fb093c0f5a6a13f99054970c43d78e00bee60d73d900f069ae59433414fe9cf8fad7049a0fea609bcbb097cf84f8f7f02504b03041400000008000000215c1628a554e00100000304000026000000362d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1f93ac63637bd9241bba1785d26e7bafc8635bc4b28ca49c287df78e9c26bb100a6141028da4f9e69f19297f3cca8eec411ba1fa82467e4809f45c55a26f0afaf375edcd293196f515eb540f053d81a18fe5e74ff941e9ad69012c41426f0ada5a3b644160780b92195f0dd0e349adb464164ddd0466d0c0aad14976411c860f8164a2a76742a6ef61a8ba161c568aef24f4f60cd1d0318bfa4d2b0673a1497e0f4e32bddd0d1e577240c44674c29e46282592672f4daf34db7498f7319a324e8e1a478c73720933eedf4492826b65546d7d24ffd37c9b7e1aa401e357d26dfe7761a22916602f5c03df50f10759b32b2b7e834d3e087bb8c25cb974b61355417fafd338099fd285f7bc8a226f1aa789972ed66b2f7c5ecc93e46911cf66cb3fb4cc2b811d76ce44435dd0654c83321fe9bf041cccbb35b16cf3033ae016304044897b9b1ba5b6eef005b742e71adcf8aec787f04d930a6ab6ebec7775f802a2692d42e67e3243d1aebb59755a81e1f8dc90e44faf3256ccb232d7ea40b073582e3330f70f26d9e43f8e65ceddd5a5bbeb7496f9be8cfc7896077b94c77122ec22f44c1f58035f996e446f4807f5084a28d16795e3daaa615ca1dc8db256c98bd56237403b0b05d54ad98be18a71fdbee55f504b03041400000008000000215c8b3094a204030000ed0700001a000000362d61667465725f7061636b6167652f7374796c65732e786d6cb555dd6adc3814be5fe83b08dd3bb23db6c71ec6133a9d3104b250c82cecade29127a2b2646439f5ecd29bf41d0a7d83def56661cbbe4e20cfb147b6e7afa5cd926caf747ebff31deb1c797ade9602dd325d732553ec9db9183199ab35979b14ffb6ca9c18a3da50b9a6424996e22dabf1f9ecc52fd3da6c05bbba61cc208090758a6f8ca92684d4f90d2b697da62a26c153285d5203aade90bad28cae6b9b540ae2bb6e444aca25ee112665fe5f404aaadf349593abb2a2865f73c1cdb6c3c2a8cc27171ba934bd1640b5f5029aa3d68bb48f5abd2bd259bfa953f25cab5a15e60c70892a0a9eb36fe9262421343f2001f2d390bc90b8fe49efad7e22524034bbe5f6faf06c5a28696a94ab469a148f00db363b7923d55b995917dcf010359bd67fa05b2a52ec4798cca6b9124a230395990d028ba425eb231ebe7cb9bffbebfeeeeffbf7efefef3e5b67414b2eb6038035901ef414daf37e1ef4ffc9ba3b6af07321f69fcfc7bd61368539334ccb0c1434c8ab6d051525ac440fd3c53d12bdd174ebf9e151427740dd6ba5d7b082bbcaf68e7ad36c2a58612041f3cd8d3d8daa88751a0323319bae39dd28498585dc650c02c0e64c882bbba6bf17275db505924d9995e6629d625878dbfd4e044283d8c3f40af97e92ffdd2444ab4a6ceddc0d10e498504fefd9cc505b3c4ad17b2cdb3be1eaedb9ee6976a44f98eeadc84e5c8a576fbb5ddec1b57ad27010ff8c93280afc3871a265e63ac1388c9d643c1a3b7e305e04cb78e486e1cb77dd287f05f8f0e9e3c33f1f0efda1eb860bc3e5a0e54d0d2330ef6dc79c7baa301aede1d3765fc7d857f1b411c059b38236c2acf64e68652fffcad6bc29fd7dd46b7eabcc1075902fed6cf6fbc85a73599bee448de6d0ff723e4e16cbcc7762771e3bc188854e12ce174e18bc9a2f1659e2faeeab77476ff3335ee6ee398529f082492d204a0fcd0ee4af0eb6141f293dfdeefb01ed63ee891fb92f43cf75b291eb39414463278e46a193859ebf8882f932ccc223eee1135f709778de817c3831bc64824b764a7f756c854b02f5074d90dd4d90c37f7af62f504b03041400000008000000215ce5e00d13e10100000504000025000000362d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1f13af63637bd9241bba1785d2d3bd228f6d11cb329272584adfbd23a7c91642212c48a09134dffc3323158f27d993036823d450d2c80f298181ab5a0c6d497f7cdf780b4a8c6543cd7a3540495fc1d0c7eae387e2a8f4ce74009620613025edac1df32030bc03c98caf4618f0a4515a328ba66e03336a60f5e424fb200ec387403231d03321d7f73054d3080e6bc5f712067b8668e89945fda613a3b9d024bf072799deed478f2b3922622b7a615f27282592e72feda034dbf698f7299a334e4e1a478c73760933eddf4492826b6554637d24ffd57c9b7e166401e357d26dfe7761a23916e0205c03df50f13b59c99515bfc166ef843d5c61ae5c3adf8bbaa4bf36599c864fd9d27b5e4791378fb3d4cb969b8d173e2f1769fab48c9364f59b56452db0c3ce9968684aba8a69501513fda780a3f9674d2cdb7e831eb8050c1051e2dee656a99d3b7cc1add0b90637be9be9217cd1a48686ed7bfb551d3f81683b5bd279eca7098a76ddcdebd735188ecf0d49fe22b9ea5833cbaa42ab23c1d661bdccc8dc4798e5b3ff795605777757eeb2535a15872af2e3a4080e2890e344da45ea193fb2163e33dd8ac1901e9a899452a2cf3aa7b555e3b442c15b65ad9217abc37e8076162a6a94b217c395e3fa81ab3f504b03041400000008000000215cee4fdf3439030000740800001b000000372d6265666f72655f7061636b6167652f7374796c65732e786d6cbd56cd8edb3610be17e83b08ba73a93f6a2d4356605b161020450aac0bf4ca95292f118a14287a23b7c865f30e05fa06bdf552a0415f67817d8e8c7e6ccb49361b6c8b9e389c9f6fbe190e29c52f9a5258b74cd75cc999ed5e38b6c564ae365c6e67f64feb0c4d6cab36546ea85092cdec3dabed17c9f7dfc5b5d90b7675c398b10042d633fbc6986a8a719ddfb092d617aa62122c85d22535b0d55b5c579ad14ddd0695027b8e13e2927269f708d332ff169092ea37bb0ae5aaaca8e1d75c70b3efb06cabcca72fb752697a2d806ae30634b71a37d49ed5e843924efb599e92e75ad5aa3017808b5551f09c7d4e37c211a6f90909909f87e412ec7867b537fa994801d6ec96b7c7672771a1a4a9ad5ceda499d93e60b7c54edf48f55666ad094e78f04ae2fa17eb960ad0b8364ee25c09a52d039959eb041a494bd67b3c7cf8707ff7d7fddddff7efdfdfdffdd91a0b5a72b1efcd5eabc03de8ff071dfe87d0dd52839d0b716c9f67f78a248639334ccb0c36d620aff715649470257a98ceef09efada67bd723a3806e81bcd74a6fe00a1e32b767d4ab9258b0c24080e6db9b7635aac2add118188924de70ba55928a16f2103108009b3321aeda6bfa73311a8a246e0a4beecaac342f37331b2e7c5bfd41044283d8c3f41bfc7890f7689045ab4aecdbb97b02c2fd5a5e3caea2af69548ef7ac72aca678b2aec7490dd1ee5981ee91eb916647faacf147add58ee9cc7e0d93ab0f78d0c8464f771cc45f976479398f2e1db49ab8040541eaa1f99244c8274e14cdd3cc9f04febbee027c82b87edb3d29078247c060b17096d9324461407c14a44188e697f339f2c255e06764ee4cd2d517011ffef8fde19fdf4e1db3ae775c182e875dbeab611217bd6edc85be7898d0e674585dbf4dfb389fb7067036aca03b61d647239472947f601bbe2bbda3d78ffc5699c1eb24bf6aaf48ff2cb0c6bcaa4db75a3bcda1fed5e2324a57998726ce6282029f111491458a48b05ca46916399eb37c37fa44fc8b0f44f7aac35cb9c1b416e0a5876207f25727ddcc1e6d7afa5dff80f6987be485ce9cb80eca7cc7454148276812fa0465c4f5d23058ac484646dcc9333f240e76dd13793235bc64824b764e7f3dd6c221c1f62b45e0c349e0d3ef42f211504b03041400000008000000215cdc7f1c6cdf0100000304000026000000372d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb1133b8eb1bdb0494df7a250b6877b451edb22966524e544e9bb77e434d942288405093492e69b7f66a4fce9247b72006d841a0a1afa334a60e0aa16435bd01fdf2b2fa5c45836d4ac570314f40c863e951f3fe447a577a603b0040983296867ed980581e11d48667c35c280278dd2925934751b985103ab2727d907d16c96049289815e08997e84a19a4670d828be9730d80b4443cf2cea379d18cd9526f92338c9f46e3f7a5cc911115bd10b7b9ea094489ebdb483d26cdb63dea770c13839691c11cef935ccb47f17490aae95518df591fc57f37dfaab6015307e23dde7ff10265c60010ec235f00d15bd9315df58d11b6cfe4e587283b972e96c2fea82fe4a3ec555953e475e98a495b748c2c45b45e9da5bc4d53289e3591a25cfbf6999d7023bec9c8986a6a0eb8806653ed17f0a389a7fd6c4b2ed37e8815bc0002125ee6d6e95dab9c317dc9a39d7e0ceb79a1ec2574d6a68d8beb7afeaf81944db5984a4fe3246d1aebb597dde80e1f8dc90e42f6e3236ccb232d7ea48b073582e3332f70fe6d9fc3f8e65ceddd5b5bbeb7496f9a10cfd28ce8303cae3381176157aa18fac852f4cb76230a48766022d29d11795d3daaa715aa1dcadb256c9abd56137403b0b05354ad9abe18a71fbbee51f504b03041400000008000000215c34961f453c030000740800001a000000372d61667465725f7061636b6167652f7374796c65732e786d6cb556cd8edb3610be17e83b08ba73a93f6a2d4352605b161020450aac0bf4ca95292f118a14286a23b7c865f30e05fa06bdf552a0415f67817d8e90926ccb49361b6cdb1387c3e137df371c528a5f7415b36e896ca8e089ed5e38b6457821b694ef12fba74d0e66b6d528ccb798094e127b4f1afb45fafd7771a3f68c5cdd10a22c0dc19bc4be51aa9e43d81437a4c2cd85a809d72ba59015567a2a77b0a925c1dbc66caa18f41c278415a6dc1e10e655f12d2015966fda1a14a2aab1a2d79451b5efb16cab2ae62f775c487ccd34d5ce0d7061756e283dab938724bdf7b33c152da46844a92e342e1465490bf239dd0846101727248dfc3c241741c73bd3dec967220550925b6a8ecf4ee35270d5588568b94a6c5f631bb1f3375cbce5b959d2273c46a571f38b758b59627ba10dd3b8104c484be9ccc404690fc71519221e3e7cb8bffbebfeeeeffbf7efefeffe348b25ae28db8f00c60107d07368d7fdffa0ff4bd6fdd0e875cad8b17c9e3d38d258f7992292e77a628df6665feb8c5c5f8901a68f7b227a27f1def5d064433fe8bcd7426ef5153c64366734b8d2989152e90d92ee6ecca8440dcda252ba25d2784bf14e70cc0ce461c76868d882307665aee9cfe5a429d2b82b2dde5679a55e6e135b5f78a3fe606a42a339c00c13f8f826efd14d16ae6bb6377df70484fbb5bc70aa62d03491e33d4b8ed5954fea7a9cd4b8db3d13e81eb91e69f6a4cf0a7ff45aa64d13fbb5ee5c79c0d385ece4bca5dafc758556978be8d201eb998b4010641e58ac50047ce444d122cbfd59e0bfeb2fc027889bb7fd93722078040c964b6795af421006c8074116846071b958002f5c077e8e16ce2c5b7f11f0e18fdf1ffef9ed5431ebbaa54c513ece8ab6d19db81c7cd32a0ce2758776a7c3eaebadcce37c5e1a8db325256e99da1c17b594a3fd03d9d2b6f28e513fd25ba1c6a893fdca5c91e159209d7ad5a87eb45a49b5fef5f232cad6b90766ce7206029f2010a1650650b05a66591e399eb37a37f944fc8b0f44ffaaebbe728379c374941cc58ee4af4ebec49e4c06fa7dfd34ed29f7c80b9d05721d90fb8e0b8210cfc02cf411c891eb6561b05ca31c4db8a3677e481ce8ba27f268ae684518e5e49cfe66ead587a4a75f11010f27014fbf0be947504b03041400000008000000215ccf2317d7e10100000504000025000000372d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb1133b8eb1bdb0494df7a250b6877b451edb22966524e544e9bb77e434d942288405093492e69b7f66a4fce9247b72006d841a0a1afa334a60e0aa16435bd01fdf2b2fa5c45836d4ac570314f40c863e951f3fe447a577a603b0040983296867ed980581e11d48667c35c280278dd2925934751b985103ab2727d907d16c96049289815e08997e84a19a4670d828be9730d80b4443cf2cea379d18cd9526f92338c9f46e3f7a5cc911115bd10b7b9ea094489ebdb483d26cdb63dea770c13839691c11cef935ccb47f17490aae95518df591fc57f37dfaab6015307e23dde7ff10265c60010ec235f00d15bd9315df58d11b6cfe4e587283b972e96c2fea82fe4a3ec555953e475e98a495b748c2c45b45e9da5bc4d53289e3591a25cfbf6999d7023bec9c8986a6a0eb8806653ed17f0a389a7fd6c4b2ed37e8815bc0002125ee6d6e95dab9c317dc9a39d7e0ceb79a1ec2574d6a68d8beb7afeaf81944dbd9822e227f19a368d7ddac3e6fc0707c6e48f2d3f8a663c32c2b73ad8e045b87f53223731f619ecdffe759e6dcdd5dbbcb4e69991fcad08fe23c38a0408e136957a917fcc85af8c2742b06437a6826d292127dd139adad1aa7150ade2a6b95bc5a1df603b4b35051a394bd1aae1cb70f5cfe01504b03041400000008000000215cd5be7c493e030000d50800001b000000382d6265666f72655f7061636b6167652f7374796c65732e786d6ccd56dd8ae33614be2ff41d8cef3db2e49fd821c9923fc3c296162685de6a1c39112b4b4656669d96bd997d8742dfa077bd2974e9eb0ccc73f4c876124fb7dd2929945ef99ca3733e7de7479227af9a5238f74cd75cc9a98b6f7cd76132575b2e7753f7db4de625ae531b2ab75428c9a6ee91d5eeabd9975f4c6a7314ec76cf98710042d653776f4c3546a8cef7aca4f58daa98849542e9921a50f50ed59566745bdba05220e2fb312a29976e87302ef37f025252fdf65079b92a2b6af81d17dc1c5b2cd729f3f1eb9d549ade09a0dae090e64e83634d9c469f3669ad9fec53f25cab5a15e60670912a0a9eb34fe9a6284534bf2001f2754838423e79967ba3af440a9166f7dcb6cf9d4d0a254dede4ea20cdd40d01db263b7e2bd53b99d925e870ef359bd4df3bf7548005bb6836c99550da31b033b34e6091b4649dc7d3c78f8f0fbf3e3efcf6f8e1c3e3c32f76b1a02517c76e995803ea40ff3be8f8ffcb3a68e3f754d770383a48920cb66b3f35c47021cedd226e67984d60ac0dd33203c5e9e5cdb10216124e6007d3fabde0bdd3f488493408683fb0ef9dd25b38f1a79ded4874a6d944b0c24080e6bbbdfd1a5521bb680c4ce06cb2e574a7241516f214d10b009b33216eedadf05d71c60e00bb291c7928b3d2bcde4e5db85f6cf6271108f56207d329e8ef83c83541f8734168c8bbcb629000b92a01a7295e2415bc140da9d2aa12477b72fb11443dbb41b19f95fa6c75ecb04eddaf617ef500afd1e30307f187b5bf9c0741b2f2fc358ebc1067b137c7a3b58783609dcde3688489ffbe1de33f216edeb57756d197f50cb84a47611262e28dd2650280d1dc9b2f969117c5491a10128d484cfe12f0e9e79f9e7efff15231e7eec085e1b2d7f2430db3b7e86cc32a74c9c34c369766b5f536f6f67f5e1ac0d9b2821e84d99c172195b3fc15dbf24349ce5edff07b657aaf8bfcc61e8aeede618d79539bf6eb1c34b7055d8cd2d53a235ee22f20ff80455e1a2d565e142e17ab5596fac45fbe1fbc41ffe2056a9f0d982b1c8e6b015eba4fb6277f7bb14ddd81d2d16feb07b487dc5312fbf308fb5e16f8d80b639a78491c445e1661b28ac3c53acaa201f7e8ca97ca47185fc84763c34b26b864cfe96f86566812a89f49029d3a812eff23b33f00504b03041400000008000000215cfef3f72ee00100000304000026000000382d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb19dc48eb1bd2c4943f7a250b6877b451edb22966524e544e9bb77e434de42288405093492e69b7f66a4fce92c3b72046d84ea0b1afa334aa0e7aa127d53d01fdfb75e4a89b1acaf58a77a28e8050c7d2a3f7ec84f4aef4d0b6009127a53d0d6da210b02c35b90ccf86a801e4f6aa525b368ea26308306568d4eb20ba2d96c1948267a7a2564fa1186aa6bc161a3f841426faf100d1db3a8dfb46230379ae48fe024d3fbc3e071250744ec4427ec6584522279f6d2f44ab35d87799fc339e3e4ac714438e35b9871ff2e92145c2ba36aeb23f9afe6fbf457c12a607c22dde7ff10269c63018ec235f00d15bd93b59858d11b2c7e276c39c15cb974761055417f45b368f1299d27de264d56de3c795e7ae97a157b7192a6e9f679bd0aa3f4372df34a60879d33d15017741dd1a0cc47fa4f0127f3cf9a58b6fb061d700b1820a4c4bdcd9d527b77f8825b33e71adcf96ec787f055930a6a76e8ecab3a7d06d1b41621a99f2c50b4eb6e565d3660383e3724f9f349c6865956e65a9d08760ecb6506e6fe419cc5ff712c73eeaeaedd5da7b3cc8f65e8478b3c38a23c8e136137a157fac01af8c274237a433aa847504289beaa1cd7560de30ae5ee94b54adeac16bb01da5928a856cade0c578ce9fb967f00504b03041400000008000000215c1858570244030000d50800001a000000382d61667465725f7061636b6167652f7374796c65732e786d6cb596cd8edb361080ef05fa0e82ee5a8ad48f25c372e03f010152b4c0ba40af5c99b28950a440d11bb9452e9b7728d037c82d97020dfa3a0bec7374f4635b6e9a6ce1b4270e87331f6786235293177521ac7ba62bae6462e31bd7b698ccd486cb6d62ffb84e9dc8b62a43e5860a2559621f5865bf987efbcda43207c16e778c190b10b24aec9d31e518a12adbb1825637aa64125672a50b6a60aab7a82a35a39baa712a0422ae1ba282726977847191fd1b4841f5eb7de964aa28a9e1775c70736859b65564e3975ba934bd13106a8d7d9a59350e35b16a7ddca4d57eb24fc133ad2a959b1be02295e73c639f861ba318d1ec4c02f275241c20975ce45eeb2b493ed2ec9e37c7674f27b992a6b232b59726b17d6037c98e5f4bf546a6cd129c706f359d543f5bf7542436096d349d644a286d19d8993546a091b4609dc5d3c78f8f0fbf3f3efcf1f8eedde3c3876631a70517871ed0285007bd44e3ff118dbf12edb5fe3baa2be8e00e49a2cf6e47bcff309376a8609d0b713a2d62778ae904dada302d539858bdbc3e94b0a3842fb0c3b476cf586f353d60120c1cda01f6bd537a035ffc71e7a6253ad57422586ec041f3edae198d2a51b3680c74e074b2e174ab24150df2e8d10b80cd9810b7cdadf0537e627bc0ae734bee8bb4302f37890df74b93fd5184807ab1c37413f479277c8d93f72527348cbbcb629000b92a01abce9f0d8a3ce70d06b42cc5a1f972fb76437d7483625f94faa4b59ac64cecefa157f58057ebf19e83f8cbca5dcc3c2f5a3aee0a078e8fd3d099e1d1cac19eb74a676130c2c47ddbb6fcdf88eb37ed9d95f76771022ee3911ff99838a3781101309839b3f9227082308a3d42821109c93f029fdefff6f4e7afe78a59777b2e0c97fd2cdb57d07bf34e37ac42973cf4647d3eacb6dea6b9fd2f4b039c0dcbe95e98f569115239c9dfb10ddf17e464f503bf57a6b73acbaf9a8fa2bbd2586d5e55a61dadbde64d41e7a378b94a8913b973c8df63811307f3a513f88bf97299c62e71176f076fd057bc40edb3017d85fd7125c04af7c9f6c1df9e75893d9874e1b7f583b087b1c724746701769dd473b1e3873472a2d00b9c34c06419faf355900683d8832b5f2a17617c0e3e181b5e30c125bb0c7f3dd4c221c1f40b49a0e349a0f3ffc8f42f504b03041400000008000000215c0fe8ab94e10100000504000025000000382d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17bdbb19dc48eb1bd2c4943f7a250b6877b451edb22966524e544e9bb77e434de42288405093492e69b7f66a4fce92c3b72046d84ea0b1afa334aa0e7aa127d53d01fdfb75e4a89b1acaf58a77a28e8050c7d2a3f7ec84f4aef4d0b6009127a53d0d6da210b02c35b90ccf86a801e4f6aa525b368ea26308306568d4eb20ba2d96c1948267a7a2564fa1186aa6bc161a3f841426faf100d1db3a8dfb46230379ae48fe024d3fbc3e071250744ec4427ec6584522279f6d2f44ab35d87799fc339e3e4ac714438e35b9871ff2e92145c2ba36aeb23f9afe6fbf457c12a607c22dde7ff10269c63018ec235f00d15bd93b59858d11b2c7e276c39c15cb974761055417f45b368f1299d27de264d56de3c795e7ae97a157b7192a6e9f679bd0aa3f4372df34a60879d33d15017741dd1a0cc47fa4f0127f3cf9a58b6fb061d700b1820a4c4bdcd9d527b77f8825b33e71adcf96ec787f055930a6a76e8ecab3a7d06d1b4b6a0f3c84f1628da7537ab2e1b301c9f1b92fc7431e9d830cbca5cab13c1d661bdccc0dc4788b3f87f9e65ceddddb5bbec9496f9b10cfd6891074714c87122ed26f58a1f58035f986e446f4807f5484a28d1579de3daaa615ca1e09db256c99bd5623f403b0b15d54ad99be1ca317de0f20f504b03041400000008000000215c84f462b9fd020000920700001b000000392d6265666f72655f7061636b6167652f7374796c65732e786d6cad55cd6edb3810be2fd077207457282aa26a19b683b8b680025da040bcc05e1999728852a44051a9dca297f41d0af40df6b6970536d8d70990e7d8a124db728a3645d213e7f79b6f34436a72d614125d735309ada61e39093cc455a6d7426da6de1fabd41f79a8b24cad99d48a4fbd2dafbcb3d98bdf2695dd4a7e71c5b94500a1aaa977656d39c6b8caae78c1aa135d72059e5c9b825950cd0657a5e16c5db9a442e23008625c30a1bc0e615c643f035230f3ae2efd4c1725b3e2524861b72d96878a6cfc7aa3b4619712a8362462196a486c42d4985d91d6fa4d9d426446573ab727808b759e8b8c7f4b37c10966d90109909f8644280ec2a3de1bf344a4081b7e2ddcf8bcd924d7ca5628d3b5b2532f046cd7ecf89dd2ef55ea5c30e13e6a36a93ea06b26c1423c3c9b645a6a832c54e62e082c8a15bc8bb8bfbdbdbbf9e7eee6dfbbcf9fef6efe76ce9c15426e3b77e80cb8037d001dff42e8f6a8c02fa41cf4d81966135806cb8d4a4141bdbcda965051c1de76306ddc23d11bc3b624a48384f680ba97daace19eec2abb0fd9996613c9730b09466caedc6975899dd35a98db6cb2166ca315930e7297d10b009b71292fdc5dfa333feaaac991aa8bb4b0afd7530f6ea5eb7e2702a15eec603a057f3f897c3709b1b2945bb71c3d041e12eae83d9b196af247293e9a4d8eb8923dd73dcd96f411d3bd15b98d9b7aabf7ed85dbc135665c0b103fa60b9a26348efde4e532f2a37372ea27e774e48f484c977444a2305a7c6a57f901e0fd5f5feffffb72e80f5dd6425aa17a2dab2b588179671b72eea8c26a34874fdb7e1deb9eaee3460067cd73564bbbda3ba195bdfc3b5f8bba08f7516fc5b5b67dd4417ee376b3bb8fbcb16f2adb9ea83602fa5fce5f268b651afaa3603ef2a3534efd84ce173e8d5ecd178b3409c2e0d5a7c103fa8ce7b37df3600b4834ae244499bed99efcc5c136f5064a47bffd7e407bc83d09e3e09c92c04f4f03e2473183b1c5a7d44f29091771345fd2940eb8d3273eb30126e4409e8ead28b8148a1fd35f0dad3024507fd004de4d021f7ea6b3ff01504b03041400000008000000215cff2d1b8bde0100000304000026000000392d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1f13e7606c2f6d4ce85e144a4ff78a3cb6452cc948ca61297df78e9c265b0885b0208146d27cf3cf8c543c9de5408e60acd0aaa4491853028aeb46a8aea43fbe6f831525d631d5b0412b28e90b58fa54bd7f579cb4d9db1ec01124285bd2deb9318f22cb7b90cc867a048527ad369239344d17d9d1006b26273944691c2f22c984a217426e1e61e8b6151c6acd0f1294bb400c0ccca17edb8bd15e69923f8293ccec0f63c0b51c11b11383702f139412c9f3e74e69c37603e67d4ee68c93b3c191e29c5dc34cfb7791a4e0465bddba10c97f35dfa7bf8ed611e337d27dfe0f61923916e0287c035f51e91b59d98d95bec2666f842d6e305f2e931f4453d25f593dcfe255bc08d22c898379bd4d830f8bfa63502fd7b3559c6ee265b6fe4daba211d861ef4c0cb425dda434aa8a89fe53c0c9feb3268eedbec100dc01064828f16f73a7f5de1f3ee356ec5da33bdfedf410be18d240cb0e83fbaa4f9f4074bd43c82a5c6628da77376f5e6ab01c9f1b92c2f94d46cd1cab0aa34f043b87e5b223f3ff6096cffee35815dc5fddf8bb5e67551cab244cb3223aa23c8e136157a117fac83af8cc4c27942503b413684989b9a89cd64e8fd30ae5eeb4735a5ead1ebb01c65b28a8d5da5d0d5f8cdbf7adfe00504b03041400000008000000215c472f9fe902030000ed0700001a000000392d61667465725f7061636b6167652f7374796c65732e786d6cb555cd8adc3810be07f20ec2778f2cb7e5b49b7687e9741b020904a617f6aa71cb3d22b2646479e24ec865f20e81bcc1def61248d8d71998e7d892edfedb909d30494eaadfafbe7295e4e9d3b694e89a9b5a68957ae42cf01057b95e0bb549bd3f56993ff6506d995a33a9154fbd2dafbda7b3c78fa6b5dd4a7e71c5b94500a1ead4bbb2b69a605ce757bc64f599aeb8024fa14dc92ca86683ebca70b6ae5d5229711804312e99505e8f3029f31f01299979dd547eaecb8a597129a4b0db0ecb43653e79be51dab04b09545b12b11cb52436216acdae4867fda64e2972a36b5dd833c0c5ba2844cebfa59be004b3fc8004c80f43221407e149efad792052840dbf166e7cde6c5a68656b94eb46d9d41b01b66b76f25ae9372a732e98f010359bd66fd13593a917c61e9e4d732db541162a73170416c54ade47dc7dfd7a7bf3f9f6e6cbed870fb7377f3b67c14a21b7038033e01ef4149afc3ee85fcaba3b6af00b29f79f2ff47ac36c0a7b66b9511928689057db0a2a2ab8123d4c17774ff4c6b02d09e951427740dd4b6dd670057795dd8c7ad36c2a796121c188cd953badaeb0735a0b2b319bae05db68c5a483dc650c02c0e65cca0b774dff2c4eba6a0ba49a322bedf375eac18577ddef442034883d4cafe0ef2791ef2621565572ebf66e80c0c7847a7a3fcd0cb5c5bd14c3fbb2c90957b2e7baa7d9913e61bab722b771a9b77ad3dde51d5c6b268d00f15db6a05942e3d84f9e2c233f3a27233f39a7637f4c62baa4631285d1e27db7caff01bcfbebd3dd3f1f0ffda1cb46482bd4a0e54d0d2b30ef6dc79c7baab01aede1d3765fc7ba57f1b411c059f38235d2aef64e68652fbfe46bd194e13eea95b8d676883ac82fdc6ef6579db7f6456dbb13354640ffcbf99364b1cc427f1cccc77e34e2d44fe87ce1d3e8d97cb1c892200c9ebd3f7a9b7fe265ee9e53d802124d6a0951666876207f71b0a5de91d2d3efbe1fd03ee69e8471704e49e067a380f851cc606cf188fa1925e1228ee64b9ad123eef4812f7880093990a7132b4a2e85e2a7f457c7561812a8ffd304de4d021ffed3b37f01504b03041400000008000000215c7183dbecdf0100000504000025000000392d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1f13e7606c2f6d4ce85e144a4ff78a3cb6452cc948ca61297df78e9c265b0885b0208146d27cf3cf8c543c9de5408e60acd0aaa4491853028aeb46a8aea43fbe6f831525d631d5b0412b28e90b58fa54bd7f579cb4d9db1ec01124285bd2deb9318f22cb7b90cc867a048527ad369239344d17d9d1006b26273944691c2f22c984a217426e1e61e8b6151c6acd0f1294bb400c0ccca17edb8bd15e69923f8293ccec0f63c0b51c11b11383702f139412c9f3e74e69c37603e67d4ee68c93b3c191e29c5dc34cfb7791a4e0465bddba10c97f35dfa7bf8ed611e337d27dfe0f61923916e0287c035f51e91b59d98d95bec2666f842d6e305f2e931f4453d25f593dcfe255bc08d22c898379bd4d830f8bfa63502fd7b3559c6ee265b6fe4daba211d861ef4c0cb425dda434aa8a89fe53c0c9feb3268eedbec100dc01064828f16f73a7f5de1f3ee356ec5da33bdfedf410be18d240cb0e83fbaa4f9f4074bd2be93c0d97198af6ddcd9b971a2cc7e786a47095dd74d4ccb1aa30fa44b075582f3b32ff1166f9ec7f9e55c1fddd8dbfec9556c5b14ac2342ba2230ae4389176957ac18fac83cfcc74425932403b919694988bce69edf438ad50f04e3ba7e5d5eab11f60bc858a5aadddd5f0e5b87de0ea0f504b03041400000008000000215c887b1f49fa020000920700001c00000031302d6265666f72655f7061636b6167652f7374796c65732e786d6cad55dd6adb3014be1fec1d84ef5dd98eedc52149699a180a1d0c9ac16e55474e4565c9c872eb6cf4a67d87c1de6077bb19acec750a7d8e1dd94ee2b4741dedae747ebff31d9f2379b85f651c5d505530294696bbe758888a442e98588eac8ff3d8ee5ba8d0442c0897828eac152dacfdf1db37c342af383d39a354238010c5c83ad33a1f605c24673423c59ecca9004f2a554634a86a898b5c51b2284c52c6b1e73821ce0813568330c8927f01c9883a2f733b91594e343b659ce9558d65a12c191c2d8554e49403d5caf549822a37541eaad4ba486d7d5427638992854cf51ee06299a62ca18fe94638c224d92201f2cb90dc003bde4eef957a21928f15bd60667cd678984aa10b94c852e891e501b66976702ee4a5888d0b26dc468d87c567744138585c0b8f8789e452210d95a909028b20196d22ee6f6fefae7fde5dffbabbb9b9bbfe619c29c9185f356ecf187003fa003afc8fd0f551809f71dee9b1318c87b00c9a2a1183825a79becaa1a280bd6d60eab867a2978aac5c2fe824d407d43d956a01f7645dd97cc8c6341e729a6a48506c79664e2d736c9c5ac3dcc6c305234b29083790eb8c5600d884727e62eed2a774a7ab2a45a2cce24c1f2d4616dc4ad3fd5a0442add8c0340a7e3ac97d3209913ce72bb31c2d04ee126ae8bd9a19aad267293e9bedee7075375c37346bd23b4c375664366e64cd2feb0bb786abd4a064207e099da07f10c5be3df1c39eed1f1eccec7e2f0eec5ee48561cf8dfd68165dd5abfc00f0fefbb7fbdf5fb7fda1d39271cd44ab2565012b30696c5dce0d55588d6afb69ebafa3cdd3b5db08e02c684a4aaee71b27b4b291dfd3052b336f13f5815d48dd466de563b39bcd7da4953e2e747da25231e87f3679174d67b167f79d49dff67b34b0a36032b503ff70329dc691e33987579d07f415cf67fde6c116b8fea0e010a5da665bf2275bdbc8ea280dfdfafb01ed2e7718917310b88e1df71cd7f643d2b7fb612fb0e3c0f5a6a13f990571d0e11ebcf09975b0eb6ec90703cd32ca99a0bbf4e75d2b0c09d4bf3481d793c0db9fe9f80f504b03041400000008000000215c497b84cadf010000030400002700000031302d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a1fbd88e9d83636c2f3910ba1785d2d3bd228f6d114b329272a2f4dd3b729a6c2114c282041a49f3cdaf9951fe72961d3982b142ab828e838812505c57423505fdf17d3b4a29b18ea98a755a41412f60e94bf9f1437ed2666f5b004790a06c415be7fa2c0c2d6f41321be81e149ed4da48e6d0344d687b03ac1a9c6417c651340b25138a5e09997986a1eb5a70d8687e90a0dc1562a0630ef5db56f4f64693fc199c64667fe8475ccb1e113bd1097719a094489ebd364a1bb6ebf0dde7f18471723638629cc92dccb0ff10490a6eb4d5b50b90fc57f3e3f317e12264fc4e7a7cff5398f104137014be806fa8f89dace99d15bfc19277c26677984f97c90ea22ae8afe562be5c2fd364b49dafa3d16419618fa5ab6494ac26693a4f57b345bafd4dcbbc125861ef4c0cd4055dc7342cf381fe53c0c9feb3268eedbe4107dc01061853e27b73a7f5de1fbee256e45dc307dfedd0085f0ca9a06687ce7dd5a74f209ad621240de65314edab9b55970d588eed86a4607297b1618e95b9d1278295c374d99ef97f9064c97f1ccb9cfbab6b7fd7eb2cf363390ee2691e1e511ec789b09bd02bbd670d7c66a611ca920eea0134a7c45c550e6ba7fb61857277da392d6f568bd500e32d14546bed6e864fc6fdfb967f00504b03041400000008000000215c843cb99f10030000010800001b00000031302d61667465725f7061636b6167652f7374796c65732e786d6cb555cd8edb3610be17e83b10bc6ba9ff5a86e560bdb680002910605da057ae4cd9442852a0a88ddc2297cd3b04c81bf4d64b80047d9d05f6393a94645b6e906eb08b9c38339cf9e61bcd70347bd19602dd325d732553ec5db8183199ab0d97db14ffb6ce9c0946b5a1724385922cc57b56e317f39f7f9ad5662fd8f58e31830042d629de19534d09a9f31d2b697da12a26e1a650baa40654bd2575a519ddd436a814c477dd9894944bdc234ccbfc7b404aaadf349593abb2a286df70c1cdbec3c2a8cca72fb752697a23806aeb853447ad176b1fb5fa90a4b37e95a7e4b956b52acc05e01255143c675fd34d4842687e4202e4a721791171fdb3da5bfd44a4906876cb6dfbf07c5628696a94ab469a1407806d8b9dbe91eaadccec157478f09acfea3fd02d1529f6634ce6b35c09a59181cccc3a8145d292f51e0f5fbedcdf7dbabffb7cfffefdfddddff6b2a02517fb01c01a480f7a0eedfd38e867b30ebaf81dd5354c70cfd69f8cd275470d315c88e327f5716f98cf60f60cd33203050df27a5f010b09cfa487e9fc1ef1de6abaf7fc6814d01d90f746e90d3ccb4366dbb7de349f09561808d07cbbb3a75115b197c6c098cc671b4eb74a5261210f118300b03913e2da3edddf8bb3aada02c9a6cc4af37293625802b6fa83088406b187e915f2ed20ef9b41885695d8db591c20c898504fefd9cc505b3c4ad17f2cda3be3ea1db91e6976a4cf981eadc84e618ad76fbbf77d806bf5b4e120fe19bbd1e432c9426711c681135e5dae9c4990454e90f8711c785998ac9277dd78fe07f0e1af8f0fff7c38d5876e1a2e0c97839637358cc0a2b78d39f7546134dad3a7edbe8eb19bf2bc10c0d9b08236c2ac8f9750ca51fe956d7853fa47afd7fc5699c1eb24bfb2b3d93f7fd69a57b5e94ed4680ef5af16bf24cb55e63b13773171c280454e122d964e145e2d96cb2c717df7eadd685f3f635b772b16a6c00ba7b5002f3d143b90bf3ed9523c527afaddf703da63eed022f732f25c270b5ccf09633a712671103959e4f9cb385caca22c1a718f9eb8d55de27927f2d1d4f092092ed939fdf5d80a4d02f57f8a20874e90d3bf7bfe2f504b03041400000008000000215c113f4cdce0010000050400002600000031302d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a1fbd88e9d83636c2f3910ba1785d2d3bd228f6d114b329272a2f4dd3b729a6c2114c282041a49f3cdaf9951fe72961d3982b142ab828e838812505c57423505fdf17d3b4a29b18ea98a755a41412f60e94bf9f1437ed2666f5b004790a06c415be7fa2c0c2d6f41321be81e149ed4da48e6d0344d687b03ac1a9c6417c651340b25138a5e09997986a1eb5a70d8687e90a0dc1562a0630ef5db56f4f64693fc199c64667fe8475ccb1e113bd1097719a094489ebd364a1bb6ebf0dde7f18471723638629cc92dccb0ff10490a6eb4d5b50b90fc57f3e3f317e12264fc4e7a7cff5398f104137014be806fa8f89dace99d15bfc19277c26677984f97c90ea22ae8afe562be5c2fd364b49dafa3d16419618fa5ab6494ac26693a4f57b345bafd4dcbbc125861ef4c0cd4055dc7342cf381fe53c0c9feb3268eedbe4107dc01061853e27b73a7f5de1fbee256e45dc307dfedd0085f0ca9a06687ce7dd5a74f209ad615741207f3298af6d5cdaacb062cc7764352904eef3a36ccb13237fa44b074982fdb33ff11922cf99f6799737f77ed2f7ba5657e2cc7413ccdc3230ae4389176937ac5f7ac81cfcc344259d2413d90e69498abce61ed743fac50f04e3ba7e5cd6ab11e60bc858a6aadddcdf0e9b87fe0f20f504b03041400000008000000215c22aab536f9020000920700001c00000031312d6265666f72655f7061636b6167652f7374796c65732e786d6cad55dd6adb3014be1fec1d84ef5d598e9d262149a99b1a061b0c9ac16e15474ec564c9c872e76ceca67d87c1de6077bb196cec75027d8e1dd94ee2ac741dedae747ebff31de9481a9f549940574c175cc989438e3c073199a82597ab89f3661ebb03071586ca25154ab289b3668573327dfe6c5c98b56017978c190410b2983897c6e4238c8be49265b438523993e04995cea80155af70916b4697854dca04f63daf8f33caa5d3208cb2e45f4032aadf95b99ba82ca7862fb8e0665d6339284b462f565269ba1040b522014d5045fada4795de16a9ad77ea643cd1aa50a939025cacd29427ec2edd211e629aec9100f9714824c49e7fd07ba51f891460cdaeb83d3e673a4e9534054a5429cdc4f101db363b7a27d57b195b179c701b351d171fd0151560210e9e8e13259446062a331b04164933d644dcfefcb9b9febeb9feb1b9b9d95c7fb3ce94665cac1bb76f0db801fd03baff1fa1eba5003f17a2d36363988e61180cd3320605b5f27c9d43450973dbc0d4710f44af345d133fec24d40bd45d28bd847bb2ad6c37b2314dc782a50612345f5ddad5a81c5ba731706ed3f192d395925458c86d462b006cc284b8b077e96d7ad0559522596671665e2c270edc4adbfd560442add8c0340abe3f89dc9b84689e8bb51d8e1602770935f49ecc0c55e983141fcc26075cc98eeb8e664dfa80e9ce8aecc44d9cf9fbfac26de12a3d2a39881fa3b360460232747ba7247283b877ea46c7bd6337f2493c1880338e679fea51fe03f0f6eb97db5f9ff7fda145c985e1b2d592b28011881a5b9773431546a3da6f6dbd3bc63e5d878d00ce92a5b41466be73422b3bf9155bf232f37751aff995326dd45e7e6967b3b98fac322f0b53afa8d41cfa3f8f8e87b3f3d877075e3470831e0bdd6118cddc30388b66b378e8f9ded9a7ce03fa84e7b37ef3600a48302a0444e9b6d996fcc5de36713a4a43bfde3fa0dde53ef4fbde69483c37ee79c40dfa74e00efabdd08d43e2cffa41741ec661877bf8c867d6c384ecc98723c33326b86487f4e75d2b1c12a87f69026f4f02ef3fd3e96f504b03041400000008000000215c64b31a28de010000030400002700000031312d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1f936c12637b619d84ee45a1f474afc8635bc4928ca49c287df78e9c265b0885b0208146d27cf3cf8c943f9f644f0e60acd0aaa0491853028aeb5aa8b6a03fbe6f820525d63155b35e2b28e8192c7d2e3f7ec88fdaec6c07e00812942d68e7dc904591e51d4866433d80c293461bc91c9aa68dec6080d5a393eca3348e9f22c984a21742661e61e8a6111c569aef2528778118e89943fdb61383bdd2247f042799d9ed87806b3920622b7ae1ce239412c9b3d75669c3b63de67d4aa68c9393c191e29c5cc38cfb7791a4e0465bddb810c97f35dfa7bf8c9611e337d27dfe0f61922916e0207c03df50e93b59b31b2b7d834dde097bbac17cb94cb61775417f55d57abd895fd6c1a4aaaa609ac6f36099bc2c8378ba4c56b3743e5f2d16bf6999d7023bec9d8981a6a0554aa3321fe93f051ced3f6be2d8f61bf4c01d60808412ff36b75aeffce12b6ec5de35baf3dd8c0fe18b2135346cdfbbaffaf80944db39842cc2f90c45fbee66f5790596e373435238bdc95831c7cadce823c1ce61b9ecc0fc3f986493ff389639f7572b7fd7eb2cf3439984e92c8f0e288fe344d855e8853eb0163e33d30a65490fcd089a53622e2ac7b5d3c3b842b95bed9c9657abc36e80f1160a6ab47657c317e3f67dcb3f504b03041400000008000000215ce1714866fe020000ed0700001b00000031312d61667465725f7061636b6167652f7374796c65732e786d6cb555cd6ed43010be23f10e96efa9e36cb2dd5d6d1635dd46420209a98bc4d5cd3a5b0bc78e1ca764415cca3b20f106dcb82081789d4a7d0ec649f60f0445054e9edf6fbe89679ce9a3a690e88a9b4a6815637ae463c455a69742ad62fc7c917a238c2acbd49249ad788cd7bcc28f660f1f4c2bbb96fcfc92738b00425531beb4b69c10526597bc60d5912eb9024fae4dc12ca86645aad270b6ac5c522149e0fb435230a170873029b23f0129987959975ea68b92597121a4b0eb160ba3229b3c5e296dd88504aa0d0d59861a3a34016acca6486bfda94e2132a32b9ddb23c0253acf45c67fa63b2663c2b21d1220df0f8946c40f0e7a6fcc3d914262f89570d78767d35c2b5ba14cd7cac67800d8aed9c94ba55fa9d4b9e086fba8d9b47a8dae988c7130c46436cdb4d40659a8cc5d1058142b781771fbf5ebcdf5e79beb2f37efdedd5c7f72ce9c1542ae7b0067201de82134fd7fd0ff94757b54e017526e3f5f803bc36c0a7366b9512928a89717eb122a2a58890ea68dbb237a65d89a06d15e427b40dd0b6d96b0829bcaee8e3ad36c2a796e21c188d5a53bad2e89735a0b23319b2e055b69c5a483dc64f402c0665cca73b7a62ff283ae9a1ca9ba480bfb7819635878d7fd460442bdd8c1740af97512fd6512626529d76eee7a08b24fa8a3f7d7cc5093df4931b82b9b1e70a55bae5b9a2de903a65b2b721317e3c5ab769737708d99d402c437c96938a7211d7b83139a78613a38f192e3c1b19704341d8dc099a6f3b7ed28ff0078fbf1c3edb7f7bbfed0452da415aad7b2ba8211483adb3ee78e2a8c46b3fbb4edd7b1ee553c6c0470963c67b5b48bad135ad9ca4ff952d445b08d7a26aeb4eda376f213379bddaaf3c63ea96c7ba2da08e8ff2c391ecfcfd2c01bf9c9c80b073cf2c65132f7a2f03499cfd3b11ff8a76ff7dee6bf7899dbe714a68086934a4294e99bedc99fef6c31de533afaedf703dafbdcc7c1d03f89a8efa5039f7ae1908dbcd1701079694483f9304ccea234dae31eddf305f709a53bf2d1c48a824ba1f821fdc5be152e09d4df344136374176ffe9d977504b03041400000008000000215ce2cdd969e0010000050400002600000031312d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c9d93db8adb301086ef0b7d07a17b1f936c12637b619d84ee45a1f474afc8635bc4928ca49c287df78e9c265b0885b0208146d27cf3cf8c943f9f644f0e60acd0aaa0491853028aeb5aa8b6a03fbe6f820525d63155b35e2b28e8192c7d2e3f7ec88fdaec6c07e00812942d68e7dc904591e51d4866433d80c293461bc91c9aa68dec6080d5a393eca3348e9f22c984a21742661e61e8a6111c569aef2528778118e89943fdb61383bdd2247f042799d9ed87806b3920622b7ae1ce239412c9b3d75669c3b63de67d4aa68c9393c191e29c5cc38cfb7791a4e0465bddb810c97f35dfa7bf8c9611e337d27dfe0f61922916e0207c03df50e93b59b31b2b7d834dde097bbac17cb94cb61775417f55d57abd895fd6c1a4aaaa609ac6f36099bc2c8378ba4c56b3743e5f2d16bf6999d7023bec9d8981a6a0554aa3321fe93f051ced3f6be2d8f61bf4c01d60808412ff36b75aeffce12b6ec5de35baf3dd8c0fe18b2135346cdfbbaffaf80944dbb9824ed3703e43d1bebb597d5e81e5f8dc90142e66371d2be658991b7d24d83aac971d98ff08936cf23fcf32e7fe6ee52f7ba5657e2893309de5d10105729c48bb4abde007d6c267665aa12ce9a11949734acc45e7b8767a18572878ab9dd3f26a75d80f30de42458dd6ee6af872dc3e70f907504b010214001400000008000000215c56d3cf34f0020000760700001b0000000000000000000000800100000000302d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c72133eade60100000d040000260000000000000000000000800129030000302d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c9d08c876f1020000760700001a0000000000000000000000800153050000302d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c827dd939e50100000f04000025000000000000000000000080017c080000302d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c7aee49d60a030000f30700001b00000000000000000000008001a40a0000312d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c9b8ac75ae50100000d0400002600000000000000000000008001e70d0000312d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c984e67fb0e030000f30700001a0000000000000000000000800110100000312d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c9b8ac75ae50100000d040000250000000000000000000000800156130000312d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c45afb0f8f8020000840700001b000000000000000000000080017e150000322d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c91b66d89e40100000d0400002600000000000000000000008001af180000322d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c1e931679fe020000df0700001a00000000000000000000008001d71a0000322d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c91b66d89e40100000d04000025000000000000000000000080010d1e0000322d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c84466a23ff020000df0700001b0000000000000000000000800134200000332d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215ce9654399e50100000d04000026000000000000000000000080016c230000332d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cd9ee697bf1020000760700001a0000000000000000000000800195250000332d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c27ce0a12e40100000f0400002500000000000000000000008001be280000332d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cf9fb8b7af9020000920700001b00000000000000000000008001e52a0000342d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c662da9a5e0010000030400002600000000000000000000008001172e0000342d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c96abc807f8020000840700001a000000000000000000000080013b300000342d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c662da9a5e00100000304000025000000000000000000000080016b330000342d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cbf4d1e4afa020000920700001b000000000000000000000080018e350000352d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c3cd62cbbdf010000030400002600000000000000000000008001c1380000352d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215ccbeb3620fa020000920700001a00000000000000000000008001e43a0000352d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c5f1c6326e1010000050400002500000000000000000000008001163e0000352d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cc54295a9fe020000ed0700001b000000000000000000000080013a400000362d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c1628a554e001000003040000260000000000000000000000800171430000362d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c8b3094a204030000ed0700001a0000000000000000000000800195450000362d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215ce5e00d13e1010000050400002500000000000000000000008001d1480000362d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cee4fdf3439030000740800001b00000000000000000000008001f54a0000372d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215cdc7f1c6cdf010000030400002600000000000000000000008001674e0000372d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c34961f453c030000740800001a000000000000000000000080018a500000372d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215ccf2317d7e1010000050400002500000000000000000000008001fe530000372d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215cd5be7c493e030000d50800001b0000000000000000000000800122560000382d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215cfef3f72ee001000003040000260000000000000000000000800199590000382d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c1858570244030000d50800001a00000000000000000000008001bd5b0000382d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c0fe8ab94e1010000050400002500000000000000000000008001395f0000382d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c84f462b9fd020000920700001b000000000000000000000080015d610000392d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215cff2d1b8bde01000003040000260000000000000000000000800193640000392d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c472f9fe902030000ed0700001a00000000000000000000008001b5660000392d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c7183dbecdf010000050400002500000000000000000000008001ef690000392d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c887b1f49fa020000920700001c00000000000000000000008001116c000031302d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c497b84cadf010000030400002700000000000000000000008001456f000031302d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c843cb99f10030000010800001b000000000000000000000080016971000031302d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c113f4cdce0010000050400002600000000000000000000008001b274000031302d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215c22aab536f9020000920700001c00000000000000000000008001d676000031312d6265666f72655f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215c64b31a28de010000030400002700000000000000000000008001097a000031312d6265666f72655f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b010214001400000008000000215ce1714866fe020000ed0700001b000000000000000000000080012c7c000031312d61667465725f7061636b6167652f7374796c65732e786d6c504b010214001400000008000000215ce2cdd969e0010000050400002600000000000000000000008001637f000031312d61667465725f7061636b6167652f776f726b7368656574732f7368656574312e786d6c504b05060000000030003000a80e0000878100000000";
+        let bytes: Vec<u8> = NATIVE_PARTS.as_bytes().chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(),16).unwrap()).collect();
+        let mut parts=zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let seed=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let mut failures=Vec::new();
+        for mode in 0..12 {
+            let mut packages=Vec::new();
+            for phase in ["before_package","after_package"] {
+                let mut replaced=BTreeMap::new();
+                for part in ["styles.xml","worksheets/sheet1.xml"] {
+                    let mut data=Vec::new();
+                    parts.by_name(&format!("{mode}-{phase}/{part}")).unwrap().read_to_end(&mut data).unwrap();
+                    replaced.insert(format!("xl/{part}"),data);
+                }
+                packages.push(replace_package_parts(seed,replaced).unwrap());
+            }
+            let expected=parse_xlsx(&packages[1]).unwrap();
+            let expected_cell=expected.sheets[0].rows.iter().find(|r|r.index==2).unwrap()
+                .cells.iter().find(|c|c.col==2).unwrap();
+            let mut editor=XlsxEditor::new(&packages[0]).unwrap();
+            let mut desired=editor.workbook().clone();
+            // Independently measured post-operation state is supplied as IR;
+            // unchanged cell styles remain untouched by apply_workbook.
+            desired.named_styles=expected.named_styles.clone();
+            desired.default_style=expected.default_style.clone();
+            desired.sheets[0].rows.iter_mut().find(|r|r.index==2).unwrap()
+                .cells.iter_mut().find(|c|c.col==2).unwrap().style=expected_cell.style.clone();
+            editor.apply_workbook(&desired).unwrap();
+            let saved=editor.save().unwrap();let actual=parse_xlsx(&saved).unwrap();
+            if let Some(directory)=std::env::var_os("OXI_NAMED_FONT_HISTORY_EXPORT") {
+                std::fs::write(std::path::Path::new(&directory).join(format!("mode-{mode}.xlsx")),&saved).unwrap();
+            }
+            let actual_cell=actual.sheets[0].rows.iter().find(|r|r.index==2).unwrap()
+                .cells.iter().find(|c|c.col==2).unwrap();
+            if font_xml(&actual_cell.style)!=font_xml(&expected_cell.style) {
+                failures.push(format!("mode {mode}: cell font {:?}, expected {:?}",
+                    actual_cell.style.font_size,expected_cell.style.font_size));
+            }
+            for wanted in &expected.named_styles {
+                let found=actual.named_styles.iter().find(|s|s.source_id==wanted.source_id).unwrap();
+                if font_xml(&found.style)!=font_xml(&wanted.style)
+                    || found.style.format_reference!=wanted.style.format_reference {
+                    failures.push(format!("mode {mode}: named definition {}",wanted.source_id));
+                }
+            }
+            // Sharing physical font zero preserves future edits to Normal;
+            // equal-looking explicit fonts must remain separate.
+            let is_normal=|package:&[u8]| {
+                let mut archive=OoxmlArchive::new(package).unwrap();
+                let sheet=archive.read_part("xl/worksheets/sheet1.xml").unwrap();
+                let styles=archive.read_part("xl/styles.xml").unwrap();
+                let mut reader=Reader::from_str(&sheet);
+                let id=loop {
+                    match reader.read_event().unwrap() {
+                        Event::Start(tag)|Event::Empty(tag) if tag.local_name().as_ref()==b"c"=>{
+                            let attrs: BTreeMap<_,_>=tag.attributes().map(|a|{
+                                let a=a.unwrap();(String::from_utf8_lossy(a.key.as_ref()).into_owned(),
+                                    a.unescape_value().unwrap().into_owned())
+                            }).collect();
+                            if attrs.get("r").map(String::as_str)==Some("C2") {
+                                break attrs.get("s").map(|s|s.parse::<usize>().unwrap()).unwrap_or(0);
+                            }
+                        },
+                        Event::Eof=>panic!("missing C2"),
+                        _=>{}
+                    }
+                }
+                ;
+                let nodes=style_xml_nodes(&styles).unwrap();
+                let section=named_style_section(&nodes,"cellXfs").unwrap();
+                let xfs=named_style_children(&nodes,section,"xf");
+                style_node_number(&styles,&nodes[xfs[id]],"fontId").unwrap()==0
+            };
+            if is_normal(&saved)!=is_normal(&packages[1]) {
+                failures.push(format!("mode {mode}: physical Normal font ownership"));
+            }
+            let mut noop=XlsxEditor::new(&saved).unwrap();noop.apply_workbook(&actual).unwrap();
+            if noop.save().unwrap()!=saved {failures.push(format!("mode {mode}: unchanged save bytes"));}
+        }
+        assert!(failures.is_empty(),"{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn named_style_creation_and_flags_survive_save() {
+        use crate::ir::{CellFormatReference,NamedCellStyle,CellValue};
+        let seed = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        for qualified in [false,true] {
+        let original = if qualified {
+            let mut zip=OoxmlArchive::new(seed).unwrap();
+            let xml=zip.read_part("xl/styles.xml").unwrap();let nodes=style_xml_nodes(&xml).unwrap();
+            assert!(!xml.contains("xmlns:oxiMain="));
+            let mut edits=Vec::new();
+            for node in nodes.iter().filter(|n|n.standard) {
+                edits.push((node.start+1,node.start+1+node.qualified.len(),format!("oxiMain:{}",node.name)));
+                if !node.empty {
+                    edits.push((node.close_start+2,node.close_start+2+node.qualified.len(),format!("oxiMain:{}",node.name)));
+                }
+            }
+            let xml=apply_style_xml_edits(&xml,edits).unwrap().replacen(
+                "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"",
+                "xmlns:oxiMain=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"",1);
+            replace_package_parts(seed,BTreeMap::from([("xl/styles.xml".into(),xml.into_bytes())])).unwrap()
+        } else {seed.to_vec()};
+        let mut editor = XlsxEditor::new(&original).unwrap();
+        let mut book = editor.workbook().clone();
+        let normal = book.named_styles.iter().find(|s|s.builtin_id==Some(0)).unwrap().clone();
+        let id = book.next_named_style_source_id().unwrap();
+        let mut style = normal.style.clone();
+        style.font_size = Some(16.0); style.bold = true;
+        style.number_format = Some("#,##0.0000".into());
+        style.bg_color = Some("ABCDEF".into());
+        style.border_left = Some(BorderLine {style:"thin".into(),color:Some("0000FF".into()), color_reference: None});
+        style.horizontal_align = Some("center".into());
+        style.unlocked = true;
+        style.format_reference = Some(Box::new(CellFormatReference {
+            font:Some(false),number_format:Some(true),fill:Some(false),border:Some(true),
+            alignment:Some(false),protection:Some(true),..Default::default()
+        }));
+        book.named_styles.push(NamedCellStyle {name:"Twin".into(),builtin_id:None,
+            number_format_id:0,source_id:id,style});
+        editor.apply_workbook(&book).unwrap();
+        let unused = editor.save().unwrap();
+        let mut restored = parse_xlsx(&unused).unwrap();
+        assert_eq!(restored.named_styles.len(), book.named_styles.len(), "unused named definitions must be saved");
+        let twin = restored.named_styles.iter().find(|s|s.name=="Twin").unwrap();
+        assert_eq!(twin.source_id, id);
+        assert_eq!(twin.style.font_size,Some(16.0)); assert!(twin.style.bold);
+        assert_eq!(twin.style.bg_color,Some("ABCDEF".into()));
+        assert_eq!(twin.style.border_left.as_ref().unwrap().style,"thin");
+        assert_eq!(twin.style.horizontal_align.as_deref(),Some("center"));
+        assert!(twin.style.unlocked);
+        assert_eq!(twin.style.number_format.as_deref(),Some("#,##0.0000"));
+        assert!(twin.number_format_id>=164);
+        let flags = twin.style.format_reference.as_ref().unwrap();
+        assert_eq!((flags.font,flags.number_format,flags.fill,flags.border,flags.alignment,flags.protection),
+            (Some(false),Some(true),Some(false),Some(true),Some(false),Some(true)));
+        let mut assigned = normal.style.clone();
+        assigned.number_format=twin.style.number_format.clone();
+        assigned.border_left=twin.style.border_left.clone(); assigned.unlocked=true;
+        let mut reference=CellFormatReference::for_style(id);reference.apply_all();
+        assigned.format_reference=Some(Box::new(reference));
+        let cell=restored.sheets[0].rows.iter_mut().find(|r|r.index==2).unwrap()
+            .cells.iter_mut().find(|c|c.col==2).unwrap();
+        cell.style=assigned;cell.value=CellValue::Number(1.25);
+        let twin=restored.named_styles.iter_mut().find(|s|s.name=="Twin").unwrap();
+        twin.style.font_size=Some(23.0);
+        twin.style.format_reference.as_mut().unwrap().font=Some(true);
+        let mut editor=XlsxEditor::new(&unused).unwrap();editor.apply_workbook(&restored).unwrap();
+        let saved=editor.save().unwrap();let after=parse_xlsx(&saved).unwrap();
+        assert_eq!(after.source_named_style_xf_count,id+1);
+        let twin=after.named_styles.iter().find(|s|s.name=="Twin").unwrap();
+        assert_eq!(twin.style.font_size,Some(23.0));
+        assert_eq!(twin.style.format_reference.as_ref().unwrap().font,Some(true));
+        let cell=after.sheets[0].rows.iter().find(|r|r.index==2).unwrap().cells.iter().find(|c|c.col==2).unwrap();
+        assert!(matches!(&cell.value,CellValue::Number(number) if *number==1.25));
+        assert_eq!(cell.style.font_size,normal.style.font_size);
+        assert_eq!(cell.style.number_format.as_deref(),Some("#,##0.0000"));
+        assert_eq!(cell.style.format_reference.as_ref().unwrap().style_id,Some(id));
+        let mut noop=XlsxEditor::new(&saved).unwrap();noop.apply_workbook(&after).unwrap();
+        assert_eq!(noop.save().unwrap(),saved);
+        }
+    }
+
+
+
+    #[test]
+    fn edited_border_colors_retain_native_automatic_and_indexed_identity() {
+        use std::io::{Cursor,Read,Write};
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let mut failures=Vec::new();
+        // Independent Excel saves use these distinct color records for the
+        // same displayed black. Editing line weight must retain that identity.
+        for color in [r#"indexed="64""#,r#"auto="1""#] {
+            let styles=format!(r#"<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right/><top style="thick"><color {color}/></top><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"#);
+            let sheet=r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetFormatPr defaultRowHeight="15"/><sheetData><row r="1"><c r="B1" s="1"/></row></sheetData></worksheet>"#;
+            let mut source=zip::ZipArchive::new(Cursor::new(original.as_slice())).unwrap();
+            let mut writer=zip::ZipWriter::new(Cursor::new(Vec::new()));
+            for index in 0..source.len() {
+                let mut part=source.by_index(index).unwrap();let name=part.name().to_string();
+                let replacement=match name.as_str() {"xl/styles.xml"=>Some(styles.as_bytes()),"xl/worksheets/sheet1.xml"=>Some(sheet.as_bytes()),_=>None};
+                writer.start_file(name,zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated)).unwrap();
+                if let Some(bytes)=replacement {writer.write_all(bytes).unwrap();}
+                else {let mut bytes=Vec::new();part.read_to_end(&mut bytes).unwrap();writer.write_all(&bytes).unwrap();}
+            }
+            let bytes=writer.finish().unwrap().into_inner();
+            let mut editor=XlsxEditor::new(&bytes).unwrap();let mut book=editor.workbook().clone();
+            editor.apply_workbook(&book).unwrap();
+            if editor.save().unwrap()!=bytes {failures.push(format!("{color}: no-edit package bytes changed"));}
+            let cell=book.sheets[0].rows.iter_mut().find(|row|row.index==1).unwrap().cells.iter_mut().find(|cell|cell.col==1).unwrap();
+            cell.style.border_top.as_mut().unwrap().style="medium".into();
+            let mut edited=XlsxEditor::new(&bytes).unwrap();edited.apply_workbook(&book).unwrap();
+            let saved=edited.save().unwrap();let mut archive=oxidocs_common::archive::OoxmlArchive::new(&saved).unwrap();
+            let xml=archive.read_part("xl/styles.xml").unwrap();
+            let expected=format!(r#"<top style="medium"><color {color}/></top>"#);
+            if !xml.contains(&expected) {failures.push(format!("{color}: changed border lost original color identity"));}
+        }
+        assert!(failures.is_empty(),"{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn native_border_row_caches_round_trip_through_editor() {
+        // Complete row geometry from actual Excel 169/170/171 saved files.
+        // No-op saves, new rows, manual/hidden rows, clearing and added sheets
+        // must retain the measured padding flags as well as the height.
+        const BEFORE:&[u8]=b"\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xa4\x53\xc5\xcf\x4e\x01\x00\x00\x08\x04\x00\x00\x13\x00\x08\x02\x5b\x43\x6f\x6e\x74\x65\x6e\x74\x5f\x54\x79\x70\x65\x73\x5d\x2e\x78\x6d\x6c\x20\xa2\x04\x02\x28\xa0\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xac\x93\xcb\x4e\xc3\x30\x10\x45\xf7\x48\xfc\x43\xe4\x2d\x8a\xdd\xb2\x40\x08\x35\xed\x82\xc7\x12\xba\x28\x1f\x60\xe2\x49\x62\xd5\x2f\x79\xdc\xd2\xfe\x3d\x13\xf7\xb1\x40\xa1\x15\x6a\x37\xb1\x62\xcf\xdc\x73\x3d\x33\x9e\xcc\x36\xd6\x14\x6b\x88\xa8\xbd\xab\xd8\x98\x8f\x58\x01\xae\xf6\x4a\xbb\xb6\x62\x9f\x8b\xb7\xf2\x91\x15\x98\xa4\x53\xd2\x78\x07\x15\xdb\x02\xb2\xd9\xf4\xf6\x66\xb2\xd8\x06\xc0\x82\xb2\x1d\x56\xac\x4b\x29\x3c\x09\x81\x75\x07\x56\x22\xf7\x01\x1c\x9d\x34\x3e\x5a\x99\xe8\x37\xb6\x22\xc8\x7a\x29\x5b\x10\xf7\xa3\xd1\x83\xa8\xbd\x4b\xe0\x52\x99\x7a\x0d\x36\x9d\xbc\x40\x23\x57\x26\x15\xaf\x1b\xda\xde\x39\x89\x60\x90\x15\xcf\xbb\xc0\x9e\x55\x31\x19\x82\xd1\xb5\x4c\xe4\x54\xac\x9d\xfa\x45\x29\xf7\x04\x4e\x99\x39\x06\x3b\x1d\xf0\x8e\x6c\x30\x31\x48\xe8\x4f\xfe\x06\xec\xf3\x3e\xa8\x34\x51\x2b\x28\xe6\x32\xa6\x77\x69\xc9\x86\xd8\x18\xf1\xed\xe3\xf2\xcb\xfb\x25\x3f\x2d\x32\xe0\xd2\x37\x8d\xae\x41\xf9\x7a\x65\xa9\x02\x1c\x43\x04\xa9\xb0\x03\x48\xd6\xf0\xbc\x72\x2b\xb5\x3b\xf8\x3e\xc1\xcf\xc1\x28\xf2\x32\xbe\xb2\x91\xfe\x7e\x59\xf8\x8c\x8f\x44\xfd\x06\x91\xbf\x97\x5b\xc8\x32\x67\x80\x98\xb6\x06\xf0\xda\x65\xcf\xa2\xa7\xc8\xd4\xaf\x79\xf4\x01\x69\x72\x23\xfc\x9f\x7e\x18\xcd\x3e\xbb\x0c\x24\x04\x31\x69\x38\x0e\xe7\x50\x93\x8f\x44\x9a\xfa\x8b\xaf\x0b\xfd\xbb\x52\xa0\x06\xd8\x22\xbf\xe3\xe9\x0f\x00\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xb5\x55\x30\x23\xf4\x00\x00\x00\x4c\x02\x00\x00\x0b\x00\x08\x02\x5f\x72\x65\x6c\x73\x2f\x2e\x72\x65\x6c\x73\x20\xa2\x04\x02\x28\xa0\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xac\x92\x4d\x4f\xc3\x30\x0c\x86\xef\x48\xfc\x87\xc8\xf7\xd5\xdd\x90\x10\x42\x4b\x77\x41\x48\xbb\x21\x54\x7e\x80\x49\xdc\x0f\xb5\x8d\xa3\x24\x1b\xdd\xbf\x27\x1c\x10\x54\x1a\x83\x03\x47\x7f\xbd\x7e\xfc\xca\xdb\xdd\x3c\x8d\xea\xc8\x21\xf6\xe2\x34\xac\x8b\x12\x14\x3b\x23\xb6\x77\xad\x86\x97\xfa\x71\x75\x07\x2a\x26\x72\x96\x46\x71\xac\xe1\xc4\x11\x76\xd5\xf5\xd5\xf6\x99\x47\x4a\x79\x28\x76\xbd\x8f\x2a\xab\xb8\xa8\xa1\x4b\xc9\xdf\x23\x46\xd3\xf1\x44\xb1\x10\xcf\x2e\x57\x1a\x09\x13\xa5\x1c\x86\x16\x3d\x99\x81\x5a\xc6\x4d\x59\xde\x62\xf8\xae\x01\xd5\x42\x53\xed\xad\x86\xb0\xb7\x37\xa0\xea\x93\xcf\x9b\x7f\xd7\x96\xa6\xe9\x0d\x3f\x88\x39\x4c\xec\xd2\x99\x15\xc8\x73\x62\x67\xd9\xae\x7c\xc8\x6c\x21\xf5\xf9\x1a\x55\x53\x68\x39\x69\xb0\x62\x9e\x72\x3a\x22\x79\x5f\x64\x6c\xc0\xf3\x44\x9b\xbf\x13\xfd\x7c\x2d\x4e\x9c\xc8\x52\x22\x34\x12\xf8\x32\xcf\x47\xc7\x25\xa0\xf5\x7f\x5a\xb4\x34\xf1\xcb\x9d\x79\xc4\x37\x09\xc3\xab\xc8\xf0\xc9\x82\x8b\x1f\xa8\xde\x01\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x84\xfb\xe5\xcc\xd2\x03\x00\x00\x9b\x09\x00\x00\x0f\x00\x00\x00\x78\x6c\x2f\x77\x6f\x72\x6b\x62\x6f\x6f\x6b\x2e\x78\x6d\x6c\xac\x56\xdb\x6e\xe3\x36\x10\x7d\x2f\xd0\x7f\x10\xf4\xce\x88\x94\x28\xc9\x12\xe2\x2c\x74\x45\x03\x24\x8b\xc0\xf1\x26\x2d\x60\x60\xc1\x48\x74\xac\x46\xb7\x52\x94\xed\x20\xd8\x7f\xef\x50\xb6\x9c\x8b\x8b\xc2\xcd\xd6\xb0\x49\x91\x1c\x1e\x9e\x99\x39\x43\xf9\xfc\xcb\xb6\x2a\xb5\x35\x17\x5d\xd1\xd4\x53\x9d\x9c\x61\x5d\xe3\x75\xd6\xe4\x45\xfd\x38\xd5\xbf\xcd\x53\x34\xd1\xb5\x4e\xb2\x3a\x67\x65\x53\xf3\xa9\xfe\xcc\x3b\xfd\xcb\xc5\xaf\xbf\x9c\x6f\x1a\xf1\xf4\xd0\x34\x4f\x1a\x00\xd4\xdd\x54\x5f\x49\xd9\xfa\x86\xd1\x65\x2b\x5e\xb1\xee\xac\x69\x79\x0d\x2b\xcb\x46\x54\x4c\xc2\x50\x3c\x1a\x5d\x2b\x38\xcb\xbb\x15\xe7\xb2\x2a\x0d\x13\x63\xc7\xa8\x58\x51\xeb\x3b\x04\x5f\x9c\x82\xd1\x2c\x97\x45\xc6\xe3\x26\xeb\x2b\x5e\xcb\x1d\x88\xe0\x25\x93\x40\xbf\x5b\x15\x6d\x37\xa2\x55\xd9\x29\x70\x15\x13\x4f\x7d\x8b\xb2\xa6\x6a\x01\xe2\xa1\x28\x0b\xf9\x3c\x80\xea\x5a\x95\xf9\x97\x8f\x75\x23\xd8\x43\x09\x6e\x6f\x89\xad\x6d\x05\x7c\x1d\xf8\x11\x0c\x8d\x39\x9e\x04\x4b\x47\x47\x55\x45\x26\x9a\xae\x59\xca\x33\x80\x36\x76\xa4\x8f\xfc\x27\xd8\x20\xe4\x5d\x08\xb6\xc7\x31\x38\x0d\x89\x1a\x82\xaf\x0b\x95\xc3\x03\x2b\xe1\x7c\x92\x95\x73\xc0\x72\x5e\xc1\x08\xfe\x69\x34\x02\xd2\x1a\xb4\xe2\x43\xf0\x3e\x89\x66\x1f\xb8\x99\xfa\xc5\xf9\xb2\x28\xf9\xdd\x4e\xba\x1a\x6b\xdb\xaf\xac\x52\x99\x2a\x75\xad\x64\x9d\x4c\xf2\x42\xf2\x7c\xaa\xbb\x30\x6c\x36\xfc\xdd\x84\xe8\xdb\xb0\x2f\x4a\x58\xb5\xb0\x6d\xba\xba\x71\x71\x90\xf3\x8d\xd0\x72\xbe\x64\x7d\x29\xe7\x20\xe4\x11\x7e\xaa\x9b\xd8\xb4\x30\x56\x96\x20\x8c\xa0\x94\x5c\xd4\x4c\xf2\xa8\xa9\x25\xe8\x70\xef\xd7\xcf\x6a\x6e\xc0\x8e\x56\x0d\x28\x5c\x9b\xf1\xbf\xfa\x42\x70\x28\x2c\xd0\x17\xf8\x0a\x2d\xcb\x7c\xf6\xd0\xdd\x30\xb9\xd2\x7a\x51\x4e\xf5\xc8\x5f\x7c\xeb\xc0\xfd\x85\x78\xee\xff\x2c\x16\x41\xdb\xc6\x4c\xb2\xc5\x55\x93\xb1\x72\x31\xe7\x55\xbb\x68\xb6\x05\x5a\x3f\x30\xb4\x61\x5d\x85\x32\x06\xa5\x89\xc0\x0f\x87\x60\x8b\x2c\xde\xc8\x97\x1d\xd7\xca\x7f\x10\x30\xcb\x54\x54\x0c\x08\xcb\x8e\xfa\xee\xf9\x63\x88\xc0\x03\xe1\x8f\x22\xbd\x91\x42\x83\xe7\xcb\xf8\x0a\x12\x75\xcb\xd6\x90\x36\x10\x47\xbe\xaf\xea\x4b\xc8\xcb\xe4\xfb\x4b\x1a\x5a\x71\x82\x27\x0e\xb2\x83\xd4\x44\x94\xda\x31\x0a\x2d\xcb\x46\x34\x8e\x9c\x90\xb8\x69\xea\xba\xe6\x0f\xf0\x42\x38\x7e\xd6\xb0\x5e\xae\xf6\x52\x50\x98\x53\x9d\x42\xde\x8f\x96\xae\xd9\x76\x5c\x21\xd8\xef\x8b\xfc\xf5\xfc\x17\xbc\xff\x20\xd5\x7f\x68\xc6\xb5\x1f\xca\x53\x75\xe9\xdd\x15\x7c\xd3\xbd\x8a\x46\x0d\xb5\xed\x7d\x51\xe7\xcd\x66\xaa\x23\x62\x82\x37\xcf\xef\x87\x9b\x61\xf1\xbe\xc8\xe5\x0a\xc4\xe4\x61\x0a\x26\xbb\xb9\xdf\x78\xf1\xb8\x02\xc6\xc4\x76\xd5\x3e\x28\x0e\xc5\x6c\xaa\xbf\xa4\x51\x10\x4f\x82\x98\x22\x67\x62\x3b\x88\xda\xae\x87\xbc\x88\x44\x28\x30\x43\xcf\xf4\xec\xc8\x75\xcc\x74\x60\x64\xbc\xa1\x34\x5c\xaf\x40\x6d\xe8\xb5\x7a\x28\x89\x5b\x75\xe5\x12\xb8\xc7\x55\xaf\xa2\x0b\xcf\xc2\x57\x67\x88\xcb\x9c\x0c\xd9\x1b\xb7\x81\x74\x32\x28\x01\xd5\x0d\x86\x1e\xc1\xa6\xa7\x2c\xf8\x56\x5e\x75\x72\xe8\x41\x7d\x05\xd0\x23\x14\x07\x2e\xf6\x28\xc2\x89\xca\xca\xc4\x33\xd1\x84\x5a\x26\x8a\x68\x6c\x26\xb6\x9b\xc4\x49\x68\xab\xfc\xa8\xd7\x83\xff\x7f\x5c\x92\x43\x11\xf8\xe3\x7b\x47\xb1\x5c\x31\x21\xe7\x82\x65\x4f\xf0\xb6\x9a\xf1\x65\xc8\x3a\x50\xd2\xce\x21\xe0\xfb\x96\x6c\x68\x4f\x42\x6c\x01\x45\x9a\x92\x14\x51\xe2\x61\x14\x86\x0e\x45\x76\x9c\x5a\xb6\x4b\xe2\x28\xb1\x21\x96\x23\x59\xe5\xfe\xf2\x93\x57\xd4\xc4\x18\x76\x73\x26\x7b\x28\x5f\x55\xb9\xc3\xd8\x57\x6d\xba\x9f\x3d\x4c\x2e\x77\x13\xfb\x3c\xbd\x2b\x3a\x7f\x16\xab\xb8\xef\x77\xff\x9b\xe1\x2d\x78\x5f\xf2\x13\x8d\xd3\xbb\x13\x0d\xa3\xaf\xd7\xf3\xeb\x13\x6d\xaf\x92\xf9\xf7\xfb\xf4\x54\xe3\xe0\x3a\x8c\x83\xd3\xed\x83\xd9\x2c\xf8\x63\x9e\xfc\x3e\x1e\x61\xfc\x63\x40\x8d\x0f\x09\x8f\x09\xf5\xb0\x95\x04\xc8\xb2\x22\x8a\xa8\x9b\xba\x68\x92\x62\x1b\x59\xd4\xa5\x91\x4d\xc3\x84\x60\xf7\x35\xe1\xe5\x26\x5b\x7f\x2e\xdf\x26\x35\x46\x45\x46\x6f\xff\x45\xec\x2f\x23\x95\x7f\x05\xee\xef\xff\x62\x69\x1d\x97\xfb\x25\xb8\x06\x86\xd2\x1b\x88\x2b\xfa\x43\x7d\x1d\xd0\x2e\xfe\x06\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x8d\x87\xda\x70\xe0\x00\x00\x00\x2d\x02\x00\x00\x1a\x00\x08\x01\x78\x6c\x2f\x5f\x72\x65\x6c\x73\x2f\x77\x6f\x72\x6b\x62\x6f\x6f\x6b\x2e\x78\x6d\x6c\x2e\x72\x65\x6c\x73\x20\xa2\x04\x01\x28\xa0\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xac\x91\xcb\x6a\xc3\x30\x10\x45\xf7\x85\xfe\x83\x98\x7d\x3d\x76\x0a\xa5\x94\xc8\xd9\x94\x42\xb6\xc5\xfd\x00\x21\x8f\x1f\xc4\x96\x84\x66\x92\xd6\x7f\x5f\xe1\x82\xdd\x40\x48\x36\xd9\x08\xae\x06\xdd\x73\x24\x6d\x77\x3f\xe3\xa0\x4e\x14\xb9\xf7\x4e\x43\x91\xe5\xa0\xc8\x59\x5f\xf7\xae\xd5\xf0\x55\x7d\x3c\xbd\x82\x62\x31\xae\x36\x83\x77\xa4\x61\x22\x86\x5d\xf9\xf8\xb0\xfd\xa4\xc1\x48\x3a\xc4\x5d\x1f\x58\xa5\x16\xc7\x1a\x3a\x91\xf0\x86\xc8\xb6\xa3\xd1\x70\xe6\x03\xb9\x34\x69\x7c\x1c\x8d\xa4\x18\x5b\x0c\xc6\x1e\x4c\x4b\xb8\xc9\xf3\x17\x8c\xff\x3b\xa0\x3c\xeb\x54\xfb\x5a\x43\xdc\xd7\xcf\xa0\xaa\x29\x24\xf2\xed\x6e\xdf\x34\xbd\xa5\x77\x6f\x8f\x23\x39\xb9\x80\x40\x96\x69\x48\x17\x50\x95\x89\x2d\x89\x86\xbf\x9c\x25\x47\xc0\xcb\xf8\xcd\x3d\xf1\x92\x9e\x85\x56\xfa\x1c\x71\x5e\x8b\x6b\x0e\xc5\x3d\x1d\xbe\x7d\x3c\x70\x47\x24\xab\xc7\xb2\xc5\x38\x4f\x16\x19\x3c\xfb\xe4\xf2\x17\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xc6\xad\x73\xdb\xd8\x01\x00\x00\xe9\x03\x00\x00\x18\x00\x00\x00\x78\x6c\x2f\x77\x6f\x72\x6b\x73\x68\x65\x65\x74\x73\x2f\x73\x68\x65\x65\x74\x31\x2e\x78\x6d\x6c\x9c\x93\xdb\x8a\xdb\x30\x10\x86\xef\x0b\x7d\x07\xa1\xfb\x58\xb6\x73\x5a\x87\x38\xcb\x36\xd9\xd0\xbd\x28\x94\x9e\xee\x15\x79\x6c\x8b\x58\x1a\x23\x29\x9b\x84\xd2\x77\xef\xd8\x26\xd9\x42\x28\x84\x05\xdb\x68\xc6\x9a\x6f\xfe\xd1\x8c\x96\x8f\x27\xd3\xb0\x57\x70\x5e\xa3\xcd\x79\x12\xc5\x9c\x81\x55\x58\x68\x5b\xe5\xfc\xe7\x8f\xed\xe8\x81\x33\x1f\xa4\x2d\x64\x83\x16\x72\x7e\x06\xcf\x1f\x57\x1f\x3f\x2c\x8f\xe8\xf6\xbe\x06\x08\x8c\x08\xd6\xe7\xbc\x0e\xa1\x5d\x08\xe1\x55\x0d\x46\xfa\x08\x5b\xb0\xf4\xa7\x44\x67\x64\x20\xd3\x55\xc2\xb7\x0e\x64\xd1\x07\x99\x46\xa4\x71\x3c\x13\x46\x6a\xcb\x07\xc2\xc2\xdd\xc3\xc0\xb2\xd4\x0a\x36\xa8\x0e\x06\x6c\x18\x20\x0e\x1a\x19\x48\xbf\xaf\x75\xeb\x2f\x34\xa3\xee\xc1\x19\xe9\xf6\x87\x76\xa4\xd0\xb4\x84\xd8\xe9\x46\x87\x73\x0f\xe5\xcc\xa8\xc5\x4b\x65\xd1\xc9\x5d\x43\x75\x9f\x92\x89\x54\xec\xe4\xe8\x49\xe9\x1d\x5f\xd2\xf4\xfe\x9b\x4c\x46\x2b\x87\x1e\xcb\x10\x11\x59\x0c\x9a\x6f\xcb\xcf\x44\x26\xa4\xba\x92\x6e\xeb\xbf\x0b\x93\x4c\x84\x83\x57\xdd\x35\xf0\x0d\x95\xbe\x4f\x52\x32\xbd\xb2\xd2\x37\xd8\xf8\x9d\xb0\xd9\x15\xd6\x1d\x97\x5b\x1c\x74\x91\xf3\xdf\xf1\xa7\x2c\x1d\xaf\x63\x9a\xac\xe7\x6c\x36\x9a\x3c\xa5\xb3\x51\x16\xc7\xe9\x68\x3c\xd9\x3e\xcc\x93\x75\xb2\x79\x5e\x67\x7f\xf8\x6a\x59\x68\xea\x70\x57\x15\x73\x50\xe6\xfc\x29\xe1\x62\xb5\xec\x87\xe7\x97\x86\xa3\xff\x67\xcd\x82\xdc\x7d\x87\x06\x54\x00\x4a\x90\x70\xd6\xcd\xe6\x0e\x71\xdf\x6d\x7c\x21\x57\xdc\x85\x8a\x9b\xd8\x6d\x3f\x9b\x5f\x1d\x2b\xa0\x94\x87\x26\x7c\xc3\xe3\x67\xd0\x55\x1d\x08\x32\x25\xc5\x5d\xcb\x17\xc5\x79\x03\x5e\xd1\xac\x11\x26\x4a\xa7\x57\x11\x1b\x19\xe4\x6a\xe9\xf0\xc8\xa8\x6f\x94\x93\x6e\x00\x7d\xd5\xc1\x07\x34\x03\xb8\x77\xfc\x17\x32\xc8\x19\x28\xad\xac\xe0\x8b\x74\x95\xb6\x9e\x35\x50\xf6\xa9\xe6\x9c\xb9\x41\x4b\x1c\xd1\x3a\x60\xdb\x09\x98\x93\xae\x1d\x06\xca\x71\xb1\x6a\xba\x52\x40\x12\xe2\x88\x0e\xb9\x44\x0c\x17\xa3\x2b\xf9\x7a\x49\x57\x7f\x01\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xed\x55\xd4\xc8\xc5\x07\x00\x00\x15\x22\x00\x00\x13\x00\x00\x00\x78\x6c\x2f\x74\x68\x65\x6d\x65\x2f\x74\x68\x65\x6d\x65\x31\x2e\x78\x6d\x6c\xec\x5a\xdd\x6b\x24\xb9\x11\x7f\x0f\xe4\x7f\x10\xfd\x3e\x3b\xdd\x3d\xdf\x66\x67\x8f\xf9\x5c\xdf\xae\xed\x35\xeb\xd9\x0d\xf7\x28\xcf\x68\xa6\xb5\x56\xb7\x1a\x49\x63\x7b\x08\x07\x61\x0d\x07\xf7\x12\x08\x5c\x42\x5e\x12\xf2\x96\x87\x10\x72\x90\x83\x1c\x21\x90\x3f\xc6\xb0\x4b\x72\xf9\x23\x52\x52\xf7\x4c\xb7\x3c\x9a\xdb\xf5\x7e\x70\x97\x60\xfb\xa5\x5b\xf3\xab\xd2\xaf\xab\x4a\x55\xd5\x52\xdf\xff\xe4\x32\x66\xe8\x9c\x08\x49\x79\xd2\xf5\x82\x7b\xbe\x87\x48\x32\xe5\x33\x9a\x2c\xba\xde\xb3\xc9\xb8\xd2\xf6\x90\x54\x38\x99\x61\xc6\x13\xd2\xf5\x56\x44\x7a\x9f\x3c\xf8\xe9\x4f\xee\xe3\x3d\x15\x91\x98\x20\x90\x4f\xe4\x1e\xee\x7a\x91\x52\xe9\x5e\xb5\x2a\xa7\x30\x8c\xe5\x3d\x9e\x92\x04\x7e\x9b\x73\x11\x63\x05\xb7\x62\x51\x9d\x09\x7c\x01\x7a\x63\x56\x0d\x7d\xbf\x59\x8d\x31\x4d\x3c\x94\xe0\x18\xd4\x3e\x99\xcf\xe9\x94\xa0\xeb\xab\x2f\xae\xaf\xfe\x71\x7d\xf5\x7b\xef\xc1\x7a\x82\x11\x83\x59\x12\x25\xf5\xc0\x94\x89\x13\xad\x9e\x58\x52\x06\x3b\x3b\x0b\x34\x42\xae\xe4\x80\x09\x74\x8e\x59\xd7\x83\xb9\x66\xfc\x62\x42\x2e\x95\x87\x18\x96\x0a\x7e\xe8\x7a\xbe\xf9\xf3\xaa\x0f\xee\x57\xf1\x5e\x2e\xc4\xd4\x0e\xd9\x92\xdc\xd8\xfc\xe5\x72\xb9\xc0\xec\x2c\x34\x73\x8a\xc5\xe9\x66\x52\x7f\x14\xb6\xeb\xc1\x46\xbf\x01\x30\xb5\x8d\x1b\xb5\xf5\xff\x46\x9f\x01\xe0\xe9\x14\x9e\x34\xe3\x52\xd6\x19\x34\x9a\x7e\x3b\xcc\xb1\x25\x50\x76\xe9\xd0\xdd\x69\x05\x35\x1b\x5f\xd2\x5f\xdb\xe2\x1c\x74\x9a\xfd\xb0\x6e\xe9\x37\xa0\x4c\x7f\x7d\xfb\x19\xc7\x9d\xd1\xb0\x61\xe1\x0d\x28\xc3\x37\xb6\xf0\x3d\x3f\xec\x77\x6a\x16\xde\x80\x32\x7c\x73\x0b\x5f\x1f\xf5\x5a\xe1\xc8\xc2\x1b\x50\xc4\x68\x72\xb6\x8d\x6e\xb6\xda\xed\x66\x8e\xde\x40\xe6\x9c\xed\x3b\xe1\x9d\x66\xd3\x6f\x0d\x73\x78\x81\x82\x68\xd8\x44\x97\x9e\x62\xce\x13\xb5\x2b\xd6\x62\xfc\x82\x8b\x31\x00\x34\x90\x61\x45\x13\xa4\x56\x29\x99\xe3\x29\x44\x72\x2f\x55\x5c\xa2\x21\x95\x29\xc3\x2b\x0f\xa5\x38\xe1\x12\x86\xfd\x30\x08\x20\xf4\xea\x7e\xb8\xf9\x37\x16\xc7\x7b\x04\x97\xa4\x35\x2f\x60\x22\xb7\x86\x34\x1f\x24\xa7\x82\xa6\xaa\xeb\x3d\x02\xad\x5e\x09\xf2\xea\xdb\x6f\xaf\x5f\x7e\x73\xfd\xf2\x6f\xd7\x57\x57\xd7\x2f\xff\x82\x0e\xe8\x22\x52\x99\x2a\x4b\x6e\x1f\x27\x8b\xb2\xdc\x77\x7f\xfc\xd5\x7f\x7e\xf7\x0b\xf4\xef\xbf\xfe\xe1\xbb\xaf\x7e\xed\xc6\xcb\x32\xfe\xf5\x9f\xbf\x7c\xfd\xf7\x7f\x7e\x9f\x7a\x58\x6a\x85\x29\x5e\xfd\xe6\xeb\xd7\xdf\x7c\xfd\xea\xb7\xbf\xfc\xd7\x9f\xbe\x72\x68\xef\x09\x7c\x5a\x86\x4f\x68\x4c\x24\x3a\x22\x17\xe8\x29\x8f\xe1\x01\x8d\x29\x6c\xfe\xe4\x54\xdc\x4e\x62\x12\x61\x6a\x49\xe0\x08\x74\x3b\x54\x8f\x54\x64\x01\x8f\x56\x98\xb9\x70\x7d\x62\x9b\xf0\xb9\x80\x2c\xe3\x02\x3e\x5c\xbe\xb0\xb8\x9e\x44\x62\xa9\xa8\x63\xe6\xc7\x51\x6c\x01\x0f\x39\x67\x7d\x2e\x9c\x06\x78\xac\xe7\x2a\x59\x78\xb2\x4c\x16\xee\xc9\xc5\xb2\x8c\x7b\x8a\xf1\xb9\x6b\xee\x01\x4e\x2c\x07\x8f\x96\x29\xa4\x57\xea\x52\x39\x88\x88\x45\xf3\x98\xe1\x44\xe1\x05\x49\x88\x42\xfa\x37\x7e\x46\x88\xe3\xe9\x3e\xa3\xd4\xb2\xeb\x21\x9d\x0a\x2e\xf9\x5c\xa1\xcf\x28\xea\x63\xea\x34\xc9\x84\x9e\x5a\x81\x54\x08\xed\xd3\x18\xfc\xb2\x72\x11\x04\x57\x5b\xb6\x39\x7c\x8e\xfa\x9c\xb9\x9e\x7a\x48\xce\x6d\x24\x2c\x0b\xcc\x1c\xe4\x27\x84\x59\x66\x7c\x88\x97\x0a\xc7\x2e\x95\x13\x1c\xb3\xb2\xc1\x0f\xb0\x8a\x5c\x24\x4f\x56\x62\x5a\xc6\x8d\xa4\x02\x4f\x2f\x08\xe3\x68\x34\x23\x52\xba\x64\x9e\x08\x78\xde\x92\xd3\x1f\x63\x48\x6c\x4e\xb7\x1f\xb2\x55\x6c\x23\x85\xa2\x67\x2e\x9d\x07\x98\xf3\x32\x72\xc8\xcf\x06\x11\x8e\x53\x27\x67\x9a\x44\x65\xec\xa7\xf2\x0c\x42\x14\xa3\x63\xae\x5c\xf0\x43\x6e\xaf\x10\x7d\x0f\x7e\xc0\xc9\x4e\x77\x3f\xa7\xc4\x72\xf7\x9b\x13\xc1\x33\x48\x70\x65\x4a\x45\x80\xe8\x5f\x96\xc2\xe1\xcb\x87\x84\xdb\xeb\x71\xc5\xe6\x98\xb8\xb2\x4c\x4f\xc4\x56\x76\xed\x09\xea\x8c\x8e\xfe\x72\x61\x85\xf6\x01\x21\x0c\x5f\xe0\x19\x21\xe8\xd9\xa7\x0e\x06\x7d\x9e\x5a\x36\x2f\x48\x3f\x8a\x20\xab\xec\x13\x57\x60\x3d\xc2\x76\xac\xea\xfb\x84\x48\x82\x4c\x5f\xb3\x9d\x22\x0f\xa8\xb4\x42\xf6\x84\x2c\xf8\x0e\x3e\x87\xab\x1b\x89\x67\x85\x93\x18\x8b\x5d\x9a\x8f\xc0\xeb\x56\xe8\x9e\x0a\x58\x8c\x8e\xe7\x7c\xc2\xa6\x67\x65\xe0\x11\x85\x16\x10\xe2\xc5\x69\x94\x27\x12\x74\x94\x82\x7b\xb4\x4b\xeb\x71\x84\xad\xda\xa5\xef\xa5\x3b\x5e\x57\xc2\xf2\xdf\xdb\xac\x31\x58\x97\x2f\x6e\xbb\x2e\x41\x86\xdc\x5a\x06\x12\xfb\x5b\xdb\x66\x82\x99\x35\x41\x11\x30\x13\x4c\xd1\x81\x2b\xdd\x82\x88\xe5\xfe\x42\x44\xd7\x55\x23\xb6\x74\xca\xcd\xed\x45\x5b\xb8\x01\x1a\x23\xab\xdf\x89\x69\xf2\xa6\xe6\xe7\x08\x0b\xc1\x2f\x7e\x98\xde\xe7\xa3\x75\x3d\x6e\xc5\xef\xd3\xef\xec\xca\x2b\xfb\x37\xba\x9c\x5d\xb8\xff\xc1\xde\x66\x88\x97\xc9\x31\x81\x72\xb2\x9d\xb8\xee\x5a\x9b\xbb\xd6\xc6\xfb\xbf\x6f\x6d\x76\xad\xe5\xbb\x86\xe6\xae\xa1\xb9\x6b\x68\x5c\xaf\x60\x1f\xa5\xa1\x29\x7a\x18\x68\x6f\x8a\xad\x1e\xb3\xf1\x13\xef\xdc\xf7\x99\x53\xc6\x4e\xd4\x8a\x91\x03\x69\xb6\x7e\x24\xbc\xd6\xcc\xc6\x30\x68\xf6\xa4\xcc\xc6\xe4\x66\x1f\x30\x8d\xe0\x52\x3f\x0f\x4c\x60\xe1\x16\x02\x1b\x19\x24\xb8\xfa\x19\x55\xd1\x49\x84\x53\xd8\x1f\x0a\xcc\x2e\xe6\x42\xe6\xaa\x17\x12\xa5\x5c\xc2\xb6\x91\x19\x36\x7b\xaa\xe4\x86\x6e\xb3\xf9\xb4\x8c\x0f\xf9\x2c\xdb\xee\x34\xfb\x4b\x7e\x66\x42\x89\x55\x31\xee\x37\x60\xe3\x29\x1b\x87\xad\x2a\x95\xa1\x9b\xad\x7c\x50\xf3\x5b\x53\x37\x6c\x17\x66\xab\x75\x4d\x40\xcb\xde\x86\x44\x69\x32\x9b\x44\xcd\x41\xa2\xb5\x1e\x7c\x03\x09\xbd\x73\xf6\x61\x58\x74\x1c\x2c\xda\x5a\xfd\xda\x55\x5b\xa6\x00\x6a\x1b\xaf\xc0\x7b\x37\x82\xb7\xf5\xae\xd7\xa8\x67\x8c\x60\x47\x0e\x7a\xf4\x99\xf6\x53\xe6\xea\xb5\x77\xb5\x73\x3e\xa8\xa7\x77\x19\x93\x95\x23\x00\xb6\x16\xb7\x3d\xdd\xd1\x5c\x77\x3e\x9e\x7e\xba\x2c\xd4\xde\xc2\xd3\x16\x09\xe3\x94\x2c\xac\x6c\x12\xc6\x57\xa6\xc1\x93\x11\xbc\x0d\xe7\xd1\x59\xde\x77\xff\xbe\x80\xbb\xad\xaf\x3b\x85\x4b\x2d\x7a\xda\x14\xeb\xd5\x50\xd0\x68\xb5\x3f\x86\xaf\x75\x12\xb9\x91\x1b\x58\x52\xce\x14\x2c\x41\x17\xb0\xc6\x43\x58\x74\x1e\x9a\xe2\xb4\xeb\xcd\x61\xdf\x18\x2e\xe3\x14\x82\x47\xea\x77\x2f\xcc\x16\x70\x00\x33\x55\x22\x5b\xf1\xef\x92\x5a\x52\x21\xd5\x10\xcb\x28\xb3\xb8\xc9\x3a\x99\x7f\x62\xaa\x88\x40\x8c\xc6\x5d\x4f\x3f\xff\x26\x1c\x58\x62\x92\x48\x46\xae\x03\x4b\xf7\xc7\x4a\x2e\xd4\x0b\xee\xc7\x46\x0e\xbc\x6e\x7b\x99\xcc\xe7\x64\xaa\xca\x7e\x2f\x8d\x68\x4b\x67\xb7\x90\xe2\xb3\x64\xe1\xfc\xd5\x88\xbf\x3b\x58\x4b\xf2\x25\xb8\xfb\x24\x9a\x5d\xa0\x53\xb6\x14\x4f\x31\x84\x58\xa3\x15\x68\xef\xce\xa8\x84\xe3\x83\x20\x73\xf5\x8c\xc2\x79\xd8\x26\x93\x15\xf1\x77\xa3\x32\xe5\xd9\xdf\x3a\xe4\x2a\xf2\x31\x66\x69\x84\xf3\x92\x52\xce\xe6\x19\xdc\x14\x94\x0d\x1d\x73\xb7\xb1\x41\xe9\x2e\x7f\x66\x30\xe8\xb6\x09\x4f\x17\xba\xc2\xbe\x77\xd9\x7d\x73\xad\xd6\x96\x2b\xea\x63\xa7\x28\x9a\x56\x5a\xd1\x65\xd3\x9d\x4d\x3f\x5e\x95\x2f\xb1\x2a\xaa\xa8\xc5\x2a\xcb\xdd\x37\x73\x6e\x67\x9d\xec\x20\x50\x9d\x65\xe2\xfd\x6b\x7f\x89\x5a\x31\x99\x45\x4d\x33\xde\xce\xc3\x3a\x69\xe7\xa3\x36\xb5\x0f\xd8\x11\x94\xaa\x4f\x73\x87\xdd\x36\x45\xc2\x69\x89\x77\x2d\xfd\x20\x77\x33\x6a\x75\x85\x58\x37\x96\x26\xf0\xcd\xe1\x79\xf9\x6c\x9b\x9f\xbe\x80\xe4\x31\x84\x53\xc4\x25\xcb\x4e\xbb\x59\x02\x77\xa6\xb5\x4c\x8f\x85\xf1\xed\x29\x9f\xad\xf2\x4b\x26\xb3\x44\x93\xf9\x5c\x37\xa5\x59\x2a\x7f\x4a\xe6\x88\xce\x2e\xbb\x5e\xe8\xea\x1c\xf3\xc3\xe3\xbc\x1b\x60\x09\xa0\x4d\xcf\x0b\x2b\x6c\x23\xe8\xec\xf6\x6c\x41\x5d\xec\x72\xd1\x6c\xc1\x6e\x84\xb3\x36\xf6\x46\xbf\x6a\x0b\x6f\x24\xd6\xc7\xac\x1b\x61\xb3\xb5\xe8\xa2\xad\x2e\xd7\x27\xea\xba\x57\x37\x33\x6b\x87\x65\x4f\x6d\xd2\xb0\xb1\x14\x5c\x6d\x5b\x11\x8e\xff\x05\x86\xd6\x39\x3b\xcc\xcd\x72\x2f\xe4\x99\x4b\x95\x77\xda\x70\x85\x96\x82\x76\xbd\x9f\xfb\x8d\x5e\x7d\x10\x36\x06\x15\xbf\xdd\x18\x55\xea\xb5\xba\x5f\x69\x37\x7a\xb5\x4a\xaf\xd1\xa8\x05\xa3\x46\xe0\x0f\xfb\xe1\xe7\x40\x4f\x45\x71\xd0\xc8\xbe\x7e\x18\xc3\x69\x10\x5b\xe5\xdf\x40\x98\xf1\xad\xef\x20\xe2\xf5\x81\xd7\xbd\x29\x8f\xab\xdc\x7c\xe7\x50\x35\xde\x37\xdf\x41\x04\xa1\xeb\x3b\x88\x89\xfe\xc8\xc1\x03\x47\x02\xad\x70\x14\xd4\xc3\x5e\x38\xa8\x0c\x86\x41\xb3\x52\x0f\x87\xcd\x4a\xbb\x55\xeb\x55\x06\x61\x73\x18\xf6\xa0\x68\x37\xc7\xbd\xcf\x3d\x74\x6e\xc0\x41\x7f\x38\x1c\x8f\x1b\x61\xa5\x39\x00\x5c\xdd\xef\x35\x2a\xbd\x7e\x6d\x50\x69\xb6\x47\xfd\x70\x1c\x8c\xea\x43\x1f\xc0\x79\xf9\xb9\x84\xb7\x18\x9d\x73\x73\x5b\xc0\xa5\xe1\xf5\xe0\xbf\x00\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x26\xad\xda\xcd\xc9\x02\x00\x00\xa2\x06\x00\x00\x0d\x00\x00\x00\x78\x6c\x2f\x73\x74\x79\x6c\x65\x73\x2e\x78\x6d\x6c\xa4\x55\x59\x6e\xdb\x30\x10\xfd\x2f\xd0\x3b\x10\xfc\x57\xb4\xc4\x72\x6d\x43\x52\x10\xc7\x11\x10\x20\x2d\x0a\x24\x05\xfa\x4b\x4b\x94\x4d\x84\x8b\x40\x52\x89\xdc\xa2\xd7\x28\xd0\x1b\xf4\x0c\x3d\x50\xce\xd1\xa1\x24\xdb\x0a\x02\x74\x49\x7e\xac\xe1\xcc\xf0\xcd\x9b\x85\xe3\xe4\xac\x15\x1c\xdd\x53\x6d\x98\x92\x29\x0e\x4f\x02\x8c\xa8\x2c\x54\xc9\xe4\x26\xc5\x9f\x6e\x73\x6f\x86\x91\xb1\x44\x96\x84\x2b\x49\x53\xbc\xa3\x06\x9f\x65\x6f\xdf\x24\xc6\xee\x38\xbd\xd9\x52\x6a\x11\x40\x48\x93\xe2\xad\xb5\xf5\xc2\xf7\x4d\xb1\xa5\x82\x98\x13\x55\x53\x09\x96\x4a\x69\x41\x2c\x1c\xf5\xc6\x37\xb5\xa6\xa4\x34\xee\x92\xe0\x7e\x14\x04\x53\x5f\x10\x26\x71\x8f\xb0\x10\xc5\xbf\x80\x08\xa2\xef\x9a\xda\x2b\x94\xa8\x89\x65\x6b\xc6\x99\xdd\x75\x58\x18\x89\x62\x71\xb5\x91\x4a\x93\x35\x07\xaa\x6d\x38\x21\x05\x6a\xc3\xa9\x8e\x50\xab\xf7\x41\x3a\xed\xb3\x38\x82\x15\x5a\x19\x55\xd9\x13\xc0\xf5\x55\x55\xb1\x82\x3e\xa7\x3b\xf7\xe7\x3e\x29\x8e\x48\x80\xfc\x32\xa4\x30\xf6\x83\xe8\x49\xee\xad\x7e\x21\xd2\xc4\xd7\xf4\x9e\xb9\xf6\xe1\x2c\xa9\x94\xb4\x06\x15\xaa\x91\x16\x9a\x09\x44\x5d\x09\x16\x77\x52\x3d\xc8\xdc\x99\x9c\xb2\xf7\xca\x12\xf3\x05\xdd\x13\x0e\x9a\x10\xfb\x59\x52\x28\xae\x34\xb2\xd0\x3a\xa8\x5c\xa7\x91\x44\xd0\xde\xe3\xbc\xb6\xca\xa0\x0f\x44\x6b\xf5\xe0\x7c\x2b\x22\x18\xdf\xf5\xb6\xc8\x29\x7c\x17\x77\xf8\x18\xb0\x33\xce\x0f\x2c\x22\x17\x10\x14\x59\x02\xed\xb2\x54\xcb\x1c\x0e\x68\x90\x6f\x77\x35\x84\x93\x30\x59\x3d\x4c\xe7\xf7\x17\xef\x8d\x26\xbb\x30\x8a\x47\x17\xfc\x2e\x60\x96\xac\x95\x2e\x61\x92\x8f\xf9\xef\x55\x59\xc2\x69\x65\x81\xa8\x66\x9b\xad\xfb\x5a\x55\xc3\xef\x5a\x59\x0b\xdd\xce\x92\x92\x91\x8d\x92\x84\xbb\x54\x7a\x90\x83\x00\xe9\x14\x94\xf3\x1b\x37\xed\x9f\xab\x27\xd8\x6d\x85\x64\x23\x72\x61\xaf\xca\x14\xc3\xbb\x71\x45\xd8\x8b\x90\xc8\x20\xf6\x78\xfd\xc1\xe1\x8f\xd1\x7a\xec\x11\xac\x2b\xd6\xff\xc3\xa2\xb6\x3a\xe0\xbf\xe2\x36\x22\x75\xcd\x77\xcb\xae\x88\xc3\x0c\x74\x6c\x81\xdf\xa8\x08\x4f\x4a\x70\x48\x06\xb9\x69\x49\xf1\xe3\xcf\x1f\x8f\xbf\xbe\xc3\xdc\x0d\x84\xd0\xba\x61\xdc\x32\x39\xd4\xa2\x68\x0c\x14\x7c\xd9\xeb\xc6\x21\xba\xf2\x42\x94\xb2\x3d\x96\x38\x70\x1d\xb6\xee\x29\xf7\xd6\x7d\x5b\xa1\xd2\x25\xad\x48\xc3\xed\xed\xc1\x98\xe2\xa3\xfc\x9e\x96\xac\x11\xd1\xc1\xeb\x23\xbb\x57\xb6\x83\x48\xf1\x51\xbe\x76\x93\x10\x4e\x5d\x0c\xda\xda\x6b\x03\xe3\x0b\x5f\xd4\x68\x96\xe2\xaf\x97\xcb\x77\xf3\xd5\x65\x1e\x79\xb3\x60\x39\xf3\x26\xa7\x34\xf6\xe6\xf1\x72\xe5\xc5\x93\x8b\xe5\x6a\x95\xcf\x83\x28\xb8\xf8\x36\x5a\x28\xaf\x58\x27\xdd\xfe\x83\xa6\x87\x93\x85\xe1\xb0\x74\xf4\x90\xec\x90\xe2\xcd\x51\x97\xe2\xd1\xa1\xa7\xdf\xbd\x01\xa0\x3d\xe6\x3e\x8f\xa6\xc1\x79\x1c\x06\x5e\x7e\x1a\x84\xde\x64\x4a\x66\xde\x6c\x7a\x1a\x7b\x79\x1c\x46\xab\xe9\x64\x79\x19\xe7\xf1\x88\x7b\xfc\xc2\xb5\x13\xf8\x61\xd8\x2f\x30\x47\x3e\x5e\x58\x26\x28\x67\x72\xdf\xab\x7d\x87\xc6\x5a\x68\x12\x1c\xff\x90\x84\xbf\xef\x84\x7f\xfc\x73\xc9\x7e\x03\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x92\x41\xfb\xa4\x8d\x01\x00\x00\xd1\x02\x00\x00\x11\x00\x08\x01\x64\x6f\x63\x50\x72\x6f\x70\x73\x2f\x63\x6f\x72\x65\x2e\x78\x6d\x6c\x20\xa2\x04\x01\x28\xa0\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xac\x92\xcb\x4a\x03\x31\x14\x86\xf7\x82\xef\x30\x64\xdf\xa6\xd3\x62\x91\x61\x3a\x05\x95\xae\x14\x04\x2b\x8a\xbb\x90\x9c\xb6\x83\x33\x99\x21\x89\xd6\xee\x4a\x8b\x82\x20\xa8\x5b\xe9\xa2\x88\x0b\x2f\xa0\xa0\x2b\x2f\xf8\x32\xb1\xfa\x1a\x66\xa6\x17\x2b\xba\x12\x21\x8b\x24\xe7\x3f\x1f\xff\xf9\x13\xb7\xbc\x17\x06\xd6\x2e\x08\xe9\x47\xbc\x84\xec\x6c\x0e\x59\xc0\x69\xc4\x7c\x5e\x2f\xa1\xf5\x6a\x25\x33\x8f\x2c\xa9\x08\x67\x24\x88\x38\x94\x50\x0b\x24\x2a\x7b\xb3\x33\x2e\x8d\x1d\x1a\x09\x58\x15\x51\x0c\x42\xf9\x20\x2d\x43\xe2\xd2\xa1\x71\x09\x35\x94\x8a\x1d\x8c\x25\x6d\x40\x48\x64\xd6\x28\xb8\x29\xd6\x22\x11\x12\x65\x8e\xa2\x8e\x63\x42\xb7\x49\x1d\x70\x3e\x97\x2b\xe2\x10\x14\x61\x44\x11\x9c\x00\x33\xf1\x84\x88\x46\x48\x46\x27\xc8\x78\x47\x04\x29\x80\x51\x0c\x01\x84\xc0\x95\xc4\x76\xd6\xc6\x5f\x5a\x05\x22\x94\xbf\x36\xa4\x95\x29\x65\xe8\xab\x56\x6c\x66\x1a\xd9\x9d\x66\x33\x3a\x2c\x4e\xd4\x7b\xd2\x9f\x08\x9b\xcd\x66\xb6\x59\x48\x6d\x18\xff\x36\xde\x5c\x59\x5e\x4b\x47\xcd\xf8\x3c\xc9\x8a\x02\xf2\x5c\x46\x1d\x2a\x80\xa8\x48\x78\xba\x7d\xf2\xde\xbf\x1e\xbc\x1c\xbf\xbd\x9c\x7d\x5c\xbc\xea\xce\xa5\xee\xf6\x75\xe7\x51\x77\xee\x92\x7d\xe7\x5c\x77\x9f\x75\xf7\x4a\x77\x7b\xba\x7d\x6a\x0d\x6e\x0f\xdf\xef\x1f\x06\x07\xfb\xba\xdd\xfe\xb8\xe9\xbd\x3d\x1d\xb9\x78\x0a\x96\x04\x1f\x10\xa9\x56\xcc\x1b\xd5\x7c\x60\x0b\xad\x7f\xe0\xff\x64\x1a\xff\x69\x5c\xc3\x21\x80\x59\x26\x00\x67\x18\xd7\xb8\xb2\x51\x58\x5c\xaa\x56\x90\x97\xcf\xe5\x8b\x19\xdb\x36\xab\x6a\xcf\x39\x73\xb6\x53\x28\x6e\x25\x96\xbf\xf5\x27\x81\x0c\x2f\xc2\x91\xf1\x3f\x13\xc7\x00\xcf\xc5\x3f\x3e\xa1\xf7\x09\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xde\xd9\x7d\x8f\x9d\x01\x00\x00\x19\x03\x00\x00\x10\x00\x08\x01\x64\x6f\x63\x50\x72\x6f\x70\x73\x2f\x61\x70\x70\x2e\x78\x6d\x6c\x20\xa2\x04\x01\x28\xa0\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x9c\x92\xb1\x6e\xdb\x30\x10\x86\xf7\x02\x7d\x07\x81\x7b\x4c\x39\x0d\x82\xc0\xa0\x18\x14\x4e\x8b\x0c\x29\x6a\xc0\x76\x76\x86\x3a\x59\x44\x29\x92\x20\x2f\x82\xdd\x31\x5e\xfa\x36\x19\xb3\xf4\x6d\xfc\x22\x39\x49\x88\x23\xb7\x9d\xba\xdd\xdd\x7f\xfc\xf9\xf1\x78\xe2\x7a\xdb\xd8\xac\x85\x98\x8c\x77\x05\x9b\x4e\x72\x96\x81\xd3\xbe\x34\x6e\x53\xb0\xf5\xea\xeb\xd9\x15\xcb\x12\x2a\x57\x2a\xeb\x1d\x14\x6c\x07\x89\x5d\xcb\x8f\x1f\xc4\x22\xfa\x00\x11\x0d\xa4\x8c\x2c\x5c\x2a\x58\x8d\x18\x66\x9c\x27\x5d\x43\xa3\xd2\x84\x64\x47\x4a\xe5\x63\xa3\x90\xd2\xb8\xe1\xbe\xaa\x8c\x86\x1b\xaf\x1f\x1b\x70\xc8\xcf\xf3\xfc\x92\xc3\x16\xc1\x95\x50\x9e\x85\xa3\x21\x1b\x1c\x67\x2d\xfe\xaf\x69\xe9\x75\xc7\x97\xee\x57\xbb\x40\xc0\x52\x7c\x0e\xc1\x1a\xad\x90\x5e\x29\xbf\x19\x1d\x7d\xf2\x15\x66\x5f\xb6\x1a\xac\xe0\x63\x51\x10\xdd\x12\xf4\x63\x34\xb8\x93\xb9\xe0\xe3\x54\x2c\xb5\xb2\x30\x27\x63\x59\x29\x9b\x40\xf0\xf7\x82\xb8\x05\xd5\x0d\x6d\xa1\x4c\x4c\x52\xb4\x38\x6b\x41\xa3\x8f\x59\x32\x3f\x69\x6c\xe7\x2c\x7b\x50\x09\x3a\x9c\x82\xb5\x2a\x1a\xe5\x90\xb0\xba\xb6\x21\xe9\x63\x1b\x12\x46\x79\xd8\x3f\x1f\xf6\xbf\x0f\x4f\xcf\x87\xa7\x97\x2e\xd8\xff\x12\x9c\x1a\x07\xb1\x0f\xc7\x67\xc6\xb1\xb9\x90\xd3\xbe\x81\x82\xd3\xc6\xce\x60\x00\x22\xe1\x14\x75\x65\xd0\x42\xfa\x5e\x2d\x54\xc4\x7f\x90\x4f\xc7\xe4\x3d\xc3\xc0\x3d\xe0\x2c\x6b\x00\x1c\xee\x1c\xf3\xf5\x4f\xa7\x9b\xfe\xf0\x9e\xfb\x26\x28\xb7\x23\xe1\x18\xdd\x19\xf7\x23\xad\xc3\xca\xdf\x28\x84\xb7\xb1\x9e\x16\xc5\xb2\x56\x11\x4a\xfa\x89\xe3\xd8\x8f\x05\x71\x4b\x13\x8d\xb6\x33\x99\xd7\xca\x6d\xa0\x7c\xeb\xf9\x5b\xe8\x96\xe0\x7e\xd8\x74\x39\xbd\x9c\xe4\x9f\x72\xfa\xdf\x51\x4d\xf0\xf7\x9d\x96\xaf\x00\x00\x00\xff\xff\x03\x00\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xa4\x53\xc5\xcf\x4e\x01\x00\x00\x08\x04\x00\x00\x13\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x5b\x43\x6f\x6e\x74\x65\x6e\x74\x5f\x54\x79\x70\x65\x73\x5d\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xb5\x55\x30\x23\xf4\x00\x00\x00\x4c\x02\x00\x00\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x87\x03\x00\x00\x5f\x72\x65\x6c\x73\x2f\x2e\x72\x65\x6c\x73\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x84\xfb\xe5\xcc\xd2\x03\x00\x00\x9b\x09\x00\x00\x0f\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xac\x06\x00\x00\x78\x6c\x2f\x77\x6f\x72\x6b\x62\x6f\x6f\x6b\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x8d\x87\xda\x70\xe0\x00\x00\x00\x2d\x02\x00\x00\x1a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xab\x0a\x00\x00\x78\x6c\x2f\x5f\x72\x65\x6c\x73\x2f\x77\x6f\x72\x6b\x62\x6f\x6f\x6b\x2e\x78\x6d\x6c\x2e\x72\x65\x6c\x73\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xc6\xad\x73\xdb\xd8\x01\x00\x00\xe9\x03\x00\x00\x18\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xcb\x0c\x00\x00\x78\x6c\x2f\x77\x6f\x72\x6b\x73\x68\x65\x65\x74\x73\x2f\x73\x68\x65\x65\x74\x31\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xed\x55\xd4\xc8\xc5\x07\x00\x00\x15\x22\x00\x00\x13\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xd9\x0e\x00\x00\x78\x6c\x2f\x74\x68\x65\x6d\x65\x2f\x74\x68\x65\x6d\x65\x31\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x26\xad\xda\xcd\xc9\x02\x00\x00\xa2\x06\x00\x00\x0d\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xcf\x16\x00\x00\x78\x6c\x2f\x73\x74\x79\x6c\x65\x73\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x92\x41\xfb\xa4\x8d\x01\x00\x00\xd1\x02\x00\x00\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xc3\x19\x00\x00\x64\x6f\x63\x50\x72\x6f\x70\x73\x2f\x63\x6f\x72\x65\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xde\xd9\x7d\x8f\x9d\x01\x00\x00\x19\x03\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x87\x1c\x00\x00\x64\x6f\x63\x50\x72\x6f\x70\x73\x2f\x61\x70\x70\x2e\x78\x6d\x6c\x50\x4b\x05\x06\x00\x00\x00\x00\x09\x00\x09\x00\x3e\x02\x00\x00\x5a\x1f\x00\x00\x00\x00";
+        type Geometry=(u32,Option<f32>,bool,bool,bool,bool);
+        let cases:Vec<(u32,u32,Vec<Geometry>)>=serde_json::from_str(r####"[[169,0,[[1,null,false,false,false,false]]],[169,1,[[1,15.75,false,false,false,true]]],[169,2,[[1,15.75,false,false,false,true],[2,15.75,false,false,true,false]]],[169,3,[[1,15.75,false,false,false,true],[2,15.75,false,false,true,false]]],[169,4,[[1,15.75,false,false,false,true],[2,15.75,false,false,true,false]]],[169,5,[[1,15.75,false,false,false,true],[2,15.75,false,false,true,false]]],[169,6,[[1,15.75,false,false,false,true],[2,15.75,false,false,true,false]]],[169,7,[[1,15.75,false,false,false,true],[2,16.5,false,false,true,true],[3,15.75,false,false,true,false]]],[169,8,[[1,21.95,true,false,false,true],[2,15.75,false,false,true,false]]],[169,9,[[1,21.95,true,false,false,true],[2,21.95,true,false,true,false]]],[169,10,[[1,27.0,false,false,false,true],[2,15.75,false,false,true,false]]],[169,11,[[1,180.75,false,false,false,true],[2,15.75,false,false,true,false]]],[169,12,[[1,35.25,false,false,false,true],[2,35.25,false,false,true,false]]],[169,13,[[1,null,false,false,false,false]]],[169,14,[[2,15.75,false,false,false,true],[3,null,false,true,false,false],[4,15.75,false,false,true,false]]],[169,15,[[1,15.75,false,false,true,false]]],[170,0,[[2,15.75,false,false,false,true],[3,null,false,true,false,false],[4,15.75,false,false,true,false]]],[170,1,[[2,15.75,false,false,false,true],[3,15.75,false,true,true,false],[4,15.75,false,false,true,false]]],[170,2,[[2,15.75,false,false,false,true],[3,null,false,true,false,false],[4,15.75,false,false,true,false]]],[170,3,[[3,15.75,false,true,false,true]]],[170,4,[[3,15.75,false,true,true,false]]],[170,5,[[1,15.75,false,false,false,true],[2,null,false,true,false,false],[3,null,false,true,false,false],[4,null,false,true,false,false],[5,15.75,false,false,true,false]]],[171,0,[[2,15.75,false,true,false,true]]],[171,1,[[2,15.75,false,true,true,false]]],[171,2,[[2,15.75,false,false,false,true],[3,15.75,false,false,true,false]]],[171,3,[[2,15.75,false,false,false,true],[3,15.75,false,true,true,false],[4,15.75,false,false,true,false]]]]"####).unwrap();
+        fn geometry(sheet:&crate::ir::Sheet)->Vec<Geometry> {
+            sheet.rows.iter().map(|r|(r.index,r.height,r.custom_height,r.hidden,r.thick_top,r.thick_bottom))
+                .filter(|r|r.1.is_some()||r.2||r.3||r.4||r.5).collect()
+        }
+        fn set_geometry(sheet:&mut crate::ir::Sheet, rows:&[Geometry]) {
+            sheet.rows=rows.iter().map(|&(index,height,custom_height,hidden,thick_top,thick_bottom)|crate::ir::Row {
+                index,height,custom_height,hidden,thick_top,thick_bottom,cells:Vec::new(),format_recorded: None, style_font:None
+            }).collect();
+        }
+        let mut failures=Vec::new();
+        for (version,mode,rows) in cases {
+            let expected:Vec<_>=rows.iter().copied().filter(|r|r.1.is_some()||r.2||r.3||r.4||r.5).collect();
+            for added in [false,true] {
+                let mut editor=XlsxEditor::new(BEFORE).unwrap();let mut book=editor.workbook().clone();
+                let target=if added {let mut sheet=book.sheets[0].clone();sheet.origin_id=None;sheet.name="PaddingCopy".into();
+                    book.sheets.push(sheet);book.sheets.len()-1} else {0};
+                set_geometry(&mut book.sheets[target],&rows);
+                editor.apply_workbook(&book).unwrap();let saved=editor.save().unwrap();
+                let parsed=crate::parse_xlsx(&saved).unwrap();let actual=geometry(&parsed.sheets[target]);
+                if actual!=expected {failures.push(format!("Native{version}/{mode} added={added}: {actual:?} != {expected:?}"));}
+                let mut noop=XlsxEditor::new(&saved).unwrap();noop.apply_workbook(&parsed).unwrap();
+                assert_eq!(noop.save().unwrap(),saved,"unchanged flags must retain exact package bytes");
+                let mut clear=XlsxEditor::new(&saved).unwrap();let mut book=clear.workbook().clone();
+                for row in &mut book.sheets[target].rows {row.thick_top=false;row.thick_bottom=false;}
+                clear.apply_workbook(&book).unwrap();let cleared=clear.save().unwrap();
+                let parsed=crate::parse_xlsx(&cleared).unwrap();
+                if parsed.sheets[target].rows.iter().any(|r|r.thick_top||r.thick_bottom) {
+                    failures.push(format!("Native{version}/{mode} added={added}: stale thickness after clear"));
+                }
+                // Native169/13 saves no padded neighbor row after clearing.
+                // Removing an empty automatic cache must clear its old height
+                // as well as its thickness bits in the original worksheet.
+                let mut remove=XlsxEditor::new(&saved).unwrap();let mut book=remove.workbook().clone();
+                book.sheets[target].rows.clear();remove.apply_workbook(&book).unwrap();
+                let removed=remove.save().unwrap();let parsed=crate::parse_xlsx(&removed).unwrap();
+                let remaining=geometry(&parsed.sheets[target]);
+                if !remaining.is_empty() {failures.push(format!("Native{version}/{mode} added={added}: removed cache retained {remaining:?}"));}
+            }
+        }
+        assert!(failures.is_empty(),"{} native cache histories differ:\n{}",failures.len(),failures.join("\n"));
+    }
+
+    #[test]
+    fn edited_components_preserve_native_resource_bindings() {
+        const BEFORE:&[u8]=b"\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xa4\x53\xc5\xcf\x4e\x01\x00\x00\x08\x04\x00\x00\x13\x00\x08\x02\x5b\x43\x6f\x6e\x74\x65\x6e\x74\x5f\x54\x79\x70\x65\x73\x5d\x2e\x78\x6d\x6c\x20\xa2\x04\x02\x28\xa0\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xac\x93\xcb\x4e\xc3\x30\x10\x45\xf7\x48\xfc\x43\xe4\x2d\x8a\xdd\xb2\x40\x08\x35\xed\x82\xc7\x12\xba\x28\x1f\x60\xe2\x49\x62\xd5\x2f\x79\xdc\xd2\xfe\x3d\x13\xf7\xb1\x40\xa1\x15\x6a\x37\xb1\x62\xcf\xdc\x73\x3d\x33\x9e\xcc\x36\xd6\x14\x6b\x88\xa8\xbd\xab\xd8\x98\x8f\x58\x01\xae\xf6\x4a\xbb\xb6\x62\x9f\x8b\xb7\xf2\x91\x15\x98\xa4\x53\xd2\x78\x07\x15\xdb\x02\xb2\xd9\xf4\xf6\x66\xb2\xd8\x06\xc0\x82\xb2\x1d\x56\xac\x4b\x29\x3c\x09\x81\x75\x07\x56\x22\xf7\x01\x1c\x9d\x34\x3e\x5a\x99\xe8\x37\xb6\x22\xc8\x7a\x29\x5b\x10\xf7\xa3\xd1\x83\xa8\xbd\x4b\xe0\x52\x99\x7a\x0d\x36\x9d\xbc\x40\x23\x57\x26\x15\xaf\x1b\xda\xde\x39\x89\x60\x90\x15\xcf\xbb\xc0\x9e\x55\x31\x19\x82\xd1\xb5\x4c\xe4\x54\xac\x9d\xfa\x45\x29\xf7\x04\x4e\x99\x39\x06\x3b\x1d\xf0\x8e\x6c\x30\x31\x48\xe8\x4f\xfe\x06\xec\xf3\x3e\xa8\x34\x51\x2b\x28\xe6\x32\xa6\x77\x69\xc9\x86\xd8\x18\xf1\xed\xe3\xf2\xcb\xfb\x25\x3f\x2d\x32\xe0\xd2\x37\x8d\xae\x41\xf9\x7a\x65\xa9\x02\x1c\x43\x04\xa9\xb0\x03\x48\xd6\xf0\xbc\x72\x2b\xb5\x3b\xf8\x3e\xc1\xcf\xc1\x28\xf2\x32\xbe\xb2\x91\xfe\x7e\x59\xf8\x8c\x8f\x44\xfd\x06\x91\xbf\x97\x5b\xc8\x32\x67\x80\x98\xb6\x06\xf0\xda\x65\xcf\xa2\xa7\xc8\xd4\xaf\x79\xf4\x01\x69\x72\x23\xfc\x9f\x7e\x18\xcd\x3e\xbb\x0c\x24\x04\x31\x69\x38\x0e\xe7\x50\x93\x8f\x44\x9a\xfa\x8b\xaf\x0b\xfd\xbb\x52\xa0\x06\xd8\x22\xbf\xe3\xe9\x0f\x00\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xb5\x55\x30\x23\xf4\x00\x00\x00\x4c\x02\x00\x00\x0b\x00\x08\x02\x5f\x72\x65\x6c\x73\x2f\x2e\x72\x65\x6c\x73\x20\xa2\x04\x02\x28\xa0\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xac\x92\x4d\x4f\xc3\x30\x0c\x86\xef\x48\xfc\x87\xc8\xf7\xd5\xdd\x90\x10\x42\x4b\x77\x41\x48\xbb\x21\x54\x7e\x80\x49\xdc\x0f\xb5\x8d\xa3\x24\x1b\xdd\xbf\x27\x1c\x10\x54\x1a\x83\x03\x47\x7f\xbd\x7e\xfc\xca\xdb\xdd\x3c\x8d\xea\xc8\x21\xf6\xe2\x34\xac\x8b\x12\x14\x3b\x23\xb6\x77\xad\x86\x97\xfa\x71\x75\x07\x2a\x26\x72\x96\x46\x71\xac\xe1\xc4\x11\x76\xd5\xf5\xd5\xf6\x99\x47\x4a\x79\x28\x76\xbd\x8f\x2a\xab\xb8\xa8\xa1\x4b\xc9\xdf\x23\x46\xd3\xf1\x44\xb1\x10\xcf\x2e\x57\x1a\x09\x13\xa5\x1c\x86\x16\x3d\x99\x81\x5a\xc6\x4d\x59\xde\x62\xf8\xae\x01\xd5\x42\x53\xed\xad\x86\xb0\xb7\x37\xa0\xea\x93\xcf\x9b\x7f\xd7\x96\xa6\xe9\x0d\x3f\x88\x39\x4c\xec\xd2\x99\x15\xc8\x73\x62\x67\xd9\xae\x7c\xc8\x6c\x21\xf5\xf9\x1a\x55\x53\x68\x39\x69\xb0\x62\x9e\x72\x3a\x22\x79\x5f\x64\x6c\xc0\xf3\x44\x9b\xbf\x13\xfd\x7c\x2d\x4e\x9c\xc8\x52\x22\x34\x12\xf8\x32\xcf\x47\xc7\x25\xa0\xf5\x7f\x5a\xb4\x34\xf1\xcb\x9d\x79\xc4\x37\x09\xc3\xab\xc8\xf0\xc9\x82\x8b\x1f\xa8\xde\x01\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xa4\xca\xd8\x85\xce\x03\x00\x00\x9b\x09\x00\x00\x0f\x00\x00\x00\x78\x6c\x2f\x77\x6f\x72\x6b\x62\x6f\x6f\x6b\x2e\x78\x6d\x6c\xac\x56\xdb\x6e\xe3\x36\x10\x7d\x2f\xd0\x7f\x10\xf4\xce\x88\xd4\xcd\x96\x10\x67\xa1\x2b\x1a\x20\x59\x04\x89\x37\x69\x01\x03\x0b\x46\xa2\x63\x36\x92\xa8\x52\x94\xed\x20\xd8\x7f\xef\x50\xb6\x9c\x5b\x51\xb8\xd9\x1a\x36\x29\x92\xc3\xc3\x33\x33\x67\x28\x9f\x7e\xd9\xd6\x95\xb1\x66\xb2\xe3\xa2\x99\x99\xe4\x04\x9b\x06\x6b\x0a\x51\xf2\xe6\x61\x66\x7e\x9b\xe7\x68\x6a\x1a\x9d\xa2\x4d\x49\x2b\xd1\xb0\x99\xf9\xc4\x3a\xf3\xcb\xd9\xaf\xbf\x9c\x6e\x84\x7c\xbc\x17\xe2\xd1\x00\x80\xa6\x9b\x99\x2b\xa5\xda\xd0\xb2\xba\x62\xc5\x6a\xda\x9d\x88\x96\x35\xb0\xb2\x14\xb2\xa6\x0a\x86\xf2\xc1\xea\x5a\xc9\x68\xd9\xad\x18\x53\x75\x65\xd9\x18\xfb\x56\x4d\x79\x63\xee\x10\x42\x79\x0c\x86\x58\x2e\x79\xc1\x52\x51\xf4\x35\x6b\xd4\x0e\x44\xb2\x8a\x2a\xa0\xdf\xad\x78\xdb\x8d\x68\x75\x71\x0c\x5c\x4d\xe5\x63\xdf\xa2\x42\xd4\x2d\x40\xdc\xf3\x8a\xab\xa7\x01\xd4\x34\xea\x22\x3c\x7f\x68\x84\xa4\xf7\x15\xb8\xbd\x25\x9e\xb1\x95\xf0\xf5\xe1\x47\x30\x34\xf6\x78\x12\x2c\x7d\x38\xaa\xe6\x85\x14\x9d\x58\xaa\x13\x80\xb6\x76\xa4\x3f\xf8\x4f\xb0\x45\xc8\x9b\x10\x6c\x3f\xc6\xe0\x38\x24\xd7\x92\x6c\xcd\x75\x0e\x0f\xac\xa4\xff\x49\x56\xfe\x01\xcb\x7f\x01\x23\xf8\xa7\xd1\x08\x48\x6b\xd0\x4a\x08\xc1\xfb\x24\x9a\x77\xe0\x66\x9b\x67\xa7\x4b\x5e\xb1\xdb\x9d\x74\x0d\xda\xb6\x5f\x69\xad\x33\x55\x99\x46\x45\x3b\x95\x95\x5c\xb1\x72\x66\x4e\x60\x28\x36\xec\xcd\x84\xec\xdb\xb8\xe7\x15\xac\x3a\xd8\xb3\x27\xa6\x75\x76\x90\xf3\x95\x34\x4a\xb6\xa4\x7d\xa5\xe6\x20\xe4\x11\x7e\x66\xda\xd8\x76\x30\xd6\x96\x20\x8c\xa8\x52\x4c\x36\x54\xb1\x44\x34\x0a\x74\xb8\xf7\xeb\x67\x35\x37\x60\x27\x2b\x01\x0a\x37\xae\xd9\x5f\x3d\x97\x0c\x0a\x0b\xf4\x05\xbe\x42\x4b\x8b\x90\xde\x77\x57\x54\xad\x8c\x5e\x56\x33\x33\x09\x17\xdf\x3a\x70\x7f\x21\x9f\xfa\x3f\xf9\x22\x6a\xdb\x94\x2a\xba\xb8\x10\x05\xad\x16\x73\x56\xb7\x0b\xb1\xe5\x68\x7d\x4f\xd1\x86\x76\x35\x2a\x28\x94\x26\x02\x3f\x7c\x82\x1d\xb2\x78\x25\x5f\xfa\xb1\x56\xfe\x83\x80\x69\xa1\xa3\x62\x41\x58\x76\xd4\x77\xcf\xef\x43\x04\x1e\xc8\x70\x14\xe9\x95\x92\x06\x3c\x9f\xa7\x17\x90\xa8\x1b\xba\x86\xb4\x81\x38\xca\x7d\x55\x9f\x43\x5e\xa6\xdf\x9f\x49\x1c\xf8\x11\x49\x13\x64\x7b\xb1\x8d\x5c\xdb\xf1\x50\x90\x4f\x63\x94\xc6\xae\x93\x67\x78\x92\xf8\x7e\xfa\x03\xbc\x90\x7e\x58\x08\xda\xab\xd5\x5e\x0a\x1a\x73\x66\xba\x90\xf7\x0f\x4b\x97\x74\x3b\xae\x10\x1c\xf6\xbc\x7c\x39\xff\x19\xef\x3f\x48\xf7\xef\x9a\x71\xed\x87\xf6\x54\x5f\x7a\xb7\x9c\x6d\xba\x17\xd1\xe8\xa1\xb1\xbd\xe3\x4d\x29\x36\x33\x13\x11\x1b\xbc\x79\x7a\x3b\xdc\x0c\x8b\x77\xbc\x54\x2b\x10\x53\x80\x5d\x30\xd9\xcd\xfd\xc6\xf8\xc3\x0a\x18\x13\x6f\xa2\xf7\x41\x71\x68\x66\x33\xf3\x39\xb7\xfd\xcc\x4d\xd2\x08\xf9\x49\x90\x20\x77\xe2\xc6\x28\xb0\x53\x82\xe2\x2c\xf2\x71\x9e\xc5\x8e\x8d\xbd\x81\x91\xf5\x8a\xd2\x70\xbd\x02\xb5\xa1\x37\x9a\xa1\x24\x6e\xf4\x95\x4b\xe0\x1e\xd7\xbd\x8e\x2e\x3c\xcb\x50\x9f\x21\xcf\x4b\x32\x64\x6f\xdc\x06\xd2\x29\xa0\x04\x74\x37\x18\x06\x04\xdb\x81\xb6\x60\x5b\x75\xd1\xa9\xa1\x07\xf5\x71\xa0\x47\x5c\x1c\x4d\x70\xe0\x22\x9c\x41\x6a\xdc\x69\x60\xa3\xa9\xeb\xd8\x28\x71\x53\x3b\xf3\x26\x59\x9a\xc5\x40\x6f\x2c\xf9\xff\xe1\x92\x1c\x8a\x20\x1c\xdf\x3b\x9a\xe5\x8a\x4a\x35\x97\xb4\x78\x84\xb7\xd5\x35\x5b\xc6\xb4\x03\x25\xed\x1c\x02\xbe\xaf\xc9\xc6\xde\x34\xc6\x0e\x50\x74\x73\x92\x23\x97\x04\x18\xc5\xb1\xef\x22\x2f\xcd\x1d\x6f\x02\x2a\xcb\xbc\xfc\x85\xac\x76\x7f\xf9\xc9\x2b\x6a\x6a\x0d\xbb\x19\x55\x3d\x94\xaf\xae\xdc\x61\x1c\xea\x36\xdf\xcf\x1e\x26\x97\xbb\x89\x7d\x9e\xde\x14\x5d\x78\x9d\xea\xb8\xef\x77\xff\x9b\xe1\x0d\x78\x5f\xb1\x23\x8d\xf3\xdb\x23\x0d\x93\xaf\x97\xf3\xcb\x23\x6d\x2f\xb2\xf9\xf7\xbb\xfc\x58\xe3\xe8\x32\x4e\xa3\xe3\xed\xa3\xeb\xeb\xe8\x8f\x79\xf6\xfb\x78\x84\xf5\x8f\x01\xb5\xde\x25\x3c\x25\x6e\x80\x9d\x2c\x42\x8e\x93\xb8\x50\x3c\xf9\x04\x4d\x73\xec\x21\x07\xea\x28\xf1\xdc\x38\x23\x78\xf2\x92\xf0\x6a\x53\xac\x3f\x97\x6f\xdb\xb5\x46\x45\x26\xaf\xff\x45\xec\x2f\x23\x9d\x7f\x0d\x1e\xee\xff\x62\x19\x1d\x53\xfb\x25\xb8\x06\x86\xd2\x1b\x88\x6b\xfa\x43\x7d\x1d\xd0\xce\xfe\x06\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x8d\x87\xda\x70\xe0\x00\x00\x00\x2d\x02\x00\x00\x1a\x00\x08\x01\x78\x6c\x2f\x5f\x72\x65\x6c\x73\x2f\x77\x6f\x72\x6b\x62\x6f\x6f\x6b\x2e\x78\x6d\x6c\x2e\x72\x65\x6c\x73\x20\xa2\x04\x01\x28\xa0\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xac\x91\xcb\x6a\xc3\x30\x10\x45\xf7\x85\xfe\x83\x98\x7d\x3d\x76\x0a\xa5\x94\xc8\xd9\x94\x42\xb6\xc5\xfd\x00\x21\x8f\x1f\xc4\x96\x84\x66\x92\xd6\x7f\x5f\xe1\x82\xdd\x40\x48\x36\xd9\x08\xae\x06\xdd\x73\x24\x6d\x77\x3f\xe3\xa0\x4e\x14\xb9\xf7\x4e\x43\x91\xe5\xa0\xc8\x59\x5f\xf7\xae\xd5\xf0\x55\x7d\x3c\xbd\x82\x62\x31\xae\x36\x83\x77\xa4\x61\x22\x86\x5d\xf9\xf8\xb0\xfd\xa4\xc1\x48\x3a\xc4\x5d\x1f\x58\xa5\x16\xc7\x1a\x3a\x91\xf0\x86\xc8\xb6\xa3\xd1\x70\xe6\x03\xb9\x34\x69\x7c\x1c\x8d\xa4\x18\x5b\x0c\xc6\x1e\x4c\x4b\xb8\xc9\xf3\x17\x8c\xff\x3b\xa0\x3c\xeb\x54\xfb\x5a\x43\xdc\xd7\xcf\xa0\xaa\x29\x24\xf2\xed\x6e\xdf\x34\xbd\xa5\x77\x6f\x8f\x23\x39\xb9\x80\x40\x96\x69\x48\x17\x50\x95\x89\x2d\x89\x86\xbf\x9c\x25\x47\xc0\xcb\xf8\xcd\x3d\xf1\x92\x9e\x85\x56\xfa\x1c\x71\x5e\x8b\x6b\x0e\xc5\x3d\x1d\xbe\x7d\x3c\x70\x47\x24\xab\xc7\xb2\xc5\x38\x4f\x16\x19\x3c\xfb\xe4\xf2\x17\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xa8\x22\x77\x7a\x29\x02\x00\x00\x7e\x04\x00\x00\x18\x00\x00\x00\x78\x6c\x2f\x77\x6f\x72\x6b\x73\x68\x65\x65\x74\x73\x2f\x73\x68\x65\x65\x74\x31\x2e\x78\x6d\x6c\x9c\x94\x59\x8b\xdb\x30\x10\xc7\xdf\x0b\xfd\x0e\x42\xef\x89\x6c\xc7\xb9\x8c\xed\x65\x73\xd1\x7d\x28\x94\x9e\xcf\x8a\x3c\xb6\x45\x2c\xcb\x48\xca\xb1\x94\x7e\xf7\x1d\x39\x9b\x6c\x21\xa5\x84\x05\xdb\xe8\x9a\xdf\xfc\xe7\x90\xd3\x87\x93\x6a\xc8\x01\x8c\x95\xba\xcd\x68\x38\x0c\x28\x81\x56\xe8\x42\xb6\x55\x46\x7f\x7c\xdf\x0c\x66\x94\x58\xc7\xdb\x82\x37\xba\x85\x8c\x3e\x83\xa5\x0f\xf9\xc7\x0f\xe9\x51\x9b\x9d\xad\x01\x1c\x41\x42\x6b\x33\x5a\x3b\xd7\x25\x8c\x59\x51\x83\xe2\x76\xa8\x3b\x68\x71\xa7\xd4\x46\x71\x87\x53\x53\x31\xdb\x19\xe0\x45\x6f\xa4\x1a\x16\x05\xc1\x84\x29\x2e\x5b\x7a\x26\x24\xe6\x1e\x86\x2e\x4b\x29\x60\xa5\xc5\x5e\x41\xeb\xce\x10\x03\x0d\x77\xa8\xdf\xd6\xb2\xb3\x17\x9a\x12\xf7\xe0\x14\x37\xbb\x7d\x37\x10\x5a\x75\x88\xd8\xca\x46\xba\xe7\x1e\x4a\x89\x12\xc9\x53\xd5\x6a\xc3\xb7\x0d\xc6\x7d\x0a\x63\x2e\xc8\xc9\xe0\x13\xe1\x3b\xba\xb8\xe9\xd7\x6f\x3c\x29\x29\x8c\xb6\xba\x74\x43\x24\xb3\xb3\xe6\xdb\xf0\xe7\x6c\xce\xb8\xb8\x92\x6e\xe3\xbf\x0b\x13\xc6\xcc\xc0\x41\xfa\x02\xbe\xa1\xa2\xf7\x49\x0a\xc7\x57\x56\xf4\x06\x1b\xbd\x13\x36\xb9\xc2\x7c\xba\x4c\xb2\x97\x45\x46\x7f\x4f\xe7\xcb\x68\xb1\x9e\x2c\x07\xe3\x38\xda\x0c\xe2\xe5\x1a\x7b\x6c\x1e\xcc\x06\xb3\x69\x38\x5d\xad\x17\xf3\x70\x31\x5a\xfc\xa1\x79\x5a\x48\xac\xb0\x8f\x8a\x18\x28\x33\xfa\x18\x26\x8b\x90\xb2\x3c\xed\xfb\xe7\xa7\x84\xa3\xfd\x6b\x4c\x1c\xdf\x7e\x83\x06\x84\x03\xf4\x11\x52\xe2\xdb\x73\xab\xf5\xce\x1f\x7c\xc2\xa5\xc0\x9b\xb2\x1b\xdb\x4d\xdf\x9e\x5f\x0c\x29\xa0\xe4\xfb\xc6\x7d\xd5\xc7\x4f\x20\xab\xda\x21\x64\x8c\xa2\x7d\xd5\x93\xe2\x79\x05\x56\x60\xbb\x21\x66\x18\x8d\x3d\x49\xe8\x06\xdd\xe3\x97\x28\xe9\xef\x0d\xb6\x0b\x3f\x65\x14\x93\x76\x94\x85\xab\x71\x25\xa6\x64\x0b\xd6\x6d\xa4\x47\x51\x22\xf6\xd6\x69\xf5\xeb\x75\xb3\x17\x73\x66\xf4\x92\x56\xdc\xf1\x3c\x35\xfa\x48\xb0\x09\xf0\xb4\xed\xb8\xbf\x52\x61\x82\x40\xaf\x25\xc2\xb5\x7f\x68\x19\x8d\x31\x4f\xc2\xdb\x3c\x7a\x23\x6f\x9a\xa7\x87\x3c\x8c\x46\xf1\x78\x32\x9d\xa5\xec\x80\x31\x8b\xd7\x23\x98\xbd\xff\x1c\x61\xe8\xfc\x92\xa0\xb3\x9a\x8e\x57\xf0\x99\x9b\x4a\xb6\x96\x34\x50\xf6\xc1\x4f\x29\x31\xe7\xec\x04\x43\x1c\x3b\xdd\xf9\x94\x4c\x31\x53\x5b\xed\x30\xbe\xcb\xac\xc6\x7b\x0e\x28\x2b\x18\x62\xe5\x4b\xad\xdd\x65\xe2\x8b\x70\xfd\x73\xe4\x2f\x00\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xed\x55\xd4\xc8\xc5\x07\x00\x00\x15\x22\x00\x00\x13\x00\x00\x00\x78\x6c\x2f\x74\x68\x65\x6d\x65\x2f\x74\x68\x65\x6d\x65\x31\x2e\x78\x6d\x6c\xec\x5a\xdd\x6b\x24\xb9\x11\x7f\x0f\xe4\x7f\x10\xfd\x3e\x3b\xdd\x3d\xdf\x66\x67\x8f\xf9\x5c\xdf\xae\xed\x35\xeb\xd9\x0d\xf7\x28\xcf\x68\xa6\xb5\x56\xb7\x1a\x49\x63\x7b\x08\x07\x61\x0d\x07\xf7\x12\x08\x5c\x42\x5e\x12\xf2\x96\x87\x10\x72\x90\x83\x1c\x21\x90\x3f\xc6\xb0\x4b\x72\xf9\x23\x52\x52\xf7\x4c\xb7\x3c\x9a\xdb\xf5\x7e\x70\x97\x60\xfb\xa5\x5b\xf3\xab\xd2\xaf\xab\x4a\x55\xd5\x52\xdf\xff\xe4\x32\x66\xe8\x9c\x08\x49\x79\xd2\xf5\x82\x7b\xbe\x87\x48\x32\xe5\x33\x9a\x2c\xba\xde\xb3\xc9\xb8\xd2\xf6\x90\x54\x38\x99\x61\xc6\x13\xd2\xf5\x56\x44\x7a\x9f\x3c\xf8\xe9\x4f\xee\xe3\x3d\x15\x91\x98\x20\x90\x4f\xe4\x1e\xee\x7a\x91\x52\xe9\x5e\xb5\x2a\xa7\x30\x8c\xe5\x3d\x9e\x92\x04\x7e\x9b\x73\x11\x63\x05\xb7\x62\x51\x9d\x09\x7c\x01\x7a\x63\x56\x0d\x7d\xbf\x59\x8d\x31\x4d\x3c\x94\xe0\x18\xd4\x3e\x99\xcf\xe9\x94\xa0\xeb\xab\x2f\xae\xaf\xfe\x71\x7d\xf5\x7b\xef\xc1\x7a\x82\x11\x83\x59\x12\x25\xf5\xc0\x94\x89\x13\xad\x9e\x58\x52\x06\x3b\x3b\x0b\x34\x42\xae\xe4\x80\x09\x74\x8e\x59\xd7\x83\xb9\x66\xfc\x62\x42\x2e\x95\x87\x18\x96\x0a\x7e\xe8\x7a\xbe\xf9\xf3\xaa\x0f\xee\x57\xf1\x5e\x2e\xc4\xd4\x0e\xd9\x92\xdc\xd8\xfc\xe5\x72\xb9\xc0\xec\x2c\x34\x73\x8a\xc5\xe9\x66\x52\x7f\x14\xb6\xeb\xc1\x46\xbf\x01\x30\xb5\x8d\x1b\xb5\xf5\xff\x46\x9f\x01\xe0\xe9\x14\x9e\x34\xe3\x52\xd6\x19\x34\x9a\x7e\x3b\xcc\xb1\x25\x50\x76\xe9\xd0\xdd\x69\x05\x35\x1b\x5f\xd2\x5f\xdb\xe2\x1c\x74\x9a\xfd\xb0\x6e\xe9\x37\xa0\x4c\x7f\x7d\xfb\x19\xc7\x9d\xd1\xb0\x61\xe1\x0d\x28\xc3\x37\xb6\xf0\x3d\x3f\xec\x77\x6a\x16\xde\x80\x32\x7c\x73\x0b\x5f\x1f\xf5\x5a\xe1\xc8\xc2\x1b\x50\xc4\x68\x72\xb6\x8d\x6e\xb6\xda\xed\x66\x8e\xde\x40\xe6\x9c\xed\x3b\xe1\x9d\x66\xd3\x6f\x0d\x73\x78\x81\x82\x68\xd8\x44\x97\x9e\x62\xce\x13\xb5\x2b\xd6\x62\xfc\x82\x8b\x31\x00\x34\x90\x61\x45\x13\xa4\x56\x29\x99\xe3\x29\x44\x72\x2f\x55\x5c\xa2\x21\x95\x29\xc3\x2b\x0f\xa5\x38\xe1\x12\x86\xfd\x30\x08\x20\xf4\xea\x7e\xb8\xf9\x37\x16\xc7\x7b\x04\x97\xa4\x35\x2f\x60\x22\xb7\x86\x34\x1f\x24\xa7\x82\xa6\xaa\xeb\x3d\x02\xad\x5e\x09\xf2\xea\xdb\x6f\xaf\x5f\x7e\x73\xfd\xf2\x6f\xd7\x57\x57\xd7\x2f\xff\x82\x0e\xe8\x22\x52\x99\x2a\x4b\x6e\x1f\x27\x8b\xb2\xdc\x77\x7f\xfc\xd5\x7f\x7e\xf7\x0b\xf4\xef\xbf\xfe\xe1\xbb\xaf\x7e\xed\xc6\xcb\x32\xfe\xf5\x9f\xbf\x7c\xfd\xf7\x7f\x7e\x9f\x7a\x58\x6a\x85\x29\x5e\xfd\xe6\xeb\xd7\xdf\x7c\xfd\xea\xb7\xbf\xfc\xd7\x9f\xbe\x72\x68\xef\x09\x7c\x5a\x86\x4f\x68\x4c\x24\x3a\x22\x17\xe8\x29\x8f\xe1\x01\x8d\x29\x6c\xfe\xe4\x54\xdc\x4e\x62\x12\x61\x6a\x49\xe0\x08\x74\x3b\x54\x8f\x54\x64\x01\x8f\x56\x98\xb9\x70\x7d\x62\x9b\xf0\xb9\x80\x2c\xe3\x02\x3e\x5c\xbe\xb0\xb8\x9e\x44\x62\xa9\xa8\x63\xe6\xc7\x51\x6c\x01\x0f\x39\x67\x7d\x2e\x9c\x06\x78\xac\xe7\x2a\x59\x78\xb2\x4c\x16\xee\xc9\xc5\xb2\x8c\x7b\x8a\xf1\xb9\x6b\xee\x01\x4e\x2c\x07\x8f\x96\x29\xa4\x57\xea\x52\x39\x88\x88\x45\xf3\x98\xe1\x44\xe1\x05\x49\x88\x42\xfa\x37\x7e\x46\x88\xe3\xe9\x3e\xa3\xd4\xb2\xeb\x21\x9d\x0a\x2e\xf9\x5c\xa1\xcf\x28\xea\x63\xea\x34\xc9\x84\x9e\x5a\x81\x54\x08\xed\xd3\x18\xfc\xb2\x72\x11\x04\x57\x5b\xb6\x39\x7c\x8e\xfa\x9c\xb9\x9e\x7a\x48\xce\x6d\x24\x2c\x0b\xcc\x1c\xe4\x27\x84\x59\x66\x7c\x88\x97\x0a\xc7\x2e\x95\x13\x1c\xb3\xb2\xc1\x0f\xb0\x8a\x5c\x24\x4f\x56\x62\x5a\xc6\x8d\xa4\x02\x4f\x2f\x08\xe3\x68\x34\x23\x52\xba\x64\x9e\x08\x78\xde\x92\xd3\x1f\x63\x48\x6c\x4e\xb7\x1f\xb2\x55\x6c\x23\x85\xa2\x67\x2e\x9d\x07\x98\xf3\x32\x72\xc8\xcf\x06\x11\x8e\x53\x27\x67\x9a\x44\x65\xec\xa7\xf2\x0c\x42\x14\xa3\x63\xae\x5c\xf0\x43\x6e\xaf\x10\x7d\x0f\x7e\xc0\xc9\x4e\x77\x3f\xa7\xc4\x72\xf7\x9b\x13\xc1\x33\x48\x70\x65\x4a\x45\x80\xe8\x5f\x96\xc2\xe1\xcb\x87\x84\xdb\xeb\x71\xc5\xe6\x98\xb8\xb2\x4c\x4f\xc4\x56\x76\xed\x09\xea\x8c\x8e\xfe\x72\x61\x85\xf6\x01\x21\x0c\x5f\xe0\x19\x21\xe8\xd9\xa7\x0e\x06\x7d\x9e\x5a\x36\x2f\x48\x3f\x8a\x20\xab\xec\x13\x57\x60\x3d\xc2\x76\xac\xea\xfb\x84\x48\x82\x4c\x5f\xb3\x9d\x22\x0f\xa8\xb4\x42\xf6\x84\x2c\xf8\x0e\x3e\x87\xab\x1b\x89\x67\x85\x93\x18\x8b\x5d\x9a\x8f\xc0\xeb\x56\xe8\x9e\x0a\x58\x8c\x8e\xe7\x7c\xc2\xa6\x67\x65\xe0\x11\x85\x16\x10\xe2\xc5\x69\x94\x27\x12\x74\x94\x82\x7b\xb4\x4b\xeb\x71\x84\xad\xda\xa5\xef\xa5\x3b\x5e\x57\xc2\xf2\xdf\xdb\xac\x31\x58\x97\x2f\x6e\xbb\x2e\x41\x86\xdc\x5a\x06\x12\xfb\x5b\xdb\x66\x82\x99\x35\x41\x11\x30\x13\x4c\xd1\x81\x2b\xdd\x82\x88\xe5\xfe\x42\x44\xd7\x55\x23\xb6\x74\xca\xcd\xed\x45\x5b\xb8\x01\x1a\x23\xab\xdf\x89\x69\xf2\xa6\xe6\xe7\x08\x0b\xc1\x2f\x7e\x98\xde\xe7\xa3\x75\x3d\x6e\xc5\xef\xd3\xef\xec\xca\x2b\xfb\x37\xba\x9c\x5d\xb8\xff\xc1\xde\x66\x88\x97\xc9\x31\x81\x72\xb2\x9d\xb8\xee\x5a\x9b\xbb\xd6\xc6\xfb\xbf\x6f\x6d\x76\xad\xe5\xbb\x86\xe6\xae\xa1\xb9\x6b\x68\x5c\xaf\x60\x1f\xa5\xa1\x29\x7a\x18\x68\x6f\x8a\xad\x1e\xb3\xf1\x13\xef\xdc\xf7\x99\x53\xc6\x4e\xd4\x8a\x91\x03\x69\xb6\x7e\x24\xbc\xd6\xcc\xc6\x30\x68\xf6\xa4\xcc\xc6\xe4\x66\x1f\x30\x8d\xe0\x52\x3f\x0f\x4c\x60\xe1\x16\x02\x1b\x19\x24\xb8\xfa\x19\x55\xd1\x49\x84\x53\xd8\x1f\x0a\xcc\x2e\xe6\x42\xe6\xaa\x17\x12\xa5\x5c\xc2\xb6\x91\x19\x36\x7b\xaa\xe4\x86\x6e\xb3\xf9\xb4\x8c\x0f\xf9\x2c\xdb\xee\x34\xfb\x4b\x7e\x66\x42\x89\x55\x31\xee\x37\x60\xe3\x29\x1b\x87\xad\x2a\x95\xa1\x9b\xad\x7c\x50\xf3\x5b\x53\x37\x6c\x17\x66\xab\x75\x4d\x40\xcb\xde\x86\x44\x69\x32\x9b\x44\xcd\x41\xa2\xb5\x1e\x7c\x03\x09\xbd\x73\xf6\x61\x58\x74\x1c\x2c\xda\x5a\xfd\xda\x55\x5b\xa6\x00\x6a\x1b\xaf\xc0\x7b\x37\x82\xb7\xf5\xae\xd7\xa8\x67\x8c\x60\x47\x0e\x7a\xf4\x99\xf6\x53\xe6\xea\xb5\x77\xb5\x73\x3e\xa8\xa7\x77\x19\x93\x95\x23\x00\xb6\x16\xb7\x3d\xdd\xd1\x5c\x77\x3e\x9e\x7e\xba\x2c\xd4\xde\xc2\xd3\x16\x09\xe3\x94\x2c\xac\x6c\x12\xc6\x57\xa6\xc1\x93\x11\xbc\x0d\xe7\xd1\x59\xde\x77\xff\xbe\x80\xbb\xad\xaf\x3b\x85\x4b\x2d\x7a\xda\x14\xeb\xd5\x50\xd0\x68\xb5\x3f\x86\xaf\x75\x12\xb9\x91\x1b\x58\x52\xce\x14\x2c\x41\x17\xb0\xc6\x43\x58\x74\x1e\x9a\xe2\xb4\xeb\xcd\x61\xdf\x18\x2e\xe3\x14\x82\x47\xea\x77\x2f\xcc\x16\x70\x00\x33\x55\x22\x5b\xf1\xef\x92\x5a\x52\x21\xd5\x10\xcb\x28\xb3\xb8\xc9\x3a\x99\x7f\x62\xaa\x88\x40\x8c\xc6\x5d\x4f\x3f\xff\x26\x1c\x58\x62\x92\x48\x46\xae\x03\x4b\xf7\xc7\x4a\x2e\xd4\x0b\xee\xc7\x46\x0e\xbc\x6e\x7b\x99\xcc\xe7\x64\xaa\xca\x7e\x2f\x8d\x68\x4b\x67\xb7\x90\xe2\xb3\x64\xe1\xfc\xd5\x88\xbf\x3b\x58\x4b\xf2\x25\xb8\xfb\x24\x9a\x5d\xa0\x53\xb6\x14\x4f\x31\x84\x58\xa3\x15\x68\xef\xce\xa8\x84\xe3\x83\x20\x73\xf5\x8c\xc2\x79\xd8\x26\x93\x15\xf1\x77\xa3\x32\xe5\xd9\xdf\x3a\xe4\x2a\xf2\x31\x66\x69\x84\xf3\x92\x52\xce\xe6\x19\xdc\x14\x94\x0d\x1d\x73\xb7\xb1\x41\xe9\x2e\x7f\x66\x30\xe8\xb6\x09\x4f\x17\xba\xc2\xbe\x77\xd9\x7d\x73\xad\xd6\x96\x2b\xea\x63\xa7\x28\x9a\x56\x5a\xd1\x65\xd3\x9d\x4d\x3f\x5e\x95\x2f\xb1\x2a\xaa\xa8\xc5\x2a\xcb\xdd\x37\x73\x6e\x67\x9d\xec\x20\x50\x9d\x65\xe2\xfd\x6b\x7f\x89\x5a\x31\x99\x45\x4d\x33\xde\xce\xc3\x3a\x69\xe7\xa3\x36\xb5\x0f\xd8\x11\x94\xaa\x4f\x73\x87\xdd\x36\x45\xc2\x69\x89\x77\x2d\xfd\x20\x77\x33\x6a\x75\x85\x58\x37\x96\x26\xf0\xcd\xe1\x79\xf9\x6c\x9b\x9f\xbe\x80\xe4\x31\x84\x53\xc4\x25\xcb\x4e\xbb\x59\x02\x77\xa6\xb5\x4c\x8f\x85\xf1\xed\x29\x9f\xad\xf2\x4b\x26\xb3\x44\x93\xf9\x5c\x37\xa5\x59\x2a\x7f\x4a\xe6\x88\xce\x2e\xbb\x5e\xe8\xea\x1c\xf3\xc3\xe3\xbc\x1b\x60\x09\xa0\x4d\xcf\x0b\x2b\x6c\x23\xe8\xec\xf6\x6c\x41\x5d\xec\x72\xd1\x6c\xc1\x6e\x84\xb3\x36\xf6\x46\xbf\x6a\x0b\x6f\x24\xd6\xc7\xac\x1b\x61\xb3\xb5\xe8\xa2\xad\x2e\xd7\x27\xea\xba\x57\x37\x33\x6b\x87\x65\x4f\x6d\xd2\xb0\xb1\x14\x5c\x6d\x5b\x11\x8e\xff\x05\x86\xd6\x39\x3b\xcc\xcd\x72\x2f\xe4\x99\x4b\x95\x77\xda\x70\x85\x96\x82\x76\xbd\x9f\xfb\x8d\x5e\x7d\x10\x36\x06\x15\xbf\xdd\x18\x55\xea\xb5\xba\x5f\x69\x37\x7a\xb5\x4a\xaf\xd1\xa8\x05\xa3\x46\xe0\x0f\xfb\xe1\xe7\x40\x4f\x45\x71\xd0\xc8\xbe\x7e\x18\xc3\x69\x10\x5b\xe5\xdf\x40\x98\xf1\xad\xef\x20\xe2\xf5\x81\xd7\xbd\x29\x8f\xab\xdc\x7c\xe7\x50\x35\xde\x37\xdf\x41\x04\xa1\xeb\x3b\x88\x89\xfe\xc8\xc1\x03\x47\x02\xad\x70\x14\xd4\xc3\x5e\x38\xa8\x0c\x86\x41\xb3\x52\x0f\x87\xcd\x4a\xbb\x55\xeb\x55\x06\x61\x73\x18\xf6\xa0\x68\x37\xc7\xbd\xcf\x3d\x74\x6e\xc0\x41\x7f\x38\x1c\x8f\x1b\x61\xa5\x39\x00\x5c\xdd\xef\x35\x2a\xbd\x7e\x6d\x50\x69\xb6\x47\xfd\x70\x1c\x8c\xea\x43\x1f\xc0\x79\xf9\xb9\x84\xb7\x18\x9d\x73\x73\x5b\xc0\xa5\xe1\xf5\xe0\xbf\x00\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x13\x84\x76\x6b\xda\x02\x00\x00\xf8\x06\x00\x00\x0d\x00\x00\x00\x78\x6c\x2f\x73\x74\x79\x6c\x65\x73\x2e\x78\x6d\x6c\xac\x55\x4b\x6e\xdb\x30\x10\xdd\x17\xe8\x1d\x08\xee\x15\x7d\x62\xb9\xb6\x21\x29\x88\xe3\x08\x08\x90\x16\x05\x92\x02\xdd\xd2\x12\x65\x13\xa1\x48\x81\xa4\x1c\xb9\x45\xaf\x51\xa0\x37\xe8\x19\x7a\xa0\x9c\xa3\x43\x7d\x6c\x05\xe9\x37\xed\xc6\x22\x67\xc8\x37\x6f\xde\x0c\xc7\xd1\x59\x53\x72\xb4\xa3\x4a\x33\x29\x62\xec\x9f\x78\x18\x51\x91\xc9\x9c\x89\x4d\x8c\xdf\xdd\xa6\xce\x0c\x23\x6d\x88\xc8\x09\x97\x82\xc6\x78\x4f\x35\x3e\x4b\x5e\xbe\x88\xb4\xd9\x73\x7a\xb3\xa5\xd4\x20\x80\x10\x3a\xc6\x5b\x63\xaa\x85\xeb\xea\x6c\x4b\x4b\xa2\x4f\x64\x45\x05\x78\x0a\xa9\x4a\x62\x60\xab\x36\xae\xae\x14\x25\xb9\xb6\x97\x4a\xee\x06\x9e\x37\x75\x4b\xc2\x04\xee\x10\x16\x65\xf6\x27\x20\x25\x51\x77\x75\xe5\x64\xb2\xac\x88\x61\x6b\xc6\x99\xd9\xb7\x58\x18\x95\xd9\xe2\x6a\x23\xa4\x22\x6b\x0e\x54\x1b\x7f\x42\x32\xd4\xf8\x53\x15\xa0\x46\x0d\x41\x5a\xeb\x93\x38\x25\xcb\x94\xd4\xb2\x30\x27\x80\xeb\xca\xa2\x60\x19\x7d\x4a\x77\xee\xce\x5d\x92\x1d\x91\x00\xf9\x79\x48\x7e\xe8\x7a\xc1\xa3\xdc\x1b\xf5\x4c\xa4\x89\xab\xe8\x8e\xd9\xf2\xe1\x24\x2a\xa4\x30\x1a\x65\xb2\x16\x26\xc6\x01\x10\xb5\x12\x2c\xee\x84\xbc\x17\xa9\x75\x41\x85\xfb\x53\x49\xa4\x3f\xa0\x1d\xe1\x60\xf1\xb1\x9b\x44\x99\xe4\x52\x21\x03\xa5\x03\xe5\x5a\x8b\x20\x25\xed\x4e\x9c\x57\x46\x6a\xf4\x86\x28\x25\xef\xed\xd9\x82\x94\x8c\xef\x3b\x5f\x60\x0d\xae\x8d\xdb\x45\x1f\xe1\x4e\xff\x17\x6e\x0b\xaf\x01\x9f\x71\x3e\xca\xae\x33\x24\x11\xb4\x81\xa1\x4a\xa4\xe0\x45\xfd\xfa\x76\x5f\x41\x1a\x02\x3a\xb6\xa3\x07\xae\xdf\x9e\xde\x28\xb2\xf7\x83\x70\x74\xc1\x6d\x03\x26\xd1\x5a\xaa\x1c\x5e\xc8\xa0\xab\x95\xb0\x33\x25\x11\xa7\x85\x01\x01\x14\xdb\x6c\xed\xd7\xc8\x0a\x7e\xd7\xd2\x18\xe8\xa2\x24\xca\x19\xd9\x48\x41\xb8\x95\x68\xb8\xd1\x2f\x20\x9d\x8c\x72\x7e\x63\x5f\xd1\xfb\xe2\x11\x76\x53\x20\x51\x97\x69\x69\xae\xf2\x18\xc3\x7b\xb4\xe2\x0e\x4b\x48\xa4\x5f\x76\x78\xdd\xc6\xe2\x8f\xd1\x3a\xec\x11\x6c\x00\x94\xff\x1e\x16\x35\xc5\x01\xff\x67\xb7\x7d\xe0\xf7\x63\x52\x87\xdb\x88\x54\x15\xdf\xdb\xfe\xeb\x3b\xab\xe5\x0a\xec\x46\x12\x3c\x12\xe0\x90\x0a\xb2\x3d\x18\xe3\x87\xaf\x5f\x1e\xbe\x7d\x86\x6e\xee\xe9\xa0\x75\xcd\xb8\x61\xa2\x57\x22\xab\x35\xc8\xbd\xec\x6c\xe3\x10\xad\xb8\x10\x25\x6f\x8e\x02\x7b\xb6\xbe\xc6\x0e\x88\xce\x3b\x14\x15\x74\xce\x69\x41\x6a\x6e\x6e\x0f\xce\x18\x1f\xd7\xaf\x69\xce\xea\x12\x9e\x54\x7f\xea\x2d\xdb\x49\xd3\x42\xc4\xf8\xb8\xbe\xb6\x7d\xe0\xb7\x8d\x4f\x1b\x73\xad\xe1\x51\xc0\x17\xd5\x8a\xc5\xf8\xe3\xe5\xf2\xd5\x7c\x75\x99\x06\xce\xcc\x5b\xce\x9c\xc9\x29\x0d\x9d\x79\xb8\x5c\x39\xe1\xe4\x62\xb9\x5a\xa5\x73\x2f\xf0\x2e\x3e\x8d\xc6\xd4\x3f\x0c\xa9\x76\xaa\x42\xc9\xfd\xc9\x42\x73\x18\x65\xaa\x4f\xb6\x27\x7f\x73\xb4\xc5\x78\xb4\xe9\xe8\xb7\x2f\x00\x68\x8f\xb9\xcf\x83\xa9\x77\x1e\xfa\x9e\x93\x9e\x7a\xbe\x33\x99\x92\x99\x33\x9b\x9e\x86\x4e\x1a\xfa\xc1\x6a\x3a\x59\x5e\x86\x69\x38\xe2\x1e\x3e\x73\x98\x79\xae\xef\x77\x63\xd1\x92\x0f\x17\x86\x95\x94\x33\x31\xd4\x6a\xa8\xd0\xd8\x0a\x45\x82\xed\x2f\x92\x70\x87\x4a\xb8\xc7\xbf\xac\xe4\x3b\x00\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x7b\x19\x53\x72\x8e\x01\x00\x00\xd1\x02\x00\x00\x11\x00\x08\x01\x64\x6f\x63\x50\x72\x6f\x70\x73\x2f\x63\x6f\x72\x65\x2e\x78\x6d\x6c\x20\xa2\x04\x01\x28\xa0\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xac\x92\xcd\x4a\x03\x31\x14\x85\xf7\x82\xef\x30\x64\xdf\x66\xa6\xc5\x1f\x86\xe9\x14\x54\x5c\x29\x08\x56\x14\x77\x21\xb9\xb6\x83\x33\x99\x21\x89\xd6\xee\x4a\x8b\x82\x20\xa8\x5b\xe9\x42\xc4\x85\x3f\xa0\xa0\x2b\xb5\xf8\x32\x69\xf5\x35\xcc\x4c\x6b\xad\xe8\x4a\x84\x2c\x92\xdc\x73\x3f\xce\x3d\x89\x57\xde\x8b\x42\x6b\x17\x84\x0c\x62\x5e\x42\x4e\xde\x46\x16\x70\x1a\xb3\x80\x57\x4b\x68\xad\xb2\x98\x9b\x45\x96\x54\x84\x33\x12\xc6\x1c\x4a\xa8\x01\x12\x95\xfd\xc9\x09\x8f\x26\x2e\x8d\x05\xac\x88\x38\x01\xa1\x02\x90\x96\x21\x71\xe9\xd2\xa4\x84\x6a\x4a\x25\x2e\xc6\x92\xd6\x20\x22\x32\x6f\x14\xdc\x14\xb7\x62\x11\x11\x65\x8e\xa2\x8a\x13\x42\xb7\x49\x15\x70\xc1\xb6\xa7\x71\x04\x8a\x30\xa2\x08\x4e\x81\xb9\x64\x44\x44\x43\x24\xa3\x23\x64\xb2\x23\xc2\x0c\xc0\x28\x86\x10\x22\xe0\x4a\x62\x27\xef\xe0\x2f\xad\x02\x11\xc9\x5f\x1b\xb2\xca\x98\x32\x0a\x54\x23\x31\x33\x0d\xed\x8e\xb3\x19\x1d\x14\x47\xea\x3d\x19\x8c\x84\xf5\x7a\x3d\x5f\x2f\x66\x36\x8c\x7f\x07\x6f\x2c\x2f\xad\x66\xa3\xe6\x02\x9e\x66\x45\x01\xf9\x1e\xa3\x2e\x15\x40\x54\x2c\x7c\xdd\x3c\x79\x3b\xbf\xe9\x77\x8f\x7b\xdd\xb3\xf7\xcb\x57\xdd\xba\xd2\xed\x73\xdd\x7a\xd2\xad\xfb\x74\xdf\xba\xd0\xed\x17\xdd\xbe\xd6\xed\x8e\x6e\x9e\x5a\xfd\xbb\xc3\xb7\x87\xc7\xfe\xc1\xbe\x6e\x36\xdf\x6f\x3b\xbd\xe7\x23\x0f\x8f\xc1\xd2\xe0\x43\x22\xd5\xb2\x79\xa3\xad\x00\xd8\x5c\xe3\x1f\xf8\x3f\x99\xc6\x7f\x16\xd7\x60\x08\x60\x96\x09\xc0\x1d\xc4\xf5\x59\x59\x2f\xce\x2f\x54\x16\x91\x5f\xb0\x0b\xd3\x39\xc7\x31\xab\x62\x4f\xb9\x53\x05\xb7\x38\xb3\x99\x5a\xfe\xd6\x9f\x06\x32\xb8\x88\x86\xc6\xff\x4c\xfc\x04\xf8\x1e\xfe\xf1\x09\xfd\x0f\x00\x00\x00\xff\xff\x03\x00\x50\x4b\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xde\xd9\x7d\x8f\x9d\x01\x00\x00\x19\x03\x00\x00\x10\x00\x08\x01\x64\x6f\x63\x50\x72\x6f\x70\x73\x2f\x61\x70\x70\x2e\x78\x6d\x6c\x20\xa2\x04\x01\x28\xa0\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x9c\x92\xb1\x6e\xdb\x30\x10\x86\xf7\x02\x7d\x07\x81\x7b\x4c\x39\x0d\x82\xc0\xa0\x18\x14\x4e\x8b\x0c\x29\x6a\xc0\x76\x76\x86\x3a\x59\x44\x29\x92\x20\x2f\x82\xdd\x31\x5e\xfa\x36\x19\xb3\xf4\x6d\xfc\x22\x39\x49\x88\x23\xb7\x9d\xba\xdd\xdd\x7f\xfc\xf9\xf1\x78\xe2\x7a\xdb\xd8\xac\x85\x98\x8c\x77\x05\x9b\x4e\x72\x96\x81\xd3\xbe\x34\x6e\x53\xb0\xf5\xea\xeb\xd9\x15\xcb\x12\x2a\x57\x2a\xeb\x1d\x14\x6c\x07\x89\x5d\xcb\x8f\x1f\xc4\x22\xfa\x00\x11\x0d\xa4\x8c\x2c\x5c\x2a\x58\x8d\x18\x66\x9c\x27\x5d\x43\xa3\xd2\x84\x64\x47\x4a\xe5\x63\xa3\x90\xd2\xb8\xe1\xbe\xaa\x8c\x86\x1b\xaf\x1f\x1b\x70\xc8\xcf\xf3\xfc\x92\xc3\x16\xc1\x95\x50\x9e\x85\xa3\x21\x1b\x1c\x67\x2d\xfe\xaf\x69\xe9\x75\xc7\x97\xee\x57\xbb\x40\xc0\x52\x7c\x0e\xc1\x1a\xad\x90\x5e\x29\xbf\x19\x1d\x7d\xf2\x15\x66\x5f\xb6\x1a\xac\xe0\x63\x51\x10\xdd\x12\xf4\x63\x34\xb8\x93\xb9\xe0\xe3\x54\x2c\xb5\xb2\x30\x27\x63\x59\x29\x9b\x40\xf0\xf7\x82\xb8\x05\xd5\x0d\x6d\xa1\x4c\x4c\x52\xb4\x38\x6b\x41\xa3\x8f\x59\x32\x3f\x69\x6c\xe7\x2c\x7b\x50\x09\x3a\x9c\x82\xb5\x2a\x1a\xe5\x90\xb0\xba\xb6\x21\xe9\x63\x1b\x12\x46\x79\xd8\x3f\x1f\xf6\xbf\x0f\x4f\xcf\x87\xa7\x97\x2e\xd8\xff\x12\x9c\x1a\x07\xb1\x0f\xc7\x67\xc6\xb1\xb9\x90\xd3\xbe\x81\x82\xd3\xc6\xce\x60\x00\x22\xe1\x14\x75\x65\xd0\x42\xfa\x5e\x2d\x54\xc4\x7f\x90\x4f\xc7\xe4\x3d\xc3\xc0\x3d\xe0\x2c\x6b\x00\x1c\xee\x1c\xf3\xf5\x4f\xa7\x9b\xfe\xf0\x9e\xfb\x26\x28\xb7\x23\xe1\x18\xdd\x19\xf7\x23\xad\xc3\xca\xdf\x28\x84\xb7\xb1\x9e\x16\xc5\xb2\x56\x11\x4a\xfa\x89\xe3\xd8\x8f\x05\x71\x4b\x13\x8d\xb6\x33\x99\xd7\xca\x6d\xa0\x7c\xeb\xf9\x5b\xe8\x96\xe0\x7e\xd8\x74\x39\xbd\x9c\xe4\x9f\x72\xfa\xdf\x51\x4d\xf0\xf7\x9d\x96\xaf\x00\x00\x00\xff\xff\x03\x00\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xa4\x53\xc5\xcf\x4e\x01\x00\x00\x08\x04\x00\x00\x13\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x5b\x43\x6f\x6e\x74\x65\x6e\x74\x5f\x54\x79\x70\x65\x73\x5d\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xb5\x55\x30\x23\xf4\x00\x00\x00\x4c\x02\x00\x00\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x87\x03\x00\x00\x5f\x72\x65\x6c\x73\x2f\x2e\x72\x65\x6c\x73\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xa4\xca\xd8\x85\xce\x03\x00\x00\x9b\x09\x00\x00\x0f\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xac\x06\x00\x00\x78\x6c\x2f\x77\x6f\x72\x6b\x62\x6f\x6f\x6b\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x8d\x87\xda\x70\xe0\x00\x00\x00\x2d\x02\x00\x00\x1a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xa7\x0a\x00\x00\x78\x6c\x2f\x5f\x72\x65\x6c\x73\x2f\x77\x6f\x72\x6b\x62\x6f\x6f\x6b\x2e\x78\x6d\x6c\x2e\x72\x65\x6c\x73\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xa8\x22\x77\x7a\x29\x02\x00\x00\x7e\x04\x00\x00\x18\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xc7\x0c\x00\x00\x78\x6c\x2f\x77\x6f\x72\x6b\x73\x68\x65\x65\x74\x73\x2f\x73\x68\x65\x65\x74\x31\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xed\x55\xd4\xc8\xc5\x07\x00\x00\x15\x22\x00\x00\x13\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x26\x0f\x00\x00\x78\x6c\x2f\x74\x68\x65\x6d\x65\x2f\x74\x68\x65\x6d\x65\x31\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x13\x84\x76\x6b\xda\x02\x00\x00\xf8\x06\x00\x00\x0d\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1c\x17\x00\x00\x78\x6c\x2f\x73\x74\x79\x6c\x65\x73\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\x7b\x19\x53\x72\x8e\x01\x00\x00\xd1\x02\x00\x00\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x21\x1a\x00\x00\x64\x6f\x63\x50\x72\x6f\x70\x73\x2f\x63\x6f\x72\x65\x2e\x78\x6d\x6c\x50\x4b\x01\x02\x2d\x00\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00\xde\xd9\x7d\x8f\x9d\x01\x00\x00\x19\x03\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xe6\x1c\x00\x00\x64\x6f\x63\x50\x72\x6f\x70\x73\x2f\x61\x70\x70\x2e\x78\x6d\x6c\x50\x4b\x05\x06\x00\x00\x00\x00\x09\x00\x09\x00\x3e\x02\x00\x00\xb9\x1f\x00\x00\x00\x00";
+        // Exact independently measured Native166 styles/sheet parts. The
+        // unchanged package parts come from its exact Native132 input.
+        const AFTER:&[(&str,&str)]=&[("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"x14ac x16r2 xr\" xmlns:x14ac=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac\" xmlns:x16r2=\"http://schemas.microsoft.com/office/spreadsheetml/2015/02/main\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\"><fonts count=\"3\" x14ac:knownFonts=\"1\"><font><sz val=\"11\"/><color theme=\"1\"/><name val=\"Aptos Narrow\"/><family val=\"2\"/></font><font><sz val=\"16\"/><color theme=\"1\"/><name val=\"Aptos Narrow\"/><family val=\"2\"/></font><font><sz val=\"26\"/><color theme=\"1\"/><name val=\"Aptos Narrow\"/><family val=\"2\"/></font></fonts><fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills><borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs><cellXfs count=\"3\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/><xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/><xf numFmtId=\"0\" fontId=\"2\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/></cellXfs><cellStyles count=\"1\"><cellStyle name=\"標準\" xfId=\"0\" builtinId=\"0\" customBuiltin=\"1\"/></cellStyles><dxfs count=\"0\"/><tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleLight16\"/><extLst><ext uri=\"{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:slicerStyles defaultSlicerStyle=\"SlicerStyleLight1\"/></ext><ext uri=\"{9260A510-F301-46a8-8635-F512D64BE5F5}\" xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\"><x15:timelineStyles defaultTimelineStyle=\"TimeSlicerStyleLight1\"/></ext></extLst></styleSheet>","<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"x14ac xr xr2 xr3\" xmlns:x14ac=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\" xmlns:xr2=\"http://schemas.microsoft.com/office/spreadsheetml/2015/revision2\" xmlns:xr3=\"http://schemas.microsoft.com/office/spreadsheetml/2016/revision3\" xr:uid=\"{79C2BE6C-542F-4CEF-8908-8717DEB91B3B}\"><dimension ref=\"A1:B1\"/><sheetViews><sheetView tabSelected=\"1\" workbookViewId=\"0\"/></sheetViews><sheetFormatPr defaultRowHeight=\"15\" x14ac:dyDescent=\"0.25\"/><cols><col min=\"1\" max=\"1\" width=\"22.85546875\" bestFit=\"1\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"14\" bestFit=\"1\" customWidth=\"1\"/></cols><sheetData><row r=\"1\" spans=\"1:2\" ht=\"34.5\" x14ac:dyDescent=\"0.55000000000000004\"><c r=\"A1\" s=\"2\"><v>12345678</v></c><c r=\"B1\" s=\"1\"><v>12345678</v></c></row></sheetData><pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/></worksheet>"),
+("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"x14ac x16r2 xr\" xmlns:x14ac=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac\" xmlns:x16r2=\"http://schemas.microsoft.com/office/spreadsheetml/2015/02/main\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\"><fonts count=\"2\" x14ac:knownFonts=\"1\"><font><sz val=\"11\"/><color theme=\"1\"/><name val=\"Aptos Narrow\"/><family val=\"2\"/></font><font><sz val=\"16\"/><color theme=\"1\"/><name val=\"Aptos Narrow\"/><family val=\"2\"/></font></fonts><fills count=\"3\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill><fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF32465A\"/><bgColor indexed=\"64\"/></patternFill></fill></fills><borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs><cellXfs count=\"3\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/><xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/><xf numFmtId=\"0\" fontId=\"1\" fillId=\"2\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"/></cellXfs><cellStyles count=\"1\"><cellStyle name=\"標準\" xfId=\"0\" builtinId=\"0\" customBuiltin=\"1\"/></cellStyles><dxfs count=\"0\"/><tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleLight16\"/><extLst><ext uri=\"{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:slicerStyles defaultSlicerStyle=\"SlicerStyleLight1\"/></ext><ext uri=\"{9260A510-F301-46a8-8635-F512D64BE5F5}\" xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\"><x15:timelineStyles defaultTimelineStyle=\"TimeSlicerStyleLight1\"/></ext></extLst></styleSheet>","<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"x14ac xr xr2 xr3\" xmlns:x14ac=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\" xmlns:xr2=\"http://schemas.microsoft.com/office/spreadsheetml/2015/revision2\" xmlns:xr3=\"http://schemas.microsoft.com/office/spreadsheetml/2016/revision3\" xr:uid=\"{79C2BE6C-542F-4CEF-8908-8717DEB91B3B}\"><dimension ref=\"A1:B1\"/><sheetViews><sheetView tabSelected=\"1\" workbookViewId=\"0\"/></sheetViews><sheetFormatPr defaultRowHeight=\"15\" x14ac:dyDescent=\"0.25\"/><cols><col min=\"1\" max=\"2\" width=\"14\" bestFit=\"1\" customWidth=\"1\"/></cols><sheetData><row r=\"1\" spans=\"1:2\" ht=\"21\" x14ac:dyDescent=\"0.35\"><c r=\"A1\" s=\"2\"><v>12345678</v></c><c r=\"B1\" s=\"1\"><v>12345678</v></c></row></sheetData><pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/></worksheet>"),
+("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"x14ac x16r2 xr\" xmlns:x14ac=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac\" xmlns:x16r2=\"http://schemas.microsoft.com/office/spreadsheetml/2015/02/main\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\"><fonts count=\"2\" x14ac:knownFonts=\"1\"><font><sz val=\"11\"/><color theme=\"1\"/><name val=\"Aptos Narrow\"/><family val=\"2\"/></font><font><sz val=\"16\"/><color theme=\"1\"/><name val=\"Aptos Narrow\"/><family val=\"2\"/></font></fonts><fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills><borders count=\"2\"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style=\"thin\"><color indexed=\"64\"/></left><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs><cellXfs count=\"3\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/><xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/><xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyBorder=\"1\"/></cellXfs><cellStyles count=\"1\"><cellStyle name=\"標準\" xfId=\"0\" builtinId=\"0\" customBuiltin=\"1\"/></cellStyles><dxfs count=\"0\"/><tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleLight16\"/><extLst><ext uri=\"{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:slicerStyles defaultSlicerStyle=\"SlicerStyleLight1\"/></ext><ext uri=\"{9260A510-F301-46a8-8635-F512D64BE5F5}\" xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\"><x15:timelineStyles defaultTimelineStyle=\"TimeSlicerStyleLight1\"/></ext></extLst></styleSheet>","<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"x14ac xr xr2 xr3\" xmlns:x14ac=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\" xmlns:xr2=\"http://schemas.microsoft.com/office/spreadsheetml/2015/revision2\" xmlns:xr3=\"http://schemas.microsoft.com/office/spreadsheetml/2016/revision3\" xr:uid=\"{79C2BE6C-542F-4CEF-8908-8717DEB91B3B}\"><dimension ref=\"A1:B1\"/><sheetViews><sheetView tabSelected=\"1\" workbookViewId=\"0\"/></sheetViews><sheetFormatPr defaultRowHeight=\"15\" x14ac:dyDescent=\"0.25\"/><cols><col min=\"1\" max=\"2\" width=\"14\" bestFit=\"1\" customWidth=\"1\"/></cols><sheetData><row r=\"1\" spans=\"1:2\" ht=\"21\" x14ac:dyDescent=\"0.35\"><c r=\"A1\" s=\"2\"><v>12345678</v></c><c r=\"B1\" s=\"1\"><v>12345678</v></c></row></sheetData><pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/></worksheet>")];
+        fn part(bytes:&[u8],name:&str)->String {
+            let mut archive=ZipArchive::new(Cursor::new(bytes)).unwrap();let mut value=String::new();
+            archive.by_name(name).unwrap().read_to_string(&mut value).unwrap();value
+        }
+        fn raw_binding(styles:&str,sheet:&str)->(BTreeMap<String,String>,Vec<u32>) {
+            let mut reader=Reader::from_str(sheet);let mut index=None;
+            loop {
+                match reader.read_event().unwrap() {
+                    Event::Start(tag)|Event::Empty(tag) if tag.local_name().as_ref()==b"c" => {
+                        if get_attr(&tag,"r").as_deref()==Some("A1") {index=Some(get_attr(&tag,"s").and_then(|s|s.parse::<usize>().ok()).unwrap_or(0));break}
+                    },
+                    Event::Eof=>break,
+                    _=>{},
+                }
+            }
+            let nodes=style_xml_nodes(styles).unwrap();let parent=named_style_section(&nodes,"cellXfs").unwrap();
+            let xfs=named_style_children(&nodes,parent,"xf");let attributes=named_node_attributes(styles,&nodes[xfs[index.unwrap()]]).unwrap();
+            let counts=["fonts","fills","borders","cellXfs"].into_iter().map(|group|count_of(styles,group)).collect();
+            (attributes,counts)
+        }
+        let mut failures=Vec::new();
+        for (mode,(expected_styles,expected_sheet)) in AFTER.iter().enumerate() {
+            let mut archive=ZipArchive::new(Cursor::new(BEFORE)).unwrap();let mut output=ZipWriter::new(Cursor::new(Vec::new()));
+            for index in 0..archive.len() {
+                let mut entry=archive.by_index(index).unwrap();let name=entry.name().to_owned();let mut bytes=Vec::new();entry.read_to_end(&mut bytes).unwrap();
+                if name=="xl/styles.xml" {bytes=expected_styles.as_bytes().to_vec();}
+                if name=="xl/worksheets/sheet1.xml" {bytes=expected_sheet.as_bytes().to_vec();}
+                output.start_file(name,zip::write::SimpleFileOptions::default()).unwrap();output.write_all(&bytes).unwrap();
+            }
+            let native=output.finish().unwrap().into_inner();let measured=crate::parse_xlsx(&native).unwrap();
+            let expected_style=measured.sheets[0].rows.iter().find(|r|r.index==1).unwrap().cells.iter().find(|c|c.col==0).unwrap().style.clone();
+            let mut editor=XlsxEditor::new(BEFORE).unwrap();let mut book=editor.workbook().clone();
+            let target=book.sheets[0].rows.iter_mut().find(|r|r.index==1).unwrap().cells.iter_mut().find(|c|c.col==0).unwrap();
+            target.style=expected_style;
+            editor.apply_workbook(&book).unwrap();let saved=editor.save().unwrap();
+            let actual=raw_binding(&part(&saved,"xl/styles.xml"),&part(&saved,"xl/worksheets/sheet1.xml"));
+            let expected=raw_binding(expected_styles,expected_sheet);
+            if actual!=expected {failures.push(format!("Native166/{mode} binding/counts actual {actual:?}, expected {expected:?}"));}
+            let parsed=crate::parse_xlsx(&saved).unwrap();let mut noop=XlsxEditor::new(&saved).unwrap();noop.apply_workbook(&parsed).unwrap();
+            assert_eq!(noop.save().unwrap(),saved,"read/no-edit must retain exact package bytes after mode{mode}");
+            if let Some(dir)=std::env::var_os("OXI_CORE_STYLE_RESOURCE_OUTPUT_DIR") {
+                let dir=std::path::PathBuf::from(dir);std::fs::create_dir_all(&dir).unwrap();std::fs::write(dir.join(format!("core166-{mode}.xlsx")),&saved).unwrap();
+            }
+        }
+        assert!(failures.is_empty(),"{} independent resource histories differ:\n{}",failures.len(),failures.join("\n"));
+    }
+
+    #[test]
+    fn named_style_creation_without_style_part_keeps_normal_zero() {
+        use crate::ir::{NamedCellStyle,CellFormatReference};
+        let original=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut editor=XlsxEditor::new(original).unwrap();let mut book=editor.workbook().clone();
+        assert!(book.named_styles.is_empty());assert_eq!(book.source_named_style_xf_count,0);
+        let id=book.next_named_style_source_id().unwrap();assert_eq!(id,1);
+        book.named_styles.push(NamedCellStyle {name:"Twin".into(),source_id:id,builtin_id:None,number_format_id:0,
+            style:CellStyle {font_name:Some("Arial".into()),font_size:Some(16.0),bold:true,
+                format_reference:Some(Box::new(CellFormatReference::default())),..Default::default()}});
+        editor.apply_workbook(&book).unwrap();let saved=editor.save().unwrap();let after=parse_xlsx(&saved).unwrap();
+        assert_eq!(after.source_named_style_xf_count,2);assert_eq!(after.named_styles.len(),2);
+        let normal=after.named_styles.iter().find(|s|s.builtin_id==Some(0)).unwrap();
+        assert_eq!(normal.source_id,0);assert_eq!(normal.style.font_size,Some(11.0));
+        assert_eq!(after.default_style.font_size,Some(11.0));
+        let twin=after.named_styles.iter().find(|s|s.name=="Twin").unwrap();
+        assert_eq!(twin.source_id,1);assert_eq!(twin.style.font_size,Some(16.0));assert!(twin.style.bold);
+        let mut noop=XlsxEditor::new(&saved).unwrap();noop.apply_workbook(&after).unwrap();
+        assert_eq!(noop.save().unwrap(),saved);
+    }
+
+    #[test]
+    fn named_style_allocation_reserves_unreferenced_source_templates() {
+        assert_eq!(Workbook::default().next_named_style_source_id(),Some(1));
+        let seed = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        for prefix in ["", "s:"] {
+            let declaration = if prefix.is_empty() { "xmlns" } else { "xmlns:s" };
+            let templates = format!("<{prefix}xf fontId=\"0\" numFmtId=\"0\"/>").repeat(7);
+            let styles = format!(r#"<{prefix}styleSheet {declaration}="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+xmlns:f="urn:oxi:foreign-style-probe" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="f">
+<{prefix}fonts count="2"><{prefix}font><{prefix}sz val="11"/><{prefix}name val="Calibri"/><f:sz val="999"/></{prefix}font>
+<f:font><{prefix}sz val="888"/></f:font><{prefix}font><{prefix}sz val="14"/><{prefix}name val="Calibri"/></{prefix}font></{prefix}fonts>
+<{prefix}fills count="1"><{prefix}fill><{prefix}patternFill patternType="none"/></{prefix}fill></{prefix}fills>
+<{prefix}borders count="1"><{prefix}border/></{prefix}borders>
+<{prefix}cellStyleXfs count="999"><f:xf fontId="1"/>{templates}</{prefix}cellStyleXfs>
+<{prefix}cellXfs count="1"><{prefix}xf fontId="0" xfId="0"/></{prefix}cellXfs>
+<{prefix}cellStyles count="1"><{prefix}cellStyle name="Normal" xfId="0" builtinId="0"/></{prefix}cellStyles>
+<f:payload><{prefix}xf fontId="1"/></f:payload></{prefix}styleSheet>"#);
+            let sheet = br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" s="0"><v>1</v></c></row></sheetData></worksheet>"#;
+            let input = replace_package_parts(seed, BTreeMap::from([
+                ("xl/styles.xml".to_string(), styles.into_bytes()),
+                ("xl/worksheets/sheet1.xml".to_string(), sheet.to_vec())
+            ])).unwrap();
+            let mut book = parse_xlsx(&input).unwrap();
+            assert_eq!(book.source_named_style_xf_count, 7);
+            assert_eq!(book.named_styles.len(), 1);
+            assert_eq!(book.default_style.font_size, Some(11.0));
+            assert_eq!(book.named_styles[0].style.font_size, Some(11.0));
+            assert_eq!(book.next_named_style_source_id(), Some(7));
+            let wire = serde_json::to_vec(&book).unwrap();
+            let roundtrip: Workbook = serde_json::from_slice(&wire).unwrap();
+            assert_eq!(roundtrip.next_named_style_source_id(), Some(7));
+            let mut editor = XlsxEditor::new(&input).unwrap();
+            editor.apply_workbook(&book).unwrap();
+            assert_eq!(editor.save().unwrap(), input, "unchanged extended source must remain byte-identical");
+            let mut added = book.named_styles[0].clone();
+            added.name = "Twin".into(); added.builtin_id = None; added.source_id = 7;
+            book.named_styles.push(added.clone());
+            assert_eq!(book.next_named_style_source_id(), Some(8));
+            let mut saved_editor = XlsxEditor::new(&input).unwrap();
+            saved_editor.apply_workbook(&book).unwrap();
+            let saved = saved_editor.save().unwrap();
+            let restored = parse_xlsx(&saved).unwrap();
+            assert_eq!(restored.source_named_style_xf_count, 8);
+            assert_eq!(restored.named_styles.len(), 2);
+            assert_eq!(restored.named_styles.iter().find(|s|s.name=="Twin").unwrap().source_id, 7);
+            let mut zip=OoxmlArchive::new(&saved).unwrap();
+            let saved_styles=zip.read_part("xl/styles.xml").unwrap();
+            assert!(saved_styles.contains("<f:sz val=\"999\"/>"));
+            assert!(saved_styles.contains("<f:font>"));
+            assert!(saved_styles.contains("<f:xf fontId=\"1\"/>"));
+            let mut invalid=book.clone();
+            invalid.named_styles.last_mut().unwrap().source_id=3;
+            let mut invalid_editor=XlsxEditor::new(&input).unwrap();
+            invalid_editor.apply_workbook(&invalid).unwrap();
+            assert!(invalid_editor.save().is_err(), "new definitions cannot overwrite reserved unreferenced templates");
+            added.source_id = u32::MAX;
+            book.named_styles.push(added);
+            assert_eq!(book.next_named_style_source_id(), None);
+        }
+    }
+
+    #[test]
+    fn named_font_changes_keep_other_parents_and_unknown_xml() {
+        for prefix in ["", "s:"] {
+            let namespace = if prefix.is_empty() { "xmlns" } else { "xmlns:s" };
+            let xml = format!(r#"<{prefix}styleSheet {namespace}="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:f="urn:foreign"><{prefix}fonts count="2" f:keep="fonts"><{prefix}font f:keep="font"><{prefix}sz val="11"/><f:sz val="999"/><{prefix}name val="Example"/><{prefix}extLst><{prefix}ext uri="kept"><f:payload/></{prefix}ext></{prefix}extLst></{prefix}font><{prefix}font><{prefix}sz val="14"/><{prefix}name val="Independent"/></{prefix}font></{prefix}fonts><{prefix}cellStyleXfs count="2"><{prefix}xf fontId="0"/><{prefix}xf fontId="0"/></{prefix}cellStyleXfs><{prefix}cellXfs count="3"><{prefix}xf xfId="1" fontId="0" f:keep="xf"><{prefix}alignment wrapText="1"/></{prefix}xf><{prefix}xf xfId="0" fontId="0"/><{prefix}xf xfId="1" fontId="1"/></{prefix}cellXfs></{prefix}styleSheet>"#);
+            let before = CellStyle {font_name:Some("Example".into()), font_size:Some(11.0), ..Default::default()};
+            let after = CellStyle {font_size:Some(26.0), ..before.clone()};
+            // Named XF 1 deliberately shares font 0 with another parent.
+            let changes = BTreeMap::from([(1, (before, after))]);
+            let patched = patch_named_style_fonts(&xml, &changes).unwrap();
+            let nodes = style_xml_nodes(&patched).unwrap();
+            let section = |name:&str| nodes.iter().position(|n|n.standard && n.name==name).unwrap();
+            let children = |parent,name:&str| nodes.iter().enumerate().filter(|(_,n)|n.standard && n.parent==Some(parent) && n.name==name).map(|(i,_)|i).collect::<Vec<_>>();
+            let fonts = children(section("fonts"),"font");
+            assert_eq!(fonts.len(),3);
+            let named = children(section("cellStyleXfs"),"xf");
+            assert_eq!(style_node_number(&patched,&nodes[named[0]],"fontId").unwrap(),0);
+            assert_eq!(style_node_number(&patched,&nodes[named[1]],"fontId").unwrap(),2);
+            let cells = children(section("cellXfs"),"xf");
+            for (index,expected) in [2,0,1].into_iter().enumerate() {
+                assert_eq!(style_node_number(&patched,&nodes[cells[index]],"fontId").unwrap(),expected);
+            }
+            let sizes = children(fonts[2],"sz");
+            assert_eq!(style_node_number(&patched,&nodes[sizes[0]],"val").unwrap(),26);
+            let appended = &patched[nodes[fonts[2]].start..nodes[fonts[2]].end];
+            assert!(appended.contains(r#"<f:sz val="999"/>"#));
+            assert!(appended.contains(r#"f:keep="font""#));
+            assert!(appended.contains("<f:payload/>"));
+            assert!(patched.contains(r#"f:keep="fonts""#));
+            assert!(patched.contains(r#"f:keep="xf""#));
+            assert!(patched.contains(&format!(r#"<{prefix}alignment wrapText="1"/>"#)));
+            // A localized builtin Normal takes priority over a user style
+            // whose text happens to be "Normal". Exercise the canonical swap
+            // with prefixed XML and shared fonts without losing opaque data.
+            let ending = format!("</{prefix}styleSheet>");
+            let tagged = xml.replace(&ending,&format!(r#"<{prefix}cellStyles count="2"><{prefix}cellStyle name="Normal" xfId="0"/><{prefix}cellStyle name="Localized Normal" xfId="1" builtinId="0"/></{prefix}cellStyles>{ending}"#));
+            let canonical = patch_named_style_fonts(&tagged,&changes).unwrap();
+            let nodes = style_xml_nodes(&canonical).unwrap();
+            let fonts_section = nodes.iter().position(|n|n.standard && n.name=="fonts").unwrap();
+            let font0 = nodes.iter().position(|n|n.standard && n.parent==Some(fonts_section) && n.name=="font").unwrap();
+            let size = nodes.iter().find(|n|n.standard && n.parent==Some(font0) && n.name=="sz").unwrap();
+            assert_eq!(style_node_number(&canonical,size,"val").unwrap(),26);
+            let named_section = nodes.iter().position(|n|n.standard && n.name=="cellStyleXfs").unwrap();
+            let named:Vec<_> = nodes.iter().filter(|n|n.standard && n.parent==Some(named_section) && n.name=="xf").collect();
+            assert_eq!(style_node_number(&canonical,named[0],"fontId").unwrap(),2);
+            assert_eq!(style_node_number(&canonical,named[1],"fontId").unwrap(),0);
+            assert!(canonical.contains(r#"f:keep="font""#));
+            assert!(canonical.contains(r#"<f:sz val="999"/>"#));
+            assert!(canonical.contains("<f:payload/>"));
+        }
+    }
+
+    #[test]
+    fn unchanged_edited_default_cache_preserves_raw_package_bytes() {
+        for original in [include_bytes!("../../../tests/fixtures/basic_test.xlsx").as_slice(),
+            include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm").as_slice()] {
+            let mut editor = XlsxEditor::new(original).unwrap();
+            let edited = editor.workbook().clone();
+            editor.apply_workbook(&edited).unwrap();
+            for (index, sheet) in edited.sheets.iter().enumerate() {
+                editor.set_edited_default_row_height(index, sheet.default_row_height, sheet.default_row_custom);
+            }
+            assert_eq!(editor.save().unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn hidden_implicit_style_width_retains_manual_width_provenance() {
+        let wanted = BTreeMap::from([(0, ColumnWant {
+            hidden: Some(true), fallback_width: Some(9.0), custom: Some(true),
+            style: Some(Some(4)), ..Default::default()
+        })]);
+        for width in [None, Some("10.625")] {
+            let width_attr = width.map(|width|format!(" width=\"{width}\"")).unwrap_or_default();
+            let xml = format!(r#"<worksheet><cols><col min="1" max="1"{width_attr} keep="yes"/></cols><sheetData/></worksheet>"#);
+            let out = cols_of(&xml, &wanted);
+            assert!(out.contains(&format!("width=\"{}\"", width.unwrap_or("0"))), "{out}");
+            for retained in [r#"hidden="1""#,r#"customWidth="1""#,r#"style="4""#,r#"keep="yes""#] {
+                assert!(out.contains(retained), "{out}");
+            }
+        }
+        let fresh = cols_of(BARE, &wanted);
+        assert!(fresh.contains(r#"width="0""#) && fresh.contains(r#"customWidth="1""#), "{fresh}");
+    }
+
+    #[test]
+    fn edited_default_row_cache_follows_reordered_sheet_identity() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let mut editor=XlsxEditor::new(original).unwrap();
+        let mut edited=editor.workbook().clone();
+        let original_name=edited.sheets[0].name.clone();
+        let mut added=edited.sheets[0].clone();
+        added.origin_id=None;
+        added.name="AddedBeforeSource".into();
+        added.rows.clear();
+        added.default_row_height=42.75;
+        added.default_row_custom=false;
+        edited.sheets.insert(0,added);
+        editor.apply_workbook(&edited).unwrap();
+        editor.set_edited_default_row_height(0,42.75,false);
+        editor.set_edited_default_row_height(1,18.75,false);
+        let saved=editor.save().unwrap();
+        let restored=parse_xlsx(&saved).unwrap();
+        assert_eq!(restored.sheets[0].name,"AddedBeforeSource");
+        assert_eq!(restored.sheets[0].default_row_height,42.75);
+        assert_eq!(restored.sheets[1].name,original_name);
+        assert_eq!(restored.sheets[1].default_row_height,18.75);
+        assert!(!restored.sheets[0].default_row_custom);
+        assert!(!restored.sheets[1].default_row_custom);
+    }
+
+    #[test]
+    fn workbook_named_normal_font_changes_survive_save() {
+        let original=include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
+        let mut untouched=XlsxEditor::new(original).unwrap();
+        untouched.apply_workbook(&untouched.workbook().clone()).unwrap();
+        assert_eq!(untouched.save().unwrap(),original);
+        let mut editor=XlsxEditor::new(original).unwrap();
+        let mut edited=editor.workbook().clone();
+        let normal=edited.named_styles.iter_mut().find(|style|style.builtin_id==Some(0)).unwrap();
+        normal.style.font_size=Some(26.0);
+        edited.sheets[0].rows.iter_mut().find(|row|row.index==1).unwrap().cells.iter_mut()
+            .find(|cell|cell.col==1).unwrap().style.font_size=Some(26.0);
+        editor.apply_workbook(&edited).unwrap();
+        assert!(editor.has_edits());
+        let saved=editor.save().unwrap();
+        let first_font_size = |bytes: &[u8]| {
+            let mut zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
+            let mut xml = String::new();
+            zip.by_name("xl/styles.xml").unwrap().read_to_string(&mut xml).unwrap();
+            let nodes = style_xml_nodes(&xml).unwrap();
+            let section = nodes.iter().position(|n| n.standard && n.name == "fonts").unwrap();
+            let font = nodes.iter().position(|n| n.standard && n.parent == Some(section) && n.name == "font").unwrap();
+            let size = nodes.iter().find(|n| n.standard && n.parent == Some(font) && n.name == "sz").unwrap();
+            style_node_number(&xml,size,"val").unwrap()
+        };
+        assert_eq!(first_font_size(&saved),26,"Excel reads Normal from physical font0");
+        let restored=parse_xlsx(&saved).unwrap();
+        let normal=restored.named_styles.iter().find(|style|style.builtin_id==Some(0)).unwrap();
+        assert_eq!(normal.style.font_size,Some(26.0));
+        let first=&restored.sheets[0].rows.iter().find(|row|row.index==1).unwrap().cells;
+        assert_eq!(first.iter().find(|cell|cell.col==1).unwrap().style.font_size,Some(26.0));
+        // The explicitly bold font is a different font identity.
+        assert_eq!(first.iter().find(|cell|cell.col==0).unwrap().style.font_size,Some(11.0));
+        let mut again=XlsxEditor::new(&saved).unwrap();
+        let mut edited=again.workbook().clone();
+        edited.named_styles.iter_mut().find(|style|style.builtin_id==Some(0)).unwrap().style.font_size=Some(32.0);
+        again.apply_workbook(&edited).unwrap();
+        let saved_again=again.save().unwrap();
+        assert_eq!(first_font_size(&saved_again),32,"repeated Normal edits must retain physical font0");
+        let restored=parse_xlsx(&saved_again).unwrap();
+        let first=&restored.sheets[0].rows.iter().find(|row|row.index==1).unwrap().cells;
+        assert_eq!(first.iter().find(|cell|cell.col==1).unwrap().style.font_size,Some(32.0));
+        assert_eq!(first.iter().find(|cell|cell.col==0).unwrap().style.font_size,Some(11.0));
     }
 
     #[test]
@@ -14096,7 +17623,7 @@ mod tests {
             horizontal_align: Some("center".to_string()),
             bg_color: Some("FFFF00".to_string()),
             font_color: Some("FF0000".to_string()),
-            border_top: Some(BorderLine { style: "thin".to_string(), color: None }),
+            border_top: Some(BorderLine { style: "thin".to_string(), color: None, color_reference: None }),
             ..CellStyle::default()
         };
         let (patched, _) = patch_styles_xml(STYLES, &[styled], &CellStyle::default()).expect("appends");
@@ -14361,9 +17888,9 @@ mod tests {
     fn a_height_someone_chose_is_written_as_chosen() {
         // Excel writes `ht="30" customHeight="1"` for a row dragged to a size,
         // and the flag is what stops it working the height out again on open.
-        let want = BTreeMap::from([(1, RowWant {
+        let want = BTreeMap::from([(1, RowWant { format_recorded: None,
             hidden: None, height: Some(Some(30.0)), pinned: true,
-         style: None, })]);
+         style: None, thickness: None, })]);
         let out = row_tags(THREE_ROWS, &want);
         assert!(out.contains(r#"<row r="1" spans="1:1" ht="30" customHeight="1">"#), "{out}");
     }
@@ -14372,9 +17899,9 @@ mod tests {
     fn a_height_worked_out_rather_than_chosen_goes_in_without_the_flag() {
         // An autofitted row carries `ht="44.25"` and no flag: the number is
         // what the content needed, and Excel will work it out afresh.
-        let want = BTreeMap::from([(2, RowWant {
+        let want = BTreeMap::from([(2, RowWant { format_recorded: None,
             hidden: None, height: Some(Some(44.25)), pinned: false,
-         style: None, })]);
+         style: None, thickness: None, })]);
         let out = row_tags(THREE_ROWS, &want);
         assert!(out.contains(r#"<row r="2" spans="1:1" ht="44.25">"#), "{out}");
         // Row 3 has a chosen height of its own, so the flag is looked for on
@@ -14387,9 +17914,9 @@ mod tests {
     fn putting_a_row_back_on_automatic_takes_its_height_away() {
         // Autofitting a row whose content fits the default drops `ht`
         // altogether rather than writing the default number down.
-        let want = BTreeMap::from([(3, RowWant {
+        let want = BTreeMap::from([(3, RowWant { format_recorded: None,
             hidden: None, height: Some(None), pinned: false,
-         style: None, })]);
+         style: None, thickness: None, })]);
         let out = row_tags(THREE_ROWS, &want);
         assert!(out.contains(r#"<row r="3" spans="1:1">"#), "{out}");
         assert!(!out.contains("ht="), "{out}");
@@ -14398,17 +17925,17 @@ mod tests {
 
     #[test]
     fn hiding_a_row_leaves_its_height_alone_and_the_other_way_round() {
-        let hide = BTreeMap::from([(3, RowWant {
+        let hide = BTreeMap::from([(3, RowWant { format_recorded: None,
             hidden: Some(true), height: None, pinned: false,
-         style: None, })]);
+         style: None, thickness: None, })]);
         let out = row_tags(THREE_ROWS, &hide);
         assert!(out.contains(r#"ht="30""#), "{out}");
         assert!(out.contains(r#"customHeight="1""#), "{out}");
         assert!(out.contains(r#"hidden="1""#), "{out}");
 
-        let taller = BTreeMap::from([(3, RowWant {
+        let taller = BTreeMap::from([(3, RowWant { format_recorded: None,
             hidden: None, height: Some(Some(45.0)), pinned: true,
-         style: None, })]);
+         style: None, thickness: None, })]);
         let out = row_tags(
             &THREE_ROWS.replace(r#"ht="30""#, r#"ht="30" hidden="1""#),
             &taller,
@@ -14421,9 +17948,9 @@ mod tests {
     fn a_row_keeps_whatever_else_its_tag_was_carrying() {
         // The span and the descent Excel notes are not this edit's business,
         // and a row that loses its span is one Excel has to work out again.
-        let want = BTreeMap::from([(1, RowWant {
+        let want = BTreeMap::from([(1, RowWant { format_recorded: None,
             hidden: None, height: Some(Some(22.5)), pinned: true,
-         style: None, })]);
+         style: None, thickness: None, })]);
         let xml = THREE_ROWS.replace(
             r#"<row r="1" spans="1:1">"#,
             r#"<row r="1" spans="1:1" s="4" customFormat="1" x14ac:dyDescent="0.4">"#,
@@ -14437,11 +17964,34 @@ mod tests {
 
     #[test]
     fn a_row_the_sheet_never_described_can_still_be_given_a_height() {
-        let want = BTreeMap::from([(7, RowWant {
+        let want = BTreeMap::from([(7, RowWant { format_recorded: None,
             hidden: None, height: Some(Some(36.0)), pinned: true,
-         style: None, })]);
+         style: None, thickness: None, })]);
         let out = row_tags(THREE_ROWS, &want);
         assert!(out.contains(r#"<row r="7" ht="36" customHeight="1">"#), "{out}");
+        let empty = row_tags(r#"<worksheet><sheetData/></worksheet>"#, &want);
+        assert!(empty.contains(r#"<row r="7" ht="36" customHeight="1">"#), "{empty}");
+    }
+
+    #[test]
+    fn implicit_style_band_width_preserves_existing_width_and_unknown_attributes() {
+        let wanted = BTreeMap::from([(0, ColumnWant {
+            fallback_width: Some(9.0), style: Some(Some(4)), ..Default::default()
+        })]);
+        for width in [None, Some("12.77734375")] {
+            let width_attr = width.map(|w|format!(" width=\"{w}\"")).unwrap_or_default();
+            let xml = format!(r#"<worksheet><cols><col min="1" max="1"{width_attr} bestFit="1" outlineLevel="2" keep="yes"/></cols><sheetData/></worksheet>"#);
+            let out = cols_of(&xml, &wanted);
+            let expected_width = width.unwrap_or("9");
+            assert!(out.contains(&format!("width=\"{expected_width}\"")), "{out}");
+            for retained in [r#"bestFit="1""#, r#"outlineLevel="2""#, r#"keep="yes""#, r#"style="4""#] {
+                assert!(out.contains(retained), "{out}");
+            }
+            assert!(!out.contains("customWidth"), "{out}");
+        }
+        let fresh = cols_of(BARE, &wanted);
+        assert!(fresh.contains(r#"width="9""#) && fresh.contains(r#"style="4""#), "{fresh}");
+        assert!(!fresh.contains("customWidth"), "{fresh}");
     }
 
     #[test]
@@ -14449,7 +17999,7 @@ mod tests {
         // A sheet nobody has resized carries no `<cols>` element  Emeasured on
         // a freshly saved workbook  Eso one has to be put in, before
         // `<sheetData>` where the schema wants it.
-        let want = BTreeMap::from([(1, ColumnWant { hidden: None, width: Some(10.625), custom: None, style: None, })]);
+        let want = BTreeMap::from([(1, ColumnWant { best_fit: None, hidden: None, width: Some(10.625), custom: None, style: None, fallback_width: None, })]);
         assert_eq!(
             cols_of(BARE, &want),
             r#"<cols><col min="2" max="2" width="10.625" customWidth="1"/></cols>"#,
@@ -14460,7 +18010,7 @@ mod tests {
     fn a_width_always_brings_the_flag_that_says_it_was_chosen() {
         // Excel writes `customWidth="1"` beside every width it stores. Without
         // it the number is there and Excel ignores it.
-        let want = BTreeMap::from([(0, ColumnWant { hidden: None, width: Some(30.625), custom: None, style: None, })]);
+        let want = BTreeMap::from([(0, ColumnWant { best_fit: None, hidden: None, width: Some(30.625), custom: None, style: None, fallback_width: None, })]);
         let out = cols_of(BARE, &want);
         assert!(out.contains(r#"width="30.625""#), "{out}");
         assert!(out.contains(r#"customWidth="1""#), "{out}");
@@ -14473,7 +18023,7 @@ mod tests {
             r#"<worksheet><cols><col min="1" max="5" width="12.625" customWidth="1"/></cols>"#,
             r#"<sheetData/></worksheet>"#,
         );
-        let want = BTreeMap::from([(2, ColumnWant { hidden: None, width: Some(30.625), custom: None, style: None, })]);
+        let want = BTreeMap::from([(2, ColumnWant { best_fit: None, hidden: None, width: Some(30.625), custom: None, style: None, fallback_width: None, })]);
         assert_eq!(
             cols_of(xml, &want),
             concat!(
@@ -14494,7 +18044,7 @@ mod tests {
             r#"<col min="2" max="2" width="7.5" bestFit="1" customWidth="1"/>"#,
             r#"</cols><sheetData/></worksheet>"#,
         );
-        let want = BTreeMap::from([(1, ColumnWant { hidden: None, width: Some(20.625), custom: None, style: None, })]);
+        let want = BTreeMap::from([(1, ColumnWant { best_fit: None, hidden: None, width: Some(20.625), custom: None, style: None, fallback_width: None, })]);
         let out = cols_of(xml, &want);
         assert!(!out.contains("bestFit"), "{out}");
         assert!(out.contains(r#"width="20.625""#), "{out}");
@@ -14507,12 +18057,12 @@ mod tests {
             r#"<col min="2" max="2" width="18.625" customWidth="1"/>"#,
             r#"</cols><sheetData/></worksheet>"#,
         );
-        let hide = BTreeMap::from([(1, ColumnWant { hidden: Some(true), width: None, custom: None, style: None, })]);
+        let hide = BTreeMap::from([(1, ColumnWant { best_fit: None, hidden: Some(true), width: None, custom: None, style: None, fallback_width: None, })]);
         let out = cols_of(xml, &hide);
         assert!(out.contains(r#"width="18.625""#), "{out}");
         assert!(out.contains(r#"hidden="1""#), "{out}");
 
-        let widen = BTreeMap::from([(1, ColumnWant { hidden: None, width: Some(9.0), custom: None, style: None, })]);
+        let widen = BTreeMap::from([(1, ColumnWant { best_fit: None, hidden: None, width: Some(9.0), custom: None, style: None, fallback_width: None, })]);
         let out = cols_of(
             &xml.replace(r#"width="18.625""#, r#"width="18.625" hidden="1""#),
             &widen,
@@ -14531,7 +18081,7 @@ mod tests {
             r#"<col min="3" max="3" width="8" style="4" outlineLevel="2"/>"#,
             r#"</cols><sheetData/></worksheet>"#,
         );
-        let want = BTreeMap::from([(2, ColumnWant { hidden: None, width: Some(15.5), custom: None, style: None, })]);
+        let want = BTreeMap::from([(2, ColumnWant { best_fit: None, hidden: None, width: Some(15.5), custom: None, style: None, fallback_width: None, })]);
         let out = cols_of(xml, &want);
         assert!(out.contains(r#"style="4""#), "{out}");
         assert!(out.contains(r#"outlineLevel="2""#), "{out}");
@@ -14541,9 +18091,9 @@ mod tests {
     #[test]
     fn columns_asked_for_the_same_width_are_written_as_one_span() {
         let want = BTreeMap::from([
-            (0, ColumnWant { hidden: None, width: Some(12.0), custom: None, style: None, }),
-            (1, ColumnWant { hidden: None, width: Some(12.0), custom: None, style: None, }),
-            (2, ColumnWant { hidden: None, width: Some(12.0), custom: None, style: None, }),
+            (0, ColumnWant { best_fit: None, hidden: None, width: Some(12.0), custom: None, style: None, fallback_width: None, }),
+            (1, ColumnWant { best_fit: None, hidden: None, width: Some(12.0), custom: None, style: None, fallback_width: None, }),
+            (2, ColumnWant { best_fit: None, hidden: None, width: Some(12.0), custom: None, style: None, fallback_width: None, }),
         ]);
         let out = cols_of(BARE, &want);
         assert_eq!(out, r#"<cols><col min="1" max="3" width="12" customWidth="1"/></cols>"#);
