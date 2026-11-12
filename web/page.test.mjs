@@ -33,7 +33,7 @@ import{readFile}from'node:fs/promises';
 await init({module_or_path:await readFile(${JSON.stringify(join(pkg,'oxidocs_wasm_bg.wasm'))})});
 export{SpreadsheetVbaSession,spreadsheet_vba_source,spreadsheet_vba_project_name};
 export default function ready(){return Promise.resolve();}`;
-const workerSource = (await readFile(join(here,'vba-worker.js'),'utf8'))
+const workerSource = (await readFile(join(here,'vba-worker.js'),'utf8')).replace("'./vba-editor-settings.js'", JSON.stringify(new URL('./vba-editor-settings.js', import.meta.url).href))
   .replace("'./oxidocs_wasm.js'",JSON.stringify('data:text/javascript;base64,'+Buffer.from(shim).toString('base64')));
 const bridge = `import{parentPort,workerData}from'node:worker_threads';const queued=[];let listener;
 globalThis.self=Object.assign(globalThis,{postMessage:value=>parentPort.postMessage(value),
