@@ -4,6 +4,15 @@ name: Nextcloud app
 # LibreOffice). Builds oxidocs statically for Linux x86_64 and arm64, checks
 # the app end to end in Nextcloud 32 and 35, and packages the App Store
 # tarball as an artifact.
+#
+# A manual run can also release it:
+# - "register" (once): registers the app on apps.nextcloud.com with the
+#   certificate in integrations/nextcloud/oxidocs_preview.crt.
+# - "publish": signs the tarball with the app's key, attaches it to a GitHub
+#   release tagged nextcloud-app-v<version>, and submits that release to the
+#   App Store.
+# Secrets: NEXTCLOUD_APP_KEY (the app's private key, PEM) and
+# NEXTCLOUD_APPSTORE_TOKEN (the App Store account's API token).
 
 on:
   pull_request:
@@ -12,6 +21,15 @@ on:
       - "crates/oxidocs-cli/**"
       - ".github/workflows/nextcloud-app.yml"
   workflow_dispatch:
+    inputs:
+      register:
+        description: "Register the app on the App Store (once, after the certificate is issued)"
+        type: boolean
+        default: false
+      publish:
+        description: "Sign the tarball, make a GitHub release and submit it to the App Store"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -84,3 +102,69 @@ jobs:
         with:
           name: oxidocs_preview
           path: integrations/nextcloud/build/oxidocs_preview-*.tar.gz
+
+  release:
+    needs: package
+    if: github.event_name == 'workflow_dispatch' && (inputs.register || inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      CERT: integrations/nextcloud/oxidocs_preview.crt
+      STORE: https://apps.nextcloud.com/api/v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: oxidocs_preview
+          path: dist
+      - name: Key
+        env:
+          NEXTCLOUD_APP_KEY: ${{ secrets.NEXTCLOUD_APP_KEY }}
+        run: |
+          test -f "$CERT" || { echo "::error::$CERT is missing: commit the issued certificate first"; exit 1; }
+          umask 077
+          printf '%s\n' "$NEXTCLOUD_APP_KEY" > "$RUNNER_TEMP/app.key"
+          # The key must belong to the certificate the App Store knows.
+          cmp <(openssl x509 -in "$CERT" -noout -pubkey) <(openssl pkey -in "$RUNNER_TEMP/app.key" -pubout) \
+            || { echo "::error::NEXTCLOUD_APP_KEY does not match $CERT"; exit 1; }
+          openssl x509 -in "$CERT" -noout -subject
+      - name: Register the app
+        if: inputs.register
+        env:
+          TOKEN: ${{ secrets.NEXTCLOUD_APPSTORE_TOKEN }}
+        run: |
+          signature="$(printf '%s' oxidocs_preview | openssl dgst -sha512 -sign "$RUNNER_TEMP/app.key" | openssl base64 -A)"
+          jq -n --rawfile certificate "$CERT" --arg signature "$signature" '{certificate: $certificate, signature: $signature}' > "$RUNNER_TEMP/register.json"
+          code=$(curl -sS -o "$RUNNER_TEMP/register.out" -w '%{http_code}' -X POST "$STORE/apps" \
+            -H "Authorization: Token $TOKEN" -H 'Content-Type: application/json' --data @"$RUNNER_TEMP/register.json")
+          cat "$RUNNER_TEMP/register.out"; echo
+          case "$code" in 200|201|204) echo "registered (HTTP $code)";; *) echo "::error::register: HTTP $code"; exit 1;; esac
+      - name: GitHub release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tarball="$(ls dist/oxidocs_preview-*.tar.gz)"
+          version="$(sed -n 's:.*<version>\(.*\)</version>.*:\1:p' integrations/nextcloud/appinfo/info.xml)"
+          case "$tarball" in *"-$version.tar.gz") ;; *) echo "::error::$tarball is not version $version"; exit 1;; esac
+          tag="nextcloud-app-v$version"
+          openssl dgst -sha512 -sign "$RUNNER_TEMP/app.key" "$tarball" | openssl base64 -A > "$tarball.sig"
+          gh release create "$tag" "$tarball" --target "$GITHUB_SHA" \
+            --title "Oxi Word Previews for Nextcloud $version" \
+            --notes "The oxidocs_preview Nextcloud app: thumbnails of Word documents without LibreOffice. Unpack into custom_apps and run \`occ app:enable oxidocs_preview\`, or install it from the Nextcloud App Store. See integrations/nextcloud/README.md."
+          echo "TARBALL=$tarball" >> "$GITHUB_ENV"
+          echo "DOWNLOAD=https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$(basename "$tarball")" >> "$GITHUB_ENV"
+      - name: Submit to the App Store
+        if: inputs.publish
+        env:
+          TOKEN: ${{ secrets.NEXTCLOUD_APPSTORE_TOKEN }}
+        run: |
+          jq -n --arg download "$DOWNLOAD" --rawfile signature "$TARBALL.sig" '{download: $download, signature: $signature, nightly: false}' > "$RUNNER_TEMP/release.json"
+          code=$(curl -sS -o "$RUNNER_TEMP/release.out" -w '%{http_code}' -X POST "$STORE/apps/releases" \
+            -H "Authorization: Token $TOKEN" -H 'Content-Type: application/json' --data @"$RUNNER_TEMP/release.json")
+          cat "$RUNNER_TEMP/release.out"; echo
+          case "$code" in 200|201) echo "submitted $DOWNLOAD (HTTP $code)";; *) echo "::error::release: HTTP $code"; exit 1;; esac
+      - name: Forget the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/app.key"
