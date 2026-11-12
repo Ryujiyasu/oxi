@@ -11,6 +11,32 @@ use std::io::{Cursor, Read, Write};
 
 const EMU_PER_POINT: f64 = 12_700.0;
 
+/// Office accepts Single coordinates and rounds the two edges separately.
+fn ordinary_shape_edge_pair(position: f64, extent: f64) -> (f64, f64) {
+    let start = position as f32;
+    let size = extent.max(0.0) as f32;
+    if !start.is_finite() || !size.is_finite() {
+        return (position.max(0.0), extent.max(0.0));
+    }
+    let first = (f64::from(start) * EMU_PER_POINT).round();
+    let last = (f64::from(start + size) * EMU_PER_POINT).round();
+    (first.max(0.0) / EMU_PER_POINT, (last - first).max(0.0) / EMU_PER_POINT)
+}
+
+/// The integer center and half-delta use different rounding directions.
+fn ordinary_shape_resize_axis(position: f64, extent: f64, requested: f64) -> (f64, f64) {
+    let single = requested as f32;
+    if !position.is_finite() || !extent.is_finite() || !single.is_finite() {
+        return (position, requested.max(0.0));
+    }
+    let start = (position * EMU_PER_POINT).round() as i128;
+    let old = (extent * EMU_PER_POINT).round() as i128;
+    let new = (f64::from(single) * EMU_PER_POINT).round() as i128;
+    let next = (start + old / 2 - (old - new) / 2 - new / 2).max(0);
+    (next as f64 / EMU_PER_POINT, new as f64 / EMU_PER_POINT)
+}
+
+
 /// Excel snaps both edges of a non-icon Word OLE Add extent to its 96-DPI
 /// pixel grid. The pixel span then uses a 1.5pt base step and an alternating
 /// one-pixel correction in the latter 11 pixels of each 24-pixel period.
@@ -212,6 +238,10 @@ fn empty_package_embedding() -> Result<Vec<u8>, String> {
 
 /// E_INVALIDARG, which is what `Shapes("nope")` and `Shapes(9)` raise.
 const NO_SUCH_SHAPE: i64 = -2_147_024_809;
+const DELETED_COMMENT_ALIAS: i64 = -2_147_024_882;
+
+#[derive(Clone, Copy)]
+enum ShapeItemFailure { Name, Index, ChartOnly }
 
 /// Excel's new AutoShape outline points at DrawingML `lnRef` slot 2, whose
 /// Office format scheme shades the shape's accent by 15% in linear light.
@@ -498,14 +528,159 @@ impl<'a> WorkbookHost<'a> {
         self.shape_range_object(live)
     }
 
-    fn shape_range_object(&mut self, ids: Vec<u64>) -> Value {
+    fn shape_range_object(&mut self, mut ids: Vec<u64>) -> Value {
+        let sheet = ids.first().and_then(|id| self.shape(*id).ok()).map(|shape| shape.sheet);
+        let legacy_notes = ids.iter().any(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_some()));
+        let ordinary_range = ids.iter().any(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_none()));
+        // Excel concatenates an ordinary drawing range and a note selection.
+        // Each preserves caller order; note aliases select a note only once.
+        ids.sort_by_key(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_some()));
+        let mut notes = std::collections::HashSet::new();
+        ids.retain(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_none()) || notes.insert(*id));
+        let ordinary_slots: Vec<_> = ids.iter().copied()
+            .filter(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_none())).collect();
+        let ordinary_initialized = ordinary_slots.len() > 1;
         let index = self.shape_ranges.len();
-        self.shape_ranges.push(ids);
+        self.shape_ranges.push(ShapeRangeRecord { ids, sheet, legacy_notes, ordinary_range,
+            ordinary_slots, ordinary_initialized });
         self.part(DrawingPart::ShapeRange(index))
     }
 
     fn shape_range_ids(&self, index: usize) -> Vec<u64> {
-        self.shape_ranges.get(index).cloned().unwrap_or_default()
+        self.shape_ranges.get(index).map(|range| range.ids.clone()).unwrap_or_default()
+    }
+
+    fn shape_range_live_ids(&self, index: usize) -> Vec<u64> {
+        self.shape_range_ids(index).into_iter().filter(|id| self.shape(*id).is_ok()).collect()
+    }
+
+    fn refresh_shape_range_slots(&mut self) {
+        let live: std::collections::HashSet<_> = self.shapes.iter()
+            .filter(|shape| shape.comment_at.is_none()).map(|shape| shape.id).collect();
+        for range in &mut self.shape_ranges {
+            let mut selection = std::collections::HashSet::new();
+            for id in range.ordinary_slots.iter().filter(|id| live.contains(id)) {
+                if !selection.insert(*id) { selection.remove(id); }
+            }
+            // A resolvable selection compacts deleted entries. An expired
+            // backing range keeps its last slots, including deleted holes.
+            if !selection.is_empty() { range.ordinary_slots.retain(|id| live.contains(id)); }
+        }
+    }
+
+    fn shape_range_ordinary_count(&self, index: usize) -> Result<usize, String> {
+        let ordinary: Vec<_> = self.shape_ranges.get(index).into_iter()
+            .flat_map(|range| range.ordinary_slots.iter().copied())
+            .filter(|id| self.shape(*id).is_ok()).collect();
+        let mut selection = std::collections::HashSet::new();
+        for id in &ordinary {
+            if !selection.insert(*id) { selection.remove(id); }
+        }
+        if selection.is_empty() {
+            return Err(host_error(424, "Object required"));
+        }
+        Ok(ordinary.len())
+    }
+
+    fn shape_range_count(&self, index: usize) -> Result<i64, String> {
+        let record = self.shape_ranges.get(index).ok_or_else(|| host_error(9, "Subscript out of range"))?;
+        let ordinary = if record.ordinary_range { self.shape_range_ordinary_count(index)? } else { 0 };
+        let notes = self.shape_range_live_ids(index).into_iter()
+            .filter(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_some())).count();
+        Ok((ordinary + notes) as i64)
+    }
+
+    fn shape_range_scalar_get(&mut self, index: usize, name: &str) -> Result<Option<Value>, String> {
+        let record = self.shape_ranges.get(index).cloned().ok_or_else(|| host_error(9, "Subscript out of range"))?;
+        let ids = self.shape_range_live_ids(index);
+        if name == "name" && record.ordinary_slots.iter().any(|id| self.shape(*id).is_ok()) {
+            self.shape_ranges[index].ordinary_initialized = true;
+        }
+        if ids.is_empty() { return Ok(None); }
+        if record.ordinary_range && record.legacy_notes {
+            return Err(host_error(1004, "Application-defined or object-defined error"));
+        }
+        if name == "name" {
+            if ids.len() != 1 { return Err(host_error(70, "Permission denied")); }
+            return self.drawing_get(DrawingPart::Shape(ids[0]), name);
+        }
+        let read = |shape: &ShapeRecord| -> f32 { match name {
+            "left" => shape.left as f32,
+            "top" => shape.top as f32,
+            "width" => shape.width as f32,
+            _ => shape.height as f32,
+        }};
+        let first = read(self.shape(ids[0])?);
+        let uniform = ids.iter().all(|id| self.shape(*id).is_ok_and(|shape| read(shape) == first));
+        Ok(Some(Value::Single(if uniform { first } else { i32::MIN as f32 })))
+    }
+
+    fn pick_range_shape(&mut self, range: usize, asked: Option<&Value>) -> Result<u64, String> {
+        const BAD_RANGE_INDEX: i64 = -2_147_352_565;
+        self.refresh_shape_range_slots();
+        let record = self.shape_ranges.get(range).cloned().ok_or_else(|| host_error(9, "Subscript out of range"))?;
+        let live = self.shape_range_live_ids(range);
+        let default_index = Value::Integer(1);
+        let asked = asked.unwrap_or(&default_index);
+        if let Value::String(name) = asked {
+            let ordinary_alive = record.ordinary_slots.iter().any(|id| self.shape(*id).is_ok());
+            if ordinary_alive { self.shape_ranges[range].ordinary_initialized = true; }
+            let find_ordinary = |key: &str| -> Result<Option<u64>, String> {
+                for id in &record.ordinary_slots {
+                    let shape = self.shape(*id).map_err(|_| host_error(9, "Subscript out of range"))?;
+                    if shape.name.eq_ignore_ascii_case(key) { return Ok(Some(*id)); }
+                }
+                Ok(None)
+            };
+            let alias = localized_alias(name);
+            let ordinary = find_ordinary(name).and_then(|found| {
+                if found.is_some() { Ok(found) } else if let Some(alias) = alias.as_deref() { find_ordinary(alias) } else { Ok(None) }
+            });
+            match ordinary {
+                Ok(Some(id)) => return Ok(id),
+                Err(error) if !record.legacy_notes => return Err(error),
+                _ => {}
+            }
+            let notes: Vec<_> = live.iter().copied().filter(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_some())).collect();
+            if let Some(id) = notes.iter().copied().find(|id| self.shape(*id).is_ok_and(|shape| shape.name.eq_ignore_ascii_case(name)))
+                .or_else(|| alias.as_deref().and_then(|alias| notes.iter().copied().find(|id| self.shape(*id).is_ok_and(|shape| shape.name.eq_ignore_ascii_case(alias))))) {
+                return Ok(id);
+            }
+            let sheet = notes.first().and_then(|id| self.shape(*id).ok()).map(|shape| shape.sheet).or(record.sheet);
+            if let Some(owner) = sheet.and_then(|sheet| self.comment_shape_alias_owner(sheet, name)) {
+                if notes.contains(&owner) { return Ok(owner); }
+            }
+            if !record.legacy_notes && live.is_empty() { return Err(host_error(9, "Subscript out of range")); }
+            return Err(self.shape_item_failure(if record.legacy_notes { NO_SUCH_SHAPE } else { BAD_RANGE_INDEX }, ShapeItemFailure::Name));
+        }
+        let number = any_whole_number(asked).ok_or_else(|| host_error(13, "Type mismatch"))?;
+        let expired_error = |host: &Self| {
+            if number == 1 || !record.ordinary_initialized { host_error(424, "Object required") }
+            else { host.shape_item_failure(424, ShapeItemFailure::Index) }
+        };
+        if number >= 1 && number <= record.ordinary_slots.len() as i64 {
+            let id = record.ordinary_slots[(number - 1) as usize];
+            if self.shape(id).is_ok() {
+                self.shape_ranges[range].ordinary_initialized = true;
+                return Ok(id);
+            }
+            return Err(if record.legacy_notes { host_error(424, "Object required") } else { host_error(9, "Subscript out of range") });
+        }
+        if record.ordinary_range && record.legacy_notes {
+            let count = self.shape_range_ordinary_count(range).map_err(|_| expired_error(self))?;
+            if number <= 0 { return Err(self.shape_item_failure(BAD_RANGE_INDEX, ShapeItemFailure::Index)); }
+            let note_index = number - count as i64;
+            let notes: Vec<_> = live.iter().copied().filter(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_some())).collect();
+            if note_index >= 1 && note_index <= notes.len() as i64 { return Ok(notes[(note_index - 1) as usize]); }
+            return Err(self.shape_item_failure(NO_SUCH_SHAPE, ShapeItemFailure::Index));
+        }
+        if record.legacy_notes {
+            if number <= 0 { return Err(host_error(9, "Subscript out of range")); }
+            if number <= live.len() as i64 { return Ok(live[(number - 1) as usize]); }
+            return Err(self.shape_item_failure(NO_SUCH_SHAPE, ShapeItemFailure::Index));
+        }
+        if live.is_empty() && number == 1 { return Err(host_error(9, "Subscript out of range")); }
+        Err(self.shape_item_failure(BAD_RANGE_INDEX, ShapeItemFailure::Index))
     }
 
     /// `ActiveChart`: the chart of the selected shape when it holds one, or
@@ -595,7 +770,21 @@ impl<'a> WorkbookHost<'a> {
                 listed.push(shape.id);
             }
         }
+        // Notes belong to Shapes but follow the ordinary drawing layer, even
+        // when the note was created before the first ordinary shape.
+        listed.sort_by_key(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_some()));
         listed
+    }
+
+    pub(super) fn drawing_enumeration(&mut self, part: DrawingPart) -> Result<Option<Vec<Value>>, String> {
+        let items: Vec<DrawingPart> = match part {
+            DrawingPart::Shapes(sheet) => self.shapes_on(sheet).into_iter().map(DrawingPart::Shape).collect(),
+            DrawingPart::ShapeRange(index) => self.shape_range_ids(index).into_iter().map(DrawingPart::Shape).collect(),
+            DrawingPart::GroupItems(id) => self.shape(id)?.group_children.iter().copied().map(DrawingPart::Shape).collect(),
+            DrawingPart::ChartObjects(sheet) => self.charts_on(sheet).into_iter().map(DrawingPart::ChartObject).collect(),
+            _ => return Ok(None),
+        };
+        Ok(Some(items.into_iter().map(|item| self.part(item)).collect()))
     }
 
     pub(super) fn ole_objects_on(&self, sheet: usize) -> Vec<u64> {
@@ -621,7 +810,7 @@ impl<'a> WorkbookHost<'a> {
 
     pub(super) fn ole_objects_snapshot(&mut self, sheet: usize, ids: Vec<u64>) -> Value {
         let index = self.shape_ranges.len();
-        self.shape_ranges.push(ids);
+        self.shape_ranges.push(ShapeRangeRecord { ordinary_slots: ids.clone(), ordinary_initialized: ids.len() > 1, ids, sheet: Some(sheet), legacy_notes: false, ordinary_range: true });
         self.part(DrawingPart::OleObjectsSnapshot(sheet, index))
     }
 
@@ -720,34 +909,48 @@ impl<'a> WorkbookHost<'a> {
             .collect()
     }
 
-    /// `Shapes(n)` / `Shapes("name")` / `ChartObjects(...)`, among `listed`.
-    fn pick_shape(&self, listed: &[u64], index: &Value) -> Result<u64, String> {
+    fn shape_item_failure(&self, number: i64, failure: ShapeItemFailure) -> String {
+        let description = match (self.error_language, failure) {
+            (ErrorLanguage::Japanese, ShapeItemFailure::Name) => "指定した名前のアイテムが見つかりませんでした。",
+            (ErrorLanguage::Japanese, ShapeItemFailure::Index) => "指定したコレクションに対するインデックスが境界を超えています。",
+            (ErrorLanguage::Japanese, ShapeItemFailure::ChartOnly) => "このメンバーは、グラフ オブジェクトだけにアクセスできます。",
+            (_, ShapeItemFailure::Name) => "The item with the specified name wasn't found.",
+            (_, ShapeItemFailure::Index) => "The index into the specified collection is out of bounds.",
+            (_, ShapeItemFailure::ChartOnly) => "This member can only be accessed for chart objects.",
+        };
+        host_error_described(number, description)
+    }
+
+    /// Name lookup has an explicit worksheet even when the collection is empty.
+    /// Ordinary shapes precede notes, and explicit names precede generated aliases.
+    fn pick_shape(&self, sheet: usize, listed: &[u64], index: &Value, charts_only: bool) -> Result<u64, String> {
         match index {
             Value::String(name) => {
                 let alias = localized_alias(name);
-                let sheet = listed.first().and_then(|id| self.shape(*id).ok()).map(|shape| shape.sheet);
-                self.shapes
-                    .iter()
-                    .filter(|shape| sheet.is_none_or(|sheet| shape.sheet == sheet))
-                    .map(|shape| shape.id)
-                    .find(|id| {
-                        self.shape(*id).is_ok_and(|shape| {
-                            shape.name.eq_ignore_ascii_case(name)
-                                || alias.as_deref().is_some_and(|alias| shape.name.eq_ignore_ascii_case(alias))
-                        })
-                    })
-                    .ok_or_else(|| {
-                        // Measured: `Shapes("none")` says "The item with the
-                        // specified name wasn't found."
-                        let _ = name;
-                        oxivba_core::host_error_described(NO_SUCH_SHAPE, "The item with the specified name wasn't found.")
-                    })
+                let candidates: Vec<_> = self.shapes.iter().filter(|shape| shape.comment_at.is_none())
+                    .chain(self.shapes.iter().filter(|shape| shape.comment_at.is_some()))
+                    .filter(|shape| shape.sheet == sheet && (!charts_only || shape.comment_at.is_none())).collect();
+                let found = candidates.iter().copied().find(|shape| shape.name.eq_ignore_ascii_case(name))
+                    .or_else(|| alias.as_deref().and_then(|alias| candidates.iter().copied()
+                        .find(|shape| shape.name.eq_ignore_ascii_case(alias))));
+                if let Some(shape) = found {
+                    if charts_only && !matches!(shape.kind, ShapeKind::Chart(_)) {
+                        return Err(self.shape_item_failure(NO_SUCH_SHAPE, ShapeItemFailure::ChartOnly));
+                    }
+                    return Ok(shape.id);
+                }
+                if !charts_only {
+                    if let Some(owner) = self.comment_shape_alias_owner(sheet, name) {
+                        return if self.shape(owner).is_ok() { Ok(owner) }
+                            else { Err(self.shape_item_failure(DELETED_COMMENT_ALIAS, ShapeItemFailure::Name)) };
+                    }
+                }
+                Err(self.shape_item_failure(NO_SUCH_SHAPE, ShapeItemFailure::Name))
             }
             value => match any_whole_number(value) {
-                Some(number) if number >= 1 && (number as usize) <= listed.len() => {
-                    Ok(listed[number as usize - 1])
-                }
-                _ => Err(host_error(NO_SUCH_SHAPE, "there is no such shape")),
+                Some(number) if number >= 1 && number <= listed.len() as i64 => Ok(listed[(number - 1) as usize]),
+                _ if charts_only => Err(host_error(1004, "Application-defined or object-defined error")),
+                _ => Err(self.shape_item_failure(NO_SUCH_SHAPE, ShapeItemFailure::Index)),
             },
         }
     }
@@ -780,10 +983,12 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn new_shape(&mut self, sheet: usize, kind: ShapeKind, base: &str) -> u64 {
+        self.reserve_drawing_identity_group(sheet);
         let number = self.next_shape_number(sheet);
         let id = self.next_shape_id;
         self.next_shape_id += 1;
         let mut record = ShapeRecord::blank(id, sheet, format!("{base} {number}"), kind);
+        record.non_visual_id = number.saturating_add(1);
         record.theme_palette = workbook_office_theme_palette(&self.workbook.theme_colors);
         let accent1_theme = 5usize;
         if record.fill_theme == Some(accent1_theme) {
@@ -871,6 +1076,8 @@ impl<'a> WorkbookHost<'a> {
         drawing.fill_visible = false;
         drawing.original = Some(oxicells_core::ir::Drawing {
             name: Some(drawing.name.clone()),
+            non_visual_id: None,
+            metadata: None,
             ole_prog_id: Some("Word.Document.12".into()),
             ole_source_name: None,
             ole_clone_position: Some((left, top)),
@@ -935,6 +1142,8 @@ impl<'a> WorkbookHost<'a> {
         drawing.fill_visible = false;
         drawing.original = Some(oxicells_core::ir::Drawing {
             name: Some(drawing.name.clone()),
+            non_visual_id: None,
+            metadata: None,
             ole_prog_id: Some("Package".into()),
             ole_source_name: None,
             ole_clone_position: Some((left, top)),
@@ -1019,6 +1228,8 @@ impl<'a> WorkbookHost<'a> {
         drawing.fill_visible = false;
         drawing.original = Some(oxicells_core::ir::Drawing {
             name: Some(drawing.name.clone()),
+            non_visual_id: None,
+            metadata: None,
             ole_prog_id: Some("Package".into()),
             ole_source_name: None,
             ole_clone_position: Some((left, top)),
@@ -1098,6 +1309,8 @@ impl<'a> WorkbookHost<'a> {
     fn add_chart(&mut self, sheet: usize, left: f64, top: f64, width: f64, height: f64, chart_type: i64) -> Result<u64, String> {
         let chart = ChartRecord {
             chart_type,
+            fill: Some("FFFFFF".to_string()),
+            plot_fill: None,
             plot_modified: true,
             of_pie: chart_plot_options(chart_type).of_pie,
             category_axis_labels: Vec::new(),
@@ -1125,10 +1338,8 @@ impl<'a> WorkbookHost<'a> {
     fn place_shape(&mut self, id: u64, left: f64, top: f64, width: f64, height: f64) -> Result<(), String> {
         let sheet = {
             let shape = self.shape_mut(id)?;
-            shape.left = left.max(0.0);
-            shape.top = top.max(0.0);
-            shape.width = width.max(0.0);
-            shape.height = height.max(0.0);
+            (shape.left, shape.width) = ordinary_shape_edge_pair(left, width);
+            (shape.top, shape.height) = ordinary_shape_edge_pair(top, height);
             shape.sheet
         };
         self.mirror_drawings(sheet);
@@ -1138,6 +1349,28 @@ impl<'a> WorkbookHost<'a> {
     fn redraw(&mut self, id: u64) -> Result<(), String> {
         let sheet = self.shape(id)?.sheet;
         self.mirror_drawings(sheet);
+        Ok(())
+    }
+
+    fn translate_group_children(&mut self, id: u64, dx: f64, dy: f64) -> Result<(), String> {
+        let children = self.shape(id)?.group_children.clone();
+        let group = self.shape_mut(id)?;
+        if let Some((left, top, width, height)) = group.group_bounds {
+            group.group_bounds = Some((left + dx, top + dy, width, height));
+        }
+        if let Some(transform) = &mut group.group_transform {
+            let emu = |points: f64| (points * 12_700.0).round() as i64;
+            transform.offset.0 += emu(dx);
+            transform.offset.1 += emu(dy);
+            transform.child_offset.0 += emu(dx);
+            transform.child_offset.1 += emu(dy);
+        }
+        for child in children {
+            let shape = self.shape_mut(child)?;
+            shape.left += dx;
+            shape.top += dy;
+            if !shape.group_children.is_empty() { self.translate_group_children(child, dx, dy)?; }
+        }
         Ok(())
     }
 
@@ -1191,6 +1424,10 @@ impl<'a> WorkbookHost<'a> {
     fn delete_shape(&mut self, id: u64) -> Result<(), String> {
         let deleted = self.shape(id)?.clone();
         let sheet = deleted.sheet;
+        if let Some(at) = deleted.comment_at {
+            self.notes.retain(|note| note.at != at);
+            self.saved = false;
+        }
         if !deleted.group_children.is_empty() {
             let members: std::collections::HashSet<u64> = deleted.group_children.iter().copied().collect();
             self.shapes.retain(|shape| shape.id != id && !members.contains(&shape.id));
@@ -1220,6 +1457,7 @@ impl<'a> WorkbookHost<'a> {
                 }
             }
         }
+        self.refresh_shape_range_slots();
         self.mirror_drawings(sheet);
         Ok(())
     }
@@ -1301,6 +1539,12 @@ impl<'a> WorkbookHost<'a> {
     /// measured, `Duplicate` of Rectangle 6 at (10, 300) is Rectangle 8 at
     /// (22, 312).
     fn duplicate_shape(&mut self, id: u64, at: Option<(f64, f64)>) -> Result<u64, String> {
+        self.copy_shape_to(id, self.shape(id)?.sheet, at)
+    }
+
+    /// Copies allocate a physical identity from the destination worksheet.
+    /// Copying to another sheet must not consume the source's name/id counter.
+    fn copy_shape_to(&mut self, id: u64, sheet: usize, at: Option<(f64, f64)>) -> Result<u64, String> {
         let source = self.shape(id)?.clone();
         let is_ole = source.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some());
         let base = if is_ole {
@@ -1316,15 +1560,19 @@ impl<'a> WorkbookHost<'a> {
             }
         };
         let number = if is_ole {
-            self.next_ole_object_number(source.sheet)
+            self.next_ole_object_number(sheet)
         } else {
-            self.next_shape_number(source.sheet)
+            self.next_shape_number(sheet)
         };
         let new_id = self.next_shape_id;
         self.next_shape_id += 1;
         let (left, top) = at.unwrap_or((source.left + 12.0, source.top + 12.0));
         let ole_clone_of = is_ole.then(|| source.ole_clone_of.clone().unwrap_or_else(|| source.name.clone()));
-        let copy = ShapeRecord { id: new_id, name: format!("{base} {number}"), left, top, ole_clone_of, ..source };
+        let copied_name = if !is_ole && !source.name_is_automatic { source.name.clone() }
+            else { format!("{base} {number}") };
+        let physical_id = if is_ole { source.non_visual_id } else { number.saturating_add(1) };
+        let copy = ShapeRecord { id: new_id, sheet, non_visual_id: physical_id, source_drawing_id: None,
+            name: copied_name, left, top, ole_clone_of, ..source };
         self.shapes.push(copy);
         self.redraw(new_id)?;
         Ok(new_id)
@@ -1341,16 +1589,9 @@ impl<'a> WorkbookHost<'a> {
             return Ok(None);
         }
         let at = self.selection.first();
-        let left = (0..at.column).map(|c| f64::from(self.column_px(sheet, c))).sum::<f64>() * 0.75;
-        let top = (1..at.row).map(|r| f64::from(self.row_px(sheet, r))).sum::<f64>() * 0.75;
-        let source_sheet = self.shape(id)?.sheet;
-        let new_id = self.duplicate_shape(id, Some((left, top)))?;
-        if source_sheet != sheet {
-            let old = source_sheet;
-            self.shape_mut(new_id)?.sheet = sheet;
-            self.mirror_drawings(old);
-            self.mirror_drawings(sheet);
-        }
+        let left = (0..at.column).map(|c| f64::from(self.column_px(sheet, c))).fold(0.0, |sum, pixels|sum+pixels) * 0.75;
+        let top = (1..at.row).map(|r| f64::from(self.row_px(sheet, r))).fold(0.0, |sum, pixels|sum+pixels) * 0.75;
+        self.copy_shape_to(id, sheet, Some((left, top)))?;
         Ok(Some(Value::Boolean(true)))
     }
 
@@ -2162,7 +2403,7 @@ impl<'a> WorkbookHost<'a> {
                 Ok(match lower.as_str() {
                     // RGB is the default member: measured, a ForeColor read as
                     // a value is its colour.
-                    "rgb" | "value" => Some(Value::Integer(shape.fill)),
+                    "rgb" | "value" => Some(Value::Integer(if matches!(shape.kind, ShapeKind::Line) { 0 } else { shape.fill })),
                     "objectthemecolor" => Some(Value::Integer(shape.fill_theme.map_or(0, |theme| theme as i64))),
                     // Measured on a fresh shape (accent1): Type
                     // msoColorTypeScheme (2), SchemeColor 21, no brightness
@@ -2696,9 +2937,8 @@ impl<'a> WorkbookHost<'a> {
                 Ok(match lower.as_str() {
                     "width" => Some(Value::Double(shape.width - 5.0)),
                     "height" => Some(Value::Double(shape.height - 5.0)),
-                    "format" => Some(self.part(DrawingPart::ChartArea(id))),
-                    "fill" | "interior" | "forecolor" => Some(self.part(DrawingPart::ChartArea(id))),
-                    "rgb" | "color" => Some(Value::Integer(WHITE)),
+                    "format" => Some(self.part(DrawingPart::ChartFormat(id, false))),
+                    "interior" => Some(self.part(DrawingPart::ChartInterior(id, false))),
                     // Measured: グラフ, square corners, no shadow.
                     "name" => Some(Value::String("グラフ".to_string())),
                     "roundedcorners" | "shadow" => Some(Value::Boolean(false)),
@@ -2711,8 +2951,8 @@ impl<'a> WorkbookHost<'a> {
             DrawingPart::PlotArea(id) => {
                 let shape = self.shape(id)?;
                 Ok(match lower.as_str() {
-                    "format" | "fill" | "interior" | "forecolor" => Some(self.part(DrawingPart::PlotArea(id))),
-                    "rgb" | "color" => Some(Value::Integer(WHITE)),
+                    "format" => Some(self.part(DrawingPart::ChartFormat(id, true))),
+                    "interior" => Some(self.part(DrawingPart::ChartInterior(id, true))),
                     "insideleft" => Some(Value::Double(16.8025196850394)),
                     // Measured: プロット, at its automatic place.
                     "name" => Some(Value::String("プロット".to_string())),
@@ -2725,6 +2965,37 @@ impl<'a> WorkbookHost<'a> {
                     "top" => Some(Value::Double(5.0)),
                     "width" => Some(Value::Double((shape.width - 15.0).max(0.0))),
                     "height" => Some(Value::Double((shape.height - 15.0).max(0.0))),
+                    _ => None,
+                })
+            }
+            DrawingPart::ChartFormat(id, plot) => {
+                self.chart(id)?;
+                Ok(match lower.as_str() {
+                    "fill" => Some(self.part(DrawingPart::ChartFill(id, plot))),
+                    "parent" => Some(self.part(if plot { DrawingPart::PlotArea(id) } else { DrawingPart::ChartArea(id) })),
+                    _ => None,
+                })
+            }
+            DrawingPart::ChartFill(id, plot) => {
+                self.chart(id)?;
+                Ok(match lower.as_str() {
+                    "forecolor" => Some(self.part(DrawingPart::ChartColor(id, plot))),
+                    "parent" => Some(self.part(DrawingPart::ChartFormat(id, plot))),
+                    _ => None,
+                })
+            }
+            DrawingPart::ChartColor(id, plot) | DrawingPart::ChartInterior(id, plot) => {
+                let chart = self.chart(id)?;
+                let interior = matches!(part, DrawingPart::ChartInterior(..));
+                Ok(match lower.as_str() {
+                    "value" | "color" if interior => Some(Value::Integer(if plot {
+                        colour_to_packed(chart.plot_fill.as_deref()).unwrap_or(0)
+                    } else { self.shape(id)?.fill })),
+                    "value" | "rgb" if !interior => Some(Value::Integer(if plot {
+                        colour_to_packed(chart.plot_fill.as_deref()).unwrap_or(0)
+                    } else { self.shape(id)?.fill })),
+                    "parent" if interior => Some(self.part(if plot { DrawingPart::PlotArea(id) } else { DrawingPart::ChartArea(id) })),
+                    "parent" => Some(self.part(DrawingPart::ChartFill(id, plot))),
                     _ => None,
                 })
             }
@@ -2741,9 +3012,10 @@ impl<'a> WorkbookHost<'a> {
                 _ => None,
             }),
             DrawingPart::ShapeRange(index) => {
-                let ids = self.shape_range_ids(index);
+                let ids = self.shape_range_live_ids(index);
                 match lower.as_str() {
-                    "count" => Ok(Some(Value::Integer(ids.len() as i64))),
+                    "count" => self.shape_range_count(index).map(|count| Some(Value::Integer(count))),
+                    "name" | "left" | "top" | "width" | "height" => self.shape_range_scalar_get(index, lower.as_str()),
                     "shaperange" => Ok(Some(self.part(part))),
                     _ => match ids.first() {
                         Some(id) => self.drawing_get(DrawingPart::Shape(*id), name),
@@ -2755,6 +3027,9 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn shape_get(&mut self, part: DrawingPart, id: u64, lower: &str) -> Result<Option<Value>, String> {
+        if matches!(part, DrawingPart::Shape(_)) && lower == "shaperange" {
+            return Err(host_error(438, "Object doesn't support this property or method"));
+        }
         let shape = self.shape(id)?.clone();
         if matches!(part, DrawingPart::GroupObject(_)) {
             return Ok(match lower {
@@ -2791,7 +3066,7 @@ impl<'a> WorkbookHost<'a> {
                 "creator" => Some(Value::Integer(1_480_803_660)),
                 "index" => Some(Value::Integer(self.shapes_on(shape.sheet).iter().position(|held| *held == id).map_or(1, |at| at as i64 + 1))),
                 "parentgroup" => return Err(host_error(1004, "the shape is in no group")),
-                "id" => Some(Value::Integer(shape.id as i64 + 1)),
+                "id" => Some(Value::Integer(i64::from(shape.non_visual_id))),
                 _ => None,
             });
         }
@@ -2807,10 +3082,11 @@ impl<'a> WorkbookHost<'a> {
         // corners, no shadow and no chart protection.
         if matches!(part, DrawingPart::ChartObject(_)) {
             match lower {
-                "left" => return Ok(Some(Value::Double(shape.left))),
-                "top" => return Ok(Some(Value::Double(shape.top))),
-                "width" => return Ok(Some(Value::Double(shape.width))),
-                "height" => return Ok(Some(Value::Double(shape.height))),
+                "shaperange" => return Ok(Some(self.shape_range_object(vec![id]))),
+                "left" => return Ok(Some(Value::Double(f64::from(shape.left as f32)))),
+                "top" => return Ok(Some(Value::Double(f64::from(shape.top as f32)))),
+                "width" => return Ok(Some(Value::Double(f64::from(shape.width as f32)))),
+                "height" => return Ok(Some(Value::Double(f64::from(shape.height as f32)))),
                 "visible" => return Ok(Some(Value::Boolean(shape.visible))),
                 "zorder" => {
                     let at = self.shapes_on(shape.sheet).iter().position(|held| *held == id).map_or(1, |at| at as i64 + 1);
@@ -2850,11 +3126,11 @@ impl<'a> WorkbookHost<'a> {
             "visible" => Some(mso(shape.visible)),
             "placement" => Some(Value::Integer(shape.placement)),
             "onaction" => Some(Value::String(shape.on_action)),
-            "alternativetext" => Some(Value::String(shape.alt_text)),
+            "alternativetext" => Some(Value::from_utf16(shape.alt_text_units())),
             "lockaspectratio" => Some(mso(shape.lock_aspect)),
             "horizontalflip" => Some(mso(shape.flip_h)),
             "verticalflip" => Some(mso(shape.flip_v)),
-            "id" => Some(Value::Integer(shape.id as i64 + 1)),
+            "id" => Some(Value::Integer(i64::from(shape.non_visual_id))),
             "zorderposition" => Some(Value::Integer(
                 self.shapes_on(shape.sheet).iter().position(|held| *held == id).map_or(1, |at| at as i64 + 1),
             )),
@@ -3246,6 +3522,33 @@ impl<'a> WorkbookHost<'a> {
                 }
             }
             DrawingPart::Shape(id) | DrawingPart::ChartObject(id) | DrawingPart::GroupObject(id) => {
+                if lower == "alternativetext" {
+                    self.shape(id)?;
+                    let resolved = if let Value::Object(reference) = &value {
+                        self.get(reference, "Value")?.ok_or_else(|| host_error(438, "object has no default value"))?
+                    } else { value };
+                    let converted = oxivba_core::runtime::coerce_automation_scalar(&resolved,
+                        oxivba_core::runtime::AutomationScalarType::Bstr)?;
+                    let units = converted.string_units().expect("BSTR conversion supplied UTF-16").into_owned();
+                    self.shape_mut(id)?.set_alt_text_units(units);
+                    self.redraw(id)?;
+                    return Ok(true);
+                }
+                let previous = self.shape(id)?;
+                // Exact custom names take precedence over generated aliases.
+                // A note cannot take another note's generated identity, even
+                // after that other note was deleted during this open session.
+                if lower == "name" && previous.comment_at.is_some() {
+                    if let Value::String(named) = &value {
+                        if previous.name == *named { return Ok(true); }
+                        if let Some(owner) = self.comment_shape_alias_owner(previous.sheet, named) {
+                            if owner == id { return Ok(true); }
+                            return Err(host_error(70, "Permission denied"));
+                        }
+                    }
+                }
+                let group_position = (!previous.group_children.is_empty() && matches!(lower.as_str(), "left" | "top"))
+                    .then_some((previous.left, previous.top));
                 let taken = {
                     let shape = self.shape_mut(id)?;
                     match lower.as_str() {
@@ -3253,16 +3556,43 @@ impl<'a> WorkbookHost<'a> {
                             let Value::String(named) = &value else {
                                 return Err("Shape.Name takes text".to_string());
                             };
-                            shape.name = named.clone();
+                            let generated = (shape.comment_at.is_none()
+                                && !shape.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some())
+                                && generated_shape_name(&shape.kind,
+                                shape.non_visual_id.saturating_sub(1), true).as_ref() == Some(named))
+                                .then(||generated_shape_name(&shape.kind, shape.non_visual_id.saturating_sub(1), false)).flatten();
+                            let keeps_generated_note = shape.comment_at.is_some() && shape.name_is_automatic && shape.name == *named;
+                            shape.name_is_automatic = generated.is_some() || keeps_generated_note;
+                            shape.name = generated.unwrap_or_else(||named.clone());
                             true
                         }
                         "left" | "top" | "width" | "height" | "rotation" => {
-                            let Some(number) = any_number(&value) else {
+                            let Some(mut number) = any_number(&value) else {
                                 return Err(format!("Shape.{name} takes a number"));
                             };
+                            if shape.comment_at.is_some() && lower != "rotation" {
+                                let size = matches!(lower.as_str(), "width" | "height");
+                                if !size || number >= 0.0 {
+                                    number = (number.max(0.0) / 0.75).round_ties_even() * 0.75;
+                                    if size { number = number.max(0.75); }
+                                }
+                            }
+                            let ordinary_leaf = shape.comment_at.is_none()
+                                && shape.rotation == 0.0 && shape.group_children.is_empty()
+                                && shape.group_parent_id.is_none()
+                                && shape.original.as_ref().is_none_or(|drawing| drawing.ole_prog_id.is_none());
+                            if ordinary_leaf && lower != "rotation" && number >= 0.0 {
+                                number = (f64::from(number as f32) * EMU_PER_POINT).round() / EMU_PER_POINT;
+                            }
                             match lower.as_str() {
                                 "left" => shape.left = number.max(0.0),
                                 "top" => shape.top = number.max(0.0),
+                                "width" if ordinary_leaf && number >= 0.0 => {
+                                    (shape.left, shape.width) = ordinary_shape_resize_axis(shape.left, shape.width, number);
+                                }
+                                "height" if ordinary_leaf && number >= 0.0 => {
+                                    (shape.top, shape.height) = ordinary_shape_resize_axis(shape.top, shape.height, number);
+                                }
                                 "width" => shape.width = number.max(0.0),
                                 "height" => shape.height = number.max(0.0),
                                 _ => shape.rotation = number.rem_euclid(360.0),
@@ -3284,13 +3614,6 @@ impl<'a> WorkbookHost<'a> {
                             };
                             true
                         }
-                        "alternativetext" => {
-                            shape.alt_text = match &value {
-                                Value::String(text) => text.clone(),
-                                _ => String::new(),
-                            };
-                            true
-                        }
                         "lockaspectratio" => {
                             shape.lock_aspect = mso_asked(&value, "Shape.LockAspectRatio")?;
                             true
@@ -3299,6 +3622,10 @@ impl<'a> WorkbookHost<'a> {
                     }
                 };
                 if taken {
+                    if let Some((left, top)) = group_position {
+                        let current = self.shape(id)?;
+                        self.translate_group_children(id, current.left - left, current.top - top)?;
+                    }
                     self.redraw(id)?;
                 }
                 Ok(taken)
@@ -3326,15 +3653,33 @@ impl<'a> WorkbookHost<'a> {
             DrawingPart::FillColor(id) | DrawingPart::LineColor(id) | DrawingPart::LineBackColor(id) => {
                 let fill = matches!(part, DrawingPart::FillColor(_));
                 let back = matches!(part, DrawingPart::LineBackColor(_));
+                let language = self.error_language;
                 let taken = {
                     let shape = self.shape_mut(id)?;
                     match lower.as_str() {
                         "rgb" => {
-                            let Some(colour) = color_number(&value, "ColorFormat.RGB")? else {
-                                return Ok(true);
-                            };
+                            // Native75: Fill's ColorFormat coerces Empty to
+                            // zero and rejects Null before the line-fill check.
+                            if fill && matches!(value, Value::Null) {
+                                return Err(oxivba_core::host_error_described(94, match language {
+                                    ErrorLanguage::Japanese => "Null の使い方が不正です。",
+                                    ErrorLanguage::English => "Invalid use of Null",
+                                }));
+                            }
+                            let colour = if fill && matches!(value, Value::Empty) { Some(0) }
+                                else { color_number(&value, "ColorFormat.RGB")? };
+                            let Some(colour) = colour else { return Ok(true); };
+                            if fill && matches!(shape.kind, ShapeKind::Line) {
+                                return Err(oxivba_core::host_error_described(-2_147_024_809, match language {
+                                    ErrorLanguage::Japanese => "指定された値は境界を超えています。",
+                                    ErrorLanguage::English => "The specified value is out of range.",
+                                }));
+                            }
                             if fill {
                                 shape.fill = colour as i64;
+                                if let ShapeKind::Chart(chart) = &mut shape.kind {
+                                    chart.fill = Some(packed_hex(colour as i64));
+                                }
                                 shape.fill_theme = None;
                                 shape.fill_scheme_color = None;
                                 shape.fill_brightness = 0.0;
@@ -3974,8 +4319,36 @@ impl<'a> WorkbookHost<'a> {
                 }
                 Ok(false)
             }
+            DrawingPart::ChartColor(id, plot) | DrawingPart::ChartInterior(id, plot) => {
+                self.chart(id)?;
+                let interior = matches!(part, DrawingPart::ChartInterior(..));
+                if lower != if interior { "color" } else { "rgb" } { return Ok(false); }
+                if matches!(value, Value::Null) {
+                    let (number, description) = if interior {
+                        (-2_147_467_259, match self.error_language {
+                            ErrorLanguage::Japanese => "パラメーターが無効です",
+                            ErrorLanguage::English => "The parameter is incorrect",
+                        })
+                    } else {
+                        (94, match self.error_language {
+                            ErrorLanguage::Japanese => "Null の使い方が不正です。",
+                            ErrorLanguage::English => "Invalid use of Null",
+                        })
+                    };
+                    return Err(host_error_described(number, description));
+                }
+                if !plot { return self.drawing_set(DrawingPart::FillColor(id), "rgb", value); }
+                let colour = if matches!(value, Value::Empty) { Some(0) }
+                    else { color_number(&value, "ColorFormat.RGB")? };
+                if let Some(colour) = colour {
+                    self.chart_mut(id)?.plot_fill = Some(packed_hex(colour as i64));
+                    self.redraw(id)?;
+                }
+                Ok(true)
+            }
+            DrawingPart::ChartFormat(..) | DrawingPart::ChartFill(..) => Ok(false),
             DrawingPart::ChartArea(_) | DrawingPart::PlotArea(_) => {
-                Ok(matches!(lower.as_str(), "rgb" | "color" | "colorindex" | "visible" | "width" | "height" | "left" | "top" | "insideleft" | "insidetop" | "insidewidth" | "insideheight"))
+                Ok(matches!(lower.as_str(), "width" | "height" | "left" | "top" | "insideleft" | "insidetop" | "insidewidth" | "insideheight"))
             }
             DrawingPart::Adjustments(id) => {
                 if lower == "item" {
@@ -3986,7 +4359,19 @@ impl<'a> WorkbookHost<'a> {
             }
             DrawingPart::Paragraphs(_) => Ok(false),
             DrawingPart::ShapeRange(index) => {
-                let ids = self.shape_range_ids(index);
+                let ids = self.shape_range_live_ids(index);
+                if lower == "name" {
+                    let record = &self.shape_ranges[index];
+                    if record.ordinary_range && record.legacy_notes {
+                        return Err(host_error(1004, "Application-defined or object-defined error"));
+                    }
+                    if ids.len() > 1 {
+                        let description = if self.error_language == ErrorLanguage::Japanese {
+                            "このメンバーにアクセスできるのは、単一の図形の場合だけです。"
+                        } else { "This member can only be accessed for a single shape." };
+                        return Err(host_error_described(-2_147_024_891, description));
+                    }
+                }
                 let mut any = false;
                 for id in ids {
                     if self.drawing_set(DrawingPart::Shape(id), name, value.clone())? {
@@ -4045,7 +4430,8 @@ impl<'a> WorkbookHost<'a> {
                 "item" | "_default" => {
                     let listed = self.shapes_on(sheet);
                     let index = args.first().ok_or_else(|| "Shapes.Item takes an index or a name".to_string())?;
-                    let id = self.pick_shape(&listed, index)?;
+                    let id = self.pick_shape(sheet, &listed, index, false)?;
+
                     Ok(Some(self.part(DrawingPart::Shape(id))))
                 }
                 "addshape" => self.add_shape(sheet, args).map(Some),
@@ -4083,7 +4469,7 @@ impl<'a> WorkbookHost<'a> {
                     let skip = usize::from(lower == "addchart2");
                     let chart_type = args.get(skip).and_then(any_whole_number).unwrap_or(51);
                     let number = |index: usize| args.get(skip + 1 + index).and_then(any_number).unwrap_or(0.0);
-                    let (left, top, width, height) = (number(0), number(1), number(2).max(1.0), number(3).max(1.0));
+                    let (left, top, width, height) = (number(0), number(1), number(2), number(3));
                     let (width, height) = if args.get(skip + 3).is_none() { (360.0, 216.0) } else { (width, height) };
                     let id = self.add_chart(sheet, left, top, width, height, chart_type)?;
                     Ok(Some(self.part(DrawingPart::Shape(id))))
@@ -4096,9 +4482,10 @@ impl<'a> WorkbookHost<'a> {
                         Some(one) => vec![one.clone()],
                         None => return Err(host_error(1004, "Shapes.Range takes a name or an array of names")),
                     };
+                    if names.is_empty() { return Err(host_error(1004, "Application-defined or object-defined error")); }
                     let mut ids = Vec::new();
                     for name in &names {
-                        ids.push(self.pick_shape(&listed, name)?);
+                        ids.push(self.pick_shape(sheet, &listed, name, false)?);
                     }
                     Ok(Some(self.shape_range_object(ids)))
                 }
@@ -4161,7 +4548,8 @@ impl<'a> WorkbookHost<'a> {
                 "item" | "_default" => {
                     let listed = self.charts_on(sheet);
                     let index = args.first().ok_or_else(|| "ChartObjects.Item takes an index or a name".to_string())?;
-                    let id = self.pick_shape(&listed, index)?;
+                    let id = self.pick_shape(sheet, &listed, index, true)?;
+
                     Ok(Some(self.part(DrawingPart::ChartObject(id))))
                 }
                 "add" => {
@@ -4624,19 +5012,33 @@ impl<'a> WorkbookHost<'a> {
                 _ => Ok(None),
             },
             DrawingPart::ShapeRange(index) => {
-                let ids = self.shape_range_ids(index);
+                let ids = self.shape_range_live_ids(index);
                 match lower.as_str() {
                     "select" => {
+                        let record = self.shape_ranges.get(index).ok_or_else(||host_error(9, "Subscript out of range"))?;
+                        if record.legacy_notes {
+                            if record.ordinary_range {
+                                return Err(host_error(1004, "Application-defined or object-defined error"));
+                            }
+                            if ids.is_empty() {
+                                let description = match self.error_language {
+                                    ErrorLanguage::Japanese => "'Select' メソッドは失敗しました: 'ShapeRange' オブジェクト",
+                                    ErrorLanguage::English => "'Select' method of 'ShapeRange' failed",
+                                };
+                                return Err(host_error_described(-2_147_417_848, description));
+                            }
+                            return Err(host_error(70, "Permission denied"));
+                        }
+                        self.shape_range_ordinary_count(index)?;
                         self.shape_selection = ids;
                         Ok(Some(Value::Boolean(true)))
                     }
                     "item" | "_default" => {
-                        let at = args.first().and_then(any_whole_number).unwrap_or(1).max(1) as usize;
-                        ids.get(at - 1)
-                            .map(|id| Ok(Some(self.part(DrawingPart::Shape(*id)))))
-                            .unwrap_or_else(|| Err(host_error(1004, "there is no such shape")))
+                        let id = self.pick_range_shape(index, args.first())?;
+                        Ok(Some(self.part(DrawingPart::Shape(id))))
                     }
-                    "count" => Ok(Some(Value::Integer(ids.len() as i64))),
+                    "count" => self.shape_range_count(index).map(|count| Some(Value::Integer(count))),
+                    "name" | "left" | "top" | "width" | "height" => self.shape_range_scalar_get(index, lower.as_str()),
                     "shaperange" => Ok(Some(self.part(part))),
                     "delete" => {
                         for id in ids {
@@ -4649,7 +5051,7 @@ impl<'a> WorkbookHost<'a> {
                         let sheet = ids.first().and_then(|id| self.shape(*id).ok()).map(|shape| shape.sheet)
                             .ok_or_else(|| host_error(1004, "There are no shapes to group."))?;
                         let id = self.group_shapes(sheet, ids)?;
-                        Ok(Some(self.part(DrawingPart::GroupObject(id))))
+                        Ok(Some(self.part(DrawingPart::Shape(id))))
                     }
                     _ => match ids.first() {
                         Some(id) => self.drawing_call(DrawingPart::Shape(*id), name, args),

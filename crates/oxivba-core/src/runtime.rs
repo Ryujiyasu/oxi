@@ -20,7 +20,7 @@ use crate::errors::{vba_error_description, ErrorEnvironment};
 mod utf16;
 mod bstr;
 
-use crate::ast::{FileInputStmt, FileMode, FileOpenStmt, FileSeekStmt, FileTransferKind, FileTransferStmt, FileOutputKind, FileOutputSeparator, FileOutputStmt, FileSystemStmt, FileSystemUnaryKind, 
+use crate::ast::{FileInputStmt, FileMode, FileOpenStmt, FileSeekStmt, FileTransferKind, FileTransferStmt, FileOutputKind, FileOutputSeparator, FileOutputStmt, FileSystemStmt, FileSystemUnaryKind,
     AlignedAssignStmt, AlignmentKind, Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind,
     Expr, ForEachStmt, ForStmt, Literal, LoopTest, MidAssignStmt, Module, ModuleItem, ModuleOption,
     OnBranchKind, OnError, ParamMode, ProcKind, Procedure, ReDimItem, ResumeTarget, SelectCaseStmt,
@@ -536,6 +536,14 @@ pub trait Host {
     }
 
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String>;
+
+    /// Write a scalar already converted using the setter's declared parameter.
+    /// The default preserves ordinary host behavior. Hosts whose typed and
+    /// Variant entry points expose different errors can distinguish this call.
+    fn set_prepared(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        self.set(receiver, name, value)
+    }
+
 
     fn set_indexed(
         &mut self,
@@ -2552,7 +2560,7 @@ impl<'a> Runtime<'a> {
                 return Err(language_error(451, "field does not take property indices", line));
             }
             self.with_callback_error_context(frame, |runtime, _|
-                runtime.host_set(receiver, name, value, line))?
+                runtime.host_set_prepared(receiver, name, value, line))?
         };
         if handled { Ok(()) } else {
             Err(no_such_member("the object has no writable property".into(), Some(line)))
@@ -4997,6 +5005,119 @@ impl<'a> Runtime<'a> {
         statement: &Statement,
         frame: &mut Frame,
     ) -> Result<Flow, RuntimeError> {
+        // Keep recursively entered statement dispatch small in native debug
+        // builds. Large assignment/call temporaries belong to their own frame,
+        // rather than every enclosing If/For/With block on the VBA stack.
+        match statement {
+            Statement::If(_) | Statement::For(_) | Statement::ForEach(_)
+            | Statement::Do(_) | Statement::SelectCase(_) | Statement::While { .. }
+            | Statement::With { .. } => self.exec_control_statement(statement, frame),
+            _ => self.exec_leaf_statement(statement, frame),
+        }
+    }
+
+    fn exec_control_statement(
+        &mut self,
+        statement: &Statement,
+        frame: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        match statement {
+            Statement::If(branch) => {
+                if truthy(&self.eval_scalar_expr(&branch.condition, frame)?).map_err(|message| {
+                    error(
+                        RuntimeErrorKind::TypeMismatch,
+                        message,
+                        Some(branch.span.line),
+                    )
+                })? {
+                    self.exec_body(&branch.then_body, frame)
+                } else {
+                    for (condition, body) in &branch.else_ifs {
+                        if truthy(&self.eval_scalar_expr(condition, frame)?).map_err(|message| {
+                            error(
+                                RuntimeErrorKind::TypeMismatch,
+                                message,
+                                Some(branch.span.line),
+                            )
+                        })? {
+                            return self.exec_body(body, frame);
+                        }
+                    }
+                    match &branch.else_body {
+                        Some(body) => self.exec_body(body, frame),
+                        None => Ok(Flow::Continue),
+                    }
+                }
+            }
+            Statement::For(loop_) => self.exec_for(loop_, frame),
+            Statement::ForEach(loop_) => self.exec_for_each(loop_, frame),
+            Statement::Do(loop_) => self.exec_do(loop_, frame),
+            Statement::SelectCase(select) => self.exec_select_case(select, frame),
+            Statement::While {
+                condition,
+                body,
+                span,
+            } => self.exec_while(condition, body, frame, span.line),
+            Statement::With { subject, body, .. } => {
+                let line = subject.span().line;
+                self.ensure_expression_module(subject, frame)?;
+                // Capture a record-rooted slot once, including any array index.
+                // Its value can itself be an object field rather than a record.
+                let held = if self.record_rooted(frame, subject) {
+                    let class = self.source_class_name(subject, frame);
+                    let early_application = self.early_application_expression(subject, frame);
+                    let assignment_type = self.assignment_receiver_type(subject, frame);
+                    self.record_slot(subject, frame, line)?.map(|root| {
+                        let value = root.snapshot();
+                        match value {
+                            Value::Record(_) => WithSubject::Record { root },
+                            Value::Object(receiver) => WithSubject::Object {
+                                receiver, class, early_application, assignment_type,
+                            },
+                            value => WithSubject::Value(value),
+                        }
+                    })
+                } else {
+                    None
+                };
+                let held = match held {
+                    Some(held) => held,
+                    None => {
+                        let class = self.source_class_name(subject, frame);
+                        let early_application = self.early_application_expression(subject, frame);
+                        let assignment_type = self.assignment_receiver_type(subject, frame);
+                        match self.eval_with_value(subject, frame, line)? {
+                            Value::Object(receiver) => WithSubject::Object {
+                                receiver, class, early_application, assignment_type,
+                            },
+                            value => WithSubject::Value(value),
+                        }
+                    },
+                };
+                frame.with_objects.push(held);
+                let result = self.exec_body(body, frame);
+                frame.with_objects.pop();
+                // The block held its subject; an instance only it held is
+                // done at End With: measured, `With New C ... End With` runs
+                // C's Class_Terminate there.
+                if result.is_ok() {
+                    self.collect_instances(line)?;
+                }
+                result
+            }
+            // `On Error GoTo -1` ends the handler that is running and clears
+            // Err, leaving the mode as it was: measured, Err.Number is 0 after
+            // it.
+
+            _ => unreachable!("control statement dispatch"),
+        }
+    }
+
+    fn exec_leaf_statement(
+        &mut self,
+        statement: &Statement,
+        frame: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
         match statement {
             Statement::Assign {
                 target,
@@ -5503,92 +5624,6 @@ impl<'a> Runtime<'a> {
                 self.exec_aligned_assign(statement, frame)?;
                 Ok(Flow::Continue)
             }
-            Statement::If(branch) => {
-                if truthy(&self.eval_scalar_expr(&branch.condition, frame)?).map_err(|message| {
-                    error(
-                        RuntimeErrorKind::TypeMismatch,
-                        message,
-                        Some(branch.span.line),
-                    )
-                })? {
-                    self.exec_body(&branch.then_body, frame)
-                } else {
-                    for (condition, body) in &branch.else_ifs {
-                        if truthy(&self.eval_scalar_expr(condition, frame)?).map_err(|message| {
-                            error(
-                                RuntimeErrorKind::TypeMismatch,
-                                message,
-                                Some(branch.span.line),
-                            )
-                        })? {
-                            return self.exec_body(body, frame);
-                        }
-                    }
-                    match &branch.else_body {
-                        Some(body) => self.exec_body(body, frame),
-                        None => Ok(Flow::Continue),
-                    }
-                }
-            }
-            Statement::For(loop_) => self.exec_for(loop_, frame),
-            Statement::ForEach(loop_) => self.exec_for_each(loop_, frame),
-            Statement::Do(loop_) => self.exec_do(loop_, frame),
-            Statement::SelectCase(select) => self.exec_select_case(select, frame),
-            Statement::While {
-                condition,
-                body,
-                span,
-            } => self.exec_while(condition, body, frame, span.line),
-            Statement::With { subject, body, .. } => {
-                let line = subject.span().line;
-                self.ensure_expression_module(subject, frame)?;
-                // Capture a record-rooted slot once, including any array index.
-                // Its value can itself be an object field rather than a record.
-                let held = if self.record_rooted(frame, subject) {
-                    let class = self.source_class_name(subject, frame);
-                    let early_application = self.early_application_expression(subject, frame);
-                    let assignment_type = self.assignment_receiver_type(subject, frame);
-                    self.record_slot(subject, frame, line)?.map(|root| {
-                        let value = root.snapshot();
-                        match value {
-                            Value::Record(_) => WithSubject::Record { root },
-                            Value::Object(receiver) => WithSubject::Object {
-                                receiver, class, early_application, assignment_type,
-                            },
-                            value => WithSubject::Value(value),
-                        }
-                    })
-                } else {
-                    None
-                };
-                let held = match held {
-                    Some(held) => held,
-                    None => {
-                        let class = self.source_class_name(subject, frame);
-                        let early_application = self.early_application_expression(subject, frame);
-                        let assignment_type = self.assignment_receiver_type(subject, frame);
-                        match self.eval_with_value(subject, frame, line)? {
-                            Value::Object(receiver) => WithSubject::Object {
-                                receiver, class, early_application, assignment_type,
-                            },
-                            value => WithSubject::Value(value),
-                        }
-                    },
-                };
-                frame.with_objects.push(held);
-                let result = self.exec_body(body, frame);
-                frame.with_objects.pop();
-                // The block held its subject; an instance only it held is
-                // done at End With: measured, `With New C ... End With` runs
-                // C's Class_Terminate there.
-                if result.is_ok() {
-                    self.collect_instances(line)?;
-                }
-                result
-            }
-            // `On Error GoTo -1` ends the handler that is running and clears
-            // Err, leaving the mode as it was: measured, Err.Number is 0 after
-            // it.
             Statement::OnError(OnError::Goto { label, .. }) if label.is_empty() || label == "-1" => {
                 frame.error_state = ErrorState::default();
                 frame.error_handler_active = false;
@@ -11496,11 +11531,20 @@ impl<'a> Runtime<'a> {
     }
 
     fn host_set(
-        &mut self,
-        receiver: &ObjectRef,
-        name: &str,
-        value: Value,
-        line: u32,
+        &mut self, receiver: &ObjectRef, name: &str, value: Value, line: u32,
+    ) -> Result<bool, RuntimeError> {
+        self.host_set_value(receiver, name, value, line, false)
+    }
+
+    fn host_set_prepared(
+        &mut self, receiver: &ObjectRef, name: &str, value: Value, line: u32,
+    ) -> Result<bool, RuntimeError> {
+        self.host_set_value(receiver, name, value, line, true)
+    }
+
+    fn host_set_value(
+        &mut self, receiver: &ObjectRef, name: &str, value: Value, line: u32,
+        prepared: bool,
     ) -> Result<bool, RuntimeError> {
         if let Some(message)=self.host.as_deref().and_then(|host|host.closed_native_object_error(receiver)) {
             return Err(host_failure(message,line));
@@ -11555,7 +11599,8 @@ impl<'a> Runtime<'a> {
                 Some(answer) => Ok(answer),
                 None => {
                     let Some(host) = self.host.as_deref_mut() else { return Ok(false) };
-                    host.set(receiver, name, value)
+                    if prepared { host.set_prepared(receiver, name, value) }
+                    else { host.set(receiver, name, value) }
                 }
             };
             while self.work_out_user_functions()? {
@@ -15194,7 +15239,7 @@ fn call_text_conversion_builtin(
                 }
                 // Measured: Str(-0#) is -0.
                 _ if value == 0.0 && value.is_sign_negative() => "-0".to_string(),
-                _ => text(&numeric_literal(value)).map_err(mismatch)?,
+                _ => text(&Value::Double(value)).map_err(mismatch)?,
             };
             // Str writes a fraction without its nought: measured,
             // `Str(0.1 + 0.2)` is " .3".
@@ -15717,7 +15762,8 @@ fn format_value(
     // Format(CSng(2) / 3, "0.0000000000") is 0.6666667000 and
     // Format(CSng(16777217), "0") 16777220.
     if let Value::Single(single) = value {
-        let seven: f64 = format!("{single:.6e}").parse().unwrap_or(f64::from(*single));
+        if pattern.eq_ignore_ascii_case("general number") { return text(value); }
+        let seven: f64 = number_text_in(f64::from(*single), 7).parse().unwrap_or(f64::from(*single));
         return format_value(&Value::Double(seven), pattern, first_day, first_week, this_year);
     }
     // Pictures that scale or take an exponent work on the Double.
@@ -16274,10 +16320,12 @@ fn decimal_fixed(value: f64, places: usize) -> String {
     let (mut digits, exponent) = match exact {
         Some(figures) => figures,
         None => {
-            let written = format!("{magnitude:.14e}");
-            let (mantissa, exponent) = written.split_once('e').unwrap_or((&written, "0"));
-            let exponent: i64 = exponent.parse().unwrap_or(0);
-            (mantissa.bytes().filter(u8::is_ascii_digit).map(|b| b - b'0').collect(), exponent)
+            // Use the same measured fifteen-digit half-away conversion as
+            // CStr. Rust's scientific formatter rounds exact ties to even.
+            let written = number_text_in(magnitude, 15);
+            let (mantissa, power) = written.split_once('E').unwrap_or((&written, "0"));
+            let (digits, exponent) = exact_figures(mantissa).expect("finite nonzero magnitude has digits");
+            (digits, exponent + power.parse::<i64>().unwrap_or(0))
         }
     };
     // Digits before the point.
@@ -20441,7 +20489,7 @@ fn text(value: &Value) -> Result<String, String> {
         // A Single says only as many digits as a Single holds: asked of
         // Excel, a Single of 0.7055475 writes back as 0.7055475, where
         // widening it to a Double first would say 0.705547511577606.
-        Value::Single(value) => number_text_in(single_text_value(*value), 7),
+        Value::Single(value) => number_text_in(f64::from(*value), 7),
         // A Double keeps the sign of its zero: measured, `CStr(-0#)` and
         // `Fix(-0.5)` write -0, where an Integer 0 * -1 writes 0.
         Value::Double(value) if *value == 0.0 && value.is_sign_negative() => "-0".to_string(),
@@ -20470,15 +20518,6 @@ fn text(value: &Value) -> Result<String, String> {
         }
         Value::Object(_) => return Err("type mismatch converting object to String".to_string()),
     })
-}
-
-/// A Single as a Double that says the same thing: seven significant digits,
-/// which is all a Single carries.
-fn single_text_value(value: f32) -> f64 {
-    if !value.is_finite() || value == 0.0 {
-        return value as f64;
-    }
-    format!("{:.6e}", value).parse().unwrap_or(value as f64)
 }
 
 /// A Double written the way VBA writes one.
@@ -20527,6 +20566,27 @@ pub fn vba_number_text(value: f64) -> String {
 /// Double and seven for a Single, whose bounds move with it -- measured,
 /// `CStr(CSng(12345678))` is 1.234568E+07 and `CStr(CSng(0.00000012))`
 /// 1.2E-07, where `CStr(CSng(0.0000001))` is 0.0000001.
+// Whether a binary float falls exactly halfway between the requested
+// decimal digits. Work on its integer significand, avoiding an inexact
+// multiplication by a decimal scale near the rounding boundary.
+fn exact_decimal_midpoint(value: f64, decimal_step: i32) -> bool {
+    let bits = value.abs().to_bits();
+    let exponent = ((bits >> 52) & 0x7ff) as i32;
+    let mut significand = bits & ((1u64 << 52) - 1);
+    let binary_step = if exponent == 0 { -1074 } else {
+        significand |= 1u64 << 52;
+        exponent - 1023 - 52
+    };
+    if significand == 0 { return false; }
+    if decimal_step >= 0 {
+        for _ in 0..decimal_step {
+            if significand % 5 != 0 { return false; }
+            significand /= 5;
+        }
+    }
+    binary_step - decimal_step + significand.trailing_zeros() as i32 == -1
+}
+
 fn number_text_in(value: f64, places: usize) -> String {
     // A negative nought keeps its sign: measured, CStr(CSng(0) * -1) and
     // Str(-0#) are -0.
@@ -20544,8 +20604,18 @@ fn number_text_in(value: f64, places: usize) -> String {
     let (mantissa, exponent) = written
         .split_once('e')
         .expect("Rust writes an exponent in this form");
-    let exponent: i32 = exponent.parse().expect("Rust writes a whole exponent");
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let mut exponent: i32 = exponent.parse().expect("Rust writes a whole exponent");
+    let mut digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    if exact_decimal_midpoint(value, exponent - places as i32 + 1)
+        && written.parse::<f64>().is_ok_and(|rounded| rounded < value.abs())
+    {
+        // Rust formats exact ties to even; VBA's text conversion rounds the
+        // magnitude upward. CDec has its own, deliberately even, conversion.
+        let next = digits.parse::<u64>().expect("significant digits fit u64") + 1;
+        let limit = 10u64.pow(places as u32);
+        if next == limit { digits = (next / 10).to_string(); exponent += 1; }
+        else { digits = next.to_string(); }
+    }
     let digits = digits.trim_end_matches('0');
     let digits = if digits.is_empty() { "0" } else { digits };
 
@@ -22145,6 +22215,29 @@ Dim x As Variant
             run(source, "Ask", vec![]).unwrap(),
             Value::String("0.7055475/0.7055475".to_string())
         );
+        let midpoint = r#"Public Function Tie() As String
+Dim value As Single
+value = 10000.125
+Tie = CStr(value) & "|" & CStr(CDec(value)) & "|" & CStr(-value) & "|" & CStr(CDec(-value)) & "|" & CStr(10000000000000.25#) & "|" & CStr(CDec(10000000000000.25#)) & "|" & Str$(value) & "|" & Format$(value, "General Number") & "|" & Format$(value, "0.0000000000")
+value = 10000000
+Tie = Tie & "|" & Format$(value, "General Number")
+value = 0.0000001
+Tie = Tie & "|" & CStr(value) & "|" & Str$(value)
+End Function"#;
+        assert_eq!(run(midpoint, "Tie", vec![]).unwrap(), Value::String("10000.13|10000.12|-10000.13|-10000.12|10000000000000.3|10000000000000.2| 10000.13|10000.13|10000.1300000000|1E+07|0.0000001| .0000001".into()));
+        // Native67/68: a whole-valued Double keeps its own text precision;
+        // numeric pictures round its initial fifteen decimal digits upward.
+        for (expression, expected) in [
+            ("Str$(1000000000000005#)", " 1.00000000000001E+15"),
+            ("Str$(-1000000000000025#)", "-1.00000000000003E+15"),
+            ("Format$(10000000000000.25#, \"0.0000000000\")", "10000000000000.3000000000"),
+            ("Format$(-100000000000000.5#, \"0\")", "-100000000000001"),
+            ("Format$(1000000000000005#, \"0.0\")", "1000000000000010.0"),
+        ] {
+            let program = format!("Public Function Ask() As String\nAsk = {expression}\nEnd Function");
+            assert_eq!(run(&program, "Ask", vec![]).unwrap(), Value::String(expected.into()), "{expression}");
+        }
+
     }
 
     /// A Date says itself as a date, and Empty says nothing whatever picture

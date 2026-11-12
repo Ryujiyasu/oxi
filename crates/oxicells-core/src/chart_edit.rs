@@ -873,6 +873,72 @@ fn patch_plot_options(xml: &str, before: &Chart, after: &Chart, ns: &str, drawin
     Ok(output)
 }
 
+/// Replace only the direct background paint. Preserve borders, geometry,
+/// extensions and foreign elements, including those with the same local name.
+fn patch_background_fill(xml: &str, plot: bool, colour: Option<&str>, chart_ns: &str, drawing_ns: &str) -> Result<String, XlsxError> {
+    use quick_xml::{name::ResolveResult, reader::NsReader};
+    let path: &[&str] = if plot { &["chartSpace", "chart", "plotArea"] } else { &["chartSpace"] };
+    let (children, end) = children_at(xml, path)?;
+    let fill = colour.map(|colour| format!("<a:solidFill xmlns:a=\"{drawing_ns}\"><a:srgbClr val=\"{}\"/></a:solidFill>", escape(colour))).unwrap_or_default();
+    let Some((_, start, finish)) = children.iter().find(|(name, _, _)| name == "spPr") else {
+        if colour.is_none() { return Ok(xml.to_string()); }
+        let at = children.iter().find(|(name, _, _)| if plot { name == "extLst" } else {
+            matches!(name.as_str(), "txPr" | "externalData" | "printSettings" | "userShapes" | "extLst")
+        }).map_or(end, |(_, at, _)| *at);
+        return Ok(format!("{}<c:spPr xmlns:c=\"{chart_ns}\">{fill}</c:spPr>{}", &xml[..at], &xml[at..]));
+    };
+    let fragment = &xml[*start..*finish];
+    if fragment.ends_with("/>") {
+        if colour.is_none() { return Ok(xml.to_string()); }
+        let name = fragment[1..].split(|ch: char| ch.is_whitespace() || matches!(ch, '/' | '>')).next().unwrap_or_default();
+        return Ok(format!("{}{}>{fill}</{name}>{}", &xml[..*start], &fragment[..fragment.len()-2], &xml[*finish..]));
+    }
+    let mut paint_path = path.to_vec(); paint_path.push("spPr");
+    let (_, content_end) = children_at(xml, &paint_path)?;
+    let mut reader = NsReader::from_str(xml);
+    let mut depth = 0usize;
+    let mut paint_start = None;
+    let mut ranges = Vec::new();
+    let mut insert_at = content_end;
+    loop {
+        let at = reader.buffer_position() as usize;
+        let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let main = matches!(namespace, ResolveResult::Bound(ns) if matches!(ns.as_ref(),
+            b"http://schemas.openxmlformats.org/drawingml/2006/main" | b"http://purl.oclc.org/ooxml/drawingml/main"));
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                if main && at > *start && at < content_end && depth == path.len() + 1 {
+                    let name = local_name(element.name().as_ref());
+                    if matches!(name.as_str(), "noFill" | "solidFill" | "gradFill" | "blipFill" | "pattFill" | "grpFill") {
+                        if matches!(event, Event::Empty(_)) { ranges.push((at, reader.buffer_position() as usize)); }
+                        else { paint_start = Some((at, depth + 1)); }
+                    } else if matches!(name.as_str(), "ln" | "effectLst" | "effectDag" | "scene3d" | "sp3d" | "extLst") {
+                        insert_at = insert_at.min(at);
+                    }
+                }
+                if matches!(event, Event::Start(_)) { depth += 1; }
+            }
+            Event::End(_) => {
+                if let Some((begin, paint_depth)) = paint_start {
+                    if depth == paint_depth { ranges.push((begin, reader.buffer_position() as usize)); paint_start = None; }
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        if reader.buffer_position() as usize >= *finish { break; }
+    }
+    if ranges.is_empty() {
+        return Ok(format!("{}{}{}", &xml[..insert_at], fill, &xml[insert_at..]));
+    }
+    let mut output = xml.to_string();
+    for (index, (start, end)) in ranges.iter().enumerate().rev() {
+        output.replace_range(*start..*end, if index == 0 { &fill } else { "" });
+    }
+    Ok(output)
+}
+
 pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<String, XlsxError> {
     let mut reader = quick_xml::reader::NsReader::from_str(xml);
     let strict = loop {
@@ -966,6 +1032,12 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
     if series_data_changed(before, after) && !plot_options_changed(before, after) {
         output = patch_series_data(&output, before, after, chart_ns, drawing_ns)?;
     }
+    if before.fill != after.fill {
+        output = patch_background_fill(&output, false, after.fill.as_deref(), chart_ns, drawing_ns)?;
+    }
+    if before.plot_fill != after.plot_fill {
+        output = patch_background_fill(&output, true, after.plot_fill.as_deref(), chart_ns, drawing_ns)?;
+    }
     Ok(output)
 }
 
@@ -973,6 +1045,40 @@ pub(crate) fn patch_chart(xml: &str, before: &Chart, after: &Chart) -> Result<St
 mod filtered_category_source_tests {
     use super::*;
     use crate::{chart::parse_chart_xml, ir::ChartCategoryValue, parser::Theme};
+
+    #[test]
+    fn background_paint_edits_keep_borders_extensions_and_foreign_namespaces() {
+        for strict in [false, true] {
+            let ns = if strict { "http://purl.oclc.org/ooxml/drawingml/chart" } else { C };
+            let drawing_ns = if strict { "http://purl.oclc.org/ooxml/drawingml/main" } else { A };
+            let border = "<d:ln w=\"12345\"><d:solidFill><d:srgbClr val=\"778899\"/></d:solidFill></d:ln>";
+            let foreign = "<f:solidFill keep=\"yes\"><f:srgbClr val=\"BADBAD\"/></f:solidFill>";
+            for paint in ["", "<q:spPr custom=\"keep\"/>", "<q:spPr custom=\"keep\"><d:noFill/><!--keep--><d:ln w=\"12345\"><d:solidFill><d:srgbClr val=\"778899\"/></d:solidFill></d:ln><f:solidFill keep=\"yes\"><f:srgbClr val=\"BADBAD\"/></f:solidFill></q:spPr>"] {
+                let xml = format!("<q:chartSpace xmlns:q=\"{ns}\" xmlns:d=\"{drawing_ns}\" xmlns:f=\"urn:foreign\"><q:chart><q:title><q:tx><q:rich><d:bodyPr/><d:lstStyle/><d:p><d:r><d:t>Heading</d:t></d:r></d:p></q:rich></q:tx><q:txPr><d:bodyPr/><d:lstStyle/><d:p><d:pPr><d:defRPr><d:solidFill><d:srgbClr val=\"000000\"/></d:solidFill></d:defRPr></d:pPr></d:p></q:txPr></q:title><q:plotArea><q:barChart><q:barDir val=\"col\"/></q:barChart>{paint}<q:extLst><q:ext uri=\"keep-plot\"/></q:extLst></q:plotArea></q:chart>{paint}<q:txPr/><q:extLst><q:ext uri=\"keep-chart\"/></q:extLst><f:spPr><f:solidFill/></f:spPr></q:chartSpace>");
+                let before = parse_chart_xml(&xml, &Theme::default()).unwrap();
+                assert_eq!(before.fill, None, "title text paint is not the chart background");
+                assert_eq!(before.plot_fill, None);
+                assert_eq!(patch_chart(&xml, &before, &before).unwrap(), xml);
+                let mut after = before.clone();
+                after.fill = Some("112233".into()); after.plot_fill = Some("445566".into());
+                let saved = patch_chart(&xml, &before, &after).unwrap();
+                let parsed = parse_chart_xml(&saved, &Theme::default()).unwrap();
+                assert_eq!(parsed.fill, after.fill); assert_eq!(parsed.plot_fill, after.plot_fill);
+                assert!(saved.contains("<f:spPr><f:solidFill/></f:spPr>"));
+                assert!(saved.contains("uri=\"keep-plot\"")); assert!(saved.contains("uri=\"keep-chart\""));
+                if paint.contains("d:ln") {
+                    assert_eq!(saved.matches(border).count(), 2);
+                    assert_eq!(saved.matches(foreign).count(), 2);
+                    assert_eq!(saved.matches("<!--keep-->").count(), 2);
+                    assert_eq!(saved.matches("custom=\"keep\"").count(), 2);
+                }
+                let mut area_only = after.clone(); area_only.fill = Some("AABBCC".into());
+                let revised = patch_chart(&saved, &parsed, &area_only).unwrap();
+                let read = parse_chart_xml(&revised, &Theme::default()).unwrap();
+                assert_eq!(read.fill, area_only.fill); assert_eq!(read.plot_fill, after.plot_fill);
+            }
+        }
+    }
 
 
     #[test]

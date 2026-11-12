@@ -176,6 +176,11 @@ fn move_columns(sheet: &mut Sheet, at: u32, count: i64) {
         row.cells.sort_by_key(|cell| cell.col);
     }
 
+    // A column's automatic-width provenance moves with its dimensions.
+    sheet.best_fit_cols = sheet.best_fit_cols.iter()
+        .filter(|col| count > 0 || **col < at || **col >= at + (-count) as u32)
+        .map(|col| if *col >= at { shifted_zero(*col, at, count) } else { *col })
+        .collect();
     // A column's width belongs to the column, so it moves with it.
     sheet.col_custom_widths = sheet.col_custom_widths.iter()
         .filter(|(col, _)| count > 0 || **col < at || **col >= at + (-count) as u32)

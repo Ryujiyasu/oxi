@@ -12,6 +12,10 @@ pub type DefinedNameAttributes = std::collections::BTreeMap<String, std::collect
 pub struct FontReference {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latin_name: Option<String>,
+    /// Lossless logical face when its UTF-16 name cannot be a Unicode string.
+    /// The rendering face remains available separately in `font_name`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latin_name_utf16: Option<Vec<u16>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheme: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -30,7 +34,7 @@ pub struct FontReference {
 
 impl FontReference {
     pub fn is_empty(&self) -> bool {
-        self.latin_name.is_none() && self.scheme.is_none() && self.theme.is_none()
+        self.latin_name.is_none() && self.latin_name_utf16.is_none() && self.scheme.is_none() && self.theme.is_none()
             && self.indexed.is_none() && !self.automatic && self.tint.is_none()
             && self.rgb.is_none() && !self.implicit_automatic
     }
@@ -81,6 +85,15 @@ pub struct NamedCellStyle {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
+    /// Copy instance identity -> source-template identity. A copy owns its
+    /// edits while its template retains package features not represented here.
+    /// This provenance is consumed when materializing a new source package.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub copied_sheet_origins: std::collections::BTreeMap<u32, u32>,
+    /// Document-object identity assigned to a copied instance, when initialized.
+    /// Missing entries clear the template's code name rather than sharing it.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub copied_sheet_code_names: std::collections::BTreeMap<u32, String>,
     /// The DrawingML theme palette in OOXML order: dark1, light1, dark2,
     /// light2, accents 1-6, hyperlink and followed hyperlink.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -106,6 +119,10 @@ pub struct Workbook {
     /// Named styles retain their own format, which can differ from cell XF 0.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub named_styles: Vec<NamedCellStyle>,
+    /// Reserved named-format slots in the source, including unnamed templates.
+    /// New definitions must not reuse an unreferenced imported slot.
+    #[serde(default)]
+    pub source_named_style_xf_count: u32,
     /// The names the workbook gives to things, as `(name, what it refers to)`.
     /// A formula saying `SUM(sales)` means one of these, and without them it
     /// means nothing at all.
@@ -133,6 +150,14 @@ pub struct Workbook {
     /// answer to give, and the cell keeps whatever it was saved showing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub external_books: Vec<ExternalBook>,
+}
+
+impl Workbook {
+    pub fn next_named_style_source_id(&self) -> Option<u32> {
+        self.named_styles.iter().try_fold(self.source_named_style_xf_count.max(1), |next, style| {
+            Some(next.max(style.source_id.checked_add(1)?))
+        })
+    }
 }
 
 /// A sheet-qualified defined name, using the same quoting as a formula.
@@ -354,6 +379,10 @@ pub struct SheetProtection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
+    /// Workbook-wide legacy drawing ID blocks owned by this sheet, in order.
+    /// A block has 1024 IDs; its first slot is the initial drawing-group root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drawing_id_blocks: Vec<u32>,
     #[serde(default, skip_serializing_if = "SheetKind::is_worksheet")]
     pub kind: SheetKind,
     /// Whether the sheet is shown, and how firmly it is hidden when it is not.
@@ -380,6 +409,9 @@ pub struct Sheet {
     /// Missing entries retain compatibility with older serialized workbooks.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub col_custom_widths: std::collections::BTreeMap<u32, bool>,
+    /// Columns whose widths may grow automatically with their contents.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub best_fit_cols: std::collections::BTreeSet<u32>,
     /// The Normal style's Latin face, used to measure digits in column widths.
     /// Text can still use the theme's East Asian face through normal_font.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -475,12 +507,132 @@ pub struct Sheet {
     /// colour; a sheet with no `<tabColor>` leaves it `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_color: Option<String>,
+    /// Header/footer programs and their printing flags. UTF-16 preserves the
+    /// complete spreadsheet string domain, including unpaired surrogates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_footer: Option<HeaderFooter>,
     /// A stable identity the parser stamps (the sheet's position in the file),
     /// so an editor round-trip can tell a rename (same id, new name) from an
     /// add-and-delete that happens to leave the count unchanged. `None` on a
     /// sheet the editor added, and on a workbook not built by the parser.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HeaderFooter {
+    pub odd_header: Vec<u16>,
+    pub odd_footer: Vec<u16>,
+    pub even_header: Vec<u16>,
+    pub even_footer: Vec<u16>,
+    pub first_header: Vec<u16>,
+    pub first_footer: Vec<u16>,
+    pub different_odd_even: bool,
+    pub different_first: bool,
+    pub scale_with_doc: bool,
+    pub align_with_margins: bool,
+}
+
+impl Default for HeaderFooter {
+    fn default() -> Self {
+        Self { odd_header: Vec::new(), odd_footer: Vec::new(), even_header: Vec::new(),
+            even_footer: Vec::new(), first_header: Vec::new(), first_footer: Vec::new(),
+            different_odd_even: false, different_first: false, scale_with_doc: true,
+            align_with_margins: true }
+    }
+}
+
+impl HeaderFooter {
+    fn section_ranges(raw: &[u16]) -> Vec<(usize, std::ops::Range<usize>)> {
+        let end = raw.iter().position(|unit| *unit == 0).unwrap_or(raw.len());
+        let (mut section, mut start, mut at) = (1, 0, 0);
+        let mut ranges = Vec::new();
+        while at < end {
+            if raw[at] == u16::from(b'&') && at + 1 < end {
+                if raw[at + 1] == u16::from(b'&') { at += 2; continue; }
+                let next = match raw[at + 1] {
+                    0x4c | 0x6c => Some(0), 0x43 | 0x63 => Some(1), 0x52 | 0x72 => Some(2),
+                    _ => None,
+                };
+                if let Some(next) = next {
+                    if start < at { ranges.push((section, start..at)); }
+                    section = next; start = at; at += 2; continue;
+                }
+            }
+            at += 1;
+        }
+        if start < end { ranges.push((section, start..end)); }
+        ranges
+    }
+
+    pub fn odd_sections(&self) -> [Vec<u16>; 6] {
+        let mut parts: [Vec<u16>; 6] = Default::default();
+        for (offset, raw) in [(0, &self.odd_header), (3, &self.odd_footer)] {
+            for (section, range) in Self::section_ranges(raw) {
+                let text = &raw[range];
+                let marker = text.len() >= 2 && text[0] == u16::from(b'&')
+                    && matches!(text[1], 0x4c | 0x6c | 0x43 | 0x63 | 0x52 | 0x72);
+                parts[offset + section].extend_from_slice(&text[if marker { 2 } else { 0 }..]);
+            }
+        }
+        parts
+    }
+
+    /// Replaces only the chosen section's spans, retaining other sections and
+    /// all their literal control programs, then appends the assigned program.
+    pub fn set_odd_section(&mut self, index: usize, value: &[u16]) -> Result<(), &'static str> {
+        if index >= 6 { return Err("header/footer section is outside 0..6"); }
+        let raw = if index < 3 { &self.odd_header } else { &self.odd_footer };
+        let section = index % 3;
+        let mut next = Vec::new();
+        for (held, range) in Self::section_ranges(raw) {
+            if held != section { next.extend_from_slice(&raw[range]); }
+        }
+        let end = value.iter().position(|unit| *unit == 0).unwrap_or(value.len());
+        if end > 0 {
+            next.extend([u16::from(b'&'), u16::from(b"LCR"[section])]);
+            next.extend_from_slice(&value[..end]);
+        }
+        if next.len() > 255 { return Err("header/footer program is longer than 255 UTF-16 units"); }
+        if index < 3 { self.odd_header = next; } else { self.odd_footer = next; }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod header_footer_tests {
+    use super::HeaderFooter;
+
+    #[test]
+    fn header_programs_follow_native_sections_and_keep_other_programs() {
+        let mut footer = HeaderFooter::default();
+        footer.set_odd_section(1, &"a&&&Cb".encode_utf16().collect::<Vec<_>>()).unwrap();
+        footer.set_odd_section(0, &"left".encode_utf16().collect::<Vec<_>>()).unwrap();
+        assert_eq!(String::from_utf16(&footer.odd_header).unwrap(), "&Ca&&&Cb&Lleft");
+        let parts = footer.odd_sections();
+        assert_eq!(String::from_utf16(&parts[0]).unwrap(), "left");
+        assert_eq!(String::from_utf16(&parts[1]).unwrap(), "a&&b");
+        let mut footer = HeaderFooter { odd_header: "&LLEFT&CCENTER&RRIGHT".encode_utf16().collect(), ..Default::default() };
+        footer.set_odd_section(1, &"one&Ltwo&rThree".encode_utf16().collect::<Vec<_>>()).unwrap();
+        let parts = footer.odd_sections();
+        assert_eq!(String::from_utf16(&parts[0]).unwrap(), "LEFTtwo");
+        assert_eq!(String::from_utf16(&parts[1]).unwrap(), "one");
+        assert_eq!(String::from_utf16(&parts[2]).unwrap(), "RIGHTThree");
+    }
+
+    #[test]
+    fn header_program_limit_and_lossless_units_match_native() {
+        let mut footer = HeaderFooter::default();
+        footer.set_odd_section(1, &vec![u16::from(b'a'); 253]).unwrap();
+        let before = footer.clone();
+        assert!(footer.set_odd_section(1, &vec![u16::from(b'a'); 254]).is_err());
+        assert_eq!(footer, before);
+        footer.set_odd_section(1, &[0x41, 0xd800, 0x42]).unwrap();
+        assert_eq!(footer.odd_sections()[1], [0x41, 0xd800, 0x42]);
+        footer.set_odd_section(1, &[0x41, 0, 0x42]).unwrap();
+        assert_eq!(footer.odd_sections()[1], [0x41]);
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -563,6 +715,10 @@ pub struct Row {
     /// file 窶・Excel recomputes the height from the row's content on open.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub custom_height: bool,
+    /// An explicit row-format record, independent of cell-style overrides.
+    /// None preserves existing metadata when an older client edits the IR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_recorded: Option<bool>,
     /// The font of the row's own format (`s=` with customFormat="1"). The
     /// row wears it across all its columns, and its default height becomes
     /// the row's base 窶・which is how a row sinks below the sheet default
@@ -876,6 +1032,10 @@ pub struct BorderLine {
     /// The colour as six hex digits, when the edge names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Original color identity when it differs from canonical RGB or the
+    /// edge's default automatic color. Line edits retain theme/palette links.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_reference: Option<Box<CellColorReference>>,
 }
 
 fn is_zero(value: &u32) -> bool {
@@ -899,9 +1059,41 @@ pub struct Anchor {
     pub row_off: i64,
 }
 
+/// Accessible nonvisual text, independent of a drawing's visible label.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DrawingMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Original UTF-16 units when the live text is not valid Unicode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utf16_description: Option<Vec<u16>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Retain the stated flag's spelling while editing other metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<String>,
+}
+
+impl DrawingMetadata {
+    pub fn description_units(&self) -> Option<Vec<u16>> {
+        self.utf16_description.clone().or_else(|| self.description.as_ref().map(|text| text.encode_utf16().collect()))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.description.is_none() && self.utf16_description.is_none() && self.title.is_none() && self.hidden.is_none()
+    }
+}
+
 /// Something drawn over the grid rather than in it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Drawing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<DrawingMetadata>,
+    /// The part-local DrawingML non-visual identity; distinct from a host's
+    /// object handle and retained so connectors and Automation IDs stay stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub non_visual_id: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// ProgID of a worksheet-embedded OLE object, joined through `shapeId`.
@@ -1069,6 +1261,16 @@ pub enum DrawingKind {
 /// Excel lays it out from and what these corners hold.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Comment {
+    /// Absolute box position in points, independently of its cell anchors.
+    /// Preserve the imported position when only text or appearance changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<(f64, f64)>,
+    /// Numeric identity of the note's legacy VML shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape_id: Option<u32>,
+    /// Explicit VML shape name. None retains Excel's generated Comment name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape_name: Option<String>,
     /// Name in the worksheet comment part's shared author table.
     #[serde(default)]
     pub author: String,
@@ -1385,6 +1587,10 @@ pub struct ShapePath {
 /// A preset shape, with what it is painted and ruled with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
+    /// Position of the shape's own transform in its parent's coordinate system,
+    /// in EMU. This is independent of the offsets within its grid-cell anchors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform_offset: Option<(i64, i64)>,
     /// The preset geometry OOXML names: "rect", "line", "roundRect", 窶ｦ
     pub geometry: String,
     /// True for an Office text box (`cNvSpPr txBox="1"`), rather than a
@@ -2061,6 +2267,16 @@ impl CellFormatReference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct CellStyle {
+    /// The resolved font still shares the workbook's Normal font resource.
+    /// Equal-looking explicit fonts have Some(false); older editing views
+    /// may omit this provenance. Detaching an edit must clear this link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_font_link: Option<bool>,
+    /// Live attachment to the assigned non-Normal style's font. It may
+    /// survive disabling IncludeFont in an open editing view. A cold load
+    /// derives it from stored resource identities, as Excel does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub named_font_link: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format_reference: Option<Box<CellFormatReference>>,
     pub bold: bool,
@@ -2169,6 +2385,13 @@ impl CellStyle {
         if self.font_reference.as_deref().is_some_and(FontReference::is_empty) {
             self.font_reference=None;
         }
+    }
+
+    pub fn latin_font_units(&self) -> Option<std::borrow::Cow<'_, [u16]>> {
+        if let Some(units) = self.font_reference.as_ref().and_then(|reference| reference.latin_name_utf16.as_deref()) {
+            return Some(std::borrow::Cow::Borrowed(units));
+        }
+        self.latin_font_name().map(|name| std::borrow::Cow::Owned(name.encode_utf16().collect()))
     }
 
     pub fn latin_font_name(&self) -> Option<&str> {

@@ -11,6 +11,52 @@ use thiserror::Error;
 use oxidocs_common::archive::OoxmlArchive;
 use oxidocs_common::relationships::{parse_relationships, Relationship};
 
+fn parse_header_footer(xml: &str) -> Result<Option<crate::ir::HeaderFooter>, XlsxError> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut footer = None;
+    let mut field = None;
+    let mut text = String::new();
+    loop {
+        let event = reader.read_event().map_err(XlsxError::Xml)?;
+        let empty = matches!(event, Event::Empty(_));
+        match event {
+            Event::Start(start) | Event::Empty(start) if start.local_name().as_ref() == b"headerFooter" => {
+                footer = Some(crate::ir::HeaderFooter {
+                    different_odd_even: is_true(get_attr(&start, "differentOddEven").as_deref()),
+                    different_first: is_true(get_attr(&start, "differentFirst").as_deref()),
+                    scale_with_doc: get_attr(&start, "scaleWithDoc").as_deref().is_none_or(|s| is_true(Some(s))),
+                    align_with_margins: get_attr(&start, "alignWithMargins").as_deref().is_none_or(|s| is_true(Some(s))),
+                    ..Default::default()
+                });
+                if empty { break; }
+            }
+            Event::Start(start) if footer.is_some() => {
+                field = match start.local_name().as_ref() {
+                    b"oddHeader" => Some(0), b"oddFooter" => Some(1),
+                    b"evenHeader" => Some(2), b"evenFooter" => Some(3),
+                    b"firstHeader" => Some(4), b"firstFooter" => Some(5), _ => None,
+                };
+                if field.is_some() { text.clear(); }
+            }
+            Event::Text(value) if field.is_some() => text.push_str(&value.unescape()?),
+            Event::CData(value) if field.is_some() => text.push_str(std::str::from_utf8(value.as_ref())
+                .map_err(|e| XlsxError::InvalidData(e.to_string()))?),
+            Event::End(end) if end.local_name().as_ref() == b"headerFooter" => break,
+            Event::End(_) if field.is_some() => {
+                let f = footer.as_mut().expect("header/footer is open");
+                let value = match field.take().unwrap() { 0 => &mut f.odd_header, 1 => &mut f.odd_footer,
+                    2 => &mut f.even_header, 3 => &mut f.even_footer,
+                    4 => &mut f.first_header, _ => &mut f.first_footer };
+                *value = crate::string_value::decode(&text);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(footer)
+}
+
 /// Turns an OOXML custom-filter operator into the prefix VBA states it with.
 fn filter_operator(operator: &str) -> &'static str {
     match operator {
@@ -1475,7 +1521,10 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
     // Imported application flags still compare against the effective font.
     let imported = reconcile_imported_styles_xml(xml, false)?;
     let xml = imported.as_str();
-    let mut reader = Reader::from_str(xml);
+    let mut reader = quick_xml::reader::NsReader::from_str(xml);
+    let mut root_seen = false;
+    let mut allow_unqualified = false;
+    let mut ignored_depth = 0usize;
     let mut ss = StyleSheet::default();
 
     // Parsing state
@@ -1508,7 +1557,36 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
     let mut current_xf = XfRecord::default();
 
     loop {
-        match reader.read_event()? {
+        use quick_xml::name::ResolveResult;
+        let (namespace, event) = reader.read_resolved_event()?;
+        if !root_seen {
+            if let Event::Start(tag) | Event::Empty(tag) = &event {
+                allow_unqualified = tag.name().as_ref() == b"styleSheet"
+                    && matches!(&namespace, ResolveResult::Unbound);
+                root_seen = true;
+            }
+        }
+        let standard = matches!(&namespace, ResolveResult::Bound(ns)
+            if ns.as_ref() == b"http://schemas.openxmlformats.org/spreadsheetml/2006/main")
+            || (allow_unqualified && matches!(&namespace, ResolveResult::Unbound));
+        if ignored_depth != 0 {
+            match event {
+                Event::Start(_) => ignored_depth += 1,
+                Event::End(_) => ignored_depth -= 1,
+                Event::Eof => break,
+                _ => {}
+            }
+            continue;
+        }
+        if !standard {
+            match event {
+                Event::Start(_) => ignored_depth = 1,
+                Event::Eof => break,
+                _ => {}
+            }
+            continue;
+        }
+        match event {
             Event::Start(e) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
@@ -1670,6 +1748,15 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             None => None,
                         } {
                             line.color = held;
+                            let reference=cell_color_reference(&e);
+                            let default=if matches!(border_edge,Some(Edge::Diagonal)) {
+                                crate::ir::CellColorReference {automatic:true,..Default::default()}
+                            } else {crate::ir::CellColorReference {indexed:Some(64),..Default::default()}};
+                            let rgb=reference.rgb.as_deref().is_some_and(|rgb|rgb.len()==8 && rgb.get(..2).is_some_and(|prefix|prefix.eq_ignore_ascii_case("FF")))
+                                && reference.theme.is_none() && reference.indexed.is_none()
+                                && reference.tint.is_none() && !reference.automatic;
+                            let canonical=rgb || reference==default || reference==crate::ir::CellColorReference::default();
+                            line.color_reference=(!canonical).then(||Box::new(reference));
                         }
                     }
 
@@ -1772,7 +1859,11 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             get_attr(&e, "val").and_then(|v| v.parse().ok());
                     }
                     "name" | "rFont" if in_font => {
-                        current_font.name = get_attr(&e, "val");
+                        if let Some(encoded) = get_attr(&e, "val") {
+                            let units = crate::string_value::decode(&encoded);
+                            current_font.reference.latin_name_utf16 = String::from_utf16(&units).err().map(|_| units.clone());
+                            current_font.name = Some(String::from_utf16_lossy(&units));
+                        }
                     }
                     "charset" if in_font => {
                         current_font.charset =
@@ -1799,6 +1890,15 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             None => None,
                         } {
                             line.color = held;
+                            let reference=cell_color_reference(&e);
+                            let default=if matches!(border_edge,Some(Edge::Diagonal)) {
+                                crate::ir::CellColorReference {automatic:true,..Default::default()}
+                            } else {crate::ir::CellColorReference {indexed:Some(64),..Default::default()}};
+                            let rgb=reference.rgb.as_deref().is_some_and(|rgb|rgb.len()==8 && rgb.get(..2).is_some_and(|prefix|prefix.eq_ignore_ascii_case("FF")))
+                                && reference.theme.is_none() && reference.indexed.is_none()
+                                && reference.tint.is_none() && !reference.automatic;
+                            let canonical=rgb || reference==default || reference==crate::ir::CellColorReference::default();
+                            line.color_reference=(!canonical).then(||Box::new(reference));
                         }
                     }
                     "color" if in_font => {
@@ -1951,6 +2051,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                         };
                         if let Some(face) = face {
                             current_font.name = Some(face);
+                            current_font.reference.latin_name_utf16 = None;
                         }
                         current_font.reference.scheme = scheme;
                         current_font.reference.latin_name = current_font.latin_name.clone()
@@ -2033,7 +2134,7 @@ fn border_line(e: &quick_xml::events::BytesStart) -> Option<BorderLine> {
     if style == "none" {
         return None;
     }
-    Some(BorderLine { style, color: None })
+    Some(BorderLine { style, color: None, color_reference: None })
 }
 
 /// Build a CellStyle from a style index referencing the StyleSheet.
@@ -2042,7 +2143,23 @@ fn resolve_cell_style(style_index: usize, stylesheet: &StyleSheet) -> CellStyle 
         Some(xf) => xf,
         None => return CellStyle::default(),
     };
-    resolve_xf_style(xf,stylesheet)
+    let mut style=resolve_xf_style(xf,stylesheet);
+    let normal=stylesheet.named_styles.iter().find(|(_,_,builtin)|*builtin==Some(0))
+        .or_else(||stylesheet.named_styles.iter().find(|(name,_,_)|name.eq_ignore_ascii_case("Normal")))
+        .map_or(0,|(_,index,_)|*index);
+    let named=xf.format_reference.style_id.map(|id|id as usize).filter(|id|*id!=normal)
+        .and_then(|id|stylesheet.named_styles.iter().find(|(_,index,_)|*index==id)
+            .and_then(|(_,_,builtin)|stylesheet.cell_style_xfs.get(id).map(|parent|(parent,*builtin))));
+    if let Some((parent,builtin))=named {
+        let attached=xf.format_reference.font!=Some(true)&&xf.font_id==parent.font_id;
+        style.named_font_link=Some(attached);
+        // Numeric builtins exclude font and keep the cell's default font.
+        // An included/custom named font can share resource0 while retaining
+        // independent ownership across a later Normal edit.
+        let named_owns_default=attached&&(builtin.is_none()||parent.format_reference.font!=Some(false));
+        style.normal_font_link=Some(xf.font_id==0&&!named_owns_default);
+    } else {style.normal_font_link=Some(xf.font_id==0);}
+    style
 }
 
 fn resolve_xf_style(xf: &XfRecord, stylesheet: &StyleSheet) -> CellStyle {
@@ -2089,6 +2206,8 @@ fn resolve_xf_style(xf: &XfRecord, stylesheet: &StyleSheet) -> CellStyle {
     };
 
     CellStyle {
+        normal_font_link: None,
+        named_font_link: None,
         format_reference: Some(Box::new(xf.format_reference.clone())),
         bold: font.bold,
         italic: font.italic,
@@ -2637,6 +2756,15 @@ fn parse_vml_ole_shadows(xml: &str) -> HashMap<u32, VmlOleMetadata> {
     result
 }
 
+/// XML normalizes literal attribute whitespace before expanding references.
+/// Drawing descriptions are plain XML strings, not OOXML escaped cell text.
+fn drawing_metadata_attribute(element: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
+    let attribute = element.attributes().flatten().find(|attribute| attribute.key.as_ref() == key)?;
+    let raw = std::str::from_utf8(attribute.value.as_ref()).ok()?;
+    let normalized = raw.replace("\r\n", "\n").chars().map(|ch| if matches!(ch, '\t' | '\n' | '\r') { ' ' } else { ch }).collect::<String>();
+    quick_xml::escape::unescape(&normalized).ok().map(|text| text.into_owned())
+}
+
 fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, DrawingImageRelationships)> {
     use crate::ir::{
         Anchor, Drawing, DrawingKind, Frame, PathStep, Shape, ShapeLine, ShapeParagraph,
@@ -2655,8 +2783,9 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
 
     let mut drawing_name=None;
     let mut drawing_id: Option<u32> = None;
+    let mut drawing_metadata: Option<crate::ir::DrawingMetadata> = None;
     let mut group_name: Option<String> = None;
-    let mut reader = Reader::from_str(xml);
+    let mut reader = quick_xml::reader::NsReader::from_str(xml);
     let mut buf = Vec::new();
     let mut found: Vec<(Drawing, DrawingImageRelationships)> = Vec::new();
     // Where a chart's own shape sits, as fractions of the chart's box.
@@ -2692,6 +2821,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
     let mut extent: Option<(i64, i64)> = None;
     let mut kind: Option<DrawingKind> = None;
     let blank_shape = Shape {
+        transform_offset: None,
         geometry: String::new(),
         text_box: false,
         adjusts: Vec::new(),
@@ -2810,7 +2940,17 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
                 "alpha" if in_sp_pr && get_attr(e, "val").as_deref() == Some("0") => {
                     if let Some(DrawingKind::Picture { format, .. }) = kind.as_mut() { format.transparent_background = true; }
                 }
-                "cNvPr"=> {
+                "cNvPr" if matches!(reader.resolve_element(e.name()).0,
+                    quick_xml::name::ResolveResult::Bound(namespace) if matches!(namespace.as_ref(),
+                    b"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" |
+                    b"http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing" |
+                    b"http://schemas.openxmlformats.org/drawingml/2006/chartDrawing" |
+                    b"http://purl.oclc.org/ooxml/drawingml/chartDrawing")) => {
+                    let metadata = crate::ir::DrawingMetadata {
+                        description: drawing_metadata_attribute(e, b"descr"), utf16_description: None,
+                        title: drawing_metadata_attribute(e, b"title"), hidden: drawing_metadata_attribute(e, b"hidden"),
+                    };
+                    drawing_metadata = (!metadata.is_empty()).then_some(metadata);
                     let name = get_attr(e, "name");
                     drawing_id = get_attr(e, "id").and_then(|value| value.parse().ok());
                     if depth_in_shape == 1 && group.is_none() && parent_groups.is_empty() {
@@ -2827,6 +2967,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
                 | "relSizeAnchor" | "absSizeAnchor" => {
                     frame = None;
                     frame_to = None;
+                    drawing_metadata = None;
                     group_name = None;
                     group_rotation = 0;
                     parent_groups.clear();
@@ -3704,12 +3845,15 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
                             let root_ch_ext = root.3;
                             let mut kind = kind.take().unwrap_or(DrawingKind::Other);
                             if let DrawingKind::Shape(held) = &mut kind {
+                                shape.transform_offset = own_off;
                                 *held = shape.clone();
                             }
                             let picture = matches!(kind, DrawingKind::Picture { .. });
                             found.push((
                                 Drawing {
                                     name: drawing_name.take(),
+                                    non_visual_id: drawing_id,
+                                    metadata: drawing_metadata.clone(),
                                     ole_prog_id: None,
                                     ole_source_name: None,
                                     ole_clone_position: None,
@@ -3772,6 +3916,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
                         if group.is_none() {
                             let mut kind = kind.take().unwrap_or(DrawingKind::Other);
                             if let DrawingKind::Shape(held) = &mut kind {
+                                shape.transform_offset = own_off;
                                 *held = shape.clone();
                             }
                             let named = matches!(
@@ -3791,6 +3936,8 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
                             found.push((
                                 Drawing {
                                     name: drawing_name.take(),
+                                    non_visual_id: drawing_id,
+                                    metadata: drawing_metadata.clone(),
                                     ole_prog_id: None,
                                     ole_source_name: None,
                                     ole_clone_position: None,
@@ -3870,6 +4017,30 @@ fn vml_length(said: &str) -> Option<f32> {
 #[cfg(test)]
 fn parse_comments(comments_xml: &str, vml: &str) -> Vec<crate::ir::Comment> {
     parse_comments_with_theme(comments_xml, vml, &Theme::default())
+}
+
+fn vml_shape_attribute(shape: &str, name: &str) -> Option<String> {
+    let head = shape.split('>').next()?;
+    let xml = format!("<v:shape {head}/>");
+    let mut reader = Reader::from_str(&xml);
+    match reader.read_event().ok()? {
+        Event::Start(element) | Event::Empty(element) => get_attr(&element, name),
+        _ => None,
+    }
+}
+
+fn parse_drawing_id_blocks(xml: &str) -> Vec<u32> {
+    let mut reader = Reader::from_str(xml);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(element) | Event::Empty(element)) if local_name(element.name().as_ref()) == "idmap" => {
+                return get_attr(&element, "data").unwrap_or_default().split(',')
+                    .filter_map(|value| value.trim().parse().ok()).filter(|block| *block != 0).collect();
+            }
+            Ok(Event::Eof) | Err(_) => return Vec::new(),
+            _ => {}
+        }
+    }
 }
 
 fn parse_comments_with_theme(comments_xml: &str, vml: &str, theme: &Theme) -> Vec<crate::ir::Comment> {
@@ -4182,6 +4353,12 @@ fn parse_comments_with_theme(comments_xml: &str, vml: &str, theme: &Theme) -> Ve
             .unwrap_or((7.2, 3.6, 7.2, 3.6));
         let emu = |points: f32| (points * 12700.0).round() as i64;
         held.push(Comment {
+            position: measure("margin-left:").zip(measure("margin-top:"))
+                .map(|(left, top)| (f64::from(left), f64::from(top))),
+            shape_id: vml_shape_attribute(shape, "spid").or_else(|| vml_shape_attribute(shape, "id"))
+                .and_then(|id| id.strip_prefix("_x0000_s").unwrap_or(&id).parse().ok()),
+            shape_name: vml_shape_attribute(shape, "id").filter(|_| vml_shape_attribute(shape, "spid").is_some())
+                .map(|name| String::from_utf16_lossy(&crate::string_value::decode(&name))),
             author: authors_by_cell.get(&(row, column)).cloned().unwrap_or_default(),
             utf16_text: utf16_by_cell.get(&(row, column)).cloned(),
             from: corner(left, dx, top, dy),
@@ -4810,6 +4987,7 @@ fn parse_worksheet(
     // Column widths: index is 0-based col number
     let mut col_widths: Vec<f32> = Vec::new();
     let mut col_custom_widths = std::collections::BTreeMap::new();
+    let mut best_fit_cols = std::collections::BTreeSet::new();
     let mut hidden_cols: Vec<u32> = Vec::new();
     let mut auto_filter: Option<crate::ir::AutoFilter> = None;
     let mut declared_range: Option<(u32, u32, u32, u32)> = None;
@@ -4861,6 +5039,7 @@ fn parse_worksheet(
     let mut current_row_index: u32 = 0;
     let mut current_row_height: Option<f32> = None;
     let mut current_row_custom = false;
+    let mut current_row_format_recorded: Option<bool> = None;
     let mut current_row_font: Option<(String, f32)> = None;
     let mut current_row_thick_top = false;
     let mut current_row_thick_bottom = false;
@@ -5002,6 +5181,7 @@ fn parse_worksheet(
                                 .map(crate::row_height::file_points);
                         current_row_custom =
                             is_true(get_attr(&e, "customHeight").as_deref());
+                        current_row_format_recorded = get_attr(&e, "customFormat").map(|value| is_true(Some(value.as_str())));
                         current_row_font = row_style_font(&e, stylesheet);
                         current_row_thick_top =
                             is_true(get_attr(&e, "thickTop").as_deref());
@@ -5115,13 +5295,14 @@ fn parse_worksheet(
                             cells: std::mem::take(&mut current_cells),
                             height: current_row_height,
                             custom_height: current_row_custom,
-                            style_font: current_row_font.take(),
+                            format_recorded: current_row_format_recorded, style_font: current_row_font.take(),
                             thick_top: current_row_thick_top,
                             thick_bottom: current_row_thick_bottom,
                             hidden: current_row_hidden,
                         });
                         current_row_height = None;
                         current_row_custom = false;
+                        current_row_format_recorded = None;
                         current_row_thick_top = false;
                         current_row_thick_bottom = false;
                         current_row_hidden = false;
@@ -5368,6 +5549,7 @@ fn parse_worksheet(
                         for c in min_col..=max_col_attr {
                             col_widths[(c - 1) as usize] = width;
                             col_custom_widths.insert(c - 1, is_true(get_attr(&e, "customWidth").as_deref()));
+                            if is_true(get_attr(&e, "bestFit").as_deref()) { best_fit_cols.insert(c - 1); }
                         }
                         if is_true(get_attr(&e, "hidden").as_deref()) {
                             for c in min_col..=max_col_attr {
@@ -5426,7 +5608,7 @@ fn parse_worksheet(
                                 .map(crate::row_height::file_points),
                             custom_height:
                                 is_true(get_attr(&e, "customHeight").as_deref()),
-                            style_font: row_style_font(&e, stylesheet),
+                            format_recorded: get_attr(&e, "customFormat").map(|value| is_true(Some(value.as_str()))), style_font: row_style_font(&e, stylesheet),
                             thick_top: is_true(get_attr(&e, "thickTop").as_deref()),
                             thick_bottom: is_true(get_attr(&e, "thickBot").as_deref()),
                             hidden: is_true(get_attr(&e, "hidden").as_deref()),
@@ -5504,7 +5686,7 @@ fn parse_worksheet(
                         cells: Vec::new(),
                         height: None,
                         custom_height: false,
-                        style_font: None,
+                        format_recorded: None, style_font: None,
                         thick_top: false,
                         thick_bottom: false,
                         hidden: false,
@@ -5593,6 +5775,7 @@ fn parse_worksheet(
         col_count,
         col_widths,
         col_custom_widths,
+        best_fit_cols,
         cached_spills: None,
         pending_used_bounds,
         column_width_font,
@@ -5617,6 +5800,8 @@ fn parse_worksheet(
             hidden_cols
         },
         unsupported_elements: unsupported,
+        drawing_id_blocks: Vec::new(),
+        header_footer: parse_header_footer(xml)?,
         protected,
         protection,
         validations,
@@ -5989,6 +6174,28 @@ pub fn parse_xlsx(data: &[u8]) -> Result<Workbook, XlsxError> {
     Ok(workbook)
 }
 
+// The default-theme version can select Excel's built-in font scheme even
+// when a stale theme part still contains different faces. Version202300 and
+// explicit custom version0 are compared against saved Native workbooks.
+fn apply_workbook_default_font_scheme(theme: &mut Theme, workbook_xml: &str) {
+    let mut reader = Reader::from_str(workbook_xml);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) if e.local_name().as_ref() == b"workbookPr" => {
+                if get_attr(&e, "defaultThemeVersion").as_deref() == Some("202300") {
+                    theme.major_face = Some("游ゴシック Light".into());
+                    theme.minor_face = Some("游ゴシック".into());
+                    theme.major_latin_face = Some("Aptos Display".into());
+                    theme.minor_latin_face = Some("Aptos Narrow".into());
+                }
+                break;
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+}
+
 /// Parse an .xlsx file without recalculating anything.
 ///
 /// Every formula cell keeps the value Excel last computed for it, alongside its
@@ -6002,6 +6209,8 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         None => Vec::new(),
     };
 
+    let workbook_xml = archive.read_part("xl/workbook.xml")?;
+
     // 2. Parse styles.xml (optional 遯ｶ繝ｻsome simple xlsx have none)
     // The theme has to be read first: a style may name one of its colours
     // rather than state one of its own.
@@ -6009,6 +6218,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         Some(xml) => parse_theme_xml(&xml),
         None => Theme::default(),
     };
+    apply_workbook_default_font_scheme(&mut theme, &workbook_xml);
     let stylesheet = match archive.try_read_part("xl/styles.xml")? {
         Some(xml) => {
             // A hundred of the corpus's workbooks state a palette of their
@@ -6023,7 +6233,6 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     for string in &mut shared_strings {resolve_run_font_references(&mut string.runs,&theme);}
 
     // 3. Parse workbook.xml to get sheet names and rIds
-    let workbook_xml = archive.read_part("xl/workbook.xml")?;
     let sheet_infos = parse_workbook_sheets(&workbook_xml)?;
 
     // 4. Parse workbook relationships to map rIds to sheet file paths
@@ -6158,6 +6367,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                         None => None,
 
                     };
+                    sheet.drawing_id_blocks = vml.as_deref().map(parse_drawing_id_blocks).unwrap_or_default();
                     let ole_shadows = vml.as_deref().map(parse_vml_ole_shadows).unwrap_or_default();
 
                     let notes = match beside("/comments") {
@@ -6363,6 +6573,8 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     let (defined_names, defined_name_attributes) = parse_defined_names(&workbook_xml);
     Ok(Workbook {
         sheets,
+        copied_sheet_origins: Default::default(),
+        copied_sheet_code_names: Default::default(),
         theme_colors: theme.colours.clone(),
         theme_fonts: crate::ir::ThemeFonts {
             major: theme.major_face.clone(), minor: theme.minor_face.clone(),
@@ -6372,6 +6584,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         recalculation,
         calculation,
         default_style: resolve_cell_style(0, &stylesheet),
+        source_named_style_xf_count: stylesheet.cell_style_xfs.len() as u32,
         named_styles: {
             let records=if stylesheet.named_styles.is_empty() && !stylesheet.cell_style_xfs.is_empty() {
                 vec![("Normal".to_string(),0,Some(0))]
@@ -6543,6 +6756,35 @@ mod tests {
         let sheet = parse_worksheet(partial, "probe", &[], &stylesheet, &Theme::default()).unwrap();
         assert!(sheet.band_styles.sheet.is_none());
         assert_eq!(sheet.band_styles.columns.len(), 16_383);
+    }
+
+    #[test]
+    fn raw_native_font_names_survive_parse_serialize_and_reparse() {
+        let cases: &[(&str, &[u16])] = &[(r####"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x14ac x16r2 xr" xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac" xmlns:x16r2="http://schemas.microsoft.com/office/spreadsheetml/2015/02/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision"><fonts count="1"><font><sz val="13"/><color theme="1"/><name val="_xd800_"/><family val="2"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="標準" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/><extLst><ext uri="{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:slicerStyles defaultSlicerStyle="SlicerStyleLight1"/></ext><ext uri="{9260A510-F301-46a8-8635-F512D64BE5F5}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:timelineStyles defaultTimelineStyle="TimeSlicerStyleLight1"/></ext></extLst></styleSheet>"####,&[55296]),(r####"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x14ac x16r2 xr" xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac" xmlns:x16r2="http://schemas.microsoft.com/office/spreadsheetml/2015/02/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision"><fonts count="1"><font><sz val="13"/><color theme="1"/><name val="_xdc00_"/><family val="2"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="標準" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/><extLst><ext uri="{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:slicerStyles defaultSlicerStyle="SlicerStyleLight1"/></ext><ext uri="{9260A510-F301-46a8-8635-F512D64BE5F5}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:timelineStyles defaultTimelineStyle="TimeSlicerStyleLight1"/></ext></extLst></styleSheet>"####,&[56320]),(r####"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x14ac x16r2 xr" xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac" xmlns:x16r2="http://schemas.microsoft.com/office/spreadsheetml/2015/02/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision"><fonts count="1"><font><sz val="13"/><color theme="1"/><name val="😀"/><family val="2"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="標準" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/><extLst><ext uri="{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:slicerStyles defaultSlicerStyle="SlicerStyleLight1"/></ext><ext uri="{9260A510-F301-46a8-8635-F512D64BE5F5}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:timelineStyles defaultTimelineStyle="TimeSlicerStyleLight1"/></ext></extLst></styleSheet>"####,&[55357,56832]),(r####"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x14ac x16r2 xr" xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac" xmlns:x16r2="http://schemas.microsoft.com/office/spreadsheetml/2015/02/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision"><fonts count="1"><font><sz val="13"/><color theme="1"/><name val="_x005f_x0041_"/><family val="2"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="標準" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/><extLst><ext uri="{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:slicerStyles defaultSlicerStyle="SlicerStyleLight1"/></ext><ext uri="{9260A510-F301-46a8-8635-F512D64BE5F5}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:timelineStyles defaultTimelineStyle="TimeSlicerStyleLight1"/></ext></extLst></styleSheet>"####,&[95,120,48,48,52,49,95])];
+        for &(xml, expected) in cases {
+            let styles = parse_styles_xml(xml, &Theme::default()).unwrap();
+            let style = resolve_cell_style(0, &styles);
+            assert_eq!(style.latin_font_units().as_deref(), Some(expected));
+            let serialized = crate::editor::serialize_cell_font(&style);
+            let changed = format!("<styleSheet><fonts>{serialized}</fonts><cellXfs><xf fontId=\"0\"/></cellXfs></styleSheet>");
+            let reparsed = parse_styles_xml(&changed, &Theme::default()).unwrap();
+            assert_eq!(resolve_cell_style(0, &reparsed).latin_font_units().as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn workbook_default_font_scheme_matches_native_theme_versions() {
+        for (version, expected) in [("202300", "Aptos Display"), ("0", "Courier New")] {
+            let mut theme = Theme {major_face:Some("メイリオ".into()), major_latin_face:Some("Courier New".into()), ..Default::default()};
+            let xml = format!(r#"<workbook><workbookPr defaultThemeVersion="{version}"/></workbook>"#);
+            apply_workbook_default_font_scheme(&mut theme, &xml);
+            assert_eq!(theme.major_latin_face.as_deref(), Some(expected));
+            assert_eq!(theme.major_face.as_deref(), Some(if version=="0" {"メイリオ"} else {"游ゴシック Light"}));
+        }
     }
 
     #[test]
@@ -6940,6 +7182,7 @@ mod tests {
     <xdr:to><xdr:col>7</xdr:col><xdr:colOff>590550</xdr:colOff>
       <xdr:row>9</xdr:row><xdr:rowOff>123825</xdr:rowOff></xdr:to>
     <xdr:sp macro="" textlink="">
+      <xdr:nvSpPr><xdr:cNvPr id="77" name="Imported"/><xdr:cNvSpPr/></xdr:nvSpPr>
       <xdr:spPr>
         <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
         <a:noFill/>
@@ -6960,6 +7203,7 @@ mod tests {
   </xdr:oneCellAnchor>
 </xdr:wsDr>"##;
         let found = parse_drawing_xml(xml, &Theme::default());
+        assert_eq!(found[0].0.non_visual_id, Some(77));
         assert_eq!(found.len(), 2);
 
         let (rectangle, embeds) = &found[0];

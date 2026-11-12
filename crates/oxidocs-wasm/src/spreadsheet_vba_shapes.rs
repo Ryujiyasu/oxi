@@ -10,6 +10,99 @@
 //! 16.0 on a Japanese Office (shapes.vba, shapes2.vba, 2026-09-05).
 
 use super::*;
+
+/// The generated note label accepts a signed decimal integer prefix.
+/// These decimal families are measured against Excel; newer script digits and
+/// supplementary-plane digits remain ordinary custom-name text.
+fn generated_comment_alias_number(name: &str) -> Option<u32> {
+    if !name.get(..8)?.eq_ignore_ascii_case("Comment ") { return None; }
+    let suffix = name.get(8..)?.trim_start();
+    let suffix = suffix.strip_prefix('+').unwrap_or(suffix);
+    let zeroes = [0x0030, 0x0660, 0x06f0, 0x0966, 0x09e6, 0x0a66, 0x0ae6,
+        0x0b66, 0x0c66, 0x0ce6, 0x0d66, 0x0e50, 0x0ed0, 0x0f20, 0x17e0, 0xff10];
+    let (mut value, mut any) = (0u32, false);
+    for ch in suffix.chars() {
+        let Some(digit) = zeroes.iter().find_map(|zero| {
+            let digit = (ch as u32).wrapping_sub(*zero);
+            (digit < 10).then_some(digit)
+        }) else { break };
+        value = value.checked_mul(10)?.checked_add(digit)?;
+        if value > i32::MAX as u32 { return None; }
+        any = true;
+    }
+    any.then_some(value)
+}
+
+#[derive(Clone)]
+pub(super) struct ShapeRangeRecord {
+    pub ids: Vec<u64>,
+    pub sheet: Option<usize>,
+    /// A range containing notes uses the worksheet drawing collection's
+    /// lookup errors even after its note members have been deleted.
+    pub legacy_notes: bool,
+    pub ordinary_range: bool,
+    pub ordinary_slots: Vec<u64>,
+    pub ordinary_initialized: bool,
+}
+
+/// The workbook allocator owns ID blocks even after their last shape is deleted.
+/// DrawingML IDs are local to a part; legacy VML IDs use this separate space.
+#[derive(Default)]
+pub(super) struct DrawingIdentityAllocator {
+    owners: std::collections::BTreeMap<u32, usize>,
+    cursors: std::collections::HashMap<usize, u32>,
+    last_block: u32,
+}
+
+impl DrawingIdentityAllocator {
+    fn observe(&mut self, sheet: usize, blocks: &[u32], ids: impl Iterator<Item = u32>) {
+        for block in blocks.iter().copied().filter(|block| *block != 0) {
+            self.owners.insert(block, sheet);
+            self.last_block = self.last_block.max(block);
+            self.cursors.entry(sheet).or_insert(block * 1024);
+        }
+        for id in ids.filter(|id| *id >= 1024) {
+            let block = id / 1024;
+            self.owners.insert(block, sheet);
+            self.last_block = self.last_block.max(block);
+            let cursor = self.cursors.entry(sheet).or_insert(id);
+            *cursor = (*cursor).max(id);
+        }
+    }
+
+    fn reserve(&mut self, sheet: usize) -> u32 {
+        if let Some((&block, _)) = self.owners.iter().find(|(_, owner)| **owner == sheet) {
+            return block;
+        }
+        self.last_block += 1;
+        self.owners.insert(self.last_block, sheet);
+        self.cursors.insert(sheet, self.last_block * 1024);
+        self.last_block
+    }
+
+    fn next(&mut self, sheet: usize) -> u32 {
+        self.reserve(sheet);
+        let next = self.cursors[&sheet] + 1;
+        let block = next / 1024;
+        let next = if self.owners.get(&block).is_some_and(|owner| *owner == sheet) {
+            next
+        } else {
+            self.last_block += 1;
+            self.owners.insert(self.last_block, sheet);
+            self.last_block * 1024
+        };
+        self.cursors.insert(sheet, next);
+        next
+    }
+
+    pub(super) fn renumber(&mut self, moved: &dyn Fn(usize) -> Option<usize>) {
+        for owner in self.owners.values_mut() {
+            if *owner != usize::MAX { *owner = moved(*owner).unwrap_or(usize::MAX); }
+        }
+        self.cursors = std::mem::take(&mut self.cursors).into_iter()
+            .filter_map(|(sheet, cursor)| Some((moved(sheet)?, cursor))).collect();
+    }
+}
 use super::shapes_members::text_of_value;
 use oxicells_core::ir::{
     Anchor, Chart, ChartAxis, ChartSeries, Drawing, DrawingKind, GroupTransform, Legend, Shape, ShapeLine,
@@ -80,11 +173,20 @@ fn source_shape_run_at(paragraph: &ShapeParagraph, character: usize) -> Option<&
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ShapeRecord {
     pub id: u64,
+    /// DrawingML/VML identity exposed by Shape.ID, independent of the arena handle.
+    pub non_visual_id: u32,
+    /// Source identity before copying/rebasing. New objects have no source.
+    pub source_drawing_id: Option<u32>,
+    /// Package sheet owning the original payload, retained across copies.
+    pub source_sheet_origin: Option<u32>,
     pub sheet: usize,
     /// A legacy note's VML shape, which lives in worksheet comments rather
     /// than the normal drawing part.
     pub comment_at: Option<CellAddress>,
     pub name: String,
+    /// Live default chart names are reassigned when Excel copies a worksheet;
+    /// explicitly assigned names and literal imported names are retained.
+    pub name_is_automatic: bool,
     pub kind: ShapeKind,
     /// Points, as the macro states them.
     pub left: f64,
@@ -141,6 +243,8 @@ pub(super) struct ShapeRecord {
     pub placement: i64,
     pub on_action: String,
     pub alt_text: String,
+    pub alt_text_utf16: Option<Vec<u16>>,
+    pub alt_text_modified: bool,
     pub lock_aspect: bool,
     /// The msoConnectorType a connector was added as (1 straight, 2 elbow,
     /// 3 curve), 0 for anything else -- AddLine's line included.
@@ -165,6 +269,9 @@ pub(super) struct ShapeRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ChartRecord {
     pub chart_type: i64,
+    /// Keep absent automatic paint distinct from an explicitly assigned RGB.
+    pub fill: Option<String>,
+    pub plot_fill: Option<String>,
     pub plot_modified: bool,
     pub of_pie: Option<oxicells_core::ir::ChartOfPieOptions>,
     pub series: Vec<SeriesRecord>,
@@ -285,6 +392,11 @@ pub(super) enum DrawingPart {
     Point(u64, usize, usize),
     ChartArea(u64),
     PlotArea(u64),
+    /// The boolean selects the plot area instead of the whole chart.
+    ChartFormat(u64, bool),
+    ChartFill(u64, bool),
+    ChartColor(u64, bool),
+    ChartInterior(u64, bool),
     Adjustments(u64),
     Paragraphs(u64),
     /// `Selection.ShapeRange` / `Shapes.Range(Array(...))`: several shapes
@@ -312,8 +424,8 @@ impl DrawingPart {
             DrawingPart::Shapes(_) => "Shapes",
             DrawingPart::OleObjects(_) | DrawingPart::OleObjectsSnapshot(..) => "OLEObjects",
             DrawingPart::Shape(_) => "Shape",
-            DrawingPart::Fill(_) | DrawingPart::SeriesFill(..) => "FillFormat",
-            DrawingPart::FillColor(_) | DrawingPart::LineColor(_) | DrawingPart::LineBackColor(_) | DrawingPart::SeriesColor(..) => {
+            DrawingPart::Fill(_) | DrawingPart::SeriesFill(..) | DrawingPart::ChartFill(..) => "FillFormat",
+            DrawingPart::FillColor(_) | DrawingPart::LineColor(_) | DrawingPart::LineBackColor(_) | DrawingPart::SeriesColor(..) | DrawingPart::ChartColor(..) => {
                 "ColorFormat"
             }
             DrawingPart::Line(_) => "LineFormat",
@@ -331,7 +443,8 @@ impl DrawingPart {
             DrawingPart::ChartGroup(_) => "ChartGroup",
             DrawingPart::SeriesCollection(_) => "SeriesCollection",
             DrawingPart::Series(..) => "Series",
-            DrawingPart::SeriesFormat(..) => "ChartFormat",
+            DrawingPart::SeriesFormat(..) | DrawingPart::ChartFormat(..) => "ChartFormat",
+            DrawingPart::ChartInterior(..) => "Interior",
             DrawingPart::Points(..) => "Points",
             DrawingPart::Point(..) => "Point",
             DrawingPart::DataLabels(..) => "DataLabels",
@@ -663,6 +776,7 @@ impl<'a> WorkbookHost<'a> {
     /// The records the file's own drawings stand for, so `Shapes.Count`
     /// counts them and a macro can move or delete them.
     pub(super) fn adopt_drawings(&mut self) {
+        self.adopt_drawing_identities();
         for sheet in 0..self.workbook.sheets.len() {
             let drawings = self.workbook.sheets[sheet].drawings.clone();
             for drawing in drawings {
@@ -671,6 +785,8 @@ impl<'a> WorkbookHost<'a> {
                     DrawingKind::Chart(chart) => (
                         ShapeKind::Chart(Box::new(ChartRecord {
                             chart_type: chart_type_of(chart),
+                            fill: chart.fill.clone(),
+                            plot_fill: chart.plot_fill.clone(),
                             plot_modified: false,
                             of_pie: chart.plot_options.of_pie.clone(),
                             category_axis_labels: chart.categories.clone(),
@@ -749,6 +865,7 @@ impl<'a> WorkbookHost<'a> {
                         })),
                         "Chart",
                     ),
+                    DrawingKind::Shape(shape) if shape.text_box => (ShapeKind::TextBox, "TextBox"),
                     DrawingKind::Shape(shape) => match shape.geometry.as_str() {
                         "line" | "straightConnector1" => (ShapeKind::Line, "Straight Connector"),
                         geometry => {
@@ -778,7 +895,27 @@ impl<'a> WorkbookHost<'a> {
                 };
                 let id = self.next_shape_id;
                 self.next_shape_id += 1;
-                let mut record = ShapeRecord::blank(id, sheet, drawing.name.clone().unwrap_or_else(||format!("{base} {number}")), kind);
+                let physical_id = drawing.non_visual_id.unwrap_or(number.saturating_add(1));
+                let generated_number = physical_id.saturating_sub(1);
+                let automatic = !is_ole && (drawing.name.is_none() || generated_shape_name(&kind, generated_number, true)
+                    .is_some_and(|native| drawing.name.as_ref() == Some(&native)));
+                let display = if automatic {
+                    generated_shape_name(&kind, generated_number, false)
+                        .unwrap_or_else(|| drawing.name.clone().unwrap_or_else(||format!("{base} {number}")))
+                } else { drawing.name.clone().unwrap_or_else(||format!("{base} {number}")) };
+                let mut record = ShapeRecord::blank(id, sheet, display, kind);
+                if let Some(metadata) = &drawing.metadata {
+                    record.alt_text = metadata.description.clone().unwrap_or_default();
+                    record.alt_text_utf16 = metadata.utf16_description.clone();
+                }
+                record.non_visual_id = physical_id;
+                record.source_drawing_id = Some(physical_id);
+                record.source_sheet_origin = self.workbook.sheets[sheet].origin_id;
+                if !is_ole {
+                    let counter = self.shape_counters.entry(sheet).or_insert(0);
+                    *counter = (*counter).max(record.non_visual_id.saturating_sub(1));
+                }
+                record.name_is_automatic = automatic;
                 record.left = left;
                 record.top = top;
                 record.width = width;
@@ -914,17 +1051,64 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
+    fn adopt_drawing_identities(&mut self) {
+        for (sheet, held) in self.workbook.sheets.iter().enumerate() {
+            self.drawing_identities.observe(sheet, &held.drawing_id_blocks,
+                held.comments.iter().filter_map(|comment| comment.shape_id)
+                    .chain(held.drawings.iter().filter(|drawing| drawing.ole_prog_id.is_some()).filter_map(|drawing| drawing.non_visual_id)));
+        }
+        let mut order: Vec<_> = (0..self.workbook.sheets.len()).collect();
+        order.sort_by_key(|sheet| (*sheet != self.active_sheet, *sheet));
+        for sheet in order {
+            let held = &self.workbook.sheets[sheet];
+            if held.drawings.is_empty() && held.comments.is_empty() { continue; }
+            if !self.drawing_identities.owners.values().any(|owner| *owner == sheet) {
+                // On import, ordinary DrawingML groups occupy the remaining
+                // group slots, with the active sheet loaded first.
+                let block = (1..).find(|block| !self.drawing_identities.owners.contains_key(block)).unwrap();
+                self.drawing_identities.observe(sheet, &[block], std::iter::empty());
+            }
+        }
+    }
+
+    fn update_drawing_id_blocks(&mut self, sheet: usize) {
+        self.workbook.sheets[sheet].drawing_id_blocks = self.drawing_identities.owners.iter()
+            .filter_map(|(block, owner)| (*owner == sheet).then_some(*block)).collect();
+    }
+
+    pub(super) fn reserve_drawing_identity_group(&mut self, sheet: usize) {
+        self.drawing_identities.reserve(sheet);
+        self.update_drawing_id_blocks(sheet);
+    }
+
+    pub(super) fn next_legacy_shape_id(&mut self, sheet: usize) -> u32 {
+        let id = self.drawing_identities.next(sheet);
+        self.update_drawing_id_blocks(sheet);
+        id
+    }
+
+    pub(super) fn comment_shape_number(&self, sheet: usize, id: u32) -> Option<u32> {
+        let index = self.drawing_identities.owners.iter().filter(|(_, owner)| **owner == sheet)
+            .position(|(block, _)| *block == id / 1024)?;
+        Some(index as u32 * 1024 + id % 1024)
+    }
+
     fn adopt_comment_shapes(&mut self) {
         for sheet in 0..self.workbook.sheets.len() {
             let comments = self.workbook.sheets[sheet].comments.clone();
             for comment in comments {
                 if comment.author.strip_prefix("tc=").is_some_and(|id| self.workbook.sheets[sheet].threaded_comments.iter().any(|thread| thread.cell == comment.cell && thread.id.eq_ignore_ascii_case(id))) { continue; }
-                let number = self.next_comment_shape_number(sheet);
+                let number = comment.shape_id.and_then(|id| self.comment_shape_number(sheet, id))
+                    .unwrap_or_else(|| self.next_comment_shape_number(sheet));
+                let counter = self.comment_shape_counters.entry(sheet).or_default();
+                *counter = (*counter).max(number);
                 let at = CellAddress { sheet, row: comment.cell.0 + 1, column: comment.cell.1 };
                 let id = self.next_shape_id;
                 self.next_shape_id += 1;
-                self.next_shape_number(sheet);
                 let mut record = ShapeRecord::blank(id, sheet, format!("Comment {number}"), ShapeKind::Other);
+                record.non_visual_id = comment.shape_id.unwrap_or_else(|| self.drawing_identities.next(sheet));
+                record.name_is_automatic = comment.shape_name.is_none();
+                if let Some(name) = &comment.shape_name { record.name = name.clone(); }
                 record.comment_at = Some(at);
                 record.left = self.anchor_point(sheet, comment.from.col, comment.from.col_off, comment.from.row, comment.from.row_off).0;
                 record.top = self.anchor_point(sheet, comment.from.col, comment.from.col_off, comment.from.row, comment.from.row_off).1;
@@ -980,6 +1164,7 @@ impl<'a> WorkbookHost<'a> {
                     }
                 }
                 record.paragraph_count = comment.text.paragraphs.len().max(1);
+                self.comment_shape_aliases.entry(sheet).or_default().insert(number, id);
                 self.shapes.push(record);
             }
         }
@@ -996,17 +1181,19 @@ impl<'a> WorkbookHost<'a> {
     pub(super) fn add_comment_shape(&mut self, at: CellAddress) {
         let existing = self.shapes.iter().any(|shape| shape.comment_at == Some(at));
         if existing { return; }
+        let shape_id = self.next_legacy_shape_id(at.sheet);
         let number = self.next_comment_shape_number(at.sheet);
         let id = self.next_shape_id;
         self.next_shape_id += 1;
-        self.next_shape_number(at.sheet);
         let cell_left = (0..at.column).map(|column| f64::from(self.column_px(at.sheet, column))).sum::<f64>() * 0.75;
         let cell_top = (1..at.row).map(|row| f64::from(self.row_px(at.sheet, row))).sum::<f64>() * 0.75;
         let cell_width = f64::from(self.column_px(at.sheet, at.column)) * 0.75;
         let mut record = ShapeRecord::blank(id, at.sheet, format!("Comment {number}"), ShapeKind::Other);
+        record.non_visual_id = shape_id;
+        self.comment_shape_aliases.entry(at.sheet).or_default().insert(number, id);
         record.comment_at = Some(at);
         record.left = cell_left + cell_width + 11.25;
-        record.top = (cell_top - 7.5).max(0.0);
+        record.top = (cell_top - 7.5).max(1.5);
         record.width = 96.0;
         record.height = 59.25;
         record.visible = false;
@@ -1031,7 +1218,12 @@ impl<'a> WorkbookHost<'a> {
         self.shapes.push(record);
     }
 
-    fn next_comment_shape_number(&mut self, sheet: usize) -> u32 {
+    pub(super) fn comment_shape_alias_owner(&self, sheet: usize, name: &str) -> Option<u64> {
+        let number = generated_comment_alias_number(name)?;
+        self.comment_shape_aliases.get(&sheet)?.get(&number).copied()
+    }
+
+    pub(super) fn next_comment_shape_number(&mut self, sheet: usize) -> u32 {
         let counter = self.comment_shape_counters.entry(sheet).or_insert(0);
         *counter += 1;
         *counter
@@ -1240,6 +1432,9 @@ impl<'a> WorkbookHost<'a> {
                     .find(|comment| comment.cell == (note.at.row.saturating_sub(1), note.at.column))
                     .cloned()
                     .unwrap_or_else(|| oxicells_core::ir::Comment {
+                        position: None,
+                        shape_id: None,
+                        shape_name: None,
                         author: note.author.clone(),
                         utf16_text: None,
                         from: Anchor { col: note.at.column, col_off: 0, row: note.at.row.saturating_sub(1), row_off: 0 },
@@ -1268,8 +1463,15 @@ impl<'a> WorkbookHost<'a> {
                 comment.cell = (note.at.row.saturating_sub(1), note.at.column);
                 comment.visible = note.visible;
                 if let Some(record) = self.shapes.iter().find(|shape| shape.comment_at == Some(note.at)) {
-                    comment.from = self.anchor_at(sheet, record.left, record.top);
-                    comment.to = Some(self.anchor_at(sheet, record.left + record.width, record.top + record.height));
+                    if record.non_visual_id >= 1024 { comment.shape_id = Some(record.non_visual_id); }
+                    comment.shape_name = (!record.name_is_automatic).then(|| record.name.clone());
+                    let from = self.anchor_at(sheet, record.left, record.top);
+                    let to = Some(self.anchor_at(sheet, record.left + record.width, record.top + record.height));
+                    if comment.position.is_none() || comment.from != from || comment.to != to {
+                        comment.position = Some((record.left, record.top));
+                    }
+                    comment.from = from;
+                    comment.to = to;
                     comment.size = (record.width as f32, record.height as f32);
                     comment.fill = Some(packed_hex(record.fill));
                     comment.fill_visible = record.fill_visible;
@@ -1322,6 +1524,20 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
+    /// Save/SaveAs establishes a new source package. SaveCopyAs keeps the
+    /// existing source, so its copied objects remain additions for later saves.
+    pub(super) fn rebase_saved_drawing_sources(&mut self, saved: &oxicells_core::ir::Workbook) {
+        for record in &mut self.shapes {
+            if record.comment_at.is_some() || record.original.as_ref().is_some_and(|drawing|drawing.ole_prog_id.is_some()) { continue; }
+            let Some(sheet)=self.workbook.sheets.get(record.sheet)
+                .and_then(|live|saved.sheets.iter().find(|sheet|sheet.name==live.name)) else { continue };
+            let Some(drawing)=sheet.drawings.iter().find(|drawing|drawing.non_visual_id==Some(record.non_visual_id)) else { continue };
+            record.source_drawing_id=drawing.non_visual_id;
+            record.source_sheet_origin=sheet.origin_id;
+            record.original=Some(drawing.clone());
+        }
+    }
+
     pub(super) fn drawing_of(&self, record: &ShapeRecord) -> Drawing {
         let grouped = record.group_parent_id.is_some();
         let original = grouped.then_some(record.original.as_ref()).flatten();
@@ -1339,8 +1555,8 @@ impl<'a> WorkbookHost<'a> {
             original.and_then(|drawing| drawing.extent)
         } else {
             Some((
-            (record.width / 0.75 * EMU_PER_PX) as i64,
-            (record.height / 0.75 * EMU_PER_PX) as i64,
+            (record.width * 12700.0).round() as i64,
+            (record.height * 12700.0).round() as i64,
             ))
         };
         let kind = match &record.kind {
@@ -1355,8 +1571,6 @@ impl<'a> WorkbookHost<'a> {
                     chart.origin_id=original.origin_id;
                     if !plot_modified { chart.kind=original.kind.clone();chart.plot_options=original.plot_options.clone(); }
                     chart.plot=original.plot.clone();
-                    chart.fill=original.fill.clone();
-                    chart.plot_fill=original.plot_fill.clone();
                     chart.shapes=original.shapes.clone();
                     for (series, previous) in chart.series.iter_mut().zip(&original.series) {
                         if !plot_modified { series.explosion=previous.explosion; }
@@ -1384,7 +1598,12 @@ impl<'a> WorkbookHost<'a> {
             }
         };
         Drawing {
-            name: Some(record.name.clone()),
+            name: Some(if record.name_is_automatic && !record.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some()) {
+                generated_shape_name(&record.kind, record.non_visual_id.saturating_sub(1), true)
+                    .unwrap_or_else(||record.name.clone())
+            } else { record.name.clone() }),
+            non_visual_id: Some(record.non_visual_id),
+            metadata: record.drawing_metadata(),
             ole_prog_id: record.original.as_ref().and_then(|drawing| drawing.ole_prog_id.clone()),
             ole_source_name: record.ole_clone_of.clone(),
             ole_clone_position: record.ole_clone_of.as_ref().map(|_| (record.left, record.top)),
@@ -1575,6 +1794,14 @@ impl<'a> WorkbookHost<'a> {
             }
         });
         Shape {
+            transform_offset: if record.group_parent_id.is_some() || !record.group_children.is_empty()
+                || record.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some()) {
+                record.original.as_ref().and_then(|drawing| match &drawing.kind {
+                    DrawingKind::Shape(shape) => shape.transform_offset, _ => None,
+                })
+            } else {
+                Some(((record.left * 12700.0).round() as i64, (record.top * 12700.0).round() as i64))
+            },
             geometry: geometry.to_string(),
             text_box: matches!(record.kind, ShapeKind::TextBox),
             fill: record.fill_visible.then(|| packed_hex(record.fill)),
@@ -1731,13 +1958,35 @@ impl<'a> WorkbookHost<'a> {
                 face: None,
             }),
             shapes: Vec::new(),
-            fill: Some("FFFFFF".to_string()),
-            plot_fill: None,
+            fill: chart.fill.clone(),
+            plot_fill: chart.plot_fill.clone(),
         }
     }
 }
 
 impl ShapeRecord {
+    pub(super) fn alt_text_units(&self) -> Vec<u16> {
+        self.alt_text_utf16.clone().unwrap_or_else(|| self.alt_text.encode_utf16().collect())
+    }
+
+    pub(super) fn set_alt_text_units(&mut self, mut units: Vec<u16>) {
+        // This property uses a NUL-terminated Automation string. Other BSTR
+        // properties retain embedded NULs and must not use this truncation.
+        if let Some(end) = units.iter().position(|unit| *unit == 0) { units.truncate(end); }
+        self.alt_text_utf16 = String::from_utf16(&units).is_err().then(|| units.clone());
+        self.alt_text = String::from_utf16_lossy(&units);
+        self.alt_text_modified = true;
+    }
+
+    pub(super) fn drawing_metadata(&self) -> Option<oxicells_core::ir::DrawingMetadata> {
+        let original = self.original.as_ref().and_then(|drawing| drawing.metadata.clone());
+        if !self.alt_text_modified { return original; }
+        let mut metadata = original.unwrap_or_default();
+        metadata.description = (!self.alt_text.is_empty()).then(|| self.alt_text.clone());
+        metadata.utf16_description = self.alt_text_utf16.clone();
+        (!metadata.is_empty()).then_some(metadata)
+    }
+
     /// A record with a new shape's defaults, as measured: filled accent1 with
     /// a darker outline of 1.5 points, white 11-point text in the theme's
     /// minor face, left and top aligned, margins of a tenth and a twentieth
@@ -1749,9 +1998,13 @@ impl ShapeRecord {
         };
         let mut record = Self {
             id,
+            non_visual_id: u32::try_from(id.saturating_add(1)).unwrap_or(u32::MAX),
+            source_drawing_id: None,
+            source_sheet_origin: None,
             sheet,
             comment_at: None,
             name,
+            name_is_automatic: true,
             kind: ShapeKind::Auto(1),
             left: 0.0,
             top: 0.0,
@@ -1797,6 +2050,8 @@ impl ShapeRecord {
             placement: 1,
             on_action: String::new(),
             alt_text: String::new(),
+            alt_text_utf16: None,
+            alt_text_modified: false,
             lock_aspect: false,
             paragraph_count: 1,
             original: None,
@@ -1828,8 +2083,8 @@ impl ShapeRecord {
                 record.line = THEME_COLOURS[ACCENT1 - 1];
                 record.fill_visible = false;
             }
-            ShapeKind::Chart(_) => {
-                record.fill = WHITE;
+            ShapeKind::Chart(chart) => {
+                record.fill = colour_to_packed(chart.fill.as_deref()).unwrap_or(WHITE);
                 record.fill_theme = None;
                 record.line = 14_277_081;
                 record.line_theme = None;
@@ -2006,6 +2261,139 @@ impl ShapeRecord {
 }
 
 /// The name Excel gives a preset shape, by `msoAutoShapeType`.
+pub(super) fn generated_shape_bases(kind: &ShapeKind) -> Option<(&'static str, &'static str)> {
+    let english = match kind {
+        ShapeKind::Auto(kind) if (1..=108).contains(kind) => auto_shape(*kind).0,
+        ShapeKind::TextBox => "TextBox",
+        ShapeKind::Line => "Straight Connector",
+        ShapeKind::Chart(_) => "Chart",
+        _ => return None,
+    };
+    let localized = match kind {
+        ShapeKind::Auto(kind) => match kind {
+        1 => "正方形/長方形",
+        2 => "平行四辺形",
+        3 => "台形",
+        4 => "ひし形",
+        5 => "四角形: 角を丸くする",
+        6 => "八角形",
+        7 => "二等辺三角形",
+        8 => "直角三角形",
+        9 => "楕円",
+        10 => "六角形",
+        11 => "十字形",
+        12 => "五角形",
+        13 => "円柱",
+        14 => "直方体",
+        15 => "四角形: 角度付き",
+        16 => "四角形: メモ",
+        17 => "スマイル",
+        18 => "円: 塗りつぶしなし",
+        19 => "\"禁止\"マーク",
+        20 => "アーチ",
+        21 => "ハート",
+        22 => "稲妻",
+        23 => "太陽",
+        24 => "月",
+        25 => "円弧",
+        26 => "大かっこ",
+        27 => "中かっこ",
+        28 => "ブローチ",
+        29 => "左大かっこ",
+        30 => "右大かっこ",
+        31 => "左中かっこ",
+        32 => "右中かっこ",
+        33 => "矢印: 右",
+        34 => "矢印: 左",
+        35 => "矢印: 上",
+        36 => "矢印: 下",
+        37 => "矢印: 左右",
+        38 => "矢印: 上下",
+        39 => "矢印: 四方向",
+        40 => "矢印: 三方向",
+        41 => "矢印: 折線",
+        42 => "矢印: U ターン",
+        43 => "矢印: 二方向",
+        44 => "矢印: 上向き折線",
+        45 => "矢印: 右カーブ",
+        46 => "矢印: 左カーブ",
+        47 => "矢印: 上カーブ",
+        48 => "矢印: 下カーブ",
+        49 => "矢印: ストライプ",
+        50 => "矢印: V 字型",
+        51 => "矢印: 五方向",
+        52 => "矢印: 山形",
+        53 => "吹き出し: 右矢印",
+        54 => "吹き出し: 左矢印",
+        55 => "吹き出し: 上矢印",
+        56 => "吹き出し: 下矢印",
+        57 => "吹き出し: 左右矢印",
+        58 => "吹き出し: 上下矢印",
+        59 => "吹き出し: 四方向矢印",
+        60 => "矢印: 環状",
+        61 => "フローチャート: 処理",
+        62 => "フローチャート: 代替処理",
+        63 => "フローチャート: 判断",
+        64 => "フローチャート: データ",
+        65 => "フローチャート: 定義済み処理",
+        66 => "フローチャート: 内部記憶",
+        67 => "フローチャート: 書類",
+        68 => "フローチャート: 複数書類",
+        69 => "フローチャート: 端子",
+        70 => "フローチャート: 準備",
+        71 => "フローチャート: 手操作入力",
+        72 => "フローチャート: 手作業",
+        73 => "フローチャート: 結合子",
+        74 => "フローチャート: 他ページ結合子",
+        75 => "フローチャート: カード",
+        76 => "フローチャート: せん孔テープ",
+        77 => "フローチャート: 和接合",
+        78 => "フローチャート: 論理和",
+        79 => "フローチャート: 照合",
+        80 => "フローチャート: 分類",
+        81 => "フローチャート: 抜出し",
+        82 => "フローチャート: 組合せ",
+        83 => "フローチャート: 記憶データ",
+        84 => "フローチャート: 論理積ゲート",
+        85 => "フローチャート: 順次アクセス記憶",
+        86 => "フローチャート: 磁気ディスク",
+        87 => "フローチャート: 直接アクセス記憶",
+        88 => "フローチャート: 表示",
+        89 => "爆発: 8 pt",
+        90 => "爆発: 14 pt",
+        91 => "星: 4 pt",
+        92 => "星: 5 pt",
+        93 => "星: 8 pt",
+        94 => "星: 16 pt",
+        95 => "星: 24 pt",
+        96 => "星: 32 pt",
+        97 => "リボン: 上に曲がる",
+        98 => "リボン: 下に曲がる",
+        99 => "リボン: カーブして上方向に曲がる",
+        100 => "リボン: カーブして下方向に曲がる",
+        101 => "スクロール: 縦",
+        102 => "スクロール: 横",
+        103 => "波線",
+        104 => "小波",
+        105 => "吹き出し: 四角形",
+        106 => "吹き出し: 角を丸めた四角形",
+        107 => "吹き出し: 円形",
+        108 => "思考の吹き出し: 雲形",
+            _ => return None,
+        },
+        ShapeKind::TextBox => "テキスト ボックス",
+        ShapeKind::Line => "直線コネクタ",
+        ShapeKind::Chart(_) => "グラフ",
+        _ => return None,
+    };
+    Some((english, localized))
+}
+
+pub(super) fn generated_shape_name(kind: &ShapeKind, number: u32, localized: bool) -> Option<String> {
+    let (english, native) = generated_shape_bases(kind)?;
+    Some(format!("{} {number}", if localized { native } else { english }))
+}
+
 pub(super) fn auto_shape_label(kind: i64) -> &'static str {
     auto_shape(kind).0
 }
@@ -2024,6 +2412,11 @@ pub(super) fn default_adjusts(kind: i64) -> Vec<f64> {
 /// are named in English.
 pub(super) fn localized_alias(name: &str) -> Option<String> {
     let (word, number) = name.rsplit_once(' ')?;
+    for kind in 1..=108 {
+        if let Some((english, native)) = generated_shape_bases(&ShapeKind::Auto(kind)) {
+            if word == native { return Some(format!("{english} {number}")); }
+        }
+    }
     let english = match word {
         "正方形/長方形" => "Rectangle",
         "テキスト ボックス" => "TextBox",
