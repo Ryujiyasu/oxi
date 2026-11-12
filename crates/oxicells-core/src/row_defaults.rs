@@ -747,6 +747,22 @@ pub fn font_line_box(face: &str, size: f32, bold: bool) -> Option<(u16, u16)> {
     found(face, size).map(|(_, _, px, baseline)| (*px, *baseline))
 }
 
+/// Saved font-descent cache in twentieths. Outer None is unmeasured;
+/// Some(None) means the device cache is deliberately absent for this face.
+/// These values are independent of the line geometry used to fit content.
+pub fn font_saved_descent_twentieths(face: &str, size: f32, bold: bool, italic: bool, positioned: bool) -> Option<Option<u16>> {
+    if positioned || !size.is_finite() || size <= 0.0 { return None; }
+    if face == "Calibri" && size == 26.0 { return Some(Some(10)); }
+    if face == "Yu Gothic" && size == 16.0 { return Some(None); }
+    if !bold && !italic && size == 32.0 {
+        if face == "\u{6e38}\u{30b4}\u{30b7}\u{30c3}\u{30af}" { return Some(Some(20)); }
+        if face == "Aptos Narrow" { return Some(Some(13)); }
+    }
+    if italic { return None; }
+    font_line_box(face, size, bold)
+        .map(|(height, baseline)| Some(height.saturating_sub(baseline).saturating_add(1)))
+}
+
 fn found(face: &str, size: f32) -> Option<&'static (&'static str, u16, u16, u16)> {
     let face = if face.eq_ignore_ascii_case("Meiryo") { "メイリオ" } else { face };
     let size_q = (size * 4.0).round() as u16;
@@ -4370,6 +4386,7 @@ static FONT_DEFAULT_GEOMETRY_PX: &[(&str, u16, u16, u16)] = &[
     ("ＭＳ Ｐ明朝", 144, 24, 56),
     ("Aptos Narrow", 128, 22, 56),
     ("Calibri", 128, 22, 56),
+    ("Calibri", 104, 18, 45),
 ];
 
 /// Excel's column digit unit and untouched row height, in 96-dpi pixels.
@@ -4380,6 +4397,13 @@ pub fn font_default_geometry_px(face: &str, size: f32) -> Option<(u16, u16)> {
         .or_else(|| FONT_DEFAULT_GEOMETRY_PX.iter().find(|(f,s,_,_)|
             f.eq_ignore_ascii_case(face) && em_pixels(*s as f32 / 4.0) == em_pixels(size)))
         .map(|(_,_,digit,row)| (*digit,*row))
+}
+
+/// Measured untouched row height when the independent digit unit is unknown.
+/// Keep row-only observations separate from column-width geometry.
+pub fn font_styled_default_row_px(face: &str, size: f32, bold: bool, italic: bool) -> Option<u16> {
+    font_styled_default_geometry_px(face, size, bold, italic).map(|(_, row)| row)
+        .or_else(|| (!bold && !italic && face == "\u{6e38}\u{30b4}\u{30b7}\u{30c3}\u{30af}" && size == 32.0).then_some(69))
 }
 
 /// Measured default geometry for a styled Normal font. Unmeasured styles
