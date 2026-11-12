@@ -1,0 +1,63 @@
+name: Paperless plugin
+
+# integrations/paperless: the paperless-ngx-oxidocs parser plugin. Pull
+# requests that touch it run its unit tests and the end-to-end check (Paperless-ngx
+# 3.4.2 consuming .docx with the plugin, no Tika or Gotenberg). A manual run
+# with "publish" ticked uploads it to PyPI through trusted publishing (the PyPI
+# project paperless-ngx-oxidocs must list this workflow as a trusted publisher).
+
+on:
+  pull_request:
+    paths:
+      - "integrations/paperless/**"
+      - ".github/workflows/paperless-plugin.yml"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload the package to PyPI after the checks pass"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: integrations/paperless
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests
+        run: |
+          python -m pip install pytest build
+          PYTHONPATH=src python -m pytest -q tests
+      - name: End-to-end in Paperless-ngx
+        run: bash e2e/run.sh
+      - name: Build
+        run: python -m build --outdir dist .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paperless-plugin-dist
+          path: integrations/paperless/dist/*
+
+  publish:
+    needs: check
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: paperless-plugin-dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
