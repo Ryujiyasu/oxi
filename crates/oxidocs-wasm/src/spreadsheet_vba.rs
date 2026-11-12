@@ -45664,8 +45664,65 @@ enum OutputValue {
 }
 
 
-fn serialize_vba_outcome<T:Serialize>(outcome:&T)->Result<JsValue,JsError>{
-    let js=crate::spreadsheet_value_to_js(outcome)?;
+// Keep the existing execution protocol's optional values and UTF-16 handling.
+// Only Workbook payloads use JSON objects so worker/client copies retain maps.
+trait VbaWorkbookPayloads {
+    fn write_workbooks(&self, js: &JsValue) -> Result<(), JsError>;
+}
+
+fn write_workbook_payload(js: &JsValue, workbook: &Workbook) -> Result<(), JsError> {
+    js_sys::Reflect::set(js, &JsValue::from_str("workbook"), &crate::spreadsheet_value_to_js(workbook)?)
+        .map(|_| ()).map_err(|_| JsError::new("cannot serialize workbook payload"))
+}
+
+fn write_other_workbook_payloads(js: &JsValue, books: &[OpenWorkbookOutput]) -> Result<(), JsError> {
+    if books.is_empty() { return Ok(()); }
+    let entries = js_sys::Reflect::get(js, &JsValue::from_str("other_workbooks"))
+        .map_err(|_| JsError::new("VBA outcome has no workbook list"))?;
+    let entries = js_sys::Array::from(&entries);
+    for (index, book) in books.iter().enumerate() {
+        write_workbook_payload(&entries.get(index as u32), &book.workbook)?;
+    }
+    Ok(())
+}
+
+fn write_selected_workbook_payloads(js: &JsValue, selection: Option<&WorkbookSelection>) -> Result<(), JsError> {
+    if let Some(selection) = selection {
+        let selected = js_sys::Reflect::get(js, &JsValue::from_str("workbook_selection"))
+            .map_err(|_| JsError::new("VBA outcome has no workbook selection"))?;
+        selection.write_workbooks(&selected)?;
+    }
+    Ok(())
+}
+
+impl VbaWorkbookPayloads for RunOutcome {
+    fn write_workbooks(&self, js: &JsValue) -> Result<(), JsError> {
+        write_workbook_payload(js, &self.workbook)?;
+        write_other_workbook_payloads(js, &self.other_workbooks)?;
+        write_selected_workbook_payloads(js, self.workbook_selection.as_ref())
+    }
+}
+
+impl VbaWorkbookPayloads for RunResult {
+    fn write_workbooks(&self, js: &JsValue) -> Result<(), JsError> {
+        write_workbook_payload(js, &self.workbook)?;
+        write_other_workbook_payloads(js, &self.other_workbooks)?;
+        write_selected_workbook_payloads(js, self.workbook_selection.as_ref())
+    }
+}
+
+impl VbaWorkbookPayloads for WorkbookSelection {
+    fn write_workbooks(&self, js: &JsValue) -> Result<(), JsError> {
+        let selected = js_sys::Reflect::get(js, &JsValue::from_str("selected"))
+            .map_err(|_| JsError::new("VBA selection has no selected workbook"))?;
+        write_workbook_payload(&selected, &self.selected.workbook)?;
+        write_other_workbook_payloads(js, &self.other_workbooks)
+    }
+}
+
+fn serialize_vba_outcome<T:Serialize + VbaWorkbookPayloads>(outcome:&T)->Result<JsValue,JsError>{
+    let js=serde_wasm_bindgen::to_value(outcome).map_err(|error|JsError::new(&error.to_string()))?;
+    outcome.write_workbooks(&js)?;
     fn convert(value:&JsValue)->Result<(),JsValue>{
         let tag=js_sys::Reflect::get(value,&JsValue::from_str("type"))?.as_string();
         let payload=js_sys::Reflect::get(value,&JsValue::from_str("value"))?;
@@ -46900,7 +46957,7 @@ impl SpreadsheetVbaSession {
     pub fn select_workbook(&mut self, identity: &str) -> Result<JsValue, JsError> {
         let selection = select_session_workbook(&mut self.state, identity)
             .map_err(|error| JsError::new(&error))?;
-        crate::spreadsheet_value_to_js(&selection)
+        serialize_vba_outcome(&selection)
     }
 
     /// Preserve pending editor changes before selecting another open book.
@@ -46911,7 +46968,7 @@ impl SpreadsheetVbaSession {
             .map_err(|error| JsError::new(&format!("invalid workbook: {error}")))?;
         let selection = select_session_workbook_with_revision(&mut self.state, identity, workbook, active_sheet, revision)
             .map_err(|error| JsError::new(&error))?;
-        crate::spreadsheet_value_to_js(&selection)
+        serialize_vba_outcome(&selection)
     }
 
     /// Run the selected workbook's native Save or SaveCopyAs path, including
