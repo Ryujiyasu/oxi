@@ -777,6 +777,24 @@ fn workbook_document_header(name: &str) -> String {
 
 /// Workbook Save materializes the loader's component and its native code name.
 /// A source-only no-op export remains byte-identical through write_project_source.
+/// A copied project keeps its loader-only empty workbook component transient.
+/// An explicitly edited body follows the normal workbook-save contract.
+pub(crate) fn save_copied_workbook_project(package: &[u8], source: &str, source_code_page: Option<u16>) -> Result<Vec<u8>,String> {
+    let (_, generated) = bootstrap_workbook_source(package, source)?;
+    let Some(generated) = generated else { return save_workbook_project(package,source,source_code_page); };
+    let mut removed = false;
+    let retained = oxivba_core::parser::source_modules(source).into_iter().filter_map(|module| {
+        let empty_generated = module.class && module.named.as_deref().is_some_and(|name|name.eq_ignore_ascii_case(&generated))
+            && module.text.lines().all(|line| {
+                let line=line.trim();line.is_empty() || line.eq_ignore_ascii_case("VERSION 1.0 CLASS")
+                    || line.to_ascii_lowercase().starts_with("attribute ")
+            });
+        if empty_generated {removed=true;None}else{Some(module.text)}
+    }).collect::<String>();
+    if removed { write_project_source(package,&retained,source_code_page) }
+    else { save_workbook_project(package,source,source_code_page) }
+}
+
 pub(crate) fn save_workbook_project(package: &[u8], source: &str, source_code_page: Option<u16>) -> Result<Vec<u8>, String> {
     let (source, generated) = bootstrap_workbook_source(package, source)?;
     let unchanged = if generated.is_some() {
@@ -790,12 +808,108 @@ pub(crate) fn save_workbook_project(package: &[u8], source: &str, source_code_pa
     set_workbook_code_name(&saved, &name)
 }
 
+/// Import the selected native sheet component, preserving destination code.
+pub(crate) fn import_worksheet_project(source: &[u8], destination: &[u8], from: usize, to: usize, source_code_page: Option<u16>) -> Result<Vec<u8>, String> {
+    use std::collections::BTreeMap;
+    let documents = read_document_modules(source)?;
+    let Some(document) = documents.iter().find(|doc| !doc.host_only && !doc.unbound && doc.sheet_index == Some(from)) else { return Ok(destination.to_vec()); };
+    let Some((_, source_project)) = workbook_project_part(source)? else { return Ok(destination.to_vec()); };
+    let source_project = crate::vba_source_writer::copy_document_project(&source_project, &document.name, source_code_page)?;
+    let project = ovba::open_project(source_project.clone()).map_err(|error| error.to_string())?;
+    let names = identities(&project, source_code_page)?;
+    let selected = module_source(&project, &project.modules[0], &names[0], source_code_page)?;
+    let mut code_name = document.name.clone();
+    let mut replacements = BTreeMap::new();
+    let mut package = if let Some((path, original)) = workbook_project_part(destination)? {
+        let target = ovba::open_project(original.clone()).map_err(|error| error.to_string())?;
+        let occupied = identities(&target, None)?;
+        if occupied.iter().any(|name| name.name.eq_ignore_ascii_case(&code_name)) {
+            code_name = (1u32..).map(|number| format!("Sheet{number}"))
+                .find(|name| !occupied.iter().any(|old| old.name.eq_ignore_ascii_case(name))).ok_or("no document code names remain")?;
+        }
+        let text = selected.lines().map(|line| {
+            if line.trim_start().to_ascii_lowercase().starts_with("attribute vb_name") { format!("Attribute VB_Name = \"{code_name}\"") }
+            else { line.to_owned() }
+        }).collect::<Vec<_>>().join("\n");
+        let text = format!("VERSION 1.0 CLASS\n{text}");
+        let edited = crate::vba_source_writer::import_sheet_document(&original, &text, &code_name, None)?;
+        replacements.insert(path, edited);
+        destination.to_vec()
+    } else {
+        let copied = fresh_copied_document_project(source_project)?;
+        let mut archive = OoxmlArchive::new(destination).map_err(|error| error.to_string())?;
+        let occupied = archive.file_names();
+        let path = if !occupied.contains(&"xl/vbaProject.bin".to_owned()) { "xl/vbaProject.bin".to_owned() }
+            else { (1u32..).map(|number| format!("xl/oxiCopiedProject{number}.bin")).find(|path| !occupied.contains(path)).ok_or("no project part names remain")? };
+        let live = RetainedVbaProject { target:path.clone(), parts:BTreeMap::from([(path.clone(),copied)]), types:BTreeMap::from([(path,"application/vnd.ms-office.vbaProject".into())]) };
+        convert_workbook_format(destination, 52, Some(&live))?
+    };
+    if !replacements.is_empty() { package = replace_project_parts(&package, &replacements)?; }
+    let mut archive = OoxmlArchive::new(&package).map_err(|error| error.to_string())?;
+    let workbook = archive.read_part("xl/workbook.xml").map_err(|error|error.to_string())?;
+    let entries = document_properties(&workbook)?;
+    let (_, id) = entries.into_iter().filter(|(element,_)| element == "sheet").nth(to).ok_or("missing copied sheet metadata")?;
+    let relations = archive.read_part("xl/_rels/workbook.xml.rels").map_err(|error|error.to_string())?;
+    let relations = parse_relationships(&relations).map_err(|error|error.to_string())?;
+    let relation = relations.get(&id).ok_or("missing copied sheet relationship")?;
+    let path = project_part(&relation.target)?;
+    let root = if relation.rel_type.ends_with("/chartsheet") { "chartsheet" } else { "worksheet" };
+    set_part_code_name(&package, &path, root, "sheetPr", &code_name)
+}
+
+fn replace_project_parts(package: &[u8], replacements: &std::collections::BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, String> {
+    use std::io::{Cursor,Write};
+    let mut archive=zip::ZipArchive::new(Cursor::new(package)).map_err(|error|error.to_string())?;
+    let mut output=zip::ZipWriter::new(Cursor::new(Vec::new()));output.set_raw_comment(archive.comment().into());
+    for index in 0..archive.len() {
+        let entry=archive.by_index(index).map_err(|error|error.to_string())?;
+        if let Some(bytes)=replacements.get(entry.name()) {
+            let options=zip::write::SimpleFileOptions::default().compression_method(entry.compression()).last_modified_time(entry.last_modified().unwrap_or_default());
+            output.start_file(entry.name(),options).map_err(|error|error.to_string())?;output.write_all(bytes).map_err(|error|error.to_string())?;
+        } else { output.raw_copy_file(entry).map_err(|error|error.to_string())?; }
+    }
+    Ok(output.finish().map_err(|error|error.to_string())?.into_inner())
+}
+
+fn fresh_copied_document_project(bytes: Vec<u8>) -> Result<Vec<u8>,String> {
+    use std::io::{Cursor,Write};
+    let project=ovba::open_project(bytes.clone()).map_err(|error|error.to_string())?;
+    let properties=project.read_stream("/PROJECT").map_err(|error|error.to_string())?;
+    let encoding=codepage::to_encoding(project.information.code_page).ok_or("unsupported copied project code page")?;
+    let properties=encoding.decode_without_bom_handling_and_without_replacement(&properties).ok_or("invalid copied project properties")?;
+    let properties=properties.split_inclusive('\n').map(|line| {
+        if line.starts_with("Name=") { "Name=\"VBAProject\"\r\n" } else { line }
+    }).collect::<String>();
+    let (properties,_,replaced)=encoding.encode(&properties);if replaced { return Err("invalid copied project name".into()); }
+    let mut directory=crate::vba_compression::read_stream(&project,"/VBA/dir",0).map_err(|error|error.to_string())?;
+    let mut position=0usize;
+    loop {
+        let header=directory.get(position..position+6).ok_or("missing copied project name record")?;
+        let id=u16::from_le_bytes(header[..2].try_into().unwrap());
+        let size=u32::from_le_bytes(header[2..].try_into().unwrap()) as usize;
+        let end=position.checked_add(6).and_then(|value|value.checked_add(size)).filter(|end|*end<=directory.len()).ok_or("invalid copied project metadata bounds")?;
+        if id==4 {
+            let mut record=vec![4,0];record.extend_from_slice(&10u32.to_le_bytes());record.extend_from_slice(b"VBAProject");directory.splice(position..end,record);break;
+        }
+        if !matches!(id,1|2|3|0x14|0x4a) { return Err("unrecognized copied project header before name".into()); }
+        position=end;
+    }
+    let mut compound=cfb::CompoundFile::open(Cursor::new(bytes)).map_err(|error|error.to_string())?;
+    compound.create_stream("/PROJECT").map_err(|error|error.to_string())?.write_all(&properties).map_err(|error|error.to_string())?;
+    compound.create_stream("/VBA/dir").map_err(|error|error.to_string())?.write_all(&crate::vba_source_writer::compress(&directory)).map_err(|error|error.to_string())?;
+    Ok(compound.into_inner().into_inner())
+}
+
 fn set_workbook_code_name(package: &[u8], code_name: &str) -> Result<Vec<u8>, String> {
+    set_part_code_name(package, "xl/workbook.xml", "workbook", "workbookPr", code_name)
+}
+
+fn set_part_code_name(package: &[u8], path: &str, root: &str, property: &str, code_name: &str) -> Result<Vec<u8>, String> {
     use oxidocs_common::xml_utils::{get_attr, local_name};
     use quick_xml::{events::{BytesStart, Event}, name::ResolveResult, reader::NsReader, Writer};
     use std::io::{Cursor, Write};
     let mut parts = OoxmlArchive::new(package).map_err(|error| error.to_string())?;
-    let xml = parts.read_part("xl/workbook.xml").map_err(|error| error.to_string())?;
+    let xml = parts.read_part(path).map_err(|error| error.to_string())?;
     let mut reader = NsReader::from_str(&xml);
     let mut writer = Writer::new(Vec::new());
     let mut depth = 0usize;
@@ -810,11 +924,11 @@ fn set_workbook_code_name(package: &[u8], code_name: &str) -> Result<Vec<u8>, St
                 let empty = matches!(event, Event::Empty(_));
                 let mut element = match event { Event::Start(element) | Event::Empty(element) => element, _ => unreachable!() };
                 let name = local_name(element.name().as_ref());
-                if depth == 0 && spreadsheet && name == "workbook" {
+                if depth == 0 && spreadsheet && name == root {
                     let qualified = String::from_utf8(element.name().as_ref().to_vec()).map_err(|error| error.to_string())?;
-                    property_name = qualified.rsplit_once(':').map_or_else(|| "workbookPr".into(), |(prefix, _)| format!("{prefix}:workbookPr"));
+                    property_name = qualified.rsplit_once(':').map_or_else(|| property.into(), |(prefix, _)| format!("{prefix}:{property}"));
                 }
-                if depth == 1 && spreadsheet && name == "workbookPr" {
+                if depth == 1 && spreadsheet && name == property {
                     if written { return Err("duplicate workbook properties".into()); }
                     if get_attr(&element, "codeName").as_deref() == Some(code_name) { return Ok(package.to_vec()); }
                     let attributes = element.attributes().map(|attribute| {
@@ -827,7 +941,7 @@ fn set_workbook_code_name(package: &[u8], code_name: &str) -> Result<Vec<u8>, St
                     }
                     element.push_attribute(("codeName", code_name));
                     written = true;
-                } else if depth == 1 && !written && !matches!(name.as_str(), "fileVersion" | "fileSharing") {
+                } else if depth == 1 && !written && (root != "workbook" || !matches!(name.as_str(), "fileVersion" | "fileSharing")) {
                     let mut property = BytesStart::new(property_name.as_str());
                     property.push_attribute(("codeName", code_name));
                     writer.write_event(Event::Empty(property)).map_err(|error| error.to_string())?;
@@ -856,7 +970,7 @@ fn set_workbook_code_name(package: &[u8], code_name: &str) -> Result<Vec<u8>, St
     output.set_raw_comment(archive.comment().into());
     for index in 0..archive.len() {
         let file = archive.by_index(index).map_err(|error| error.to_string())?;
-        if file.name() == "xl/workbook.xml" {
+        if file.name() == path {
             let options = zip::write::SimpleFileOptions::default().compression_method(file.compression())
                 .last_modified_time(file.last_modified().unwrap_or_default());
             output.start_file(file.name(), options).map_err(|error| error.to_string())?;

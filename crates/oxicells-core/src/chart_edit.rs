@@ -383,10 +383,10 @@ fn children_at(
                 .all(|((name, native), expected)| *native && name == expected)
     };
     loop {
-        let before = reader.buffer_position() as usize;
+        let before = oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position());
         let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
         let native = matches!(namespace,ResolveResult::Bound(ns) if matches!(ns.as_ref(),b"http://schemas.openxmlformats.org/drawingml/2006/chart"|b"http://purl.oclc.org/ooxml/drawingml/chart"));
-        let after = reader.buffer_position() as usize;
+        let after = oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position());
         match event {
             Event::Start(element) => {
                 let name = local_name(element.name().as_ref());
@@ -477,7 +477,7 @@ fn series_fragment_envelope(xml: &str, at: usize, ns: &str) -> Result<(String, S
     let mut bindings: BTreeMap<String, String> = BTreeMap::new();
     let mut scopes = Vec::new();
     loop {
-        let position = reader.buffer_position() as usize;
+        let position = oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position());
         let event = reader.read_event().map_err(XlsxError::Xml)?;
         match event {
             Event::Start(ref element) | Event::Empty(ref element) => {
@@ -526,7 +526,7 @@ fn patch_filtered_category_title(fragment: &str, categories: &str, open: &str, c
     let mut start = None;
     let mut range = None;
     loop {
-        let before = reader.buffer_position() as usize;
+        let before = oxidocs_common::xml_utils::xml_byte_position(&wrapped, reader.buffer_position());
         let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
         let native = matches!(&namespace, ResolveResult::Bound(ns) if matches!(ns.as_ref(),
             b"http://schemas.openxmlformats.org/drawingml/2006/chart" | b"http://purl.oclc.org/ooxml/drawingml/chart"));
@@ -538,14 +538,14 @@ fn patch_filtered_category_title(fragment: &str, categories: &str, open: &str, c
                 let name = local_name(element.name().as_ref());
                 if extension && name == "filteredCategoryTitle" && at_extension {
                     if matches!(event, Event::Empty(_)) {
-                        range = Some((before, reader.buffer_position() as usize));
+                        range = Some((before, oxidocs_common::xml_utils::xml_byte_position(&wrapped, reader.buffer_position())));
                     } else { start = Some((before, parents.len() + 1)); }
                 }
                 if matches!(event, Event::Start(_)) { parents.push((name, native)); }
             }
             Event::End(_) => {
                 if let Some((begin, depth)) = start {
-                    if depth == parents.len() { range = Some((begin, reader.buffer_position() as usize)); start = None; }
+                    if depth == parents.len() { range = Some((begin, oxidocs_common::xml_utils::xml_byte_position(&wrapped, reader.buffer_position()))); start = None; }
                 }
                 parents.pop();
             }
@@ -901,7 +901,7 @@ fn patch_background_fill(xml: &str, plot: bool, colour: Option<&str>, chart_ns: 
     let mut ranges = Vec::new();
     let mut insert_at = content_end;
     loop {
-        let at = reader.buffer_position() as usize;
+        let at = oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position());
         let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
         let main = matches!(namespace, ResolveResult::Bound(ns) if matches!(ns.as_ref(),
             b"http://schemas.openxmlformats.org/drawingml/2006/main" | b"http://purl.oclc.org/ooxml/drawingml/main"));
@@ -910,7 +910,7 @@ fn patch_background_fill(xml: &str, plot: bool, colour: Option<&str>, chart_ns: 
                 if main && at > *start && at < content_end && depth == path.len() + 1 {
                     let name = local_name(element.name().as_ref());
                     if matches!(name.as_str(), "noFill" | "solidFill" | "gradFill" | "blipFill" | "pattFill" | "grpFill") {
-                        if matches!(event, Event::Empty(_)) { ranges.push((at, reader.buffer_position() as usize)); }
+                        if matches!(event, Event::Empty(_)) { ranges.push((at, oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position()))); }
                         else { paint_start = Some((at, depth + 1)); }
                     } else if matches!(name.as_str(), "ln" | "effectLst" | "effectDag" | "scene3d" | "sp3d" | "extLst") {
                         insert_at = insert_at.min(at);
@@ -920,14 +920,14 @@ fn patch_background_fill(xml: &str, plot: bool, colour: Option<&str>, chart_ns: 
             }
             Event::End(_) => {
                 if let Some((begin, paint_depth)) = paint_start {
-                    if depth == paint_depth { ranges.push((begin, reader.buffer_position() as usize)); paint_start = None; }
+                    if depth == paint_depth { ranges.push((begin, oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position()))); paint_start = None; }
                 }
                 depth = depth.saturating_sub(1);
             }
             Event::Eof => break,
             _ => {}
         }
-        if reader.buffer_position() as usize >= *finish { break; }
+        if oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position()) >= *finish { break; }
     }
     if ranges.is_empty() {
         return Ok(format!("{}{}{}", &xml[..insert_at], fill, &xml[insert_at..]));
@@ -1852,5 +1852,24 @@ mod ofpie_data_tests {
         let chart = split_chart(ChartOfPieOptions { split_mode: ChartPieSplitMode::Value,
             split_position: Some(f64::NAN), ..Default::default() });
         assert!(new_chart_xml(&chart).is_err());
+    }
+}
+
+#[cfg(test)]
+mod utf8_bom_chart_fragment_tests {
+    #[test]
+    fn chart_child_spans_keep_complete_original_tags(){
+        for namespace in ["http://schemas.openxmlformats.org/drawingml/2006/chart","http://purl.oclc.org/ooxml/drawingml/chart"]{
+            let xml=format!("<c:chartSpace xmlns:c='{namespace}'><c:chart><c:plotArea><c:layout/><c:barChart/></c:plotArea></c:chart></c:chartSpace>");
+            let bom=format!("\u{feff}{xml}");
+            let path=["chartSpace","chart","plotArea"];
+            let(a,close_a)=super::children_at(&xml,&path).unwrap();
+            let(b,close_b)=super::children_at(&bom,&path).unwrap();
+            assert_eq!(a.len(),2);assert_eq!(b.len(),2);assert_eq!(close_b,close_a+3);
+            for((name,start,end),(other,before,after))in a.iter().zip(&b){
+                assert_eq!(name,other);assert_eq!(&xml[*start..*end],&bom[*before..*after]);
+                assert_eq!(*before,*start+3);assert_eq!(*after,*end+3);
+            }
+        }
     }
 }

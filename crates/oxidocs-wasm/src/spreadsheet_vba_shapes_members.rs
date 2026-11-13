@@ -518,7 +518,13 @@ impl<'a> WorkbookHost<'a> {
     pub(super) fn selection_object(&mut self) -> Value {
         let live: Vec<u64> = self.shape_selection.iter().copied().filter(|id| self.shape(*id).is_ok()).collect();
         if live.is_empty() {
-            return self.object(HostObject::Range(self.selection));
+            let areas = self.selected_cell_ranges();
+            if areas.len() == 1 {
+                return self.object(HostObject::Range(areas[0]));
+            }
+            let handle = self.blocks.len();
+            self.blocks.push(areas);
+            return self.object(HostObject::Blocks(handle));
         }
         if let [id] = live.as_slice() {
             if self.shape(*id).ok().is_some_and(|shape| shape.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some())) {
@@ -1073,6 +1079,7 @@ impl<'a> WorkbookHost<'a> {
         drawing.visible = true;
         drawing.placement = 2;
         drawing.fill_visible = false;
+        drawing.non_visual_id = self.next_legacy_shape_id(sheet);
         drawing.original = Some(oxicells_core::ir::Drawing {
             name: Some(drawing.name.clone()),
             non_visual_id: None,
@@ -1140,6 +1147,7 @@ impl<'a> WorkbookHost<'a> {
         drawing.visible = true;
         drawing.placement = 2;
         drawing.fill_visible = false;
+        drawing.non_visual_id = self.next_legacy_shape_id(sheet);
         drawing.original = Some(oxicells_core::ir::Drawing {
             name: Some(drawing.name.clone()),
             non_visual_id: None,
@@ -1227,6 +1235,7 @@ impl<'a> WorkbookHost<'a> {
         drawing.visible = true;
         drawing.placement = 2;
         drawing.fill_visible = false;
+        drawing.non_visual_id = self.next_legacy_shape_id(sheet);
         drawing.original = Some(oxicells_core::ir::Drawing {
             name: Some(drawing.name.clone()),
             non_visual_id: None,
@@ -1651,6 +1660,7 @@ impl<'a> WorkbookHost<'a> {
                     name_auto: name_ref.is_none(),
                     name_ref,
                     values_ref: Some(block_ref(self, first, column, last, column)),
+                    values_live: true,
                     bubble_sizes: None,
                     bubble_sizes_ref: None,
                     shaded_bubbles: false,
@@ -1688,6 +1698,7 @@ impl<'a> WorkbookHost<'a> {
                     name_auto: name_ref.is_none(),
                     name_ref,
                     values_ref: Some(block_ref(self, row, first, row, last)),
+                    values_live: true,
                     bubble_sizes: None,
                     bubble_sizes_ref: None,
                     shaded_bubbles: false,
@@ -1776,6 +1787,56 @@ impl<'a> WorkbookHost<'a> {
             Some(CellValue::Number(number)) => Some(number),
             _ => None,
         }).collect()
+    }
+
+    fn series_assignment_expression(&mut self,value:&Value)->Result<Value,String> {
+        let text=text_of_value(value);let expression=text.trim().trim_start_matches('=').trim();
+        let sheet=if self.workbook.sheets[self.active_sheet].kind==oxicells_core::ir::SheetKind::Worksheet{self.active_sheet}else{
+            self.workbook.sheets.iter().position(|s|s.kind==oxicells_core::ir::SheetKind::Worksheet)
+                .ok_or_else(||host_error(1004,"Series has no worksheet context"))?
+        };
+        if expression.starts_with('{')&&expression.ends_with('}') {
+            let value=self.evaluate_object_inner(sheet,&[Value::String(expression.into())])?;
+            if matches!(value,Value::Array(_)){return Ok(value);}
+            return Err(host_error(1004,"Series requires a constant array"));
+        }
+        let range=self.range_object(sheet,&[Value::String(expression.into())],NameReach::Workbook)
+            .map_err(|_|host_error(1004,"Invalid series reference"))?;
+        if self.cells_of_range_object(&range).is_none(){return Err(host_error(1004,"Series requires a contiguous reference"));}
+        Ok(range)
+    }
+
+    // When both reference columns cover the same table's data rows, Excel
+    // attaches the series to that table. It resets a previously literal name;
+    // references that also include headers acquire the value-column header.
+    fn reconcile_series_table_binding(&mut self,id:u64,number:usize)->Result<(),String> {
+        let series=self.series(id,number)?;
+        let (Some(values),Some(xs))=(series.values_ref.as_deref(),series.x_ref.as_deref())else{return Ok(());};
+        let (Ok(values),Ok(xs))=(self.reference_areas(self.active_sheet,values,NameReach::Workbook),self.reference_areas(self.active_sheet,xs,NameReach::Workbook))else{return Ok(());};
+        let ([values],[xs])=(values.as_slice(),xs.as_slice())else{return Ok(());};let (mut values,mut xs)=(*values,*xs);
+        if values.sheet!=xs.sheet||values.start_column!=values.end_column||xs.start_column!=xs.end_column
+            ||values.start_row!=xs.start_row||values.end_row!=xs.end_row{return Ok(());}
+        let table=self.workbook.sheets[values.sheet].tables.iter().find_map(|table|{
+            let first=table.start_row.checked_add(table.header_rows)?;let last=table.end_row.checked_sub(table.totals_rows)?;
+            (first<=last&&values.end_row>=last&&(values.start_row==first||table.header_rows>0&&values.start_row==table.start_row)
+                &&(table.start_col..=table.end_col).contains(&values.start_column)
+                &&(table.start_col..=table.end_col).contains(&xs.start_column)).then_some((first,table.start_row))
+        });
+        let Some((first,header))=table else{return Ok(());};
+        if values.start_row<first {
+            let heading=CellRange{sheet:values.sheet,start_row:header,end_row:header,start_column:values.start_column,end_column:values.start_column};
+            let label=self.range_texts(heading).into_iter().next().unwrap_or_default();let name_ref=self.address_of(heading);
+            values.start_row=first;xs.start_row=first;
+            let numbers=self.range_numbers(values);let categories=self.range_texts(xs);
+            let values_ref=self.address_of(values);let x_ref=self.address_of(xs);let series=self.series_mut(id,number)?;
+            series.name=label;series.name_auto=false;series.name_ref=Some(name_ref);
+            series.values=numbers;series.sparse_values=None;series.values_live=true;series.values_ref=Some(values_ref);
+            series.xs=categories;series.typed_xs=None;series.x_ref=Some(x_ref);series.implicit_categories=false;
+            series.categories_imported=false;series.category_values_filtered=false;series.text_category_gaps=false;
+        }else{
+            let series=self.series_mut(id,number)?;series.name=format!("\u{7cfb}\u{5217}{number}");series.name_auto=true;series.name_ref=None;
+        }
+        Ok(())
     }
 
     fn assign_bubble_sizes(&mut self, id: u64, number: usize, value: &Value) -> Result<(), String> {
@@ -1959,8 +2020,15 @@ impl<'a> WorkbookHost<'a> {
 
     fn series_api_values(&self, id: u64, number: usize) -> Result<Vec<Value>, String> {
         let series = self.series(id, number)?;
-        let mut values: Vec<_> = series.values.iter().take(self.series_point_count(id, number)?)
-            .map(|v| Value::Double(*v)).collect();
+        let count=self.series_point_count(id,number)?;
+        let live=series.values_live.then(||series.values_ref.as_deref().and_then(|reference|self.category_reference_values(reference))).flatten();
+        let mut values:Vec<_>=if let Some(values)=live {
+            values.into_iter().take(count).map(|value|match value {
+                Value::Empty|Value::Error(_)=>value,
+                Value::String(_)|Value::Utf16(_)|Value::Boolean(_)=>Value::Double(0.0),
+                value=>Value::Double(any_number(&value).unwrap_or(0.0)),
+            }).collect()
+        }else{series.values.iter().take(count).map(|v|Value::Double(*v)).collect()};
         if matches!(series.chart_type.unwrap_or(self.chart(id)?.chart_type), 68 | 71) && !series.values.is_empty() {
             let selected = self.ofpie_secondary_points(id, number)?;
             values.push(Value::Double(series.values.iter().zip(selected).filter(|(_, selected)| *selected)
@@ -2076,6 +2144,15 @@ impl<'a> WorkbookHost<'a> {
         let count = self.series_point_count(id, number)?;
         let chart = self.chart(id)?;
         let xy = matches!(chart_kind(kind), "scatter" | "bubble");
+        if !series.categories_imported&&!xy {
+            if let Some(reference)=series.x_ref.as_deref() {
+                let mut values=self.category_reference_values(reference).unwrap_or_else(||series.xs.iter().cloned().map(Value::String).collect());
+                let text=values.iter().any(|value|value.string_units().is_some());
+                if text {values=values.into_iter().map(|value|Value::String(text_of_value(&value))).collect();}
+                values.resize(count,if text{Value::String(String::new())}else{Value::Empty});values.truncate(count);
+                return Ok(values);
+            }
+        }
         if series.implicit_categories {
             // A missing category expression inherits an existing text category
             // axis in a multi-series category chart, including newly added series.
@@ -4114,6 +4191,7 @@ impl<'a> WorkbookHost<'a> {
                 Ok(taken)
             }
             DrawingPart::Series(id, number) => {
+                let value=if matches!(lower.as_str(),"values"|"xvalues")&&value.string_units().is_some(){self.series_assignment_expression(&value)?}else{value};
                 let taken = match lower.as_str() {
                     "name" => {
                         if matches!(value, Value::Null) { return Err(host_error(13, "Type mismatch")); }
@@ -4154,6 +4232,7 @@ impl<'a> WorkbookHost<'a> {
                             series.values = numbers;
                             series.sparse_values = None;
                             series.values_ref = Some(reference);
+                            series.values_live = true;
                             if series.xs.len() != series.values.len() {
                                 series.xs = (1..=series.values.len()).map(|n| n.to_string()).collect();
                             }
@@ -4162,6 +4241,7 @@ impl<'a> WorkbookHost<'a> {
                             series.values = listed.values.iter().map(|v| any_number(v).unwrap_or(0.0)).collect();
                             series.sparse_values = None;
                             series.values_ref = None;
+                            series.values_live = false;
                         }
                         true
                     }
@@ -4220,6 +4300,7 @@ impl<'a> WorkbookHost<'a> {
                     _ => false,
                 };
                 if taken {
+                    if matches!(lower.as_str(),"values"|"xvalues"){self.reconcile_series_table_binding(id,number)?;}
                     self.redraw(id)?;
                 }
                 Ok(taken)
@@ -4873,6 +4954,7 @@ impl<'a> WorkbookHost<'a> {
                         name_auto: true,
                         name_ref: None,
                         values_ref: None,
+                        values_live: false,
                         bubble_sizes: None,
                         bubble_sizes_ref: None,
                         shaded_bubbles: false,
@@ -4904,6 +4986,7 @@ impl<'a> WorkbookHost<'a> {
                             name_auto: true,
                             name_ref: None,
                             values_ref: Some(reference),
+                            values_live: true,
                             bubble_sizes: None,
                             bubble_sizes_ref: None,
                             shaded_bubbles: false,
@@ -5137,6 +5220,7 @@ impl<'a> WorkbookHost<'a> {
                 if series.values != numbers { series.sparse_values = None; }
                 series.values = numbers;
                 series.values_ref = Some(reference);
+                series.values_live = true;
                 if series.xs.len() != series.values.len() {
                     series.xs = (1..=series.values.len()).map(|n| n.to_string()).collect();
                 }
@@ -5168,6 +5252,7 @@ impl<'a> WorkbookHost<'a> {
             }
             _ => return Ok(None),
         }
+        if matches!(name.to_ascii_lowercase().as_str(),"values"|"xvalues"){self.reconcile_series_table_binding(id,number)?;}
         self.redraw(id)?;
         Ok(Some(true))
     }
