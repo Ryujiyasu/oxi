@@ -262,7 +262,21 @@ jobs:
             web/vba-save-copy.test.mjs
             web/vba-file-downloads.test.mjs
             web/vba-external-copy-state.test.mjs
+            web/vba-chart-documents.test.mjs
+            web/vba-chart-persistence.test.mjs
+            web/vba-document-identity.test.mjs
+            web/vba-document-runtime.test.mjs
+            web/vba-structural-save.test.mjs
+            web/vba-unicode-modules.test.mjs
+            web/vba-ole-copy-state.test.mjs
           )
+          # New public VBA suites must be assigned to the same shard loop.
+          for suite in web/vba*.test.mjs; do
+            if [[ " ${suites[*]} " != *" $suite "* ]]; then
+              echo "Missing VBA suite in CI: $suite" >&2
+              exit 1
+            fi
+          done
           index=0
           for suite in "${suites[@]}"; do
             selected=$((index % 8 + 1))

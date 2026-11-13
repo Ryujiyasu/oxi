@@ -2305,13 +2305,19 @@ impl XlsxEditor {
                     if let Some(anchors) = drawing_package.ole_anchors.get(&name) {
                         patched = patch_ole_object_anchors(&patched, anchors)?;
                     }
+                    if let Some(ids)=drawing_package.ole_deletions.get(&name) {
+                        patched=remove_legacy_ole_objects(&patched,ids)?;
+                    }
+                    if let Some(ids)=drawing_package.ole_identity_edits.get(&name) {
+                        patched=patch_legacy_ole_ids(&patched,ids)?;
+                    }
                     if let Some(model) = &descent_styles {
                         patched = patch_saved_font_descents(&patched, model,
                             original_descent_styles.as_ref().map(|old| (xml.as_str(), old)), default_row.is_some())?;
                     }
                     writer.write_all(patched.as_bytes())
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                } else if font_cache_change || protection_change.is_some() || colour_change.is_some() || header_change.is_some() || default_width.is_some() || default_row.is_some() || legacy_edits.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_legacy_drawing.contains_key(&name) || drawing_package.ole_anchors.contains_key(&name) || drawing_package.worksheet_ole_objects.contains_key(&name) {
+                } else if font_cache_change || protection_change.is_some() || colour_change.is_some() || header_change.is_some() || default_width.is_some() || default_row.is_some() || legacy_edits.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_legacy_drawing.contains_key(&name) || drawing_package.ole_anchors.contains_key(&name) || drawing_package.worksheet_ole_objects.contains_key(&name) || drawing_package.ole_identity_edits.contains_key(&name) || drawing_package.ole_deletions.contains_key(&name) {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
@@ -2336,6 +2342,12 @@ impl XlsxEditor {
                     }
                     if let Some(anchors) = drawing_package.ole_anchors.get(&name) {
                         recoloured = patch_ole_object_anchors(&recoloured, anchors)?;
+                    }
+                    if let Some(ids)=drawing_package.ole_deletions.get(&name) {
+                        recoloured=remove_legacy_ole_objects(&recoloured,ids)?;
+                    }
+                    if let Some(ids)=drawing_package.ole_identity_edits.get(&name) {
+                        recoloured=patch_legacy_ole_ids(&recoloured,ids)?;
                     }
                     if let Some(model) = &descent_styles {
                         recoloured = patch_saved_font_descents(&recoloured, model,
@@ -3189,6 +3201,8 @@ fn shape_text_formatting_changed(before: &crate::ir::ShapeText, after: &crate::i
 struct DrawingAdditionPackage {
     parts: HashMap<String, String>,
     ole_anchors: HashMap<String, HashMap<u32, crate::ir::Drawing>>,
+    ole_identity_edits: HashMap<String, HashMap<u32, u32>>,
+    ole_deletions: HashMap<String, std::collections::HashSet<u32>>,
     worksheet_ole_objects: HashMap<String, Vec<String>>,
     relationship_xml: HashMap<String, String>,
     new_parts: Vec<(String, String)>,
@@ -3266,6 +3280,28 @@ fn drawing_addition_package(
                     return Err(XlsxError::InvalidData("group children disagree on their parent identity".into()));
                 }
             }
+        }
+    }
+    for ((sheet,name),drawing) in drawing_states {
+        if drawing.ole_prog_id.is_none() {continue;}
+        let Some(new_id)=drawing.non_visual_id else {continue};
+        let part=existing_parts.get(sheet).ok_or_else(||XlsxError::InvalidData("OLE identity has no drawing part".into()))?;
+        let source=archive.read_part(part)?;
+        let old_id=drawing_shape_id(&source,name)?.ok_or_else(||XlsxError::InvalidData("OLE identity has no source shape".into()))?;
+        if old_id==new_id {continue;}
+        let sheet_path=sheet_paths.get(*sheet).filter(|p|!p.is_empty())
+            .ok_or_else(||XlsxError::InvalidData("OLE identity has no worksheet".into()))?;
+        plan.ole_identity_edits.entry(sheet_path.clone()).or_default().insert(old_id,new_id);
+    }
+    // DrawingML also retains the VML physical identity in a14:compatExt.
+    // Rebase this link in the same one-pass map before Excel reads the package.
+    for (sheet_path,ids) in &plan.ole_identity_edits {
+        let rels=archive.read_part(&sheet_rels_path(sheet_path))?;
+        let relationships=parse_relationships(&rels).map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+        if let Some(relation)=relationships.values().find(|r|r.rel_type.ends_with("/drawing")) {
+            let path=resolve_part_target(sheet_path,&relation.target);
+            let xml=plan.parts.remove(&path).map_or_else(||archive.read_part(&path),Ok)?;
+            plan.parts.insert(path,patch_legacy_ole_ids(&xml,ids)?);
         }
     }
     for (part, edits) in &identity_edits {
@@ -3695,6 +3731,46 @@ fn drawing_addition_package(
         if let Some(index) = fresh { plan.new_parts[index].1 = xml; }
         else { plan.parts.insert(part.clone(), xml); }
     }
+    // A DrawingML deletion must also remove both worksheet compatibility
+    // branches and its VML fallback. Keep other legacy shapes untouched.
+    for (sheet,names) in deletions {
+        let Some(part)=existing_parts.get(sheet) else {continue};
+        let source=archive.read_part(part)?;
+        let sheet_path=sheet_paths.get(*sheet).filter(|p|!p.is_empty())
+            .ok_or_else(||XlsxError::InvalidData("OLE deletion has no worksheet".into()))?;
+        let worksheet=archive.read_part(sheet_path)?;
+        for name in names {
+            if let Some(id)=drawing_shape_id(&source,name)? {
+                if find_ole_object_xml(&worksheet,id)?.is_some() {
+                    plan.ole_deletions.entry(sheet_path.clone()).or_default().insert(id);
+                }
+            }
+        }
+    }
+    let deleted_ole_sheets=plan.ole_deletions.clone();
+    for (sheet_path,ids) in &deleted_ole_sheets {
+        let before=archive.read_part(sheet_path)?;
+        let after=remove_legacy_ole_objects(&before,ids)?;
+        remove_deleted_drawing_relationships(archive,&mut plan,sheet_path,&before,&after)?;
+        let rels=archive.read_part(&sheet_rels_path(sheet_path))?;
+        let relationships=parse_relationships(&rels).map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+        if let Some(relation)=relationships.values().find(|r|r.rel_type.ends_with("/vmlDrawing")) {
+            let path=resolve_part_target(sheet_path,&relation.target);
+            let xml=plan.parts.remove(&path).map_or_else(||archive.read_part(&path),Ok)?;
+            plan.parts.insert(path,remove_legacy_ole_objects(&xml,ids)?);
+        }
+    }
+    // Notes consume the pending VML part later, so publish OLE rebasing
+    // before note generation checks shared legacy identity uniqueness.
+    for (sheet_path,ids) in &plan.ole_identity_edits {
+        let rels=archive.read_part(&sheet_rels_path(sheet_path))?;
+        let relationships=parse_relationships(&rels).map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+        if let Some(relation)=relationships.values().find(|r|r.rel_type.ends_with("/vmlDrawing")) {
+            let path=resolve_part_target(sheet_path,&relation.target);
+            let xml=plan.parts.remove(&path).map_or_else(||archive.read_part(&path),Ok)?;
+            plan.parts.insert(path,patch_legacy_ole_ids(&xml,ids)?);
+        }
+    }
     for xml in plan.parts.values().chain(plan.new_parts.iter().map(|(_, xml)| xml)) {
         drawing_shape_ids(xml)?;
     }
@@ -3911,6 +3987,76 @@ fn patch_drawing_group_addition(xml: &str, group: &DrawingGroupAddition) -> Resu
 
 fn vml_shape_id(element: &BytesStart<'_>) -> Option<u32> {
     get_attr(element, "id")?.rsplit_once("_s")?.1.parse().ok()
+}
+
+// Rebase all references in one XML pass so chains such as 1026->1025,
+// 1027->1026 cannot cascade. Unknown elements and attributes are retained.
+fn remove_legacy_ole_objects(xml: &str, removed: &std::collections::HashSet<u32>) -> Result<String, XlsxError> {
+    let mut reader=Reader::from_str(xml);
+    let mut writer=Writer::new(Vec::with_capacity(xml.len()));
+    let mut skipped=0usize;
+    loop {
+        let event=reader.read_event().map_err(XlsxError::Xml)?.into_owned();
+        if skipped>0 {
+            match event {
+                Event::Start(_)=>skipped+=1,
+                Event::End(_)=>skipped-=1,
+                Event::Eof=>return Err(XlsxError::InvalidData("deleted OLE element ended unexpectedly".into())),
+                _=>{},
+            }
+            continue;
+        }
+        match &event {
+            Event::Start(start) | Event::Empty(start) => {
+                let tag=local_name(start.name().as_ref());
+                let id=if tag=="oleObject" {get_attr(start,"shapeId").and_then(|v|v.parse().ok())}
+                    else if tag=="shape" {vml_shape_id(start)} else {None};
+                if id.is_some_and(|id|removed.contains(&id)) {
+                    if matches!(event,Event::Start(_)) {skipped=1;}
+                    continue;
+                }
+            }
+            Event::Eof=>break,
+            _=>{},
+        }
+        writer.write_event(event).map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+    }
+    String::from_utf8(writer.into_inner()).map_err(|e|XlsxError::InvalidData(e.to_string()))
+}
+
+fn patch_legacy_ole_ids(xml: &str, ids: &HashMap<u32, u32>) -> Result<String, XlsxError> {
+    let mut reader=Reader::from_str(xml);
+    let mut writer=Writer::new(Vec::with_capacity(xml.len()));
+    loop {
+        let event=reader.read_event().map_err(XlsxError::Xml)?.into_owned();
+        let empty=matches!(&event, Event::Empty(_));
+        match &event {
+            Event::Start(start) | Event::Empty(start) => {
+                let tag=local_name(start.name().as_ref());
+                let mut changed=start.to_owned();changed.clear_attributes();
+                for attribute in start.attributes() {
+                    let attribute=attribute.map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+                    let key=local_name(attribute.key.as_ref());
+                    let value=attribute.unescape_value().map_err(XlsxError::Xml)?;
+                    let replaced=if tag=="oleObject" && key=="shapeId" {
+                        value.parse::<u32>().ok().and_then(|id|ids.get(&id)).map(u32::to_string)
+                    } else if key=="spid" || (tag=="shape" && key=="id") {
+                        value.rsplit_once("_s").and_then(|(prefix,suffix)|
+                            suffix.parse::<u32>().ok().and_then(|id|ids.get(&id))
+                                .map(|id|format!("{prefix}_s{id}")))
+                    } else {None};
+                    if let Some(value)=replaced {
+                        changed.push_attribute((attribute.key.as_ref(),value.as_bytes()));
+                    } else {changed.push_attribute(attribute);}
+                }
+                writer.write_event(if empty {Event::Empty(changed)} else {Event::Start(changed)})
+                    .map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+            }
+            Event::Eof=>break,
+            _=>writer.write_event(event).map_err(|e|XlsxError::InvalidData(e.to_string()))?,
+        }
+    }
+    String::from_utf8(writer.into_inner()).map_err(|e|XlsxError::InvalidData(e.to_string()))
 }
 
 fn patch_vml_ole_styles(xml: &str, edits: &HashMap<u32, crate::ir::Drawing>) -> Result<String, XlsxError> {
@@ -17779,6 +17925,78 @@ mod tests {
         assert_eq!(drawing_shape_ids(&swapped).unwrap().len(), 3);
         let collision = patch_drawing_nonvisual_ids(xml, &HashMap::from([("Left".into(), 3)])).unwrap();
         assert!(drawing_shape_ids(&collision).is_err());
+    }
+
+    #[test]
+    fn deleting_ole_removes_worksheet_branches_and_legacy_fallback() {
+        let bytes=include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
+        let mut edited=crate::parse_xlsx_preserving_values(bytes).unwrap();
+        edited.sheets[0].drawings.retain(|d|d.non_visual_id!=Some(1025));
+        let mut editor=XlsxEditor::new(bytes).unwrap();
+        editor.apply_workbook(&edited).unwrap();
+        let saved=editor.save().unwrap();
+        let mut archive=OoxmlArchive::new(&saved).unwrap();
+        assert!(!archive.file_names().iter().any(|name|name=="xl/embeddings/oleObject1.bin"));
+        assert!(archive.file_names().iter().any(|name|name=="xl/embeddings/Microsoft_Word_Document.docx"));
+        let sheet=archive.read_part("xl/worksheets/sheet1.xml").unwrap();
+        assert!(find_ole_object_xml(&sheet,1025).unwrap().is_none());
+        assert!(find_ole_object_xml(&sheet,1026).unwrap().is_some());
+        let vml=archive.read_part("xl/drawings/vmlDrawing1.vml").unwrap();
+        assert!(!vml.contains("_s1025"));assert!(vml.contains("_s1026"));
+        let reopened=crate::parse_xlsx_preserving_values(&saved).unwrap();
+        assert_eq!(reopened.sheets[0].drawings.iter().filter(|d|d.ole_prog_id.is_some()).count(),1);
+        let mut no_edit=XlsxEditor::new(&saved).unwrap();no_edit.apply_workbook(&reopened).unwrap();
+        assert_eq!(no_edit.save().unwrap(),saved);
+    }
+
+    #[test]
+    fn ole_identity_rebase_preserves_embeddings_and_all_saved_references() {
+        let bytes=include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
+        let original=crate::parse_xlsx_preserving_values(bytes).unwrap();
+        let mut edited=original.clone();
+        let ids=edited.sheets[0].drawings.iter().filter(|d|d.ole_prog_id.is_some())
+            .filter_map(|d|d.non_visual_id).collect::<Vec<_>>();
+        assert_eq!(ids,vec![1025,1026]);
+        let mut sources=HashMap::new();
+        for drawing in &mut edited.sheets[0].drawings {
+            if drawing.ole_prog_id.is_none() {continue;}
+            let old=drawing.non_visual_id.unwrap();
+            let new=if old==1025 {1026} else {1025};
+            drawing.non_visual_id=Some(new);
+            drawing.name=Some(format!("Object {}",new-1024));
+            sources.insert((0,new),Some(old));
+        }
+        let mut editor=XlsxEditor::new(bytes).unwrap();
+        editor.apply_workbook_with_drawing_id_sources(&edited,&sources).unwrap();
+        let saved=editor.save().unwrap();
+        let reopened=crate::parse_xlsx_preserving_values(&saved).unwrap();
+        let ole=reopened.sheets[0].drawings.iter().filter(|d|d.ole_prog_id.is_some()).collect::<Vec<_>>();
+        assert_eq!(ole.iter().map(|d|d.non_visual_id).collect::<Vec<_>>(),vec![Some(1026),Some(1025)]);
+        assert_eq!(ole.iter().map(|d|d.name.as_deref()).collect::<Vec<_>>(),vec![Some("Object 2"),Some("Object 1")]);
+        let mut before=OoxmlArchive::new(bytes).unwrap();
+        let mut after=OoxmlArchive::new(&saved).unwrap();
+        for name in before.file_names().into_iter().filter(|n|n.starts_with("xl/embeddings/")) {
+            assert_eq!(before.read_binary_part(&name).unwrap(),after.read_binary_part(&name).unwrap());
+        }
+        let drawing=after.read_part("xl/drawings/drawing1.xml").unwrap();
+        let worksheet=after.read_part("xl/worksheets/sheet1.xml").unwrap();
+        assert_eq!(drawing_shape_id(&drawing,"Object 2").unwrap(),Some(1026));
+        assert_eq!(drawing_shape_id(&drawing,"Object 1").unwrap(),Some(1025));
+        let mut reader=Reader::from_str(&drawing);let mut compatibility_ids=Vec::new();
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(e) | Event::Empty(e) if local_name(e.name().as_ref())=="compatExt" => {
+                    if let Some(id)=get_attr(&e,"spid") {compatibility_ids.push(id);}
+                }
+                Event::Eof=>break,_=>{},
+            }
+        }
+        assert_eq!(compatibility_ids,vec!["_x0000_s1026","_x0000_s1025"]);
+        assert!(find_ole_object_xml(&worksheet,1025).unwrap().is_some());
+        assert!(find_ole_object_xml(&worksheet,1026).unwrap().is_some());
+        let mut no_edit=XlsxEditor::new(&saved).unwrap();
+        no_edit.apply_workbook(&reopened).unwrap();
+        assert_eq!(no_edit.save().unwrap(),saved);
     }
 
     #[test]

@@ -16099,7 +16099,8 @@ impl<'a> WorkbookHost<'a> {
             style.name=BUILT_IN_STYLES[NORMAL_STYLE].local.into();
         }
         let drawings=self.shapes.iter().filter(|shape|shape.comment_at.is_none()
-            && !shape.original.as_ref().is_some_and(|drawing|drawing.ole_prog_id.is_some()))
+            && (!shape.original.as_ref().is_some_and(|drawing|drawing.ole_prog_id.is_some())
+                || shape.source_drawing_id.is_some()))
             .map(|shape|((shape.sheet,shape.non_visual_id),shape.source_drawing_id)).collect();
         editor.apply_workbook_with_drawing_id_sources(&workbook,&drawings).map_err(|e|host_error(1004,e.to_string()))?;
         for (index,sheet) in workbook.sheets.iter().enumerate() {
@@ -16473,6 +16474,11 @@ impl<'a> WorkbookHost<'a> {
                     }
                 }
             }
+            if shape.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some()) {
+                shape.non_visual_id = self.next_legacy_shape_id(to);
+                let number = self.comment_shape_number(to, shape.non_visual_id).unwrap_or(1);
+                if shape.name_is_automatic { shape.name = format!("Object {number}"); }
+            }
             shape.id = handles[&shape.id];
             shape.group_parent_id = shape.group_parent_id.and_then(|parent| handles.get(&parent).copied());
             shape.group_children = shape.group_children.iter().filter_map(|child| handles.get(child).copied()).collect();
@@ -16480,7 +16486,10 @@ impl<'a> WorkbookHost<'a> {
             if let Some(at) = &mut shape.comment_at {
                 at.sheet = to;
                 shape.non_visual_id = self.next_legacy_shape_id(to);
-                let number = self.next_comment_shape_number(to);
+                let number = self.comment_shape_number(to, shape.non_visual_id)
+                    .unwrap_or_else(|| self.next_comment_shape_number(to));
+                let counter = self.comment_shape_counters.entry(to).or_default();
+                *counter = (*counter).max(number);
                 self.comment_shape_aliases.entry(to).or_default().insert(number, shape.id);
                 if shape.name_is_automatic { shape.name = format!("Comment {number}"); }
             }
@@ -16665,6 +16674,11 @@ impl<'a> WorkbookHost<'a> {
                     }
                 }
             }
+            if shape.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some()) {
+                shape.non_visual_id = self.next_legacy_shape_id(to);
+                let number = self.comment_shape_number(to, shape.non_visual_id).unwrap_or(1);
+                if shape.name_is_automatic { shape.name = format!("Object {number}"); }
+            }
             shape.id = handles[&shape.id];
             shape.group_parent_id = shape.group_parent_id.and_then(|parent| handles.get(&parent).copied());
             shape.group_children = shape.group_children.iter().filter_map(|child| handles.get(child).copied()).collect();
@@ -16672,7 +16686,10 @@ impl<'a> WorkbookHost<'a> {
             if let Some(at) = &mut shape.comment_at {
                 at.sheet = to;
                 shape.non_visual_id = self.next_legacy_shape_id(to);
-                let number = self.next_comment_shape_number(to);
+                let number = self.comment_shape_number(to, shape.non_visual_id)
+                    .unwrap_or_else(|| self.next_comment_shape_number(to));
+                let counter = self.comment_shape_counters.entry(to).or_default();
+                *counter = (*counter).max(number);
                 self.comment_shape_aliases.entry(to).or_default().insert(number, shape.id);
                 if shape.name_is_automatic { shape.name = format!("Comment {number}"); }
             }
@@ -31040,11 +31057,14 @@ fn attach_copied_sheet_links(
         let next_name=serial.checked_add(1).ok_or_else(||host_error(7,"No workbook names remain"))?;
         let owner=self.next_workbook;let next=owner.checked_add(1).ok_or_else(||host_error(7,"No workbook identities remain"))?;
         let imported=WorkbookHost::new_owned(workbook.clone(),0)?;
-        // Notes are reallocated by the side-table import. Keep the copied OLE
-        // reservations, but do not adopt note IDs that would be allocated twice.
+        // Side-table import allocates all copied legacy identities together.
+        // Adopting OLE first would reserve the source IDs a second time.
         let copied_notes=std::mem::take(&mut workbook.sheets[0].comments);
+        let copied_drawings=std::mem::take(&mut workbook.sheets[0].drawings);
+        workbook.sheets[0].drawing_id_blocks.clear();
         let mut host=WorkbookHost::new_owned_in(workbook,0,owner,self.arena.clone())?;
         host.workbook.sheets[0].comments=copied_notes;
+        host.workbook.sheets[0].drawings=copied_drawings;
         let source=&self.hosts[&source_owner];host.error_language=source.error_language;host.automation_code_page=source.automation_code_page;host.now=source.now;
         host.file_name=Some(book_name);host.file_io.set_package(package)?;host.file_io.copied_project_transient_workbook=host.file_io.retained_project.is_some();host.file_io.source=code_source.clone();host.file_io.format=Some(51.0);host.configure_documents(&documents)?;
         // Reallocate copied drawing identities using the same parent-first
@@ -59429,6 +59449,254 @@ mod tests {
         assert_eq!(count,8);assert!(failures.is_empty(),"{} complete Native external-copy vectors differ:\n{}",failures.len(),failures.join("\n"));
     }
 
+
+    #[test]
+    fn crossbook_newbook_mixed_ole_note_exact_native3() {
+        // Native Excel V3, two independent owned sessions in reverse orders.
+        // Retain the complete source/copy/reopened ID and Name vectors.
+        let bytes = include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
+        let expected = [
+            "1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,",
+            "1026,|Object 2,|1027,|Comment 3,#1025,|Object 1,|1026,|Comment 2,#1025,|Object 1,|1026,|Comment 2,",
+            "1025,1026,|Object 1,Object 2,|1028,|Comment 4,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,"
+        ];
+        let source = r####"Option Explicit
+Public Function Probe(ByVal mode As Long) As String
+    Dim source As Workbook, ws As Worksheet, copied As Workbook, cold As Workbook
+    Dim note As Object, result As String
+    Set source = ThisWorkbook
+    Set ws = source.Worksheets(1)
+    If mode = 1 Then ws.OLEObjects(1).Delete
+    If mode = 2 Then
+        Set note = ws.Range("D3").AddComment("deleted note")
+        note.Delete
+    End If
+    ws.Range("D2").AddComment "copied note"
+    result = Observe(ws)
+    source.SaveAs "C:\work\mixed-source.xlsx", 51
+    ws.Copy
+    Set copied = ActiveWorkbook
+    result = result & "#" & Observe(copied.Worksheets(1))
+    copied.SaveAs "C:\work\mixed-copy.xlsx", 51
+    copied.Close False
+    Set cold = Workbooks.Open("C:\work\mixed-copy.xlsx", 0, True)
+    Probe = result & "#" & Observe(cold.Worksheets(1))
+    cold.Close False
+End Function
+Private Function Observe(ByVal ws As Worksheet) As String
+    Dim i As Long, ids As String, names As String, noteIds As String, noteNames As String
+    For i = 1 To ws.OLEObjects.Count
+        ids = ids & CStr(ws.OLEObjects(i).ShapeRange.ID) & ","
+        names = names & ws.OLEObjects(i).Name & ","
+    Next
+    For i = 1 To ws.Comments.Count
+        noteIds = noteIds & CStr(ws.Comments(i).Shape.ID) & ","
+        noteNames = noteNames & ws.Comments(i).Shape.Name & ","
+    Next
+    Observe = ids & "|" & names & "|" & noteIds & "|" & noteNames
+End Function"####;
+        let mut failures = Vec::new();
+        for (mode, expected) in expected.iter().enumerate() {
+            let mut context = failure_context();
+            context.file_context = Some(file_io::FileContext {
+                package_bytes: Some(bytes.to_vec()), full_name: Some(r"C:\work\original.xlsx".into()),
+                read_only: Some(true), folders: vec![r"C:\work".into()],
+                ..Default::default()
+            });
+            let out = execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(bytes).unwrap(), source, Some("Probe"),
+                vec![Value::Integer(mode as i64)], 0, context, &mut None,
+            ).unwrap();
+            if let Some(root) = std::env::var_os("OXI_VBA_MIXED_OLE_CAPTURE") {
+                let folder = std::path::PathBuf::from(root).join(format!("exact3-{mode}"));
+                std::fs::create_dir(&folder).unwrap();
+                for file in &out.files {
+                    let leaf = file.path.rsplit(['\\', '/']).next().unwrap();
+                    if leaf == "mixed-source.xlsx" || leaf == "mixed-copy.xlsx" {
+                        std::fs::write(folder.join(leaf), &file.bytes).unwrap();
+                    }
+                }
+            }
+            if out.error.is_some() || serde_json::to_value(&out.result).unwrap() != serde_json::json!({"type":"string", "value":expected}) {
+                failures.push(format!("mode{mode}: result={:?}; error={:?}; expected={expected}", serde_json::to_value(&out.result).unwrap(), out.error.as_ref().map(|e| &e.message)));
+            }
+        }
+        assert!(failures.is_empty(), "Complete mixed OLE/note Native vectors differ:\n{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn crossbook_mixed_ole_destinations_native6() {
+        // Native Excel V3, two independent owned sessions in reverse orders.
+        // Retain the complete source/copy/reopened ID and Name vectors.
+        let bytes = include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
+        let caller = include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
+        let expected = [
+            "1025,1026,|Object 1,Object 2,|1027,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,",
+            "1026,|Object 2,|1027,|Comment 3,#2049,|Object 1,|2050,|Comment 2,#2049,|Object 1,|2050,|Comment 2,",
+            "1025,1026,|Object 1,Object 2,|1028,|Comment 4,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,",
+            "1025,1026,|Object 1,Object 2,|1027,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,",
+            "1026,|Object 2,|1027,|Comment 3,#2049,|Object 1,|2050,|Comment 2,#2049,|Object 1,|2050,|Comment 2,",
+            "1025,1026,|Object 1,Object 2,|1028,|Comment 4,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,"
+        ];
+        let source = r####"Option Explicit
+Public Function Probe(ByVal mode As Long) As String
+    Dim source As Workbook, ws As Worksheet, copied As Workbook, cold As Workbook
+    Dim note As Object, result As String
+    Set source = Workbooks.Open("C:\work\provider.xlsx", 0, True)
+    Set ws = source.Worksheets(1)
+    If mode Mod 3 = 1 Then ws.OLEObjects(1).Delete
+    If mode Mod 3 = 2 Then
+        Set note = ws.Range("D3").AddComment("deleted note")
+        note.Delete
+    End If
+    ws.Range("D2").AddComment "copied note"
+    result = Observe(ws)
+    source.SaveAs "C:\work\mixed-source.xlsx", 51
+    If mode < 3 Then
+        ws.Copy After:=ws
+        Set copied = source
+    Else
+        Set copied = Workbooks.Add(-4167)
+        copied.Worksheets(1).Range("A1").AddComment "destination note"
+        ws.Copy After:=copied.Worksheets(1)
+    End If
+    result = result & "#" & Observe(copied.Worksheets(2))
+    copied.SaveAs "C:\work\mixed-copy.xlsx", 51
+    copied.Close False
+    Set cold = Workbooks.Open("C:\work\mixed-copy.xlsx", 0, True)
+    Probe = result & "#" & Observe(cold.Worksheets(2))
+    cold.Close False
+End Function
+Private Function Observe(ByVal ws As Worksheet) As String
+    Dim i As Long, ids As String, names As String, noteIds As String, noteNames As String
+    For i = 1 To ws.OLEObjects.Count
+        ids = ids & CStr(ws.OLEObjects(i).ShapeRange.ID) & ","
+        names = names & ws.OLEObjects(i).Name & ","
+    Next
+    For i = 1 To ws.Comments.Count
+        noteIds = noteIds & CStr(ws.Comments(i).Shape.ID) & ","
+        noteNames = noteNames & ws.Comments(i).Shape.Name & ","
+    Next
+    Observe = ids & "|" & names & "|" & noteIds & "|" & noteNames
+End Function"####;
+        let mut failures = Vec::new();
+        for (mode, expected) in expected.iter().enumerate() {
+            let mut context = failure_context();
+            context.file_context = Some(file_io::FileContext {
+                package_bytes: Some(caller.to_vec()), full_name: Some(r"C:\work\original.xlsx".into()),
+                read_only: Some(true), folders: vec![r"C:\work".into()],
+                files: vec![file_io::ProducedFile {path:r"C:\work\provider.xlsx".into(), bytes:bytes.to_vec()}],
+                ..Default::default()
+            });
+            let out = execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(caller).unwrap(), source, Some("Probe"),
+                vec![Value::Integer(mode as i64)], 0, context, &mut None,
+            ).unwrap();
+            if let Some(root) = std::env::var_os("OXI_VBA_OLE_DESTINATIONS_CAPTURE") {
+                let folder = std::path::PathBuf::from(root).join(format!("destinations6-{mode}"));
+                std::fs::create_dir(&folder).unwrap();
+                for file in &out.files {
+                    let leaf = file.path.rsplit(['\\', '/']).next().unwrap();
+                    if leaf == "mixed-source.xlsx" || leaf == "mixed-copy.xlsx" {
+                        std::fs::write(folder.join(leaf), &file.bytes).unwrap();
+                    }
+                }
+            }
+            if out.error.is_some() || serde_json::to_value(&out.result).unwrap() != serde_json::json!({"type":"string", "value":expected}) {
+                failures.push(format!("mode{mode}: result={:?}; error={:?}; expected={expected}", serde_json::to_value(&out.result).unwrap(), out.error.as_ref().map(|e| &e.message)));
+            }
+        }
+        assert!(failures.is_empty(), "Complete mixed OLE/note Native vectors differ:\n{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn crossbook_newbook_mixed_ole_custom_names_native6() {
+        // Native Excel V3, two independent owned sessions in reverse orders.
+        // Retain the complete source/copy/reopened ID and Name vectors.
+        let bytes = include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
+        let expected = [
+            "1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,",
+            "1026,|Object 2,|1027,|Comment 3,#1025,|Object 1,|1026,|Comment 2,#1025,|Object 1,|1026,|Comment 2,",
+            "1025,1026,|Payload 1,Payload 2,|1027,|Memo,#1025,1026,|Payload 1,Payload 2,|1027,|Memo,#1025,1026,|Payload 1,Payload 2,|1027,|Memo,",
+            "1026,|Payload 1,|1027,|Memo,#1025,|Payload 1,|1026,|Memo,#1025,|Payload 1,|1026,|Memo,",
+            "1025,1026,|Object 99,Object 77,|1027,|Comment 3,#1025,1026,|Object 99,Object 77,|1027,|Comment 3,#1025,1026,|Object 99,Object 77,|1027,|Comment 3,",
+            "1026,|Object 99,|1027,|Comment 3,#1025,|Object 99,|1026,|Comment 2,#1025,|Object 99,|1026,|Comment 2,"
+        ];
+        let source = r####"Option Explicit
+Public Function Probe(ByVal mode As Long) As String
+    Dim source As Workbook, ws As Worksheet, copied As Workbook, cold As Workbook
+    Dim note As Object, result As String
+    Set source = ThisWorkbook
+    Set ws = source.Worksheets(1)
+    Dim i As Long
+    If mode = 1 Or mode = 3 Or mode = 5 Then ws.OLEObjects(1).Delete
+    If mode = 2 Or mode = 3 Then
+        For i = 1 To ws.OLEObjects.Count
+            ws.OLEObjects(i).Name = "Payload " & CStr(i)
+        Next
+    End If
+    If mode = 4 Or mode = 5 Then
+        For i = 1 To ws.OLEObjects.Count
+            If i = 1 Then
+                ws.OLEObjects(i).Name = "Object 99"
+            Else
+                ws.OLEObjects(i).Name = "Object 77"
+            End If
+        Next
+    End If
+    ws.Range("D2").AddComment "copied note"
+    If mode = 2 Or mode = 3 Then ws.Range("D2").Comment.Shape.Name = "Memo"
+    result = Observe(ws)
+    source.SaveAs "C:\work\mixed-source.xlsx", 51
+    ws.Copy
+    Set copied = ActiveWorkbook
+    result = result & "#" & Observe(copied.Worksheets(1))
+    copied.SaveAs "C:\work\mixed-copy.xlsx", 51
+    copied.Close False
+    Set cold = Workbooks.Open("C:\work\mixed-copy.xlsx", 0, True)
+    Probe = result & "#" & Observe(cold.Worksheets(1))
+    cold.Close False
+End Function
+Private Function Observe(ByVal ws As Worksheet) As String
+    Dim i As Long, ids As String, names As String, noteIds As String, noteNames As String
+    For i = 1 To ws.OLEObjects.Count
+        ids = ids & CStr(ws.OLEObjects(i).ShapeRange.ID) & ","
+        names = names & ws.OLEObjects(i).Name & ","
+    Next
+    For i = 1 To ws.Comments.Count
+        noteIds = noteIds & CStr(ws.Comments(i).Shape.ID) & ","
+        noteNames = noteNames & ws.Comments(i).Shape.Name & ","
+    Next
+    Observe = ids & "|" & names & "|" & noteIds & "|" & noteNames
+End Function"####;
+        let mut failures = Vec::new();
+        for (mode, expected) in expected.iter().enumerate() {
+            let mut context = failure_context();
+            context.file_context = Some(file_io::FileContext {
+                package_bytes: Some(bytes.to_vec()), full_name: Some(r"C:\work\original.xlsx".into()),
+                read_only: Some(true), folders: vec![r"C:\work".into()],
+                ..Default::default()
+            });
+            let out = execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(bytes).unwrap(), source, Some("Probe"),
+                vec![Value::Integer(mode as i64)], 0, context, &mut None,
+            ).unwrap();
+            if let Some(root) = std::env::var_os("OXI_VBA_MIXED_OLE_CAPTURE") {
+                let folder = std::path::PathBuf::from(root).join(format!("custom6-{mode}"));
+                std::fs::create_dir(&folder).unwrap();
+                for file in &out.files {
+                    let leaf = file.path.rsplit(['\\', '/']).next().unwrap();
+                    if leaf == "mixed-source.xlsx" || leaf == "mixed-copy.xlsx" {
+                        std::fs::write(folder.join(leaf), &file.bytes).unwrap();
+                    }
+                }
+            }
+            if out.error.is_some() || serde_json::to_value(&out.result).unwrap() != serde_json::json!({"type":"string", "value":expected}) {
+                failures.push(format!("mode{mode}: result={:?}; error={:?}; expected={expected}", serde_json::to_value(&out.result).unwrap(), out.error.as_ref().map(|e| &e.message)));
+            }
+        }
+        assert!(failures.is_empty(), "Complete mixed OLE/note Native vectors differ:\n{}", failures.join("\n"));
+    }
 
     #[test]
     fn crossbook_newbook_mixed_ole_and_note_keep_distinct_legacy_ids() {
