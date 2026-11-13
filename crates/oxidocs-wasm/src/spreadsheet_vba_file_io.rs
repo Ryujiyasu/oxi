@@ -2996,7 +2996,8 @@ impl WorkbookHost<'_> {
             }
         }
         let drawing_sources: std::collections::HashMap<_, _> = self.shapes.iter().filter_map(|record| {
-            if record.comment_at.is_some() || record.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some()) { return None; }
+            if record.comment_at.is_some() || (record.source_drawing_id.is_none()
+                && record.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some())) { return None; }
             Some(((record.sheet,record.non_visual_id),record.source_drawing_id))
         }).collect();
         editor.apply_workbook_with_drawing_id_sources(export_workbook.as_ref(), &drawing_sources)

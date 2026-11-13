@@ -262,7 +262,21 @@ jobs:
             web/vba-save-copy.test.mjs
             web/vba-file-downloads.test.mjs
             web/vba-external-copy-state.test.mjs
+            web/vba-chart-documents.test.mjs
+            web/vba-chart-persistence.test.mjs
+            web/vba-document-identity.test.mjs
+            web/vba-document-runtime.test.mjs
+            web/vba-structural-save.test.mjs
+            web/vba-unicode-modules.test.mjs
+            web/vba-ole-copy-state.test.mjs
           )
+          # New public VBA suites must be assigned to the same shard loop.
+          for suite in web/vba*.test.mjs; do
+            if [[ " ${suites[*]} " != *" $suite "* ]]; then
+              echo "Missing VBA suite in CI: $suite" >&2
+              exit 1
+            fi
+          done
           index=0
           for suite in "${suites[@]}"; do
             selected=$((index % 8 + 1))
@@ -275,6 +289,8 @@ jobs:
               node "$suite"
             elif [ "$suite" = "web/vba-external-copy-state.test.mjs" ]; then
               node "$suite" pkg "$RUNNER_TEMP/vba-external-copy-state.json"
+            elif [ "$suite" = "web/vba-ole-copy-state.test.mjs" ]; then
+              node "$suite" pkg "$RUNNER_TEMP/vba-ole-copy-state.json"
             else
               node "$suite" pkg
             fi
@@ -286,6 +302,13 @@ jobs:
         with:
           name: vba-external-copy-state-${{ matrix.shard }}
           path: ${{ runner.temp }}/vba-external-copy-state.json
+          if-no-files-found: ignore
+      - name: Preserve complete Native OLE observations
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vba-ole-copy-state-${{ matrix.shard }}
+          path: ${{ runner.temp }}/vba-ole-copy-state.json
           if-no-files-found: ignore
       - name: Word vertical text rendering and WASM orientation
         if: ${{ matrix.shard == 1 }}

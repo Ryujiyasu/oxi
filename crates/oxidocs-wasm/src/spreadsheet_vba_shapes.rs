@@ -902,9 +902,16 @@ impl<'a> WorkbookHost<'a> {
                 self.next_shape_id += 1;
                 let physical_id = drawing.non_visual_id.unwrap_or(number.saturating_add(1));
                 let generated_number = physical_id.saturating_sub(1);
-                let automatic = !is_ole && (drawing.name.is_none() || generated_shape_name(&kind, generated_number, true)
-                    .is_some_and(|native| drawing.name.as_ref() == Some(&native)));
-                let display = if automatic {
+                let automatic = if is_ole {
+                    drawing.name.as_deref().is_none_or(|name| {
+                        self.comment_shape_number(sheet, physical_id)
+                            .is_some_and(|number| name == format!("Object {number}"))
+                    })
+                } else {
+                    drawing.name.is_none() || generated_shape_name(&kind, generated_number, true)
+                        .is_some_and(|native| drawing.name.as_ref() == Some(&native))
+                };
+                let display = if automatic && !is_ole {
                     generated_shape_name(&kind, generated_number, false)
                         .unwrap_or_else(|| drawing.name.clone().unwrap_or_else(||format!("{base} {number}")))
                 } else { drawing.name.clone().unwrap_or_else(||format!("{base} {number}")) };
@@ -1201,7 +1208,10 @@ impl<'a> WorkbookHost<'a> {
         let existing = self.shapes.iter().any(|shape| shape.comment_at == Some(at));
         if existing { return; }
         let shape_id = self.next_legacy_shape_id(at.sheet);
-        let number = self.next_comment_shape_number(at.sheet);
+        let number = self.comment_shape_number(at.sheet, shape_id)
+            .unwrap_or_else(|| self.next_comment_shape_number(at.sheet));
+        let counter = self.comment_shape_counters.entry(at.sheet).or_default();
+        *counter = (*counter).max(number);
         let id = self.next_shape_id;
         self.next_shape_id += 1;
         let cell_left = (0..at.column).map(|column| f64::from(self.column_px(at.sheet, column))).sum::<f64>() * 0.75;
@@ -1547,13 +1557,14 @@ impl<'a> WorkbookHost<'a> {
     /// existing source, so its copied objects remain additions for later saves.
     pub(super) fn rebase_saved_drawing_sources(&mut self, saved: &oxicells_core::ir::Workbook) {
         for record in &mut self.shapes {
-            if record.comment_at.is_some() || record.original.as_ref().is_some_and(|drawing|drawing.ole_prog_id.is_some()) { continue; }
+            if record.comment_at.is_some() { continue; }
             let Some(sheet)=self.workbook.sheets.get(record.sheet)
                 .and_then(|live|saved.sheets.iter().find(|sheet|sheet.name==live.name)) else { continue };
             let Some(drawing)=sheet.drawings.iter().find(|drawing|drawing.non_visual_id==Some(record.non_visual_id)) else { continue };
             record.source_drawing_id=drawing.non_visual_id;
             record.source_sheet_origin=sheet.origin_id;
             record.original=Some(drawing.clone());
+            record.ole_clone_of=None;
         }
     }
 

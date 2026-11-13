@@ -448,6 +448,8 @@ impl XlsxEditor {
                 self.drawing_restore_names.insert((original_index,id),name);
                 edited_drawings.to_mut()[index].name=Some(alias);
             }
+            let is_new_ole = |drawing: &crate::ir::Drawing| drawing.ole_prog_id.is_some()
+                && (drawing.ole_source_name.is_some() || drawing.ole_embedded_package.is_some());
             let source_name = |drawing: &crate::ir::Drawing| -> Option<String> {
                 let name=drawing.name.as_ref()?;
                 if drawing.ole_source_name.is_some() || (drawing.ole_prog_id.is_some() && drawing.ole_embedded_package.is_some()) {
@@ -506,7 +508,7 @@ impl XlsxEditor {
             }
             for original in original_drawings.iter() {
                 let Some(name) = original.name.as_ref() else { continue };
-                if !edited_drawings.iter().any(|drawing| source_name(drawing).as_ref() == Some(name)) {
+                if !edited_drawings.iter().any(|drawing| !is_new_ole(drawing) && source_name(drawing).as_ref() == Some(name)) {
                     self.drawing_deletions.entry(original_index).or_default().insert(name.clone());
                 }
             }
@@ -519,9 +521,10 @@ impl XlsxEditor {
                     self.drawing_states.insert((original_index, name.clone()), drawing.clone());
                 }
                 let existed = original_drawings.iter().any(|original| original.name.as_ref() == Some(name));
-                let is_new_ole = drawing.ole_prog_id.is_some() && drawing.ole_embedded_package.is_some()
-                    && drawing.ole_source_name.is_none();
-                if !existed && (matches!(&drawing.kind, crate::ir::DrawingKind::Shape(_) | crate::ir::DrawingKind::Chart(_)) || drawing.ole_source_name.is_some() || is_new_ole) {
+                // A fresh payload has no source object, even when its display
+                // name reuses a retained or deleted OLE object's name.
+                let is_new_ole = is_new_ole(drawing);
+                if (is_new_ole || !existed) && (matches!(&drawing.kind, crate::ir::DrawingKind::Shape(_) | crate::ir::DrawingKind::Chart(_)) || drawing.ole_source_name.is_some() || is_new_ole) {
                     self.drawing_additions.entry(original_index).or_default().push(drawing.clone());
                     continue;
                 }
@@ -2299,6 +2302,12 @@ impl XlsxEditor {
                     if let Some(rid) = drawing_package.worksheet_drawing.get(&name) {
                         patched = set_drawing(&patched, rid)?;
                     }
+                    if let Some(ids)=drawing_package.ole_deletions.get(&name) {
+                        patched=remove_legacy_ole_objects(&patched,ids)?;
+                    }
+                    if let Some(ids)=drawing_package.ole_identity_edits.get(&name) {
+                        patched=patch_legacy_ole_ids(&patched,ids)?;
+                    }
                     if let Some(additions) = drawing_package.worksheet_ole_objects.get(&name) {
                         patched = append_ole_objects_xml(&patched, additions)?;
                     }
@@ -2311,7 +2320,7 @@ impl XlsxEditor {
                     }
                     writer.write_all(patched.as_bytes())
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                } else if font_cache_change || protection_change.is_some() || colour_change.is_some() || header_change.is_some() || default_width.is_some() || default_row.is_some() || legacy_edits.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_legacy_drawing.contains_key(&name) || drawing_package.ole_anchors.contains_key(&name) || drawing_package.worksheet_ole_objects.contains_key(&name) {
+                } else if font_cache_change || protection_change.is_some() || colour_change.is_some() || header_change.is_some() || default_width.is_some() || default_row.is_some() || legacy_edits.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_drawing.contains_key(&name) || drawing_package.worksheet_legacy_drawing.contains_key(&name) || drawing_package.ole_anchors.contains_key(&name) || drawing_package.worksheet_ole_objects.contains_key(&name) || drawing_package.ole_identity_edits.contains_key(&name) || drawing_package.ole_deletions.contains_key(&name) {
                     let mut xml = String::new();
                     entry.read_to_string(&mut xml)
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
@@ -2330,6 +2339,12 @@ impl XlsxEditor {
                     }
                     if let Some(rid) = drawing_package.worksheet_drawing.get(&name) {
                         recoloured = set_drawing(&recoloured, rid)?;
+                    }
+                    if let Some(ids)=drawing_package.ole_deletions.get(&name) {
+                        recoloured=remove_legacy_ole_objects(&recoloured,ids)?;
+                    }
+                    if let Some(ids)=drawing_package.ole_identity_edits.get(&name) {
+                        recoloured=patch_legacy_ole_ids(&recoloured,ids)?;
                     }
                     if let Some(additions) = drawing_package.worksheet_ole_objects.get(&name) {
                         recoloured = append_ole_objects_xml(&recoloured, additions)?;
@@ -3189,6 +3204,8 @@ fn shape_text_formatting_changed(before: &crate::ir::ShapeText, after: &crate::i
 struct DrawingAdditionPackage {
     parts: HashMap<String, String>,
     ole_anchors: HashMap<String, HashMap<u32, crate::ir::Drawing>>,
+    ole_identity_edits: HashMap<String, HashMap<u32, u32>>,
+    ole_deletions: HashMap<String, std::collections::HashSet<u32>>,
     worksheet_ole_objects: HashMap<String, Vec<String>>,
     relationship_xml: HashMap<String, String>,
     new_parts: Vec<(String, String)>,
@@ -3266,6 +3283,28 @@ fn drawing_addition_package(
                     return Err(XlsxError::InvalidData("group children disagree on their parent identity".into()));
                 }
             }
+        }
+    }
+    for ((sheet,name),drawing) in drawing_states {
+        if drawing.ole_prog_id.is_none() {continue;}
+        let Some(new_id)=drawing.non_visual_id else {continue};
+        let part=existing_parts.get(sheet).ok_or_else(||XlsxError::InvalidData("OLE identity has no drawing part".into()))?;
+        let source=archive.read_part(part)?;
+        let old_id=drawing_shape_id(&source,name)?.ok_or_else(||XlsxError::InvalidData("OLE identity has no source shape".into()))?;
+        if old_id==new_id {continue;}
+        let sheet_path=sheet_paths.get(*sheet).filter(|p|!p.is_empty())
+            .ok_or_else(||XlsxError::InvalidData("OLE identity has no worksheet".into()))?;
+        plan.ole_identity_edits.entry(sheet_path.clone()).or_default().insert(old_id,new_id);
+    }
+    // DrawingML also retains the VML physical identity in a14:compatExt.
+    // Rebase this link in the same one-pass map before Excel reads the package.
+    for (sheet_path,ids) in &plan.ole_identity_edits {
+        let rels=archive.read_part(&sheet_rels_path(sheet_path))?;
+        let relationships=parse_relationships(&rels).map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+        if let Some(relation)=relationships.values().find(|r|r.rel_type.ends_with("/drawing")) {
+            let path=resolve_part_target(sheet_path,&relation.target);
+            let xml=plan.parts.remove(&path).map_or_else(||archive.read_part(&path),Ok)?;
+            plan.parts.insert(path,patch_legacy_ole_ids(&xml,ids)?);
         }
     }
     for (part, edits) in &identity_edits {
@@ -3416,6 +3455,261 @@ fn drawing_addition_package(
         else { plan.new_parts.push((rels_path, rels)); }
     }
 
+    let mut edits_by_part: HashMap<String, HashMap<String, Option<crate::ir::ShapeLine>>> = HashMap::new();
+    for ((sheet, shape_name), after) in line_edits {
+        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving shape {shape_name:?}")))?;
+        edits_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), after.clone());
+    }
+    let mut fills_by_part: HashMap<String, HashMap<String, (Option<String>, Option<usize>, Option<u8>, Option<f32>)>> = HashMap::new();
+    for ((sheet, shape_name), fill) in fill_edits {
+        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving shape {shape_name:?} fill")))?;
+        fills_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), fill.clone());
+    }
+    let mut text_by_part: HashMap<String, HashMap<String, ShapeTextEdit>> = HashMap::new();
+    for ((sheet, shape_name), text) in text_edits {
+        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving shape {shape_name:?} text")))?;
+        text_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), text.clone());
+    }
+    let mut pictures_by_part: HashMap<String, HashMap<String, PictureStyleEdit>> = HashMap::new();
+    for ((sheet, shape_name), format) in picture_edits {
+        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving picture {shape_name:?}")))?;
+        pictures_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), format.clone());
+    }
+    let mut geometry_by_part: HashMap<String, HashMap<String, crate::ir::Drawing>> = HashMap::new();
+    for ((sheet, shape_name), after) in geometry_edits {
+        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while moving shape {shape_name:?}")))?;
+        geometry_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), after.clone());
+    }
+    let mut drawings_by_part: HashMap<String, HashMap<String, crate::ir::Drawing>> = HashMap::new();
+    for ((sheet, shape_name), drawing) in drawing_states {
+        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving shape {shape_name:?}")))?;
+        drawings_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), drawing.clone());
+    }
+    let mut deletions_by_part: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    for (sheet, shape_names) in deletions {
+        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while deleting a shape")))?;
+        deletions_by_part.entry(part.clone()).or_default().extend(shape_names.iter().cloned());
+    }
+    let groups_by_part: HashMap<String, Vec<DrawingGroupAddition>> = group_additions.iter()
+        .filter_map(|(sheet, groups)| existing_parts.get(sheet).or_else(|| created_drawing_parts.get(sheet))
+            .map(|part| (part.clone(), groups.clone()))).collect();
+    for part in part_additions.keys().chain(edits_by_part.keys()).chain(fills_by_part.keys()).chain(text_by_part.keys()).chain(pictures_by_part.keys()).chain(geometry_by_part.keys()).chain(deletions_by_part.keys()).chain(groups_by_part.keys()).chain(fresh_ole_parts.values()).chain(identity_edits.keys()).cloned().collect::<std::collections::HashSet<_>>() {
+        let mut xml = plan.parts.remove(&part)
+            .or_else(|| plan.new_parts.iter().find(|(path, _)| path == &part).map(|(_, xml)| xml.clone()));
+        if xml.is_none() { xml = Some(archive.read_part(&part)?); }
+        let mut xml = xml.expect("drawing XML loaded");
+        let before_deletion = deletions_by_part.contains_key(&part).then(|| xml.clone());
+        if let Some(edits) = edits_by_part.get(&part) { xml = patch_drawing_line_xml(&xml, edits)?; }
+        if let Some(edits) = fills_by_part.get(&part) { xml = patch_drawing_fill_xml(&xml, edits)?; }
+        if let Some(edits) = text_by_part.get(&part) { xml = patch_drawing_text_xml(&xml, edits)?; }
+        if let Some(edits) = pictures_by_part.get(&part) {
+            xml = patch_drawing_picture_xml(&xml, edits)?;
+            xml = patch_drawing_picture_background_xml(&xml, edits)?;
+        }
+        if let Some(names) = deletions_by_part.get(&part) {
+            xml = patch_drawing_deletions_xml(
+                &xml,
+                names,
+                geometry_by_part.get(&part),
+                drawings_by_part.get(&part),
+            )?;
+        }
+        if let Some(edits) = geometry_by_part.get(&part) { xml = patch_drawing_geometry_xml(&xml, edits)?; }
+        if let Some(drawings) = part_additions.get(&part) { xml = append_drawing_shapes_xml(&xml, drawings)?; }
+        if let Some(groups) = groups_by_part.get(&part) {
+            for group in groups { xml = patch_drawing_group_addition(&xml, group)?; }
+        }
+
+        if let Some(before) = before_deletion {
+            remove_deleted_drawing_relationships(archive, &mut plan, &part, &before, &xml)?;
+        }
+        if let Some((_, contents)) = plan.new_parts.iter_mut().find(|(path, _)| path == &part) {
+            *contents = xml;
+        } else {
+            plan.parts.insert(part, xml);
+        }
+    }
+    // Excel stores OLE positions twice: in DrawingML and in worksheet
+    // oleObject/objectPr anchors. Keep the latter in sync when a shape moves.
+    let mut ole_edits_by_sheet: HashMap<String, HashMap<u32, crate::ir::Drawing>> = HashMap::new();
+    for ((sheet, shape_name), drawing) in geometry_edits {
+        if drawing.ole_prog_id.is_none() && drawing.ole_type.is_none() { continue; }
+        let drawing_part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving OLE position")))?;
+        let drawing_xml = archive.read_part(drawing_part)?;
+        let shape_id = drawing_shape_id(&drawing_xml, shape_name)?.ok_or_else(|| XlsxError::InvalidData(format!("drawing shape {shape_name:?} has no id while saving OLE position")))?;
+        let sheet_path = sheet_paths.get(*sheet).filter(|path| !path.is_empty()).ok_or_else(|| XlsxError::InvalidData(format!("sheet {sheet} is not in the source workbook while saving OLE position")))?;
+        ole_edits_by_sheet.entry(sheet_path.clone()).or_default().insert(drawing.non_visual_id.unwrap_or(shape_id), drawing.clone());
+    }
+    for (sheet_path, edits) in ole_edits_by_sheet {
+        plan.ole_anchors.entry(sheet_path).or_default().extend(edits);
+    }
+    let mut vml_shadow_edits: HashMap<String, HashMap<u32, bool>> = HashMap::new();
+    for ((sheet, shape_name), drawing) in geometry_edits {
+        let Some(shadow) = drawing.ole_shadow else { continue };
+        let drawing_part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving OLE shadow")))?;
+        let drawing_xml = archive.read_part(drawing_part)?;
+        let Some(shape_id) = drawing_shape_id(&drawing_xml, shape_name)? else { continue };
+        let sheet_path = sheet_paths.get(*sheet).filter(|path| !path.is_empty()).ok_or_else(|| XlsxError::InvalidData(format!("sheet {sheet} is not in the source workbook while saving OLE shadow")))?;
+        let rels_path = sheet_rels_path(sheet_path);
+        let Some(rels_xml) = archive.try_read_part(&rels_path)? else { continue };
+        let relationships = parse_relationships(&rels_xml).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        let Some(vml_relation) = relationships.values().find(|relation| relation.rel_type.ends_with("/vmlDrawing")) else { continue };
+        let vml_path = resolve_part_target(sheet_path, &vml_relation.target);
+        vml_shadow_edits.entry(vml_path).or_default().insert(shape_id, shadow);
+    }
+    for (vml_path, edits) in vml_shadow_edits {
+        let xml = plan.parts.get(&vml_path).cloned().unwrap_or(archive.read_part(&vml_path)?);
+        plan.parts.insert(vml_path, patch_vml_ole_shadows(&xml, &edits)?);
+    }
+    let mut vml_style_edits: HashMap<String, HashMap<u32, crate::ir::Drawing>> = HashMap::new();
+    for ((sheet, shape_name), drawing) in geometry_edits {
+        if drawing.ole_border_color.is_none() && drawing.ole_border_weight.is_none() && drawing.ole_interior_color.is_none() { continue; }
+        let drawing_part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving OLE style")))?;
+        let drawing_xml = archive.read_part(drawing_part)?;
+        let Some(shape_id) = drawing_shape_id(&drawing_xml, shape_name)? else { continue };
+        let sheet_path = sheet_paths.get(*sheet).filter(|path| !path.is_empty()).ok_or_else(|| XlsxError::InvalidData(format!("sheet {sheet} is not in the source workbook while saving OLE style")))?;
+        let rels_path = sheet_rels_path(sheet_path);
+        let Some(rels_xml) = archive.try_read_part(&rels_path)? else { continue };
+        let relationships = parse_relationships(&rels_xml).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        let Some(vml_relation) = relationships.values().find(|relation| relation.rel_type.ends_with("/vmlDrawing")) else { continue };
+        let vml_path = resolve_part_target(sheet_path, &vml_relation.target);
+        vml_style_edits.entry(vml_path).or_default().insert(shape_id, drawing.clone());
+    }
+    for (vml_path, edits) in vml_style_edits {
+        let xml = plan.parts.get(&vml_path).cloned().unwrap_or(archive.read_part(&vml_path)?);
+        plan.parts.insert(vml_path, patch_vml_ole_styles(&xml, &edits)?);
+    }
+    // A DrawingML deletion must also remove both worksheet compatibility
+    // branches and its VML fallback. Keep other legacy shapes untouched.
+    for (sheet,names) in deletions {
+        let Some(part)=existing_parts.get(sheet) else {continue};
+        let source=archive.read_part(part)?;
+        let sheet_path=sheet_paths.get(*sheet).filter(|p|!p.is_empty())
+            .ok_or_else(||XlsxError::InvalidData("OLE deletion has no worksheet".into()))?;
+        let worksheet=archive.read_part(sheet_path)?;
+        for name in names {
+            if let Some(id)=drawing_shape_id(&source,name)? {
+                if find_ole_object_xml(&worksheet,id)?.is_some() {
+                    plan.ole_deletions.entry(sheet_path.clone()).or_default().insert(id);
+                }
+            }
+        }
+    }
+    let deleted_ole_sheets=plan.ole_deletions.clone();
+    for (sheet_path,ids) in &deleted_ole_sheets {
+        let before=archive.read_part(sheet_path)?;
+        let after=remove_legacy_ole_objects(&before,ids)?;
+        remove_deleted_drawing_relationships(archive,&mut plan,sheet_path,&before,&after)?;
+        let rels=archive.read_part(&sheet_rels_path(sheet_path))?;
+        let relationships=parse_relationships(&rels).map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+        if let Some(relation)=relationships.values().find(|r|r.rel_type.ends_with("/vmlDrawing")) {
+            let path=resolve_part_target(sheet_path,&relation.target);
+            let xml=plan.parts.remove(&path).map_or_else(||archive.read_part(&path),Ok)?;
+            plan.parts.insert(path,remove_legacy_ole_objects(&xml,ids)?);
+        }
+    }
+    // Notes consume the pending VML part later, so publish OLE rebasing
+    // before note generation checks shared legacy identity uniqueness.
+    for (sheet_path,ids) in &plan.ole_identity_edits {
+        let rels=archive.read_part(&sheet_rels_path(sheet_path))?;
+        let relationships=parse_relationships(&rels).map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+        if let Some(relation)=relationships.values().find(|r|r.rel_type.ends_with("/vmlDrawing")) {
+            let path=resolve_part_target(sheet_path,&relation.target);
+            let xml=plan.parts.remove(&path).map_or_else(||archive.read_part(&path),Ok)?;
+            plan.parts.insert(path,patch_legacy_ole_ids(&xml,ids)?);
+        }
+    }
+    // Source IDs may be reused by OLE duplicates. Finish original-object
+    // deletion and rebasing before appending destination identities.
+    let mut ordered_ole_copies: Vec<_> = ole_additions.iter().collect();
+    ordered_ole_copies.sort_unstable_by_key(|(sheet, _)| **sheet);
+    for (sheet, ole_copies) in ordered_ole_copies {
+        let sheet = *sheet;
+        let part = existing_parts.get(&sheet)
+            .ok_or_else(|| XlsxError::InvalidData("OLE duplicate drawing part is missing".into()))?.clone();
+        let mut xml = plan.parts.remove(&part).map_or_else(|| archive.read_part(&part), Ok)?;
+        let sheet_path = sheet_paths.get(sheet).filter(|path| !path.is_empty())
+            .ok_or_else(|| XlsxError::InvalidData("OLE duplicate worksheet part is missing".into()))?;
+        let source_drawing_xml = archive.read_part(&part)?;
+        let source_sheet_xml = archive.read_part(sheet_path)?;
+        let rels_path = sheet_rels_path(sheet_path);
+        let source_rels = archive.try_read_part(&rels_path)?
+            .ok_or_else(|| XlsxError::InvalidData("OLE duplicate worksheet relationships are missing".into()))?;
+        let mut relationship_xml = plan.relationship_xml.get(&rels_path).cloned().unwrap_or_else(|| source_rels.clone());
+        let source_relationships = parse_relationships(&source_rels)
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        let vml_path = source_relationships.values().find(|relation| relation.rel_type.ends_with("/vmlDrawing"))
+            .map(|relation| resolve_part_target(sheet_path, &relation.target));
+        let source_vml_xml = vml_path.as_deref().map(|path| archive.read_part(path)).transpose()?;
+        let mut vml_xml = vml_path.as_deref().map(|path|
+            plan.parts.remove(path).map_or_else(|| archive.read_part(path), Ok)).transpose()?;
+        let content_types = archive.read_part("[Content_Types].xml")?;
+        let mut appended_objects = Vec::new();
+        for drawing in ole_copies {
+            let source_name = drawing.ole_source_name.as_deref()
+                .ok_or_else(|| XlsxError::InvalidData("OLE duplicate has no source name".into()))?;
+            let source_shape_id = drawing_shape_id(&source_drawing_xml, source_name)?
+                .ok_or_else(|| XlsxError::InvalidData(format!("OLE source drawing {source_name:?} has no shape id")))?;
+            let source_ole = find_ole_object_xml(&source_sheet_xml, source_shape_id)?
+                .ok_or_else(|| XlsxError::InvalidData(format!("OLE source {source_name:?} has no worksheet object")))?;
+            let source_rel_id = xml_attribute_value(&source_ole, "id")
+                .ok_or_else(|| XlsxError::InvalidData("OLE worksheet object has no relationship id".into()))?;
+            let source_relation = source_relationships.get(&source_rel_id)
+                .ok_or_else(|| XlsxError::InvalidData(format!("OLE relationship {source_rel_id:?} is missing")))?;
+            let source_target = resolve_part_target(sheet_path, &source_relation.target);
+            let source_bytes = if let Some(package) = drawing.ole_embedded_package.as_ref() {
+                package.clone()
+            } else {
+                archive.read_binary_part(&source_target)?
+            };
+            let new_target = unique_embedding_path(&names, &source_target);
+            names.insert(new_target.clone());
+            plan.new_binary_parts.push((new_target.clone(), source_bytes));
+            let relationship_target = relative_sheet_target(sheet_path, &new_target);
+            let before_ids: std::collections::HashSet<String> = parse_relationships(&relationship_xml)
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?.into_keys().collect();
+            relationship_xml = append_relationship(Some(&relationship_xml), &source_relation.rel_type, &relationship_target)?;
+            let after_relationships = parse_relationships(&relationship_xml)
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            let new_rel_id = after_relationships.keys().find(|id| !before_ids.contains(*id)).cloned()
+                .ok_or_else(|| XlsxError::InvalidData("OLE duplicate relationship id was not allocated".into()))?;
+
+            let new_shape_id = match drawing.non_visual_id {
+                Some(id) if id > 0 => id,
+                Some(_) => return Err(XlsxError::InvalidData("OLE drawing id must be positive".into())),
+                None => max_drawing_shape_id(&xml)?.checked_add(1)
+                    .ok_or_else(|| XlsxError::InvalidData("drawing shape id overflow".into()))?,
+            };
+            let mut anchor = clone_drawing_anchor_xml(&source_drawing_xml, source_name, drawing.name.as_deref().unwrap_or("Object"), source_shape_id, new_shape_id)?;
+            anchor = patch_drawing_metadata_xml(&anchor, &HashMap::from([(new_shape_id, drawing.metadata.clone())]))?;
+            let name = drawing.name.as_deref().unwrap_or("Object");
+            anchor = patch_drawing_geometry_xml(&anchor, &HashMap::from([(name.to_string(), drawing.clone())]))?;
+            xml = append_xml_child(&xml, "wsDr", &anchor)?;
+
+            let object_xml = clone_ole_object_xml(&source_ole, source_shape_id, new_shape_id, &new_rel_id)?;
+            appended_objects.push(object_xml);
+            plan.ole_anchors.entry(sheet_path.clone()).or_default().insert(new_shape_id, drawing.clone());
+            if let Some(vml_xml) = vml_xml.as_mut() {
+                let z_index = max_vml_z_index(vml_xml)?.checked_add(1)
+                    .ok_or_else(|| XlsxError::InvalidData("VML z-index overflow".into()))?;
+                let vml_shape = clone_vml_ole_shape_xml(source_vml_xml.as_deref()
+                    .ok_or_else(|| XlsxError::InvalidData("OLE source VML is missing".into()))?, source_shape_id, new_shape_id, z_index, drawing)?;
+                *vml_xml = append_xml_child(vml_xml, "xml", &vml_shape)?;
+            }
+
+            let content_type = content_type_for_part(&content_types, &source_target)?;
+            plan.content_types.push((new_target, content_type));
+        }
+        plan.relationship_xml.insert(rels_path, relationship_xml);
+        plan.worksheet_ole_objects.entry(sheet_path.clone()).or_default().extend(appended_objects);
+        if let (Some(path), Some(xml)) = (vml_path, vml_xml) {
+            plan.parts.insert(path, xml);
+        }
+        plan.parts.insert(part, xml);
+    }
+
+    // Source IDs and names may be reused by new OLE objects. Add fresh
+    // payloads only after deleting and rebasing the original legacy parts.
     for (sheet, drawings) in fresh_ole_additions {
         let part = fresh_ole_parts.get(&sheet).ok_or_else(|| XlsxError::InvalidData("new OLE object has no drawing part".into()))?.clone();
         let sheet_path = sheet_paths.get(sheet).filter(|path| !path.is_empty())
@@ -3484,208 +3778,6 @@ fn drawing_addition_package(
         }
     }
 
-    let mut edits_by_part: HashMap<String, HashMap<String, Option<crate::ir::ShapeLine>>> = HashMap::new();
-    for ((sheet, shape_name), after) in line_edits {
-        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving shape {shape_name:?}")))?;
-        edits_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), after.clone());
-    }
-    let mut fills_by_part: HashMap<String, HashMap<String, (Option<String>, Option<usize>, Option<u8>, Option<f32>)>> = HashMap::new();
-    for ((sheet, shape_name), fill) in fill_edits {
-        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving shape {shape_name:?} fill")))?;
-        fills_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), fill.clone());
-    }
-    let mut text_by_part: HashMap<String, HashMap<String, ShapeTextEdit>> = HashMap::new();
-    for ((sheet, shape_name), text) in text_edits {
-        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving shape {shape_name:?} text")))?;
-        text_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), text.clone());
-    }
-    let mut pictures_by_part: HashMap<String, HashMap<String, PictureStyleEdit>> = HashMap::new();
-    for ((sheet, shape_name), format) in picture_edits {
-        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving picture {shape_name:?}")))?;
-        pictures_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), format.clone());
-    }
-    let mut geometry_by_part: HashMap<String, HashMap<String, crate::ir::Drawing>> = HashMap::new();
-    for ((sheet, shape_name), after) in geometry_edits {
-        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while moving shape {shape_name:?}")))?;
-        geometry_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), after.clone());
-    }
-    let mut drawings_by_part: HashMap<String, HashMap<String, crate::ir::Drawing>> = HashMap::new();
-    for ((sheet, shape_name), drawing) in drawing_states {
-        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving shape {shape_name:?}")))?;
-        drawings_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), drawing.clone());
-    }
-    let mut deletions_by_part: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
-    for (sheet, shape_names) in deletions {
-        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while deleting a shape")))?;
-        deletions_by_part.entry(part.clone()).or_default().extend(shape_names.iter().cloned());
-    }
-    let ole_parts: HashMap<String, usize> = ole_additions.iter().filter_map(|(sheet, _)| {
-        existing_parts.get(sheet).map(|part| (part.clone(), *sheet))
-    }).collect();
-    let groups_by_part: HashMap<String, Vec<DrawingGroupAddition>> = group_additions.iter()
-        .filter_map(|(sheet, groups)| existing_parts.get(sheet).or_else(|| created_drawing_parts.get(sheet))
-            .map(|part| (part.clone(), groups.clone()))).collect();
-    for part in part_additions.keys().chain(edits_by_part.keys()).chain(fills_by_part.keys()).chain(text_by_part.keys()).chain(pictures_by_part.keys()).chain(geometry_by_part.keys()).chain(deletions_by_part.keys()).chain(ole_parts.keys()).chain(groups_by_part.keys()).chain(fresh_ole_parts.values()).chain(identity_edits.keys()).cloned().collect::<std::collections::HashSet<_>>() {
-        let mut xml = plan.parts.remove(&part)
-            .or_else(|| plan.new_parts.iter().find(|(path, _)| path == &part).map(|(_, xml)| xml.clone()));
-        if xml.is_none() { xml = Some(archive.read_part(&part)?); }
-        let mut xml = xml.expect("drawing XML loaded");
-        let before_deletion = deletions_by_part.contains_key(&part).then(|| xml.clone());
-        if let Some(edits) = edits_by_part.get(&part) { xml = patch_drawing_line_xml(&xml, edits)?; }
-        if let Some(edits) = fills_by_part.get(&part) { xml = patch_drawing_fill_xml(&xml, edits)?; }
-        if let Some(edits) = text_by_part.get(&part) { xml = patch_drawing_text_xml(&xml, edits)?; }
-        if let Some(edits) = pictures_by_part.get(&part) {
-            xml = patch_drawing_picture_xml(&xml, edits)?;
-            xml = patch_drawing_picture_background_xml(&xml, edits)?;
-        }
-        if let Some(names) = deletions_by_part.get(&part) {
-            xml = patch_drawing_deletions_xml(
-                &xml,
-                names,
-                geometry_by_part.get(&part),
-                drawings_by_part.get(&part),
-            )?;
-        }
-        if let Some(edits) = geometry_by_part.get(&part) { xml = patch_drawing_geometry_xml(&xml, edits)?; }
-        if let Some(drawings) = part_additions.get(&part) { xml = append_drawing_shapes_xml(&xml, drawings)?; }
-        if let Some(groups) = groups_by_part.get(&part) {
-            for group in groups { xml = patch_drawing_group_addition(&xml, group)?; }
-        }
-
-        if let Some(sheet) = ole_parts.get(&part).copied() {
-            let sheet_path = sheet_paths.get(sheet).filter(|path| !path.is_empty())
-                .ok_or_else(|| XlsxError::InvalidData("OLE duplicate worksheet part is missing".into()))?;
-            let source_drawing_xml = archive.read_part(&part)?;
-            let source_sheet_xml = archive.read_part(sheet_path)?;
-            let rels_path = sheet_rels_path(sheet_path);
-            let source_rels = archive.try_read_part(&rels_path)?;
-            let mut relationship_xml = source_rels.clone().ok_or_else(|| XlsxError::InvalidData("OLE duplicate worksheet relationships are missing".into()))?;
-            let source_relationships = parse_relationships(&relationship_xml)
-                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
-            let vml_path = source_relationships.values().find(|relation| relation.rel_type.ends_with("/vmlDrawing"))
-                .map(|relation| resolve_part_target(sheet_path, &relation.target));
-            let mut vml_xml = vml_path.as_deref().map(|path| archive.read_part(path)).transpose()?;
-            let content_types = archive.read_part("[Content_Types].xml")?;
-            let ole_copies = ole_additions.get(&sheet).expect("sheet collected from OLE additions");
-            let mut appended_objects = Vec::new();
-            for drawing in ole_copies {
-                let source_name = drawing.ole_source_name.as_deref()
-                    .ok_or_else(|| XlsxError::InvalidData("OLE duplicate has no source name".into()))?;
-                let source_shape_id = drawing_shape_id(&source_drawing_xml, source_name)?
-                    .ok_or_else(|| XlsxError::InvalidData(format!("OLE source drawing {source_name:?} has no shape id")))?;
-                let source_ole = find_ole_object_xml(&source_sheet_xml, source_shape_id)?
-                    .ok_or_else(|| XlsxError::InvalidData(format!("OLE source {source_name:?} has no worksheet object")))?;
-                let source_rel_id = xml_attribute_value(&source_ole, "id")
-                    .ok_or_else(|| XlsxError::InvalidData("OLE worksheet object has no relationship id".into()))?;
-                let source_relation = source_relationships.get(&source_rel_id)
-                    .ok_or_else(|| XlsxError::InvalidData(format!("OLE relationship {source_rel_id:?} is missing")))?;
-                let source_target = resolve_part_target(sheet_path, &source_relation.target);
-                let source_bytes = if let Some(package) = drawing.ole_embedded_package.as_ref() {
-                    package.clone()
-                } else {
-                    archive.read_binary_part(&source_target)?
-                };
-                let new_target = unique_embedding_path(&names, &source_target);
-                names.insert(new_target.clone());
-                plan.new_binary_parts.push((new_target.clone(), source_bytes));
-                let relationship_target = relative_sheet_target(sheet_path, &new_target);
-                let before_ids: std::collections::HashSet<String> = parse_relationships(&relationship_xml)
-                    .map_err(|error| XlsxError::InvalidData(error.to_string()))?.into_keys().collect();
-                relationship_xml = append_relationship(Some(&relationship_xml), &source_relation.rel_type, &relationship_target)?;
-                let after_relationships = parse_relationships(&relationship_xml)
-                    .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
-                let new_rel_id = after_relationships.keys().find(|id| !before_ids.contains(*id)).cloned()
-                    .ok_or_else(|| XlsxError::InvalidData("OLE duplicate relationship id was not allocated".into()))?;
-
-                let new_shape_id = max_drawing_shape_id(&xml)?.checked_add(1)
-                    .ok_or_else(|| XlsxError::InvalidData("drawing shape id overflow".into()))?;
-                let mut anchor = clone_drawing_anchor_xml(&source_drawing_xml, source_name, drawing.name.as_deref().unwrap_or("Object"), source_shape_id, new_shape_id)?;
-                xml = append_xml_child(&xml, "wsDr", &anchor)?;
-                xml = patch_drawing_metadata_xml(&xml, &HashMap::from([(new_shape_id, drawing.metadata.clone())]))?;
-                let name = drawing.name.as_deref().unwrap_or("Object");
-                xml = patch_drawing_geometry_xml(&xml, &HashMap::from([(name.to_string(), drawing.clone())]))?;
-                anchor.clear();
-
-                let object_xml = clone_ole_object_xml(&source_ole, source_shape_id, new_shape_id, &new_rel_id)?;
-                appended_objects.push(object_xml);
-                plan.ole_anchors.entry(sheet_path.clone()).or_default().insert(new_shape_id, drawing.clone());
-                if let Some(vml_xml) = vml_xml.as_mut() {
-                    let z_index = max_vml_z_index(vml_xml)?.checked_add(1)
-                        .ok_or_else(|| XlsxError::InvalidData("VML z-index overflow".into()))?;
-                    let vml_shape = clone_vml_ole_shape_xml(vml_xml, source_shape_id, new_shape_id, z_index, drawing)?;
-                    *vml_xml = append_xml_child(vml_xml, "xml", &vml_shape)?;
-                }
-
-                let content_type = content_type_for_part(&content_types, &source_target)?;
-                if source_target.rsplit_once('.').is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("bin")) {
-                    plan.content_types.push((new_target, content_type));
-                }
-            }
-            plan.relationship_xml.insert(rels_path, relationship_xml);
-            plan.worksheet_ole_objects.entry(sheet_path.clone()).or_default().extend(appended_objects);
-            if let (Some(path), Some(xml)) = (vml_path, vml_xml) {
-                plan.parts.insert(path, xml);
-            }
-        }
-        if let Some(before) = before_deletion {
-            remove_deleted_drawing_relationships(archive, &mut plan, &part, &before, &xml)?;
-        }
-        if let Some((_, contents)) = plan.new_parts.iter_mut().find(|(path, _)| path == &part) {
-            *contents = xml;
-        } else {
-            plan.parts.insert(part, xml);
-        }
-    }
-    // Excel stores OLE positions twice: in DrawingML and in worksheet
-    // oleObject/objectPr anchors. Keep the latter in sync when a shape moves.
-    let mut ole_edits_by_sheet: HashMap<String, HashMap<u32, crate::ir::Drawing>> = HashMap::new();
-    for ((sheet, shape_name), drawing) in geometry_edits {
-        if drawing.ole_prog_id.is_none() && drawing.ole_type.is_none() { continue; }
-        let drawing_part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving OLE position")))?;
-        let drawing_xml = archive.read_part(drawing_part)?;
-        let shape_id = drawing_shape_id(&drawing_xml, shape_name)?.ok_or_else(|| XlsxError::InvalidData(format!("drawing shape {shape_name:?} has no id while saving OLE position")))?;
-        let sheet_path = sheet_paths.get(*sheet).filter(|path| !path.is_empty()).ok_or_else(|| XlsxError::InvalidData(format!("sheet {sheet} is not in the source workbook while saving OLE position")))?;
-        ole_edits_by_sheet.entry(sheet_path.clone()).or_default().insert(shape_id, drawing.clone());
-    }
-    for (sheet_path, edits) in ole_edits_by_sheet {
-        plan.ole_anchors.entry(sheet_path).or_default().extend(edits);
-    }
-    let mut vml_shadow_edits: HashMap<String, HashMap<u32, bool>> = HashMap::new();
-    for ((sheet, shape_name), drawing) in geometry_edits {
-        let Some(shadow) = drawing.ole_shadow else { continue };
-        let drawing_part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving OLE shadow")))?;
-        let drawing_xml = archive.read_part(drawing_part)?;
-        let Some(shape_id) = drawing_shape_id(&drawing_xml, shape_name)? else { continue };
-        let sheet_path = sheet_paths.get(*sheet).filter(|path| !path.is_empty()).ok_or_else(|| XlsxError::InvalidData(format!("sheet {sheet} is not in the source workbook while saving OLE shadow")))?;
-        let rels_path = sheet_rels_path(sheet_path);
-        let Some(rels_xml) = archive.try_read_part(&rels_path)? else { continue };
-        let relationships = parse_relationships(&rels_xml).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
-        let Some(vml_relation) = relationships.values().find(|relation| relation.rel_type.ends_with("/vmlDrawing")) else { continue };
-        let vml_path = resolve_part_target(sheet_path, &vml_relation.target);
-        vml_shadow_edits.entry(vml_path).or_default().insert(shape_id, shadow);
-    }
-    for (vml_path, edits) in vml_shadow_edits {
-        let xml = plan.parts.get(&vml_path).cloned().unwrap_or(archive.read_part(&vml_path)?);
-        plan.parts.insert(vml_path, patch_vml_ole_shadows(&xml, &edits)?);
-    }
-    let mut vml_style_edits: HashMap<String, HashMap<u32, crate::ir::Drawing>> = HashMap::new();
-    for ((sheet, shape_name), drawing) in geometry_edits {
-        if drawing.ole_border_color.is_none() && drawing.ole_border_weight.is_none() && drawing.ole_interior_color.is_none() { continue; }
-        let drawing_part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving OLE style")))?;
-        let drawing_xml = archive.read_part(drawing_part)?;
-        let Some(shape_id) = drawing_shape_id(&drawing_xml, shape_name)? else { continue };
-        let sheet_path = sheet_paths.get(*sheet).filter(|path| !path.is_empty()).ok_or_else(|| XlsxError::InvalidData(format!("sheet {sheet} is not in the source workbook while saving OLE style")))?;
-        let rels_path = sheet_rels_path(sheet_path);
-        let Some(rels_xml) = archive.try_read_part(&rels_path)? else { continue };
-        let relationships = parse_relationships(&rels_xml).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
-        let Some(vml_relation) = relationships.values().find(|relation| relation.rel_type.ends_with("/vmlDrawing")) else { continue };
-        let vml_path = resolve_part_target(sheet_path, &vml_relation.target);
-        vml_style_edits.entry(vml_path).or_default().insert(shape_id, drawing.clone());
-    }
-    for (vml_path, edits) in vml_style_edits {
-        let xml = plan.parts.get(&vml_path).cloned().unwrap_or(archive.read_part(&vml_path)?);
-        plan.parts.insert(vml_path, patch_vml_ole_styles(&xml, &edits)?);
-    }
     for (sheet, order) in drawing_order_edits {
         let Some(part) = existing_parts.get(sheet).or_else(|| fresh_ole_parts.get(sheet)) else { continue };
         let fresh = plan.new_parts.iter().position(|(path, _)| path == part);
@@ -3699,16 +3791,25 @@ fn drawing_addition_package(
         drawing_shape_ids(xml)?;
     }
     let mut renames: BTreeMap<String, HashMap<String, String>> = BTreeMap::new();
+    let mut ole_renames = HashMap::<String, HashMap<u32, String>>::new();
     for ((sheet, source), drawing) in drawing_states {
         let Some(name) = drawing.name.as_ref().filter(|name|*name != source) else { continue };
         let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData("renamed drawing has no source part".into()))?;
+        // Fresh OLE objects can reuse a source display name. Rename retained
+        // objects by their final physical identity, preserving the new payload.
+        if drawing.ole_prog_id.is_some() {
+            if let Some(id) = drawing.non_visual_id {
+                ole_renames.entry(part.clone()).or_default().insert(id, name.clone());
+                continue;
+            }
+        }
         renames.entry(part.clone()).or_default().insert(source.clone(), name.clone());
     }
     for (part, names) in renames {
         let xml = plan.parts.remove(&part).map_or_else(||archive.read_part(&part), Ok)?;
         plan.parts.insert(part, patch_drawing_names_xml(&xml, &names)?);
     }
-    let mut restored=HashMap::<String,HashMap<u32,String>>::new();
+    let mut restored=ole_renames;
     for ((sheet,id),name) in restore_names {
         let part=existing_parts.get(sheet).or_else(||created_drawing_parts.get(sheet))
             .ok_or_else(||XlsxError::InvalidData("drawing restore has no source part".into()))?;
@@ -3740,7 +3841,10 @@ fn drawing_addition_package(
 }
 
 fn patch_drawing_order(xml: &str, order: &[String]) -> Result<String, XlsxError> {
-    let rank: HashMap<&str, usize> = order.iter().enumerate().map(|(index, name)| (name.as_str(), index)).collect();
+    let mut rank = HashMap::<&str, std::collections::VecDeque<usize>>::new();
+    for (index, name) in order.iter().enumerate() {
+        rank.entry(name.as_str()).or_default().push_back(index);
+    }
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Vec::with_capacity(xml.len()));
     let mut in_root = false;
@@ -3776,7 +3880,7 @@ fn patch_drawing_order(xml: &str, order: &[String]) -> Result<String, XlsxError>
                     _ => false,
                 });
                 let priority = if is_anchor {
-                    name.as_deref().and_then(|name| rank.get(name).copied()).unwrap_or(order.len() + sequence)
+                    name.as_deref().and_then(|name| rank.get_mut(name).and_then(|ranks| ranks.pop_front())).unwrap_or(order.len() + sequence)
                 } else {
                     usize::MAX / 2 + sequence
                 };
@@ -3788,7 +3892,7 @@ fn patch_drawing_order(xml: &str, order: &[String]) -> Result<String, XlsxError>
                 let is_anchor = matches!(local.as_str(), "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor" | "relSizeAnchor" | "absSizeAnchor");
                 let name = if is_anchor { get_attr(&start, "name") } else { None };
                 let priority = if is_anchor {
-                    name.as_deref().and_then(|name| rank.get(name).copied()).unwrap_or(order.len() + sequence)
+                    name.as_deref().and_then(|name| rank.get_mut(name).and_then(|ranks| ranks.pop_front())).unwrap_or(order.len() + sequence)
                 } else {
                     usize::MAX / 2 + sequence
                 };
@@ -3911,6 +4015,76 @@ fn patch_drawing_group_addition(xml: &str, group: &DrawingGroupAddition) -> Resu
 
 fn vml_shape_id(element: &BytesStart<'_>) -> Option<u32> {
     get_attr(element, "id")?.rsplit_once("_s")?.1.parse().ok()
+}
+
+// Rebase all references in one XML pass so chains such as 1026->1025,
+// 1027->1026 cannot cascade. Unknown elements and attributes are retained.
+fn remove_legacy_ole_objects(xml: &str, removed: &std::collections::HashSet<u32>) -> Result<String, XlsxError> {
+    let mut reader=Reader::from_str(xml);
+    let mut writer=Writer::new(Vec::with_capacity(xml.len()));
+    let mut skipped=0usize;
+    loop {
+        let event=reader.read_event().map_err(XlsxError::Xml)?.into_owned();
+        if skipped>0 {
+            match event {
+                Event::Start(_)=>skipped+=1,
+                Event::End(_)=>skipped-=1,
+                Event::Eof=>return Err(XlsxError::InvalidData("deleted OLE element ended unexpectedly".into())),
+                _=>{},
+            }
+            continue;
+        }
+        match &event {
+            Event::Start(start) | Event::Empty(start) => {
+                let tag=local_name(start.name().as_ref());
+                let id=if tag=="oleObject" {get_attr(start,"shapeId").and_then(|v|v.parse().ok())}
+                    else if tag=="shape" {vml_shape_id(start)} else {None};
+                if id.is_some_and(|id|removed.contains(&id)) {
+                    if matches!(event,Event::Start(_)) {skipped=1;}
+                    continue;
+                }
+            }
+            Event::Eof=>break,
+            _=>{},
+        }
+        writer.write_event(event).map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+    }
+    String::from_utf8(writer.into_inner()).map_err(|e|XlsxError::InvalidData(e.to_string()))
+}
+
+fn patch_legacy_ole_ids(xml: &str, ids: &HashMap<u32, u32>) -> Result<String, XlsxError> {
+    let mut reader=Reader::from_str(xml);
+    let mut writer=Writer::new(Vec::with_capacity(xml.len()));
+    loop {
+        let event=reader.read_event().map_err(XlsxError::Xml)?.into_owned();
+        let empty=matches!(&event, Event::Empty(_));
+        match &event {
+            Event::Start(start) | Event::Empty(start) => {
+                let tag=local_name(start.name().as_ref());
+                let mut changed=start.to_owned();changed.clear_attributes();
+                for attribute in start.attributes() {
+                    let attribute=attribute.map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+                    let key=local_name(attribute.key.as_ref());
+                    let value=attribute.unescape_value().map_err(XlsxError::Xml)?;
+                    let replaced=if tag=="oleObject" && key=="shapeId" {
+                        value.parse::<u32>().ok().and_then(|id|ids.get(&id)).map(u32::to_string)
+                    } else if key=="spid" || (tag=="shape" && key=="id") {
+                        value.rsplit_once("_s").and_then(|(prefix,suffix)|
+                            suffix.parse::<u32>().ok().and_then(|id|ids.get(&id))
+                                .map(|id|format!("{prefix}_s{id}")))
+                    } else {None};
+                    if let Some(value)=replaced {
+                        changed.push_attribute((attribute.key.as_ref(),value.as_bytes()));
+                    } else {changed.push_attribute(attribute);}
+                }
+                writer.write_event(if empty {Event::Empty(changed)} else {Event::Start(changed)})
+                    .map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+            }
+            Event::Eof=>break,
+            _=>writer.write_event(event).map_err(|e|XlsxError::InvalidData(e.to_string()))?,
+        }
+    }
+    String::from_utf8(writer.into_inner()).map_err(|e|XlsxError::InvalidData(e.to_string()))
 }
 
 fn patch_vml_ole_styles(xml: &str, edits: &HashMap<u32, crate::ir::Drawing>) -> Result<String, XlsxError> {
@@ -17779,6 +17953,114 @@ mod tests {
         assert_eq!(drawing_shape_ids(&swapped).unwrap().len(), 3);
         let collision = patch_drawing_nonvisual_ids(xml, &HashMap::from([("Left".into(), 3)])).unwrap();
         assert!(drawing_shape_ids(&collision).is_err());
+    }
+
+    #[test]
+    fn ole_duplicate_declares_the_embedded_document_content_type() {
+        let fixture = include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
+        let mut original = OoxmlArchive::new(fixture).unwrap();
+        let types = original.read_part("[Content_Types].xml").unwrap();
+        let default = r#"<Default Extension="docx" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"/>"#;
+        assert_eq!(types.matches(default).count(), 1);
+        let types = types.replace(default, r#"<Override PartName="/xl/embeddings/Microsoft_Word_Document.docx" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"/>"#);
+        let bytes = replace_package_parts(fixture, BTreeMap::from([
+            ("[Content_Types].xml".into(), types.into_bytes()),
+        ])).unwrap();
+        let mut edited = crate::parse_xlsx_preserving_values(&bytes).unwrap();
+        let mut duplicate = edited.sheets[0].drawings.iter()
+            .find(|drawing| drawing.ole_prog_id.as_deref() == Some("Word.Document.12"))
+            .unwrap().clone();
+        duplicate.ole_source_name = duplicate.name.clone();
+        duplicate.name = Some("Word Copy".into());
+        duplicate.non_visual_id = Some(1027);
+        duplicate.ole_clone_position = Some((10.0, 10.0));
+        edited.sheets[0].drawings.push(duplicate);
+        let mut editor = XlsxEditor::new(&bytes).unwrap();
+        editor.apply_workbook(&edited).unwrap();
+        let saved = editor.save().unwrap();
+        let mut archive = OoxmlArchive::new(&saved).unwrap();
+        let types = archive.read_part("[Content_Types].xml").unwrap();
+        let documents: Vec<_> = archive.file_names().into_iter()
+            .filter(|name| name.starts_with("xl/embeddings/") && name.ends_with(".docx")).collect();
+        assert_eq!(documents.len(), 2);
+        for document in documents {
+            assert_eq!(content_type_for_part(&types, &document).unwrap(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        }
+        assert_eq!(crate::parse_xlsx_preserving_values(&saved).unwrap().sheets[0]
+            .drawings.iter().filter(|drawing| drawing.ole_prog_id.is_some()).count(), 3);
+    }
+
+    #[test]
+    fn deleting_ole_removes_worksheet_branches_and_legacy_fallback() {
+        let bytes=include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
+        let mut edited=crate::parse_xlsx_preserving_values(bytes).unwrap();
+        edited.sheets[0].drawings.retain(|d|d.non_visual_id!=Some(1025));
+        let mut editor=XlsxEditor::new(bytes).unwrap();
+        editor.apply_workbook(&edited).unwrap();
+        let saved=editor.save().unwrap();
+        let mut archive=OoxmlArchive::new(&saved).unwrap();
+        assert!(!archive.file_names().iter().any(|name|name=="xl/embeddings/oleObject1.bin"));
+        assert!(archive.file_names().iter().any(|name|name=="xl/embeddings/Microsoft_Word_Document.docx"));
+        let sheet=archive.read_part("xl/worksheets/sheet1.xml").unwrap();
+        assert!(find_ole_object_xml(&sheet,1025).unwrap().is_none());
+        assert!(find_ole_object_xml(&sheet,1026).unwrap().is_some());
+        let vml=archive.read_part("xl/drawings/vmlDrawing1.vml").unwrap();
+        assert!(!vml.contains("_s1025"));assert!(vml.contains("_s1026"));
+        let reopened=crate::parse_xlsx_preserving_values(&saved).unwrap();
+        assert_eq!(reopened.sheets[0].drawings.iter().filter(|d|d.ole_prog_id.is_some()).count(),1);
+        let mut no_edit=XlsxEditor::new(&saved).unwrap();no_edit.apply_workbook(&reopened).unwrap();
+        assert_eq!(no_edit.save().unwrap(),saved);
+    }
+
+    #[test]
+    fn ole_identity_rebase_preserves_embeddings_and_all_saved_references() {
+        let bytes=include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
+        let original=crate::parse_xlsx_preserving_values(bytes).unwrap();
+        let mut edited=original.clone();
+        let ids=edited.sheets[0].drawings.iter().filter(|d|d.ole_prog_id.is_some())
+            .filter_map(|d|d.non_visual_id).collect::<Vec<_>>();
+        assert_eq!(ids,vec![1025,1026]);
+        let mut sources=HashMap::new();
+        for drawing in &mut edited.sheets[0].drawings {
+            if drawing.ole_prog_id.is_none() {continue;}
+            let old=drawing.non_visual_id.unwrap();
+            let new=if old==1025 {1026} else {1025};
+            drawing.non_visual_id=Some(new);
+            drawing.name=Some(format!("Object {}",new-1024));
+            sources.insert((0,new),Some(old));
+        }
+        let mut editor=XlsxEditor::new(bytes).unwrap();
+        editor.apply_workbook_with_drawing_id_sources(&edited,&sources).unwrap();
+        let saved=editor.save().unwrap();
+        let reopened=crate::parse_xlsx_preserving_values(&saved).unwrap();
+        let ole=reopened.sheets[0].drawings.iter().filter(|d|d.ole_prog_id.is_some()).collect::<Vec<_>>();
+        assert_eq!(ole.iter().map(|d|d.non_visual_id).collect::<Vec<_>>(),vec![Some(1026),Some(1025)]);
+        assert_eq!(ole.iter().map(|d|d.name.as_deref()).collect::<Vec<_>>(),vec![Some("Object 2"),Some("Object 1")]);
+        let mut before=OoxmlArchive::new(bytes).unwrap();
+        let mut after=OoxmlArchive::new(&saved).unwrap();
+        for name in before.file_names().into_iter().filter(|n|n.starts_with("xl/embeddings/")) {
+            assert_eq!(before.read_binary_part(&name).unwrap(),after.read_binary_part(&name).unwrap());
+        }
+        let drawing=after.read_part("xl/drawings/drawing1.xml").unwrap();
+        let worksheet=after.read_part("xl/worksheets/sheet1.xml").unwrap();
+        assert_eq!(drawing_shape_id(&drawing,"Object 2").unwrap(),Some(1026));
+        assert_eq!(drawing_shape_id(&drawing,"Object 1").unwrap(),Some(1025));
+        let mut reader=Reader::from_str(&drawing);let mut compatibility_ids=Vec::new();
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(e) | Event::Empty(e) if local_name(e.name().as_ref())=="compatExt" => {
+                    if let Some(id)=get_attr(&e,"spid") {compatibility_ids.push(id);}
+                }
+                Event::Eof=>break,_=>{},
+            }
+        }
+        assert_eq!(compatibility_ids,vec!["_x0000_s1026","_x0000_s1025"]);
+        assert!(find_ole_object_xml(&worksheet,1025).unwrap().is_some());
+        assert!(find_ole_object_xml(&worksheet,1026).unwrap().is_some());
+        let mut no_edit=XlsxEditor::new(&saved).unwrap();
+        no_edit.apply_workbook(&reopened).unwrap();
+        assert_eq!(no_edit.save().unwrap(),saved);
     }
 
     #[test]
