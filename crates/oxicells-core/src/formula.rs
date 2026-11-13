@@ -1603,6 +1603,7 @@ mod tests {
                         cells: vec![(2, 1, CellValue::Number(21.0))],
                     },
                 ],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -1636,6 +1637,7 @@ mod tests {
                     name: "Assistente".to_string(),
                     cells: Vec::new(),
                 }],
+                ..Default::default()
             }],
             ..Default::default()
         };

@@ -271,8 +271,18 @@ impl Default for CalculationSettings {
 fn legacy_compatibility(version: &u8) -> bool { *version == 1 }
 
 /// A workbook this one links to, as much of it as this file remembers.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExternalBook {
+    /// Original link part, so edits retain its relationship identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_part: Option<String>,
+    /// External-book relationship target as stored, including relative URLs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Optional absolute URL recorded alongside the primary target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absolute_target: Option<String>,
     /// The sheets it names, in the order the file lists them 窶・a cached cell
     /// says which one it belongs to by that position, not by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -287,6 +297,15 @@ pub struct ExternalSheet {
     /// IR counts them 窶・and the value that cell held.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cells: Vec<(u32, u32, CellValue)>,
+}
+
+impl PartialEq for ExternalSheet {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.cells.len() == other.cells.len()
+            && self.cells.iter().zip(&other.cells).all(|((row, col, value), (other_row, other_col, other_value))| {
+                row == other_row && col == other_col && value.storage_eq(other_value)
+            })
+    }
 }
 
 /// Whether a sheet is shown in the tab strip.
@@ -818,7 +837,7 @@ impl Spill {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CellValue {
     Empty,
     String(String),
@@ -830,6 +849,14 @@ pub enum CellValue {
 }
 
 impl CellValue {
+    /// Compare stored values without losing the IEEE sign of zero.
+    pub(crate) fn storage_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Number(left), Self::Number(right)) => left.to_bits() == right.to_bits(),
+            _ => self == other,
+        }
+    }
+
     pub fn from_utf16(units: Vec<u16>) -> Self {
         match String::from_utf16(&units) {
             Ok(text) => Self::String(text),
