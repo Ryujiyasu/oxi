@@ -4276,7 +4276,17 @@ fn parse_paragraph_with_inline_images_impl(
                             allow_inline_flow,
                             in_cell,
                         )?;
-                        for (run, dr) in tracked_runs {
+                        for (mut run, dr) in tracked_runs {
+                            // OXI_TRACKED_FIELD_MARKS (2026-11-13, default ON, opt-out
+                            // _DISABLE): a field inside a tracked insertion carries the
+                            // same fldChar sentinels as any other run and needs the same
+                            // consumer, or U+F0000 / U+FFFE reach the page as glyphs.
+                            // blind-J en/educational__0079c94e: «sdt > ins > HYPERLINK»
+                            // drew two 6pt tofu before «https://www.youtube.com/…» and
+                            // wrapped the URL a character early.
+                            if !crate::env_flag!("OXI_TRACKED_FIELD_MARKS_DISABLE") {
+                                complex_fields.consume(&mut run);
+                            }
                             let drawing_source_page_offset = preceding_page_boundaries(&runs);
                             let drawing_source_boundary_offset = preceding_flow_boundaries(&runs);
                             let drawing_source_run_index = runs.len();
@@ -4445,7 +4455,14 @@ fn parse_paragraph_with_inline_images_impl(
                                                 let drawing_source_page_offset = preceding_page_boundaries(&runs);
                             let drawing_source_boundary_offset = preceding_flow_boundaries(&runs);
                             let drawing_source_run_index = runs.len();
-                                        runs.extend(parsed_runs);
+                                        runs.extend(parsed_runs.into_iter().map(|mut run| {
+                                            // OXI_TRACKED_FIELD_MARKS: a field inside an inline content
+                                            // control needs the same sentinel consumer as any run.
+                                            if !crate::env_flag!("OXI_TRACKED_FIELD_MARKS_DISABLE") {
+                                                complex_fields.consume(&mut run);
+                                            }
+                                            run
+                                        }));
                                                 if let Some(mut drawing) = dr {
                                 offset_drawing_attachment(&mut drawing, drawing_source_page_offset, drawing_source_boundary_offset);
                                 bind_drawing_source_runs(&mut drawing, drawing_source_run_index);
@@ -4503,7 +4520,14 @@ fn parse_paragraph_with_inline_images_impl(
                                         let drawing_source_page_offset = preceding_page_boundaries(&runs);
                             let drawing_source_boundary_offset = preceding_flow_boundaries(&runs);
                             let drawing_source_run_index = runs.len();
-                                        runs.extend(parsed_runs);
+                                        runs.extend(parsed_runs.into_iter().map(|mut run| {
+                                            // OXI_TRACKED_FIELD_MARKS: a field inside an inline content
+                                            // control needs the same sentinel consumer as any run.
+                                            if !crate::env_flag!("OXI_TRACKED_FIELD_MARKS_DISABLE") {
+                                                complex_fields.consume(&mut run);
+                                            }
+                                            run
+                                        }));
                                         if let Some(mut drawing) = dr {
                                 offset_drawing_attachment(&mut drawing, drawing_source_page_offset, drawing_source_boundary_offset);
                                 bind_drawing_source_runs(&mut drawing, drawing_source_run_index);
