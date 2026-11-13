@@ -2010,7 +2010,18 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     }
                     let hex = |c: u32| Color::Rgb(((c >> 16) & 255) as f64 / 255.0, ((c >> 8) & 255) as f64 / 255.0, (c & 255) as f64 / 255.0);
                     // (fill, stroke width, stroke colour) of the main pass
-                    let (main_fill, main_w, main_stroke) = if fx_on && effects.outline {
+                    // OXI_PDF_W14_OUTLINE_WIDTH (2026-11-13, default ON, opt-out _DISABLE): a run with
+                    // both w:outline and a w14:textOutline is ringed at the w14 width and colour, as
+                    // Word's PDF draws it («w0.8 RG(4472C4)» for textOutline w=10160 at 48 and 18pt);
+                    // the fixed 1.6 swallowed the small ruby's dakuten (blind-J ja/creative__9aa11078
+                    // «こうざ» read «こうさ»).
+                    let (main_fill, main_w, main_stroke) = if fx_on && effects.outline
+                        && std::env::var_os("OXI_PDF_W14_OUTLINE_WIDTH_DISABLE").is_none()
+                        && effects.line.is_some()
+                    {
+                        let (lw, lc) = effects.line.unwrap();
+                        (Color::Gray(1.0), (lw as f64).max(0.25), Some(hex(lc)))
+                    } else if fx_on && effects.outline {
                         (Color::Gray(1.0), 1.6, Some(fill_color))
                     } else if let (true, Some((lw, lc))) = (fx_on, effects.line) {
                         (fill_color, (lw as f64).max(0.5), Some(hex(lc)))

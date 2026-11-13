@@ -6061,6 +6061,16 @@ impl LayoutEngine {
                     .map_or(font_size, |average| 2.0 * average * font_size)
             }
         } else { font_size };
+        // OXI_AUTOSPACE_TEXT_SCALE (2026-11-13, default ON, opt-out _DISABLE): w:w scales the
+        // gap's em, not the spacing: gap = 0.25 x (size x w + cs). `_pb_scaled_autospace_gen.py`
+        // (ＭＳ ゴシック and HG丸ｺﾞｼｯｸM-PRO 22pt, «時30分»): w 50/66/100/150 -> 2.8/3.6/5.52/8.28
+        // (= 5.5 x w); with spacing 20, 3.0/3.84/5.64/8.52. blind-J ja/creative__9aa11078 (w 66):
+        // Oxi kept the unscaled 5.5 and every «時30分» ran 3.9pt wide.
+        let basis = match style.text_scale {
+            Some(w) if w > 0.0 && (w - 100.0).abs() > 0.01
+                && !crate::env_flag!("OXI_AUTOSPACE_TEXT_SCALE_DISABLE") => basis * w / 100.0,
+            _ => basis,
+        };
         s1175_autospace(basis, cs, balance)
     }
 
