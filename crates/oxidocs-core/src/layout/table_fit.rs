@@ -12862,7 +12862,12 @@ impl<'a> TableFitLayouter<'a> {
                 // is content at y=51.9, Oxi had an empty text line at y=48 + content at
                 // 64.5 = a +16.5pt offset). Anchor to the first NON-EMPTY text and drop
                 // the leading empty-text lines above it. Opt-out OXI_S570_DISABLE.
-                let s570 = !crate::env_flag!("OXI_S570_DISABLE");
+                // OXI_S570 (2026-11-13: default OFF, opt-in OXI_S570=1): Word keeps a cell's empty
+                // paragraphs that move to a row-split continuation at full line height
+                // (_pb_rowsplit_empty_gen.py 48 arms, _pb_cont_empty_gen.py 24 arms: en/ja, 1-3 empties,
+                // single/multi-cell, atLeast). blind-J en/educational__0079c94e p11: two <w:p/> at the
+                // split were collapsed and the page ran two lines ahead to the end.
+                let s570 = crate::env_flag!("OXI_S570") && !crate::env_flag!("OXI_S570_DISABLE");
                 // S719 (2026-07-02, default ON, opt-out OXI_S719_DISABLE): the S570
                 // leading-line collapse applies to TRULY EMPTY paragraphs (no runs,
                 // element text == "") ONLY — a WHITESPACE-run line is CONTENT Word
@@ -14376,7 +14381,47 @@ impl<'a> TableFitLayouter<'a> {
                                 .filter(|e| (e.y - last_cont_top).abs() < 0.5)
                                 .map(|e| e.height)
                                 .fold(0.0_f32, f32::max);
-                            if last_cont_h > 0.0 {
+                            // OXI_TRAIL_EMPTY_OWN_H (2026-11-13, default ON, opt-out _DISABLE): the
+                            // trailing empty paragraphs take THEIR OWN line heights -- not the
+                            // last text line's. reports__004a5fd8 p3: «A three-year…»
+                            // (Calibri 11, 13.43) + an empty Calibri 11 + an empty Arial 10
+                            // (11.5): Word's rule 527.59 = Oxi's close 527.54, but the cursor
+                            // went to 489.19 + 3 x 13.43 = 529.47 and the next row ran 1.93 low.
+                            // The empties are not among this page's elements, but the row's
+                            // closing rule already sits below their own heights. Take it between
+                            // the last text line and the old formula, so the change can only
+                            // remove an overcount.
+                            let formula = last_cont_top
+                                + last_cont_h * (1.0 + trailing_empty_count as f32)
+                                + s817_tail;
+                            let own_end = if trailing_empty_count > 0 && last_cont_h > 0.0
+                                && !crate::env_flag!("OXI_TRAIL_EMPTY_OWN_H_DISABLE")
+                            {
+                                // This row's horizontal closing rule on this page (the lowest one
+                                // below the last text line) is where Word draws it and where the
+                                // next row starts.
+                                let text_end = last_cont_top + last_cont_h;
+                                // (The rule carries no cell_row_index; these elements are this
+                                // row's continuation only.)
+                                let close = elements
+                                    .iter()
+                                    .filter_map(|e| match &e.content {
+                                        LayoutContent::TableBorder { y1, y2, .. }
+                                            if (*y1 - *y2).abs() < 0.01 && *y1 > text_end + 0.01 => Some(*y1),
+                                        _ => None,
+                                    })
+                                    .fold(f32::NEG_INFINITY, f32::max);
+                                if close.is_finite() && close < formula - 0.01 {
+                                    close
+                                } else {
+                                    f32::NEG_INFINITY
+                                }
+                            } else {
+                                f32::NEG_INFINITY
+                            };
+                            if own_end.is_finite() {
+                                cursor.set(own_end);
+                            } else if last_cont_h > 0.0 {
                                 cursor.set(
                                     last_cont_top
                                         + last_cont_h * (1.0 + trailing_empty_count as f32)
