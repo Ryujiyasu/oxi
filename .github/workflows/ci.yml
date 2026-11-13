@@ -289,6 +289,8 @@ jobs:
               node "$suite"
             elif [ "$suite" = "web/vba-external-copy-state.test.mjs" ]; then
               node "$suite" pkg "$RUNNER_TEMP/vba-external-copy-state.json"
+            elif [ "$suite" = "web/vba-ole-copy-state.test.mjs" ]; then
+              node "$suite" pkg "$RUNNER_TEMP/vba-ole-copy-state.json"
             else
               node "$suite" pkg
             fi
@@ -300,6 +302,13 @@ jobs:
         with:
           name: vba-external-copy-state-${{ matrix.shard }}
           path: ${{ runner.temp }}/vba-external-copy-state.json
+          if-no-files-found: ignore
+      - name: Preserve complete Native OLE observations
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vba-ole-copy-state-${{ matrix.shard }}
+          path: ${{ runner.temp }}/vba-ole-copy-state.json
           if-no-files-found: ignore
       - name: Word vertical text rendering and WASM orientation
         if: ${{ matrix.shard == 1 }}

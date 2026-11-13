@@ -1,0 +1,500 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "scope": "Complete Native OLE/note source, copied, inserted-object and saved/reopened ID/name vectors; bounded cases, not complete API certification.",
+  "input_fixture": "tests/fixtures/vba/scale_picture_original_ole.xlsx",
+  "input_sha256": "b614a18d8d0f43b70789f7dc19726fad245327e38c6dc1297d4fdc9b1617fdcf",
+  "caller_fixture": "tests/fixtures/vba/cell_width.xlsm",
+  "caller_sha256": "b004469cfba371e0b847b51ad540008cfbd1e1866611a3bb6e54e33d0d729877",
+  "conditions": 42,
+  "groups": [
+    {
+      "id": "newbook3",
+      "program": "Option Explicit\nPublic Function Probe(ByVal mode As Long) As String\n    Dim source As Workbook, ws As Worksheet, copied As Workbook, cold As Workbook\n    Dim note As Object, result As String\n    Set source = ThisWorkbook\n    Set ws = source.Worksheets(1)\n    If mode = 1 Then ws.OLEObjects(1).Delete\n    If mode = 2 Then\n        Set note = ws.Range(\"D3\").AddComment(\"deleted note\")\n        note.Delete\n    End If\n    ws.Range(\"D2\").AddComment \"copied note\"\n    result = Observe(ws)\n    source.SaveAs \"C:\\work\\mixed-source.xlsx\", 51\n    ws.Copy\n    Set copied = ActiveWorkbook\n    result = result & \"#\" & Observe(copied.Worksheets(1))\n    copied.SaveAs \"C:\\work\\mixed-copy.xlsx\", 51\n    copied.Close False\n    Set cold = Workbooks.Open(\"C:\\work\\mixed-copy.xlsx\", 0, True)\n    Probe = result & \"#\" & Observe(cold.Worksheets(1))\n    cold.Close False\nEnd Function\nPrivate Function Observe(ByVal ws As Worksheet) As String\n    Dim i As Long, ids As String, names As String, noteIds As String, noteNames As String\n    For i = 1 To ws.OLEObjects.Count\n        ids = ids & CStr(ws.OLEObjects(i).ShapeRange.ID) & \",\"\n        names = names & ws.OLEObjects(i).Name & \",\"\n    Next\n    For i = 1 To ws.Comments.Count\n        noteIds = noteIds & CStr(ws.Comments(i).Shape.ID) & \",\"\n        noteNames = noteNames & ws.Comments(i).Shape.Name & \",\"\n    Next\n    Observe = ids & \"|\" & names & \"|\" & noteIds & \"|\" & noteNames\nEnd Function",
+      "separate_caller": false,
+      "reference": {
+        "version": "16.0",
+        "build": "20527.0",
+        "operating_system": "Windows (64-bit) NT 10.00",
+        "independent_orders": [
+          [
+            0,
+            1,
+            2
+          ],
+          [
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "cases": [
+        {
+          "mode": 0,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,"
+          }
+        },
+        {
+          "mode": 1,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Object 2,|1027,|Comment 3,#1025,|Object 1,|1026,|Comment 2,#1025,|Object 1,|1026,|Comment 2,"
+          }
+        },
+        {
+          "mode": 2,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1028,|Comment 4,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,"
+          }
+        }
+      ]
+    },
+    {
+      "id": "custom6",
+      "program": "Option Explicit\nPublic Function Probe(ByVal mode As Long) As String\n    Dim source As Workbook, ws As Worksheet, copied As Workbook, cold As Workbook\n    Dim note As Object, result As String\n    Set source = ThisWorkbook\n    Set ws = source.Worksheets(1)\n    Dim i As Long\n    If mode = 1 Or mode = 3 Or mode = 5 Then ws.OLEObjects(1).Delete\n    If mode = 2 Or mode = 3 Then\n        For i = 1 To ws.OLEObjects.Count\n            ws.OLEObjects(i).Name = \"Payload \" & CStr(i)\n        Next\n    End If\n    If mode = 4 Or mode = 5 Then\n        For i = 1 To ws.OLEObjects.Count\n            If i = 1 Then\n                ws.OLEObjects(i).Name = \"Object 99\"\n            Else\n                ws.OLEObjects(i).Name = \"Object 77\"\n            End If\n        Next\n    End If\n    ws.Range(\"D2\").AddComment \"copied note\"\n    If mode = 2 Or mode = 3 Then ws.Range(\"D2\").Comment.Shape.Name = \"Memo\"\n    result = Observe(ws)\n    source.SaveAs \"C:\\work\\mixed-source.xlsx\", 51\n    ws.Copy\n    Set copied = ActiveWorkbook\n    result = result & \"#\" & Observe(copied.Worksheets(1))\n    copied.SaveAs \"C:\\work\\mixed-copy.xlsx\", 51\n    copied.Close False\n    Set cold = Workbooks.Open(\"C:\\work\\mixed-copy.xlsx\", 0, True)\n    Probe = result & \"#\" & Observe(cold.Worksheets(1))\n    cold.Close False\nEnd Function\nPrivate Function Observe(ByVal ws As Worksheet) As String\n    Dim i As Long, ids As String, names As String, noteIds As String, noteNames As String\n    For i = 1 To ws.OLEObjects.Count\n        ids = ids & CStr(ws.OLEObjects(i).ShapeRange.ID) & \",\"\n        names = names & ws.OLEObjects(i).Name & \",\"\n    Next\n    For i = 1 To ws.Comments.Count\n        noteIds = noteIds & CStr(ws.Comments(i).Shape.ID) & \",\"\n        noteNames = noteNames & ws.Comments(i).Shape.Name & \",\"\n    Next\n    Observe = ids & \"|\" & names & \"|\" & noteIds & \"|\" & noteNames\nEnd Function",
+      "separate_caller": false,
+      "reference": {
+        "version": "16.0",
+        "build": "20527.0",
+        "operating_system": "Windows (64-bit) NT 10.00",
+        "independent_orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          [
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "cases": [
+        {
+          "mode": 0,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,"
+          }
+        },
+        {
+          "mode": 1,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Object 2,|1027,|Comment 3,#1025,|Object 1,|1026,|Comment 2,#1025,|Object 1,|1026,|Comment 2,"
+          }
+        },
+        {
+          "mode": 2,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Payload 1,Payload 2,|1027,|Memo,#1025,1026,|Payload 1,Payload 2,|1027,|Memo,#1025,1026,|Payload 1,Payload 2,|1027,|Memo,"
+          }
+        },
+        {
+          "mode": 3,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Payload 1,|1027,|Memo,#1025,|Payload 1,|1026,|Memo,#1025,|Payload 1,|1026,|Memo,"
+          }
+        },
+        {
+          "mode": 4,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 99,Object 77,|1027,|Comment 3,#1025,1026,|Object 99,Object 77,|1027,|Comment 3,#1025,1026,|Object 99,Object 77,|1027,|Comment 3,"
+          }
+        },
+        {
+          "mode": 5,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Object 99,|1027,|Comment 3,#1025,|Object 99,|1026,|Comment 2,#1025,|Object 99,|1026,|Comment 2,"
+          }
+        }
+      ]
+    },
+    {
+      "id": "destinations6",
+      "program": "Option Explicit\nPublic Function Probe(ByVal mode As Long) As String\n    Dim source As Workbook, ws As Worksheet, copied As Workbook, cold As Workbook\n    Dim note As Object, result As String\n    Set source = Workbooks.Open(\"C:\\work\\provider.xlsx\", 0, True)\n    Set ws = source.Worksheets(1)\n    If mode Mod 3 = 1 Then ws.OLEObjects(1).Delete\n    If mode Mod 3 = 2 Then\n        Set note = ws.Range(\"D3\").AddComment(\"deleted note\")\n        note.Delete\n    End If\n    ws.Range(\"D2\").AddComment \"copied note\"\n    result = Observe(ws)\n    source.SaveAs \"C:\\work\\mixed-source.xlsx\", 51\n    If mode < 3 Then\n        ws.Copy After:=ws\n        Set copied = source\n    Else\n        Set copied = Workbooks.Add(-4167)\n        copied.Worksheets(1).Range(\"A1\").AddComment \"destination note\"\n        ws.Copy After:=copied.Worksheets(1)\n    End If\n    result = result & \"#\" & Observe(copied.Worksheets(2))\n    copied.SaveAs \"C:\\work\\mixed-copy.xlsx\", 51\n    copied.Close False\n    Set cold = Workbooks.Open(\"C:\\work\\mixed-copy.xlsx\", 0, True)\n    Probe = result & \"#\" & Observe(cold.Worksheets(2))\n    cold.Close False\nEnd Function\nPrivate Function Observe(ByVal ws As Worksheet) As String\n    Dim i As Long, ids As String, names As String, noteIds As String, noteNames As String\n    For i = 1 To ws.OLEObjects.Count\n        ids = ids & CStr(ws.OLEObjects(i).ShapeRange.ID) & \",\"\n        names = names & ws.OLEObjects(i).Name & \",\"\n    Next\n    For i = 1 To ws.Comments.Count\n        noteIds = noteIds & CStr(ws.Comments(i).Shape.ID) & \",\"\n        noteNames = noteNames & ws.Comments(i).Shape.Name & \",\"\n    Next\n    Observe = ids & \"|\" & names & \"|\" & noteIds & \"|\" & noteNames\nEnd Function",
+      "separate_caller": true,
+      "reference": {
+        "version": "16.0",
+        "build": "20527.0",
+        "operating_system": "Windows (64-bit) NT 10.00",
+        "independent_orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          [
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "cases": [
+        {
+          "mode": 0,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1027,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,"
+          }
+        },
+        {
+          "mode": 1,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Object 2,|1027,|Comment 3,#2049,|Object 1,|2050,|Comment 2,#2049,|Object 1,|2050,|Comment 2,"
+          }
+        },
+        {
+          "mode": 2,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1028,|Comment 4,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,"
+          }
+        },
+        {
+          "mode": 3,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1027,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,"
+          }
+        },
+        {
+          "mode": 4,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Object 2,|1027,|Comment 3,#2049,|Object 1,|2050,|Comment 2,#2049,|Object 1,|2050,|Comment 2,"
+          }
+        },
+        {
+          "mode": 5,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1028,|Comment 4,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,"
+          }
+        }
+      ]
+    },
+    {
+      "id": "after_add9",
+      "program": "' SPDX-License-Identifier: CC-BY-SA-4.0\nOption Explicit\nPublic Function Probe(ByVal mode As Long) As String\n    Dim source As Workbook, ws As Worksheet, copied As Workbook, cold As Workbook\n    Dim copiedSheet As Worksheet, note As Object, added As Object\n    Dim result As String, sheetIndex As Long\n    Set source = Workbooks.Open(\"C:\\work\\provider.xlsx\", 0, True)\n    Set ws = source.Worksheets(1)\n    If mode Mod 3 = 1 Then ws.OLEObjects(1).Delete\n    If mode Mod 3 = 2 Then\n        Set note = ws.Range(\"D3\").AddComment(\"deleted note\")\n        note.Delete\n    End If\n    ws.Range(\"D2\").AddComment \"copied note\"\n    result = Observe(ws)\n    source.SaveAs \"C:\\work\\mixed-source.xlsx\", 51\n    If mode < 3 Then\n        ws.Copy\n        Set copied = ActiveWorkbook\n        sheetIndex = 1\n    ElseIf mode < 6 Then\n        ws.Copy After:=ws\n        Set copied = source\n        sheetIndex = 2\n    Else\n        Set copied = Workbooks.Add(-4167)\n        copied.Worksheets(1).Range(\"A1\").AddComment \"destination note\"\n        ws.Copy After:=copied.Worksheets(1)\n        sheetIndex = 2\n    End If\n    Set copiedSheet = copied.Worksheets(sheetIndex)\n    result = result & \"#\" & Observe(copiedSheet)\n    Set added = copiedSheet.OLEObjects.Add(Filename:=\"C:\\work\\sample.txt\", DisplayAsIcon:=True, Left:=10, Top:=10, Width:=40, Height:=20)\n    result = result & \"#\" & CStr(added.ShapeRange.ID) & \"|\" & added.Name & \"#\" & Observe(copiedSheet)\n    copied.SaveAs \"C:\\work\\mixed-copy.xlsx\", 51\n    copied.Close False\n    If mode < 3 Or mode >= 6 Then source.Close False\n    Set cold = Workbooks.Open(\"C:\\work\\mixed-copy.xlsx\", 0, True)\n    Probe = result & \"#\" & Observe(cold.Worksheets(sheetIndex))\n    cold.Close False\nEnd Function\nPrivate Function Observe(ByVal ws As Worksheet) As String\n    Dim i As Long, ids As String, names As String, noteIds As String, noteNames As String\n    For i = 1 To ws.OLEObjects.Count\n        ids = ids & CStr(ws.OLEObjects(i).ShapeRange.ID) & \",\"\n        names = names & ws.OLEObjects(i).Name & \",\"\n    Next\n    For i = 1 To ws.Comments.Count\n        noteIds = noteIds & CStr(ws.Comments(i).Shape.ID) & \",\"\n        noteNames = noteNames & ws.Comments(i).Shape.Name & \",\"\n    Next\n    Observe = ids & \"|\" & names & \"|\" & noteIds & \"|\" & noteNames\nEnd Function\n",
+      "sample_text": "Oxi authored OLE followup payload",
+      "separate_caller": true,
+      "reference": {
+        "version": "16.0",
+        "build": "20527.0",
+        "operating_system": "Windows (64-bit) NT 10.00",
+        "independent_orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          [
+            8,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "cases": [
+        {
+          "mode": 0,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1028|Object 4#1025,1026,1028,|Object 1,Object 2,Object 4,|1027,|Comment 3,#1025,1026,1028,|Object 1,Object 2,Object 4,|1027,|Comment 3,"
+          }
+        },
+        {
+          "mode": 1,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Object 2,|1027,|Comment 3,#1025,|Object 1,|1026,|Comment 2,#1027|Object 3#1025,1027,|Object 1,Object 3,|1026,|Comment 2,#1025,1027,|Object 1,Object 3,|1026,|Comment 2,"
+          }
+        },
+        {
+          "mode": 2,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1028,|Comment 4,#1025,1026,|Object 1,Object 2,|1027,|Comment 3,#1028|Object 4#1025,1026,1028,|Object 1,Object 2,Object 4,|1027,|Comment 3,#1025,1026,1028,|Object 1,Object 2,Object 4,|1027,|Comment 3,"
+          }
+        },
+        {
+          "mode": 3,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1027,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2052|Object 4#2049,2050,2052,|Object 1,Object 2,Object 4,|2051,|Comment 3,#2049,2050,2052,|Object 1,Object 2,Object 4,|2051,|Comment 3,"
+          }
+        },
+        {
+          "mode": 4,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Object 2,|1027,|Comment 3,#2049,|Object 1,|2050,|Comment 2,#2051|Object 3#2049,2051,|Object 1,Object 3,|2050,|Comment 2,#2049,2051,|Object 1,Object 3,|2050,|Comment 2,"
+          }
+        },
+        {
+          "mode": 5,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1028,|Comment 4,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2052|Object 4#2049,2050,2052,|Object 1,Object 2,Object 4,|2051,|Comment 3,#2049,2050,2052,|Object 1,Object 2,Object 4,|2051,|Comment 3,"
+          }
+        },
+        {
+          "mode": 6,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1027,|Comment 3,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2052|Object 4#2049,2050,2052,|Object 1,Object 2,Object 4,|2051,|Comment 3,#2049,2050,2052,|Object 1,Object 2,Object 4,|2051,|Comment 3,"
+          }
+        },
+        {
+          "mode": 7,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Object 2,|1027,|Comment 3,#2049,|Object 1,|2050,|Comment 2,#2051|Object 3#2049,2051,|Object 1,Object 3,|2050,|Comment 2,#2049,2051,|Object 1,Object 3,|2050,|Comment 2,"
+          }
+        },
+        {
+          "mode": 8,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,|1028,|Comment 4,#2049,2050,|Object 1,Object 2,|2051,|Comment 3,#2052|Object 4#2049,2050,2052,|Object 1,Object 2,Object 4,|2051,|Comment 3,#2049,2050,2052,|Object 1,Object 2,Object 4,|2051,|Comment 3,"
+          }
+        }
+      ]
+    },
+    {
+      "id": "without_notes9",
+      "program": "' SPDX-License-Identifier: CC-BY-SA-4.0\nOption Explicit\nPublic Function Probe(ByVal mode As Long) As String\n    Dim source As Workbook, ws As Worksheet, copied As Workbook, cold As Workbook\n    Dim copiedSheet As Worksheet, note As Object, added As Object\n    Dim result As String, sheetIndex As Long\n    Set source = Workbooks.Open(\"C:\\work\\provider.xlsx\", 0, True)\n    Set ws = source.Worksheets(1)\n    If mode Mod 3 = 1 Then ws.OLEObjects(1).Delete\n    If mode Mod 3 = 2 Then\n        Set note = ws.Range(\"D3\").AddComment(\"deleted note\")\n        note.Delete\n    End If\n    result = Observe(ws)\n    source.SaveAs \"C:\\work\\mixed-source.xlsx\", 51\n    If mode < 3 Then\n        ws.Copy\n        Set copied = ActiveWorkbook\n        sheetIndex = 1\n    ElseIf mode < 6 Then\n        ws.Copy After:=ws\n        Set copied = source\n        sheetIndex = 2\n    Else\n        Set copied = Workbooks.Add(-4167)\n        copied.Worksheets(1).Range(\"A1\").AddComment \"destination note\"\n        ws.Copy After:=copied.Worksheets(1)\n        sheetIndex = 2\n    End If\n    Set copiedSheet = copied.Worksheets(sheetIndex)\n    result = result & \"#\" & Observe(copiedSheet)\n    Set added = copiedSheet.OLEObjects.Add(Filename:=\"C:\\work\\sample.txt\", DisplayAsIcon:=True, Left:=10, Top:=10, Width:=40, Height:=20)\n    result = result & \"#\" & CStr(added.ShapeRange.ID) & \"|\" & added.Name & \"#\" & Observe(copiedSheet)\n    copied.SaveAs \"C:\\work\\mixed-copy.xlsx\", 51\n    copied.Close False\n    If mode < 3 Or mode >= 6 Then source.Close False\n    Set cold = Workbooks.Open(\"C:\\work\\mixed-copy.xlsx\", 0, True)\n    Probe = result & \"#\" & Observe(cold.Worksheets(sheetIndex))\n    cold.Close False\nEnd Function\nPrivate Function Observe(ByVal ws As Worksheet) As String\n    Dim i As Long, ids As String, names As String, noteIds As String, noteNames As String\n    For i = 1 To ws.OLEObjects.Count\n        ids = ids & CStr(ws.OLEObjects(i).ShapeRange.ID) & \",\"\n        names = names & ws.OLEObjects(i).Name & \",\"\n    Next\n    For i = 1 To ws.Comments.Count\n        noteIds = noteIds & CStr(ws.Comments(i).Shape.ID) & \",\"\n        noteNames = noteNames & ws.Comments(i).Shape.Name & \",\"\n    Next\n    Observe = ids & \"|\" & names & \"|\" & noteIds & \"|\" & noteNames\nEnd Function\n",
+      "sample_text": "Oxi authored OLE followup payload",
+      "separate_caller": true,
+      "reference": {
+        "version": "16.0",
+        "build": "20527.0",
+        "operating_system": "Windows (64-bit) NT 10.00",
+        "independent_orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          [
+            8,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "cases": [
+        {
+          "mode": 0,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,||#1025,1026,|Object 1,Object 2,||#1027|Object 3#1025,1026,1027,|Object 1,Object 2,Object 3,||#1025,1026,1027,|Object 1,Object 2,Object 3,||"
+          }
+        },
+        {
+          "mode": 1,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Object 2,||#1025,|Object 1,||#1026|Object 2#1025,1026,|Object 1,Object 2,||#1025,1026,|Object 1,Object 2,||"
+          }
+        },
+        {
+          "mode": 2,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,||#1025,1026,|Object 1,Object 2,||#1027|Object 3#1025,1026,1027,|Object 1,Object 2,Object 3,||#1025,1026,1027,|Object 1,Object 2,Object 3,||"
+          }
+        },
+        {
+          "mode": 3,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,||#2049,2050,|Object 1,Object 2,||#2051|Object 3#2049,2050,2051,|Object 1,Object 2,Object 3,||#2049,2050,2051,|Object 1,Object 2,Object 3,||"
+          }
+        },
+        {
+          "mode": 4,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Object 2,||#2049,|Object 1,||#2050|Object 2#2049,2050,|Object 1,Object 2,||#2049,2050,|Object 1,Object 2,||"
+          }
+        },
+        {
+          "mode": 5,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,||#2049,2050,|Object 1,Object 2,||#2051|Object 3#2049,2050,2051,|Object 1,Object 2,Object 3,||#2049,2050,2051,|Object 1,Object 2,Object 3,||"
+          }
+        },
+        {
+          "mode": 6,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,||#2049,2050,|Object 1,Object 2,||#2051|Object 3#2049,2050,2051,|Object 1,Object 2,Object 3,||#2049,2050,2051,|Object 1,Object 2,Object 3,||"
+          }
+        },
+        {
+          "mode": 7,
+          "expected": {
+            "type": "string",
+            "value": "1026,|Object 2,||#2049,|Object 1,||#2050|Object 2#2049,2050,|Object 1,Object 2,||#2049,2050,|Object 1,Object 2,||"
+          }
+        },
+        {
+          "mode": 8,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 1,Object 2,||#2049,2050,|Object 1,Object 2,||#2051|Object 3#2049,2050,2051,|Object 1,Object 2,Object 3,||#2049,2050,2051,|Object 1,Object 2,Object 3,||"
+          }
+        }
+      ]
+    },
+    {
+      "id": "custom_after_add9",
+      "program": "' SPDX-License-Identifier: CC-BY-SA-4.0\nOption Explicit\nPublic Function Probe(ByVal mode As Long) As String\n    Dim source As Workbook, ws As Worksheet, copied As Workbook, cold As Workbook\n    Dim copiedSheet As Worksheet, note As Object, added As Object\n    Dim result As String, sheetIndex As Long\n    Set source = Workbooks.Open(\"C:\\work\\provider.xlsx\", 0, True)\n    Set ws = source.Worksheets(1)\n    If mode Mod 3 = 0 Then\n        ws.OLEObjects(1).Name = \"Object 99\"\n        ws.OLEObjects(2).Name = \"Object 77\"\n    ElseIf mode Mod 3 = 1 Then\n        ws.OLEObjects(1).Name = \"Object 4\"\n        ws.OLEObjects(2).Name = \"Object 77\"\n    Else\n        ws.OLEObjects(1).Name = \"Payload 1\"\n        ws.OLEObjects(2).Name = \"Payload 2\"\n    End If\n    Set note = ws.Range(\"D2\").AddComment(\"copied note\")\n    If mode Mod 3 = 2 Then\n        note.Shape.Name = \"Object 4\"\n    Else\n        note.Shape.Name = \"Memo\"\n    End If\n    result = Observe(ws)\n    source.SaveAs \"C:\\work\\mixed-source.xlsx\", 51\n    If mode < 3 Then\n        ws.Copy\n        Set copied = ActiveWorkbook\n        sheetIndex = 1\n    ElseIf mode < 6 Then\n        ws.Copy After:=ws\n        Set copied = source\n        sheetIndex = 2\n    Else\n        Set copied = Workbooks.Add(-4167)\n        copied.Worksheets(1).Range(\"A1\").AddComment \"destination note\"\n        ws.Copy After:=copied.Worksheets(1)\n        sheetIndex = 2\n    End If\n    Set copiedSheet = copied.Worksheets(sheetIndex)\n    result = result & \"#\" & Observe(copiedSheet)\n    Set added = copiedSheet.OLEObjects.Add(Filename:=\"C:\\work\\sample.txt\", DisplayAsIcon:=True, Left:=10, Top:=10, Width:=40, Height:=20)\n    result = result & \"#\" & CStr(added.ShapeRange.ID) & \"|\" & added.Name & \"#\" & Observe(copiedSheet)\n    copied.SaveAs \"C:\\work\\mixed-copy.xlsx\", 51\n    copied.Close False\n    If mode < 3 Or mode >= 6 Then source.Close False\n    Set cold = Workbooks.Open(\"C:\\work\\mixed-copy.xlsx\", 0, True)\n    Probe = result & \"#\" & Observe(cold.Worksheets(sheetIndex))\n    cold.Close False\nEnd Function\nPrivate Function Observe(ByVal ws As Worksheet) As String\n    Dim i As Long, ids As String, names As String, noteIds As String, noteNames As String\n    For i = 1 To ws.OLEObjects.Count\n        ids = ids & CStr(ws.OLEObjects(i).ShapeRange.ID) & \",\"\n        names = names & ws.OLEObjects(i).Name & \",\"\n    Next\n    For i = 1 To ws.Comments.Count\n        noteIds = noteIds & CStr(ws.Comments(i).Shape.ID) & \",\"\n        noteNames = noteNames & ws.Comments(i).Shape.Name & \",\"\n    Next\n    Observe = ids & \"|\" & names & \"|\" & noteIds & \"|\" & noteNames\nEnd Function\n",
+      "sample_text": "Oxi authored OLE followup payload",
+      "separate_caller": true,
+      "reference": {
+        "version": "16.0",
+        "build": "20527.0",
+        "operating_system": "Windows (64-bit) NT 10.00",
+        "independent_orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          [
+            8,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "cases": [
+        {
+          "mode": 0,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 99,Object 77,|1027,|Memo,#1025,1026,|Object 99,Object 77,|1027,|Memo,#1028|Object 4#1025,1026,1028,|Object 99,Object 77,Object 4,|1027,|Memo,#1025,1026,1028,|Object 99,Object 77,Object 4,|1027,|Memo,"
+          }
+        },
+        {
+          "mode": 1,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 4,Object 77,|1027,|Memo,#1025,1026,|Object 4,Object 77,|1027,|Memo,#1028|Object 4#1025,1026,1028,|Object 4,Object 77,Object 4,|1027,|Memo,#1025,1026,1028,|Object 4,Object 77,Object 4,|1027,|Memo,"
+          }
+        },
+        {
+          "mode": 2,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Payload 1,Payload 2,|1027,|Object 4,#1025,1026,|Payload 1,Payload 2,|1027,|Object 4,#1028|Object 4#1025,1026,1028,|Payload 1,Payload 2,Object 4,|1027,|Object 4,#1025,1026,1028,|Payload 1,Payload 2,Object 4,|1027,|Object 4,"
+          }
+        },
+        {
+          "mode": 3,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 99,Object 77,|1027,|Memo,#2049,2050,|Object 99,Object 77,|2051,|Memo,#2052|Object 4#2049,2050,2052,|Object 99,Object 77,Object 4,|2051,|Memo,#2049,2050,2052,|Object 99,Object 77,Object 4,|2051,|Memo,"
+          }
+        },
+        {
+          "mode": 4,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 4,Object 77,|1027,|Memo,#2049,2050,|Object 4,Object 77,|2051,|Memo,#2052|Object 4#2049,2050,2052,|Object 4,Object 77,Object 4,|2051,|Memo,#2049,2050,2052,|Object 4,Object 77,Object 4,|2051,|Memo,"
+          }
+        },
+        {
+          "mode": 5,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Payload 1,Payload 2,|1027,|Object 4,#2049,2050,|Payload 1,Payload 2,|2051,|Object 4,#2052|Object 4#2049,2050,2052,|Payload 1,Payload 2,Object 4,|2051,|Object 4,#2049,2050,2052,|Payload 1,Payload 2,Object 4,|2051,|Object 4,"
+          }
+        },
+        {
+          "mode": 6,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 99,Object 77,|1027,|Memo,#2049,2050,|Object 99,Object 77,|2051,|Memo,#2052|Object 4#2049,2050,2052,|Object 99,Object 77,Object 4,|2051,|Memo,#2049,2050,2052,|Object 99,Object 77,Object 4,|2051,|Memo,"
+          }
+        },
+        {
+          "mode": 7,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Object 4,Object 77,|1027,|Memo,#2049,2050,|Object 4,Object 77,|2051,|Memo,#2052|Object 4#2049,2050,2052,|Object 4,Object 77,Object 4,|2051,|Memo,#2049,2050,2052,|Object 4,Object 77,Object 4,|2051,|Memo,"
+          }
+        },
+        {
+          "mode": 8,
+          "expected": {
+            "type": "string",
+            "value": "1025,1026,|Payload 1,Payload 2,|1027,|Object 4,#2049,2050,|Payload 1,Payload 2,|2051,|Object 4,#2052|Object 4#2049,2050,2052,|Payload 1,Payload 2,Object 4,|2051,|Object 4,#2049,2050,2052,|Payload 1,Payload 2,Object 4,|2051,|Object 4,"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -448,6 +448,8 @@ impl XlsxEditor {
                 self.drawing_restore_names.insert((original_index,id),name);
                 edited_drawings.to_mut()[index].name=Some(alias);
             }
+            let is_new_ole = |drawing: &crate::ir::Drawing| drawing.ole_prog_id.is_some()
+                && drawing.ole_embedded_package.is_some() && drawing.ole_source_name.is_none();
             let source_name = |drawing: &crate::ir::Drawing| -> Option<String> {
                 let name=drawing.name.as_ref()?;
                 if drawing.ole_source_name.is_some() || (drawing.ole_prog_id.is_some() && drawing.ole_embedded_package.is_some()) {
@@ -506,7 +508,7 @@ impl XlsxEditor {
             }
             for original in original_drawings.iter() {
                 let Some(name) = original.name.as_ref() else { continue };
-                if !edited_drawings.iter().any(|drawing| source_name(drawing).as_ref() == Some(name)) {
+                if !edited_drawings.iter().any(|drawing| !is_new_ole(drawing) && source_name(drawing).as_ref() == Some(name)) {
                     self.drawing_deletions.entry(original_index).or_default().insert(name.clone());
                 }
             }
@@ -519,9 +521,10 @@ impl XlsxEditor {
                     self.drawing_states.insert((original_index, name.clone()), drawing.clone());
                 }
                 let existed = original_drawings.iter().any(|original| original.name.as_ref() == Some(name));
-                let is_new_ole = drawing.ole_prog_id.is_some() && drawing.ole_embedded_package.is_some()
-                    && drawing.ole_source_name.is_none();
-                if !existed && (matches!(&drawing.kind, crate::ir::DrawingKind::Shape(_) | crate::ir::DrawingKind::Chart(_)) || drawing.ole_source_name.is_some() || is_new_ole) {
+                // A fresh payload has no source object, even when its display
+                // name reuses a retained or deleted OLE object's name.
+                let is_new_ole = is_new_ole(drawing);
+                if (is_new_ole || !existed) && (matches!(&drawing.kind, crate::ir::DrawingKind::Shape(_) | crate::ir::DrawingKind::Chart(_)) || drawing.ole_source_name.is_some() || is_new_ole) {
                     self.drawing_additions.entry(original_index).or_default().push(drawing.clone());
                     continue;
                 }
@@ -2299,17 +2302,17 @@ impl XlsxEditor {
                     if let Some(rid) = drawing_package.worksheet_drawing.get(&name) {
                         patched = set_drawing(&patched, rid)?;
                     }
-                    if let Some(additions) = drawing_package.worksheet_ole_objects.get(&name) {
-                        patched = append_ole_objects_xml(&patched, additions)?;
-                    }
-                    if let Some(anchors) = drawing_package.ole_anchors.get(&name) {
-                        patched = patch_ole_object_anchors(&patched, anchors)?;
-                    }
                     if let Some(ids)=drawing_package.ole_deletions.get(&name) {
                         patched=remove_legacy_ole_objects(&patched,ids)?;
                     }
                     if let Some(ids)=drawing_package.ole_identity_edits.get(&name) {
                         patched=patch_legacy_ole_ids(&patched,ids)?;
+                    }
+                    if let Some(additions) = drawing_package.worksheet_ole_objects.get(&name) {
+                        patched = append_ole_objects_xml(&patched, additions)?;
+                    }
+                    if let Some(anchors) = drawing_package.ole_anchors.get(&name) {
+                        patched = patch_ole_object_anchors(&patched, anchors)?;
                     }
                     if let Some(model) = &descent_styles {
                         patched = patch_saved_font_descents(&patched, model,
@@ -2337,17 +2340,17 @@ impl XlsxEditor {
                     if let Some(rid) = drawing_package.worksheet_drawing.get(&name) {
                         recoloured = set_drawing(&recoloured, rid)?;
                     }
-                    if let Some(additions) = drawing_package.worksheet_ole_objects.get(&name) {
-                        recoloured = append_ole_objects_xml(&recoloured, additions)?;
-                    }
-                    if let Some(anchors) = drawing_package.ole_anchors.get(&name) {
-                        recoloured = patch_ole_object_anchors(&recoloured, anchors)?;
-                    }
                     if let Some(ids)=drawing_package.ole_deletions.get(&name) {
                         recoloured=remove_legacy_ole_objects(&recoloured,ids)?;
                     }
                     if let Some(ids)=drawing_package.ole_identity_edits.get(&name) {
                         recoloured=patch_legacy_ole_ids(&recoloured,ids)?;
+                    }
+                    if let Some(additions) = drawing_package.worksheet_ole_objects.get(&name) {
+                        recoloured = append_ole_objects_xml(&recoloured, additions)?;
+                    }
+                    if let Some(anchors) = drawing_package.ole_anchors.get(&name) {
+                        recoloured = patch_ole_object_anchors(&recoloured, anchors)?;
                     }
                     if let Some(model) = &descent_styles {
                         recoloured = patch_saved_font_descents(&recoloured, model,
@@ -3452,74 +3455,6 @@ fn drawing_addition_package(
         else { plan.new_parts.push((rels_path, rels)); }
     }
 
-    for (sheet, drawings) in fresh_ole_additions {
-        let part = fresh_ole_parts.get(&sheet).ok_or_else(|| XlsxError::InvalidData("new OLE object has no drawing part".into()))?.clone();
-        let sheet_path = sheet_paths.get(sheet).filter(|path| !path.is_empty())
-            .ok_or_else(|| XlsxError::InvalidData(format!("sheet {sheet} is not in the source workbook while adding an OLE object")))?;
-        let mut xml = plan.new_parts.iter().find(|(path, _)| path == &part).map(|(_, xml)| xml.clone())
-            .or_else(|| plan.parts.get(&part).cloned());
-        if xml.is_none() { xml = Some(archive.read_part(&part)?); }
-        let mut xml = xml.expect("drawing XML loaded");
-        let rels_path = sheet_rels_path(sheet_path);
-        let original_rels = archive.try_read_part(&rels_path)?;
-        let mut worksheet_rels = plan.relationship_xml.get(&rels_path).cloned()
-            .or_else(|| plan.new_parts.iter().find(|(path, _)| path == &rels_path).map(|(_, xml)| xml.clone()))
-            .or(original_rels.clone()).unwrap_or_else(|| r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>"#.into());
-        let mut worksheet_objects = Vec::new();
-        for drawing in drawings {
-            let (shape_id, icon_relationship_id) = append_new_ole_vml(
-                archive, sheet_path, &drawing, &xml, &mut worksheet_rels, &mut names, &mut plan,
-            )?;
-            let word_document = drawing.ole_prog_id.as_deref().is_some_and(|prog_id| {
-                prog_id.eq_ignore_ascii_case("Word.Document.12")
-            });
-            let embedding = unique_embedding_path(
-                &names,
-                if word_document {
-                    "xl/embeddings/Microsoft_Word_Document.docx"
-                } else {
-                    "xl/embeddings/oleObject.bin"
-                },
-            );
-            names.insert(embedding.clone());
-            let package = drawing.ole_embedded_package.as_ref()
-                .ok_or_else(|| XlsxError::InvalidData("new OLE object has no embedded package".into()))?;
-            plan.new_binary_parts.push((embedding.clone(), package.clone()));
-            plan.content_types.push((embedding.clone(), if word_document {
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into()
-            } else {
-                "application/vnd.openxmlformats-officedocument.oleObject".into()
-            }));
-            let target = relative_sheet_target(sheet_path, &embedding);
-            let before: std::collections::HashSet<String> = parse_relationships(&worksheet_rels)
-                .map_err(|error| XlsxError::InvalidData(error.to_string()))?.into_keys().collect();
-            worksheet_rels = append_relationship(Some(&worksheet_rels),
-                if word_document {
-                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package"
-                } else {
-                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject"
-                }, &target)?;
-            let after = parse_relationships(&worksheet_rels).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
-            let relationship_id = after.keys().find(|id| !before.contains(*id)).cloned()
-                .ok_or_else(|| XlsxError::InvalidData("OLE relationship id was not allocated".into()))?;
-            xml = append_xml_child(&xml, "wsDr", &write_ole_drawing_shape(&drawing, shape_id)?)?;
-            worksheet_objects.push(write_worksheet_ole_object(&drawing, shape_id, &relationship_id, &icon_relationship_id)?);
-        }
-        if let Some((_, contents)) = plan.new_parts.iter_mut().find(|(path, _)| path == &part) {
-            *contents = xml;
-        } else {
-            plan.parts.insert(part, xml);
-        }
-        plan.worksheet_ole_objects.entry(sheet_path.clone()).or_default().extend(worksheet_objects);
-        if original_rels.is_some() {
-            plan.relationship_xml.insert(rels_path, worksheet_rels);
-        } else if let Some((_, contents)) = plan.new_parts.iter_mut().find(|(path, _)| path == &rels_path) {
-            *contents = worksheet_rels;
-        } else {
-            plan.new_parts.push((rels_path, worksheet_rels));
-        }
-    }
-
     let mut edits_by_part: HashMap<String, HashMap<String, Option<crate::ir::ShapeLine>>> = HashMap::new();
     for ((sheet, shape_name), after) in line_edits {
         let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving shape {shape_name:?}")))?;
@@ -3681,7 +3616,7 @@ fn drawing_addition_package(
         let drawing_xml = archive.read_part(drawing_part)?;
         let shape_id = drawing_shape_id(&drawing_xml, shape_name)?.ok_or_else(|| XlsxError::InvalidData(format!("drawing shape {shape_name:?} has no id while saving OLE position")))?;
         let sheet_path = sheet_paths.get(*sheet).filter(|path| !path.is_empty()).ok_or_else(|| XlsxError::InvalidData(format!("sheet {sheet} is not in the source workbook while saving OLE position")))?;
-        ole_edits_by_sheet.entry(sheet_path.clone()).or_default().insert(shape_id, drawing.clone());
+        ole_edits_by_sheet.entry(sheet_path.clone()).or_default().insert(drawing.non_visual_id.unwrap_or(shape_id), drawing.clone());
     }
     for (sheet_path, edits) in ole_edits_by_sheet {
         plan.ole_anchors.entry(sheet_path).or_default().extend(edits);
@@ -3721,15 +3656,6 @@ fn drawing_addition_package(
     for (vml_path, edits) in vml_style_edits {
         let xml = plan.parts.get(&vml_path).cloned().unwrap_or(archive.read_part(&vml_path)?);
         plan.parts.insert(vml_path, patch_vml_ole_styles(&xml, &edits)?);
-    }
-    for (sheet, order) in drawing_order_edits {
-        let Some(part) = existing_parts.get(sheet).or_else(|| fresh_ole_parts.get(sheet)) else { continue };
-        let fresh = plan.new_parts.iter().position(|(path, _)| path == part);
-        let xml = if let Some(index) = fresh { plan.new_parts[index].1.clone() }
-            else { plan.parts.remove(part).map_or_else(|| archive.read_part(part), Ok)? };
-        let xml = patch_drawing_order(&xml, order)?;
-        if let Some(index) = fresh { plan.new_parts[index].1 = xml; }
-        else { plan.parts.insert(part.clone(), xml); }
     }
     // A DrawingML deletion must also remove both worksheet compatibility
     // branches and its VML fallback. Keep other legacy shapes untouched.
@@ -3771,20 +3697,108 @@ fn drawing_addition_package(
             plan.parts.insert(path,patch_legacy_ole_ids(&xml,ids)?);
         }
     }
+    // Source IDs and names may be reused by new OLE objects. Add fresh
+    // payloads only after deleting and rebasing the original legacy parts.
+    for (sheet, drawings) in fresh_ole_additions {
+        let part = fresh_ole_parts.get(&sheet).ok_or_else(|| XlsxError::InvalidData("new OLE object has no drawing part".into()))?.clone();
+        let sheet_path = sheet_paths.get(sheet).filter(|path| !path.is_empty())
+            .ok_or_else(|| XlsxError::InvalidData(format!("sheet {sheet} is not in the source workbook while adding an OLE object")))?;
+        let mut xml = plan.new_parts.iter().find(|(path, _)| path == &part).map(|(_, xml)| xml.clone())
+            .or_else(|| plan.parts.get(&part).cloned());
+        if xml.is_none() { xml = Some(archive.read_part(&part)?); }
+        let mut xml = xml.expect("drawing XML loaded");
+        let rels_path = sheet_rels_path(sheet_path);
+        let original_rels = archive.try_read_part(&rels_path)?;
+        let mut worksheet_rels = plan.relationship_xml.get(&rels_path).cloned()
+            .or_else(|| plan.new_parts.iter().find(|(path, _)| path == &rels_path).map(|(_, xml)| xml.clone()))
+            .or(original_rels.clone()).unwrap_or_else(|| r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>"#.into());
+        let mut worksheet_objects = Vec::new();
+        for drawing in drawings {
+            let (shape_id, icon_relationship_id) = append_new_ole_vml(
+                archive, sheet_path, &drawing, &xml, &mut worksheet_rels, &mut names, &mut plan,
+            )?;
+            let word_document = drawing.ole_prog_id.as_deref().is_some_and(|prog_id| {
+                prog_id.eq_ignore_ascii_case("Word.Document.12")
+            });
+            let embedding = unique_embedding_path(
+                &names,
+                if word_document {
+                    "xl/embeddings/Microsoft_Word_Document.docx"
+                } else {
+                    "xl/embeddings/oleObject.bin"
+                },
+            );
+            names.insert(embedding.clone());
+            let package = drawing.ole_embedded_package.as_ref()
+                .ok_or_else(|| XlsxError::InvalidData("new OLE object has no embedded package".into()))?;
+            plan.new_binary_parts.push((embedding.clone(), package.clone()));
+            plan.content_types.push((embedding.clone(), if word_document {
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into()
+            } else {
+                "application/vnd.openxmlformats-officedocument.oleObject".into()
+            }));
+            let target = relative_sheet_target(sheet_path, &embedding);
+            let before: std::collections::HashSet<String> = parse_relationships(&worksheet_rels)
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?.into_keys().collect();
+            worksheet_rels = append_relationship(Some(&worksheet_rels),
+                if word_document {
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package"
+                } else {
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject"
+                }, &target)?;
+            let after = parse_relationships(&worksheet_rels).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            let relationship_id = after.keys().find(|id| !before.contains(*id)).cloned()
+                .ok_or_else(|| XlsxError::InvalidData("OLE relationship id was not allocated".into()))?;
+            xml = append_xml_child(&xml, "wsDr", &write_ole_drawing_shape(&drawing, shape_id)?)?;
+            worksheet_objects.push(write_worksheet_ole_object(&drawing, shape_id, &relationship_id, &icon_relationship_id)?);
+        }
+        if let Some((_, contents)) = plan.new_parts.iter_mut().find(|(path, _)| path == &part) {
+            *contents = xml;
+        } else {
+            plan.parts.insert(part, xml);
+        }
+        plan.worksheet_ole_objects.entry(sheet_path.clone()).or_default().extend(worksheet_objects);
+        if original_rels.is_some() {
+            plan.relationship_xml.insert(rels_path, worksheet_rels);
+        } else if let Some((_, contents)) = plan.new_parts.iter_mut().find(|(path, _)| path == &rels_path) {
+            *contents = worksheet_rels;
+        } else {
+            plan.new_parts.push((rels_path, worksheet_rels));
+        }
+    }
+
+    for (sheet, order) in drawing_order_edits {
+        let Some(part) = existing_parts.get(sheet).or_else(|| fresh_ole_parts.get(sheet)) else { continue };
+        let fresh = plan.new_parts.iter().position(|(path, _)| path == part);
+        let xml = if let Some(index) = fresh { plan.new_parts[index].1.clone() }
+            else { plan.parts.remove(part).map_or_else(|| archive.read_part(part), Ok)? };
+        let xml = patch_drawing_order(&xml, order)?;
+        if let Some(index) = fresh { plan.new_parts[index].1 = xml; }
+        else { plan.parts.insert(part.clone(), xml); }
+    }
     for xml in plan.parts.values().chain(plan.new_parts.iter().map(|(_, xml)| xml)) {
         drawing_shape_ids(xml)?;
     }
     let mut renames: BTreeMap<String, HashMap<String, String>> = BTreeMap::new();
+    let mut ole_renames = HashMap::<String, HashMap<u32, String>>::new();
     for ((sheet, source), drawing) in drawing_states {
         let Some(name) = drawing.name.as_ref().filter(|name|*name != source) else { continue };
         let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData("renamed drawing has no source part".into()))?;
+        // Fresh OLE objects can reuse a source display name. Rename retained
+        // objects by their final physical identity, preserving the new payload.
+        if drawing.ole_prog_id.is_some() {
+            if let Some(id) = drawing.non_visual_id {
+                ole_renames.entry(part.clone()).or_default().insert(id, name.clone());
+                continue;
+            }
+        }
         renames.entry(part.clone()).or_default().insert(source.clone(), name.clone());
     }
     for (part, names) in renames {
         let xml = plan.parts.remove(&part).map_or_else(||archive.read_part(&part), Ok)?;
         plan.parts.insert(part, patch_drawing_names_xml(&xml, &names)?);
     }
-    let mut restored=HashMap::<String,HashMap<u32,String>>::new();
+    let mut restored=ole_renames;
     for ((sheet,id),name) in restore_names {
         let part=existing_parts.get(sheet).or_else(||created_drawing_parts.get(sheet))
             .ok_or_else(||XlsxError::InvalidData("drawing restore has no source part".into()))?;
@@ -3816,7 +3830,10 @@ fn drawing_addition_package(
 }
 
 fn patch_drawing_order(xml: &str, order: &[String]) -> Result<String, XlsxError> {
-    let rank: HashMap<&str, usize> = order.iter().enumerate().map(|(index, name)| (name.as_str(), index)).collect();
+    let mut rank = HashMap::<&str, std::collections::VecDeque<usize>>::new();
+    for (index, name) in order.iter().enumerate() {
+        rank.entry(name.as_str()).or_default().push_back(index);
+    }
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Vec::with_capacity(xml.len()));
     let mut in_root = false;
@@ -3852,7 +3869,7 @@ fn patch_drawing_order(xml: &str, order: &[String]) -> Result<String, XlsxError>
                     _ => false,
                 });
                 let priority = if is_anchor {
-                    name.as_deref().and_then(|name| rank.get(name).copied()).unwrap_or(order.len() + sequence)
+                    name.as_deref().and_then(|name| rank.get_mut(name).and_then(|ranks| ranks.pop_front())).unwrap_or(order.len() + sequence)
                 } else {
                     usize::MAX / 2 + sequence
                 };
@@ -3864,7 +3881,7 @@ fn patch_drawing_order(xml: &str, order: &[String]) -> Result<String, XlsxError>
                 let is_anchor = matches!(local.as_str(), "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor" | "relSizeAnchor" | "absSizeAnchor");
                 let name = if is_anchor { get_attr(&start, "name") } else { None };
                 let priority = if is_anchor {
-                    name.as_deref().and_then(|name| rank.get(name).copied()).unwrap_or(order.len() + sequence)
+                    name.as_deref().and_then(|name| rank.get_mut(name).and_then(|ranks| ranks.pop_front())).unwrap_or(order.len() + sequence)
                 } else {
                     usize::MAX / 2 + sequence
                 };

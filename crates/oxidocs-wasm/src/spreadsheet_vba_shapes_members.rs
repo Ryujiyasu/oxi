@@ -1080,6 +1080,12 @@ impl<'a> WorkbookHost<'a> {
         drawing.placement = 2;
         drawing.fill_visible = false;
         drawing.non_visual_id = self.next_legacy_shape_id(sheet);
+        // OLE and notes share the legacy identity sequence. Names follow the
+        // assigned slot, including copied/deleted note history, not OLE count.
+        if let Some(number) = self.comment_shape_number(sheet, drawing.non_visual_id) {
+            drawing.name = format!("Object {number}");
+            self.ole_object_counters.insert(sheet, number);
+        }
         drawing.original = Some(oxicells_core::ir::Drawing {
             name: Some(drawing.name.clone()),
             non_visual_id: None,
@@ -1148,6 +1154,12 @@ impl<'a> WorkbookHost<'a> {
         drawing.placement = 2;
         drawing.fill_visible = false;
         drawing.non_visual_id = self.next_legacy_shape_id(sheet);
+        // OLE and notes share the legacy identity sequence. Names follow the
+        // assigned slot, including copied/deleted note history, not OLE count.
+        if let Some(number) = self.comment_shape_number(sheet, drawing.non_visual_id) {
+            drawing.name = format!("Object {number}");
+            self.ole_object_counters.insert(sheet, number);
+        }
         drawing.original = Some(oxicells_core::ir::Drawing {
             name: Some(drawing.name.clone()),
             non_visual_id: None,
@@ -1236,6 +1248,12 @@ impl<'a> WorkbookHost<'a> {
         drawing.placement = 2;
         drawing.fill_visible = false;
         drawing.non_visual_id = self.next_legacy_shape_id(sheet);
+        // OLE and notes share the legacy identity sequence. Names follow the
+        // assigned slot, including copied/deleted note history, not OLE count.
+        if let Some(number) = self.comment_shape_number(sheet, drawing.non_visual_id) {
+            drawing.name = format!("Object {number}");
+            self.ole_object_counters.insert(sheet, number);
+        }
         drawing.original = Some(oxicells_core::ir::Drawing {
             name: Some(drawing.name.clone()),
             non_visual_id: None,

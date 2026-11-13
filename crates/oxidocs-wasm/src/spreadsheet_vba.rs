@@ -59524,6 +59524,61 @@ End Function"####;
         assert!(failures.is_empty(), "Complete mixed OLE/note Native vectors differ:\n{}", failures.join("\n"));
     }
 
+    fn assert_complete_ole_insert_native9(group_id: &str) {
+        let corpus: serde_json::Value = serde_json::from_slice(include_bytes!("../../../tests/fixtures/vba/ole_copy_native.json")).unwrap();
+        let group = corpus["groups"].as_array().unwrap().iter().find(|g| g["id"] == group_id).unwrap();
+        let bytes = include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
+        let caller = include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
+        let cases = group["cases"].as_array().unwrap();assert_eq!(cases.len(), 9);
+        let mut failures = Vec::new();
+        for case in cases {
+            let mode = case["mode"].as_i64().unwrap();
+            let mut context = failure_context();
+            context.file_context = Some(file_io::FileContext {
+                package_bytes: Some(caller.to_vec()), full_name: Some(r"C:\work\original.xlsx".into()),
+                read_only: Some(true), folders: vec![r"C:\work".into()],
+                files: vec![
+                    file_io::ProducedFile {path:r"C:\work\provider.xlsx".into(),bytes:bytes.to_vec()},
+                    file_io::ProducedFile {path:r"C:\work\sample.txt".into(),bytes:group["sample_text"].as_str().unwrap().as_bytes().to_vec()},
+                ], ..Default::default()
+            });
+            let out = execute_workbook_action_in_session(
+                oxicells_core::parse_xlsx_preserving_values(caller).unwrap(),group["program"].as_str().unwrap(),Some("Probe"),
+                vec![Value::Integer(mode)],0,context,&mut None,
+            ).unwrap();
+            if let Some(root) = std::env::var_os("OXI_VBA_OLE_FOLLOWUP_CAPTURE") {
+                let folder = std::path::PathBuf::from(root).join(format!("{group_id}-{mode}"));
+                std::fs::create_dir(&folder).unwrap();
+                for file in &out.files {
+                    let leaf = file.path.rsplit(['\\','/']).next().unwrap();
+                    if leaf == "mixed-source.xlsx" || leaf == "mixed-copy.xlsx" {
+                        std::fs::write(folder.join(leaf), &file.bytes).unwrap();
+                    }
+                }
+            }
+            let actual = serde_json::to_value(&out.result).unwrap();
+            if out.error.is_some() || actual != case["expected"] || out.workbook_changed {
+                failures.push(format!("{group_id}/mode{mode}: actual={actual}; expected={}; error={:?}; caller_changed={}",case["expected"],out.error.as_ref().map(|e|&e.message),out.workbook_changed));
+            }
+        }
+        assert!(failures.is_empty(),"Complete Native OLE insertion vectors differ:\n{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn crossbook_ole_after_copy_add_native9() {
+        assert_complete_ole_insert_native9("after_add9");
+    }
+
+    #[test]
+    fn crossbook_ole_without_notes_native9() {
+        assert_complete_ole_insert_native9("without_notes9");
+    }
+
+    #[test]
+    fn crossbook_ole_custom_after_add_native9() {
+        assert_complete_ole_insert_native9("custom_after_add9");
+    }
+
     #[test]
     fn crossbook_mixed_ole_destinations_native6() {
         // Native Excel V3, two independent owned sessions in reverse orders.
