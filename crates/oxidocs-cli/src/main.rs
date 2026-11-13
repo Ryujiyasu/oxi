@@ -2051,6 +2051,19 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         {
                             continue;
                         }
+                        // OXI_PDF_SYNTH_ITALIC_LATIN (2026-11-13, default ON, opt-out _DISABLE):
+                        // italic text whose drawn face has no italic of its own is sheared
+                        // 1/3 like the East Asian case -- Word's PDF writes the same
+                        // «1 0 0.3333 1» Tm. blind-J en/policies__00cb6db7: «Letter-join 16»
+                        // (altName Eras Demi ITC, no italic face) italic paragraphs came out
+                        // upright; Word's PDF has 29 sheared text matrices on that page.
+                        let synth_skew = if synth_skew == 0.0
+                            && *italic
+                            && std::env::var_os("OXI_PDF_SYNTH_ITALIC_LATIN_DISABLE").is_none()
+                            && embedded_fonts.get(&seg_font)
+                                .and_then(|f| rustybuzz::Face::from_slice(&f.data, 0))
+                                .is_some_and(|f| !f.is_italic() && !f.is_oblique())
+                        { 0.3333 } else { synth_skew };
                         if fx_on && effects.shadow {
                             contents.push(ContentElement::Text(TextSpan {
                                 x: sx + 1.0, y: text_y + 1.0,
