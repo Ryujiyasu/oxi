@@ -16035,6 +16035,25 @@ cells={} pitch={:.2} text={:?}",
                 .map(|b| self.s1187_eff_bw(&b.style, b.width)).fold(0.0f32, f32::max);
             let own = horizontal(row, false);
             let padded = if own > 0.0 { own } else { table.style.border_width.unwrap_or(0.5) };
+            // OXI_CM15_HEADER_TOP_EDGE (2026-11-13, default ON, opt-out _DISABLE): from
+            // compatibilityMode 15 on, Word starts the row under a repeated header (a new
+            // row or a split row's continuation alike) one TABLE TOP border below the
+            // header's bottom edge; the header's own bottom rule and insideH are ignored.
+            // _pb_cont_topw_gen.py (header bottom sz24 in one cell, table sz4): mode 14 /
+            // no settings 100.46, mode 15 97.94 (= header 86.3 + 0.48); table top sz12 /
+            // sz24 -> +1.56 / +3.00; insideH sz12 / sz2 and table bottom sz24 change
+            // nothing. blind-J en/educational__0079c94e p3: Oxi started the continuation
+            // 0.5 low and lost the page's last line (one page behind to the end).
+            if self.compat_mode >= 15 && self.compat_mode_explicit
+                && !crate::env_flag!("OXI_CM15_HEADER_TOP_EDGE_DISABLE")
+            {
+                let top = match table.style.top_border.as_ref() {
+                    Some(d) if d.style != "none" && d.style != "nil" => self.s1187_eff_bw(&d.style, d.width),
+                    Some(_) => 0.0,
+                    None => table.style.border_width.unwrap_or(0.5),
+                };
+                return top - padded;
+            }
             return (horizontal(header, true).max(own) - padded).max(0.0);
         }
         if crate::env_flag!("OXI_REPEAT_HEADER_BORDER_DISABLE")
