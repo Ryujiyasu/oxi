@@ -1557,13 +1557,14 @@ impl<'a> WorkbookHost<'a> {
     /// existing source, so its copied objects remain additions for later saves.
     pub(super) fn rebase_saved_drawing_sources(&mut self, saved: &oxicells_core::ir::Workbook) {
         for record in &mut self.shapes {
-            if record.comment_at.is_some() || record.original.as_ref().is_some_and(|drawing|drawing.ole_prog_id.is_some()) { continue; }
+            if record.comment_at.is_some() { continue; }
             let Some(sheet)=self.workbook.sheets.get(record.sheet)
                 .and_then(|live|saved.sheets.iter().find(|sheet|sheet.name==live.name)) else { continue };
             let Some(drawing)=sheet.drawings.iter().find(|drawing|drawing.non_visual_id==Some(record.non_visual_id)) else { continue };
             record.source_drawing_id=drawing.non_visual_id;
             record.source_sheet_origin=sheet.origin_id;
             record.original=Some(drawing.clone());
+            record.ole_clone_of=None;
         }
     }
 

@@ -59534,13 +59534,14 @@ End Function"####;
         for case in cases {
             let mode = case["mode"].as_i64().unwrap();
             let mut context = failure_context();
+            let mut files = vec![file_io::ProducedFile {path:r"C:\work\provider.xlsx".into(),bytes:bytes.to_vec()}];
+            if let Some(text) = group["sample_text"].as_str() {
+                files.push(file_io::ProducedFile {path:r"C:\work\sample.txt".into(),bytes:text.as_bytes().to_vec()});
+            }
             context.file_context = Some(file_io::FileContext {
                 package_bytes: Some(caller.to_vec()), full_name: Some(r"C:\work\original.xlsx".into()),
                 read_only: Some(true), folders: vec![r"C:\work".into()],
-                files: vec![
-                    file_io::ProducedFile {path:r"C:\work\provider.xlsx".into(),bytes:bytes.to_vec()},
-                    file_io::ProducedFile {path:r"C:\work\sample.txt".into(),bytes:group["sample_text"].as_str().unwrap().as_bytes().to_vec()},
-                ], ..Default::default()
+                files, ..Default::default()
             });
             let out = execute_workbook_action_in_session(
                 oxicells_core::parse_xlsx_preserving_values(caller).unwrap(),group["program"].as_str().unwrap(),Some("Probe"),
@@ -59577,6 +59578,21 @@ End Function"####;
     #[test]
     fn crossbook_ole_custom_after_add_native9() {
         assert_complete_ole_insert_native9("custom_after_add9");
+    }
+
+    #[test]
+    fn crossbook_ole_after_duplicate9() {
+        assert_complete_ole_insert_native9("after_duplicate9");
+    }
+
+    #[test]
+    fn crossbook_ole_duplicate_notes9() {
+        assert_complete_ole_insert_native9("duplicate_notes9");
+    }
+
+    #[test]
+    fn crossbook_ole_duplicate_custom9() {
+        assert_complete_ole_insert_native9("duplicate_custom9");
     }
 
     #[test]

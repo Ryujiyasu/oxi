@@ -17,7 +17,7 @@ const corpusPath=path.resolve(process.argv[4]??path.join(root,'tests/fixtures/vb
 if(output)assert(!fs.existsSync(output),'Capture must be a new file');
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const corpus=JSON.parse(fs.readFileSync(corpusPath,'utf8'));
-assert.equal(corpus.license,'CC-BY-SA-4.0');assert.equal(corpus.conditions,42);
+assert.equal(corpus.license,'CC-BY-SA-4.0');assert.equal(corpus.conditions,69);
 const inputPath=path.join(root,corpus.input_fixture),callerPath=path.join(root,corpus.caller_fixture);
 const input=new Uint8Array(fs.readFileSync(inputPath)),caller=new Uint8Array(fs.readFileSync(callerPath));
 assert.equal(hash(input),corpus.input_sha256);assert.equal(hash(caller),corpus.caller_sha256);
@@ -27,7 +27,7 @@ const wasm=await import('data:text/javascript;base64,'+js.toString('base64'));
 await wasm.default({module_or_path:binary});
 const guards={};
 for(const p of [fileURLToPath(import.meta.url),corpusPath,inputPath,callerPath,jsPath,wasmPath])guards[p]=hash(fs.readFileSync(p));
-const report={completed:false,passed:false,conditions:42,expected_observations:84,
+const report={completed:false,passed:false,conditions:69,expected_observations:138,
     scope:corpus.scope,source_guards:guards,cases:[]};
 const save=()=>{if(output)fs.writeFileSync(output,JSON.stringify(report)+'\n');};
 save();
@@ -67,10 +67,10 @@ for(const group of corpus.groups){
         }
     }
 }
-assert.equal(seen.size,42);assert.equal(report.cases.length,84);
+assert.equal(seen.size,69);assert.equal(report.cases.length,138);
 report.completed=true;report.guards_unchanged=Object.entries(guards).every(([p,h])=>hash(fs.readFileSync(p))===h);
 report.passed=report.guards_unchanged&&report.cases.every(row=>row.passed);save();
-console.log(JSON.stringify({completed:true,passed:report.passed,conditions:42,observations:84,
+console.log(JSON.stringify({completed:true,passed:report.passed,conditions:69,observations:138,
     matched:report.cases.filter(row=>row.passed).length,different:report.cases.filter(row=>!row.passed).length,
     exceptions:report.cases.filter(row=>row.exception).length}));
 process.exitCode=report.passed?0:1;

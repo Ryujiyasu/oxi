@@ -1588,18 +1588,28 @@ impl<'a> WorkbookHost<'a> {
                 ShapeKind::Other => "Object".to_string(),
             }
         };
-        let number = if is_ole {
-            self.next_ole_object_number(sheet)
+        let physical_id = is_ole.then(|| self.next_legacy_shape_id(sheet));
+        let number = if let Some(id) = physical_id {
+            let number = self.comment_shape_number(sheet, id)
+                .unwrap_or_else(|| self.next_ole_object_number(sheet));
+            self.ole_object_counters.insert(sheet, number);
+            number
         } else {
             self.next_shape_number(sheet)
         };
         let new_id = self.next_shape_id;
         self.next_shape_id += 1;
         let (left, top) = at.unwrap_or((source.left + 12.0, source.top + 12.0));
-        let ole_clone_of = is_ole.then(|| source.ole_clone_of.clone().unwrap_or_else(|| source.name.clone()));
-        let copied_name = if !is_ole && !source.name_is_automatic { source.name.clone() }
+        // A loaded object's source name belongs to the saved package, before
+        // runtime renaming or worksheet-copy rebasing. Fresh payloads can be
+        // copied directly and need no source package lookup.
+        let ole_clone_of = is_ole.then(|| source.original.as_ref())
+            .flatten().filter(|drawing| drawing.ole_embedded_package.is_none())
+            .map(|drawing| source.ole_clone_of.clone()
+                .or_else(|| drawing.name.clone()).unwrap_or_else(|| source.name.clone()));
+        let copied_name = if !source.name_is_automatic { source.name.clone() }
             else { format!("{base} {number}") };
-        let physical_id = if is_ole { source.non_visual_id } else { number.saturating_add(1) };
+        let physical_id = physical_id.unwrap_or_else(|| number.saturating_add(1));
         let copy = ShapeRecord { id: new_id, sheet, non_visual_id: physical_id, source_drawing_id: None,
             name: copied_name, left, top, ole_clone_of, ..source };
         self.shapes.push(copy);
