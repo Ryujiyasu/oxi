@@ -12116,6 +12116,13 @@ struct LinkXmlNode {
     empty: bool,
 }
 
+fn link_xml_root(nodes: &[LinkXmlNode]) -> Result<usize, XlsxError> {
+    nodes
+        .iter()
+        .position(|node| node.parent.is_none())
+        .ok_or_else(|| XlsxError::InvalidData("missing external-link XML root element".into()))
+}
+
 fn link_xml_nodes(xml: &str) -> Result<Vec<LinkXmlNode>, XlsxError> {
     use quick_xml::name::ResolveResult;
     let mut reader = quick_xml::reader::NsReader::from_str(xml);
@@ -12314,7 +12321,7 @@ fn external_cache_cell(
         ],
     )?;
     let nodes = link_xml_nodes(&xml)?;
-    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let root = link_xml_root(&nodes)?;
     let values = link_children(&nodes, root, "v");
     let prefix = nodes[root]
         .qualified
@@ -12342,7 +12349,7 @@ fn external_cache_sheet(
         .unwrap_or_else(|| format!("<sheetData sheetId=\"{index}\"/>"));
     let xml = xml_root_attributes(&xml, &[("sheetId", Some(index.to_string()))])?;
     let nodes = link_xml_nodes(&xml)?;
-    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let root = link_xml_root(&nodes)?;
     let old_rows = link_children(&nodes, root, "row");
     let mut rows = BTreeMap::<u32, Vec<(u32, &CellValue)>>::new();
     let mut used = std::collections::HashSet::new();
@@ -12370,10 +12377,7 @@ fn external_cache_sheet(
                 format!("<{prefix}row r=\"{row}\"/>")
             });
         let row_nodes = link_xml_nodes(&row_xml)?;
-        let row_root = row_nodes
-            .iter()
-            .position(|node| node.parent.is_none())
-            .unwrap();
+        let row_root = link_xml_root(&row_nodes)?;
         let old_cells = link_children(&row_nodes, row_root, "cell");
         let mut values = Vec::new();
         for (col, value) in cells {
@@ -12416,7 +12420,7 @@ fn patch_external_cache(
         return Ok(xml.into());
     }
     let nodes = link_xml_nodes(xml)?;
-    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let root = link_xml_root(&nodes)?;
     let book = *link_children(&nodes, root, "externalBook")
         .first()
         .ok_or_else(|| XlsxError::InvalidData("not an external book cache".into()))?;
@@ -12426,10 +12430,7 @@ fn patch_external_cache(
         .map(|index| xml[nodes[index].start..nodes[index].end].to_owned())
         .unwrap_or_else(|| format!("<sheetNames xmlns=\"{}\"/>", escape(&nodes[book].namespace)));
     let name_nodes = link_xml_nodes(&name_xml)?;
-    let name_root = name_nodes
-        .iter()
-        .position(|node| node.parent.is_none())
-        .unwrap();
+    let name_root = link_xml_root(&name_nodes)?;
     let old_names = link_children(&name_nodes, name_root, "sheetName");
     let mut records = Vec::new();
     for (index, sheet) in desired.sheets.iter().enumerate() {
@@ -12464,10 +12465,7 @@ fn patch_external_cache(
             )
         });
     let data_nodes = link_xml_nodes(&data_xml)?;
-    let data_root = data_nodes
-        .iter()
-        .position(|node| node.parent.is_none())
-        .unwrap();
+    let data_root = link_xml_root(&data_nodes)?;
     let old_data = link_children(&data_nodes, data_root, "sheetData");
     let mut records = Vec::new();
     for (index, sheet) in desired.sheets.iter().enumerate() {
@@ -12553,7 +12551,7 @@ fn link_relation(
     external: bool,
 ) -> Result<String, XlsxError> {
     let nodes = link_xml_nodes(xml)?;
-    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let root = link_xml_root(&nodes)?;
     let matches = link_children(&nodes, root, "Relationship")
         .into_iter()
         .filter(|index| link_attr(xml, &nodes[*index], "Id").as_deref() == Some(id))
@@ -12584,7 +12582,7 @@ fn link_remove_relations(
     ids: &std::collections::HashSet<String>,
 ) -> Result<String, XlsxError> {
     let nodes = link_xml_nodes(xml)?;
-    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let root = link_xml_root(&nodes)?;
     let edits = link_children(&nodes, root, "Relationship")
         .into_iter()
         .filter(|index| link_attr(xml, &nodes[*index], "Id").is_some_and(|id| ids.contains(&id)))
@@ -12608,7 +12606,7 @@ fn link_path_relationships(
     book: &crate::ir::ExternalBook,
 ) -> Result<(String, String), XlsxError> {
     let nodes = link_xml_nodes(xml)?;
-    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let root = link_xml_root(&nodes)?;
     let parent = *link_children(&nodes, root, "externalBook")
         .first()
         .ok_or_else(|| XlsxError::InvalidData("missing external-book element".into()))?;
@@ -12699,10 +12697,7 @@ fn write_external_books(
     let parsed = parse_relationships(&relationships)
         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
     let root_nodes = link_xml_nodes(&workbook)?;
-    let root = root_nodes
-        .iter()
-        .position(|node| node.parent.is_none())
-        .unwrap();
+    let root = link_xml_root(&root_nodes)?;
     let namespace = root_nodes[root].namespace.clone();
     let relation_namespace = if namespace == "http://purl.oclc.org/ooxml/spreadsheetml/main" {
         "http://purl.oclc.org/ooxml/officeDocument/relationships"
@@ -12819,7 +12814,7 @@ fn write_external_books(
         &old_ids.difference(&used_ids).cloned().collect(),
     )?;
     let nodes = link_xml_nodes(&workbook)?;
-    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let root = link_xml_root(&nodes)?;
     let held = link_children(&nodes, root, "externalReferences");
     let section = if references.is_empty() {
         String::new()
@@ -12878,7 +12873,7 @@ fn write_external_books(
     };
     let removed: std::collections::HashSet<_> = known.difference(&used).cloned().collect();
     let nodes = link_xml_nodes(&types)?;
-    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let root = link_xml_root(&nodes)?;
     let mut edits = Vec::new();
     let mut declared = std::collections::HashSet::new();
     for index in link_children(&nodes, root, "Override") {
@@ -12951,8 +12946,6 @@ fn write_external_books(
         .map_err(|error| XlsxError::InvalidData(error.to_string()))?
         .into_inner())
 }
-
-
 /// Rewrites names with their current sheet index and retained attributes.
 fn patch_workbook_names(xml: &str, names: &[(String, String)], attributes: &crate::ir::DefinedNameAttributes) -> Result<String, XlsxError> {
     let (start, end) = match xml.find("<definedNames") {
@@ -20077,5 +20070,27 @@ mod external_link_edit_tests {
             "{xml}"
         );
         assert!(xml.contains("http://purl.oclc.org/ooxml/officeDocument/relationships"));
+    }
+
+    #[test]
+    fn external_link_save_rejects_missing_xml_roots_without_panicking() {
+        let (bytes, control) = crate::parser::native_external_link_corpus().into_iter().next().unwrap();
+        let workbook = crate::parse_xlsx_preserving_values(&bytes).unwrap();
+        let mut desired = workbook.external_books.clone();
+        desired[0].sheets.last_mut().unwrap().cells[0].2 = CellValue::Number(201.0);
+        let link = control["part"].as_str().unwrap();
+        let mut failures = Vec::new();
+        for part in ["xl/workbook.xml", "xl/_rels/workbook.xml.rels", "[Content_Types].xml", link] {
+            for invalid in ["", " \n", "\u{FEFF}", "text without an XML element"] {
+                let damaged = replace_link_test_parts(&bytes, &BTreeMap::from([(part.into(), invalid.into())]));
+                let result = std::panic::catch_unwind(|| write_external_books(&damaged, &workbook.external_books, &desired));
+                match result {
+                    Ok(Err(_)) => {},
+                    Ok(Ok(_)) => failures.push(format!("accepted invalid root in {part}: {invalid:?}")),
+                    Err(_) => failures.push(format!("panicked for missing root in {part}: {invalid:?}")),
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
