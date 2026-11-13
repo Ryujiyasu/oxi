@@ -183,7 +183,26 @@ impl Catalog {
             })
             .min_by_key(|&i| {
                 let face = &self.faces[i];
+                // OXI_CATALOG_FULLNAME_FIRST (2026-11-13, default ON, opt-out _DISABLE):
+                // a family name selects the member whose full name IS that family plus
+                // the requested style. Aptos Display's faces carry «Aptos» as their
+                // typographic family, so «Aptos» italic tied Aptos Italic with Aptos
+                // Display Italic (same weight, width, priority) and the index picked
+                // Display: blind-J en/forms__006d1fbe's italic header measured «Please»
+                // 24.62 (Display Italic) where Word draws 26.35 (Aptos Italic 26.36) and
+                // its words overlapped.
+                let style = match (bold, italic) {
+                    (true, true) => " bold italic",
+                    (true, false) => " bold",
+                    (false, true) => " italic",
+                    (false, false) => "",
+                };
+                let expected = format!("{name}{style}");
+                let exact = face.full_names.iter().any(|f| *f == expected
+                    || (!bold && !italic && *f == format!("{name} regular")));
+                let not_exact = !exact && !crate::env_flag!("OXI_CATALOG_FULLNAME_FIRST_DISABLE");
                 (
+                    not_exact as u16,
                     face.priority,
                     face.weight.abs_diff(if bold { 700 } else { 400 }),
                     face.width_class.abs_diff(5),

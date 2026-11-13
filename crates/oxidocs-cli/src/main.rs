@@ -1795,6 +1795,26 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
         // (index in contents, left, top, bottom, right, highlight name) of the last highlight box
         let mut last_hl: Option<(usize, f64, f64, f64, f64, String)> = None;
 
+        // OXI_PDF_SYMBOL_MARKER_BASELINE (2026-11-13, default ON, opt-out _DISABLE): a Symbol-font
+        // list marker sits on its line's body baseline, as the DirectWrite renderer already draws it
+        // (S518). The PDF placed it on Symbol's own ascent: blind-J en/policies__00d0246e (8pt
+        // bullet, 11pt Calibri Light) 2.43pt high, educational__007b4139 / policies__00c94b4f (same
+        // size) 0.5pt; Word's PDF puts every bullet origin on the text's (13 docs, 0.00).
+        let marker_body_ref: std::collections::HashMap<i32, (f32, Option<String>, f32)> =
+            if std::env::var_os("OXI_PDF_SYMBOL_MARKER_BASELINE_DISABLE").is_none() {
+                let mut m = std::collections::HashMap::new();
+                for e in &lp.elements {
+                    if e.paragraph_index.is_none() { continue; }
+                    if let oxidocs_core::layout::LayoutContent::Text { text, font_size, font_family, .. } = &e.content {
+                        if text.trim().is_empty() { continue; }
+                        if font_family.as_deref().map(oxidocs_core::font::render_family_name) == Some("Symbol") { continue; }
+                        m.entry((e.y * 4.0).round() as i32)
+                            .or_insert((e.text_y_off, font_family.clone(), *font_size));
+                    }
+                }
+                m
+            } else { std::collections::HashMap::new() };
+
         for elem in &lp.elements {
             let x = elem.x as f64;
             let y = elem.y as f64;
@@ -1935,7 +1955,20 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         // 0.1em low on MS Mincho (dy +1.14pt at 10.5, +0.91 at 9, +0.79 at
                         // 8) and 0.6pt high on Calibri against Word's PDF; penalized SSIM
                         // JA 0.8364 vs 0.9282 through the renderer, EN 0.9466 vs 0.9565.
-                        if std::env::var_os("OXI_PDF_BASELINE_DISABLE").is_none() {
+                        let symbol_marker_body = if elem.paragraph_index.is_none()
+                            && elem.baseline_offset.is_none()
+                            && font_family.as_deref().map(oxidocs_core::font::render_family_name) == Some("Symbol")
+                        {
+                            marker_body_ref.get(&((elem.y * 4.0).round() as i32))
+                        } else { None };
+                        if let (true, Some((body_off, body_fam, body_fs))) =
+                            (std::env::var_os("OXI_PDF_BASELINE_DISABLE").is_none(), symbol_marker_body)
+                        {
+                            let bm = body_fam.as_deref()
+                                .map(|ff| registry.get(ff))
+                                .unwrap_or_else(|| registry.default_metrics());
+                            y + *body_off as f64 - 1.0 + (bm.baseline_ascent() * *body_fs) as f64
+                        } else if std::env::var_os("OXI_PDF_BASELINE_DISABLE").is_none() {
                             match elem.baseline_offset {
                                 Some(b) => y + b as f64,
                                 None => y + elem.text_y_off as f64 - 1.0
