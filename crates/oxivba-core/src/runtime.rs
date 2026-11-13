@@ -14901,82 +14901,370 @@ fn financial_syd(cost: f64, salvage: f64, life: f64, period: f64) -> Result<f64,
     Ok((cost - salvage) * (life - period + 1.0) * 2.0 / (life * (life + 1.0)))
 }
 
-fn financial_irr(values: &[f64], guess: f64) -> Result<f64, String> {
-    if values.len() < 2
-        || !values.iter().any(|value| *value < 0.0)
-        || !values.iter().any(|value| *value > 0.0)
+// Financial intermediates keep 64 significant bits; iteration rates use binary64.
+// Integer operations preserve rounding on native and WebAssembly targets.
+#[derive(Clone, Copy, Debug)]
+struct VbaFinancialWide {
+    negative: bool,
+    exponent: i32,
+    mantissa: u64,
+}
+impl VbaFinancialWide {
+    fn zero() -> Self {
+        Self {
+            negative: false,
+            exponent: 0,
+            mantissa: 0,
+        }
+    }
+    fn normalized(negative: bool, mut exponent: i32, value: u128) -> Self {
+        if value == 0 {
+            return Self::zero();
+        }
+        let bits = 128 - value.leading_zeros();
+        let mut mantissa = value;
+        if bits > 64 {
+            let shift = bits - 64;
+            mantissa = value >> shift;
+            let remainder = value & ((1u128 << shift) - 1);
+            let half = 1u128 << (shift - 1);
+            if remainder > half || (remainder == half && mantissa & 1 != 0) {
+                mantissa += 1;
+            }
+            exponent += shift as i32;
+            if mantissa > u64::MAX as u128 {
+                mantissa >>= 1;
+                exponent += 1;
+            }
+        } else if bits < 64 {
+            mantissa <<= 64 - bits;
+            exponent -= (64 - bits) as i32;
+        }
+        Self {
+            negative,
+            exponent,
+            mantissa: mantissa as u64,
+        }
+        .limited()
+    }
+    fn limited(self) -> Self {
+        if self.mantissa == 0 || self.exponent >= -16445 {
+            return self;
+        }
+        let shift = (-16445 - self.exponent) as u32;
+        if shift < 64 && self.mantissa.trailing_zeros() >= shift {
+            return self;
+        }
+        let mantissa = Self::round_shift(self.mantissa, shift);
+        if mantissa == 0 {
+            return Self {
+                negative: self.negative,
+                ..Self::zero()
+            };
+        }
+        Self::normalized(self.negative, -16445, mantissa as u128)
+    }
+    fn from_f64(value: f64) -> Self {
+        assert!(value.is_finite());
+        let bits = value.to_bits();
+        let negative = bits >> 63 != 0;
+        let raw = (bits >> 52) & 2047;
+        let fraction = bits & ((1u64 << 52) - 1);
+        if raw == 0 {
+            if fraction == 0 {
+                return Self {
+                    negative,
+                    ..Self::zero()
+                };
+            }
+            Self::normalized(negative, -1074, fraction as u128)
+        } else {
+            Self::normalized(
+                negative,
+                raw as i32 - 1023 - 52,
+                ((1u64 << 52) | fraction) as u128,
+            )
+        }
+    }
+    fn round_shift(value: u64, shift: u32) -> u64 {
+        if shift > 64 {
+            return 0;
+        }
+        if shift == 64 {
+            return u64::from(value > (1u64 << 63));
+        }
+        if shift == 0 {
+            return value;
+        }
+        let result = value >> shift;
+        let remainder = value & ((1u64 << shift) - 1);
+        let half = 1u64 << (shift - 1);
+        result + u64::from(remainder > half || (remainder == half && result & 1 != 0))
+    }
+    fn to_f64(self) -> f64 {
+        let sign = u64::from(self.negative) << 63;
+        if self.mantissa == 0 {
+            return f64::from_bits(sign);
+        }
+        let mut exponent = self.exponent + 63;
+        if exponent < -1022 {
+            let shift = (-1074 - self.exponent).max(0) as u32;
+            return f64::from_bits(sign | Self::round_shift(self.mantissa, shift));
+        }
+        let mut mantissa = Self::round_shift(self.mantissa, 11);
+        if mantissa == (1u64 << 53) {
+            mantissa >>= 1;
+            exponent += 1;
+        }
+        if exponent > 1023 {
+            return f64::from_bits(sign | (2047u64 << 52));
+        }
+        f64::from_bits(sign | ((exponent + 1023) as u64) << 52 | (mantissa & ((1u64 << 52) - 1)))
+    }
+    fn abs(self) -> Self {
+        Self {
+            negative: false,
+            ..self
+        }
+    }
+    fn is_zero(self) -> bool {
+        self.mantissa == 0
+    }
+    fn compare(self, other: Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        if self.is_zero() && other.is_zero() {
+            return Ordering::Equal;
+        }
+        if self.negative != other.negative {
+            return if self.negative {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+        }
+        let magnitude = if self.is_zero() {
+            Ordering::Less
+        } else if other.is_zero() {
+            Ordering::Greater
+        } else {
+            self.exponent
+                .cmp(&other.exponent)
+                .then(self.mantissa.cmp(&other.mantissa))
+        };
+        if self.negative {
+            magnitude.reverse()
+        } else {
+            magnitude
+        }
+    }
+    fn less(self, other: Self) -> bool {
+        self.compare(other) == std::cmp::Ordering::Less
+    }
+    fn rate(self) -> Option<Self> {
+        let value = self.to_f64();
+        value.is_finite().then(|| Self::from_f64(value))
+    }
+}
+impl std::ops::Neg for VbaFinancialWide {
+    type Output = Self;
+    fn neg(self) -> Self {
+        Self {
+            negative: !self.negative,
+            ..self
+        }
+    }
+}
+impl std::ops::Add for VbaFinancialWide {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
+        if self.is_zero() && other.is_zero() {
+            return Self {
+                negative: self.negative && other.negative,
+                ..Self::zero()
+            };
+        }
+        if self.is_zero() {
+            return other;
+        }
+        if other.is_zero() {
+            return self;
+        }
+        let (larger, smaller) = if self.exponent >= other.exponent {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        let difference = larger.exponent - smaller.exponent;
+        if difference > 64 {
+            if difference == 65
+                && larger.negative != smaller.negative
+                && larger.mantissa == 1u64 << 63
+                && smaller.mantissa > 1u64 << 63
+            {
+                return Self {
+                    negative: larger.negative,
+                    exponent: larger.exponent - 1,
+                    mantissa: u64::MAX,
+                };
+            }
+            return larger;
+        }
+        let a = (larger.mantissa as u128) << difference;
+        let b = smaller.mantissa as u128;
+        if larger.negative == smaller.negative {
+            Self::normalized(larger.negative, smaller.exponent, a + b)
+        } else if a >= b {
+            Self::normalized(larger.negative, smaller.exponent, a - b)
+        } else {
+            Self::normalized(smaller.negative, smaller.exponent, b - a)
+        }
+    }
+}
+impl std::ops::Sub for VbaFinancialWide {
+    type Output = Self;
+    fn sub(self, other: Self) -> Self {
+        self + (-other)
+    }
+}
+impl std::ops::Mul for VbaFinancialWide {
+    type Output = Self;
+    fn mul(self, other: Self) -> Self {
+        if self.is_zero() || other.is_zero() {
+            Self {
+                negative: self.negative != other.negative,
+                ..Self::zero()
+            }
+        } else {
+            Self::normalized(
+                self.negative != other.negative,
+                self.exponent + other.exponent,
+                (self.mantissa as u128) * (other.mantissa as u128),
+            )
+        }
+    }
+}
+impl std::ops::Div for VbaFinancialWide {
+    type Output = Self;
+    fn div(self, other: Self) -> Self {
+        assert!(!other.is_zero());
+        if self.is_zero() {
+            return Self {
+                negative: self.negative != other.negative,
+                ..Self::zero()
+            };
+        }
+        let shift = if self.mantissa >= other.mantissa {
+            63
+        } else {
+            64
+        };
+        let numerator = (self.mantissa as u128) << shift;
+        let denominator = other.mantissa as u128;
+        let mut result = numerator / denominator;
+        let remainder = numerator % denominator;
+        if remainder * 2 > denominator || (remainder * 2 == denominator && result & 1 != 0) {
+            result += 1;
+        }
+        Self::normalized(
+            self.negative != other.negative,
+            self.exponent - other.exponent - shift,
+            result,
+        )
+    }
+}
+fn financial_npv_rounded(cash: &[f64], rate: VbaFinancialWide) -> Result<VbaFinancialWide, u32> {
+    let mut factor = VbaFinancialWide::from_f64(1.);
+    let mut total = VbaFinancialWide::zero();
+    let mut overflow = false;
+    for (period, &value) in cash.iter().enumerate() {
+        let product = factor * rate;
+        if !product.is_zero() && product.exponent + 63 > 16383 {
+            return Err(6);
+        }
+        factor = factor + product;
+        if factor.is_zero() {
+            return Err(if cash[period..].iter().any(|cash| *cash != 0.0) {
+                11
+            } else {
+                6
+            });
+        }
+        if factor.exponent + 63 > 16383 {
+            return Err(6);
+        }
+        if overflow {
+            continue;
+        }
+        let term = VbaFinancialWide::from_f64(value) / factor;
+        if !term.is_zero() && term.exponent + 63 > 16383 {
+            overflow = true;
+            continue;
+        }
+        total = total + term;
+        if !total.is_zero() && total.exponent + 63 > 16383 {
+            overflow = true;
+        }
+    }
+    if overflow {
+        Err(6)
+    } else {
+        Ok(total)
+    }
+}
+fn financial_irr_rounded(cash: &[f64], guess: f64) -> Option<f64> {
+    if cash.iter().any(|value| !value.is_finite())
+        || cash.len() < 2
+        || !cash.iter().any(|v| *v < 0.)
+        || !cash.iter().any(|v| *v > 0.)
         || !guess.is_finite()
-        || guess <= -1.0
+        || guess <= -1.
     {
-        return Err("invalid IRR cash flows or guess".to_string());
+        return None;
     }
-    // Excel observations favor secant iteration over the old Newton step
-    // with a forced fallback toward -1. The latter could report a spurious
-    // rate where Excel reports failure. This is still an approximation of
-    // Excel's convergence behavior; see the remaining oracle cases.
-    let residual = |rate: f64| -> f64 {
-        let base = 1.0 + rate;
-        values.iter().enumerate().map(|(i, cash)| cash / base.powf(i as f64)).sum()
-    };
-    let scale = values.iter().map(|value| value.abs()).fold(0.0_f64, f64::max);
-    let mut previous = guess;
-    let mut previous_value = residual(previous);
-    if previous_value == 0.0 { return Ok(previous); }
-    let mut rate = guess + if previous_value > 0.0 { 0.00001 } else { -0.00001 };
-    if rate > -1.0 {
-        let mut current_value = residual(rate);
-        let mut exhausted = true;
-        for _ in 0..40 {
-            if !previous_value.is_finite() || !current_value.is_finite() || previous_value == current_value { exhausted = false; break; }
-            let next = rate - (rate - previous) * current_value / (current_value - previous_value);
-            if !next.is_finite() || next <= -1.0 { exhausted = false; break; }
-            let next_value = residual(next);
-            if (next - rate).abs() < 1e-7 && next_value.abs() < scale * 1e-9 { return Ok(next); }
-            previous = rate; previous_value = current_value; rate = next; current_value = next_value;
-        }
-        // A secant can stall near -1 while still bracketing a real root.
-        // Refine that bracket instead of accepting an enormous residual.
-        if exhausted && previous_value.is_sign_positive() != current_value.is_sign_positive() {
-            for _ in 0..100 {
-                let middle = (previous + rate) * 0.5;
-                let value = residual(middle);
-                if value.abs() < scale * 1e-9 { return Ok(middle); }
-                if value.is_sign_positive() == previous_value.is_sign_positive() {
-                    previous = middle; previous_value = value;
-                } else {
-                    rate = middle;
-                }
-            }
-        }
+    let scale = cash.iter().map(|v| v.abs()).fold(0., f64::max);
+    let tolerance = VbaFinancialWide::from_f64(1e-7);
+    let epsilon = VbaFinancialWide::from_f64(scale) * tolerance * VbaFinancialWide::from_f64(0.01);
+    let step = VbaFinancialWide::from_f64(1e-5);
+    let one = VbaFinancialWide::from_f64(1.);
+    let mut r0 = VbaFinancialWide::from_f64(guess);
+    let mut f0 = financial_npv_rounded(cash, r0).ok()?;
+    let mut r1 = (r0
+        + if VbaFinancialWide::zero().less(f0) {
+            step
+        } else {
+            -step
+        })
+    .rate()?;
+    if !(-one).less(r1) {
+        return None;
     }
-    // Some observed cases converge with a derivative step when the secant
-    // iteration reaches an invalid rate; never force that rate back into the
-    // valid interval, which changes Excel failures into successful results.
-    let mut rate = guess;
+    let mut f1 = financial_npv_rounded(cash, r1).ok()?;
     for _ in 0..40 {
-        let base = 1.0 + rate;
-        let mut value = 0.0;
-        let mut derivative = 0.0;
-        for (period, cash_flow) in values.iter().enumerate() {
-            let period = period as f64;
-            value += cash_flow / base.powf(period);
-            if period != 0.0 {
-                derivative -= period * cash_flow / base.powf(period + 1.0);
+        if f1.compare(f0) == std::cmp::Ordering::Equal {
+            r0 = (r0 + if r0.less(r1) { -step } else { step }).rate()?;
+            f0 = financial_npv_rounded(cash, r0).ok()?;
+            if f1.compare(f0) == std::cmp::Ordering::Equal {
+                return None;
             }
         }
-        if !value.is_finite() || !derivative.is_finite() || derivative == 0.0 {
-            break;
+        let mut r2 = (r1 - (r1 - r0) * f1 / (f1 - f0)).rate()?;
+        if !(-one).less(r2) {
+            r2 = ((r1 - one) * VbaFinancialWide::from_f64(0.5)).rate()?;
         }
-        let next = rate - value / derivative;
-        if !next.is_finite() || next <= -1.0 {
-            break;
+        let f2 = financial_npv_rounded(cash, r2).ok()?;
+        if f2.abs().less(epsilon) && (r2 - r1).abs().less(tolerance) {
+            return Some(r2.to_f64());
         }
-        if (next - rate).abs() <= 1e-7 && residual(next).abs() < scale * 1e-9 {
-            return Ok(next);
-        }
-        rate = next;
+        r0 = r1;
+        f0 = f1;
+        r1 = r2;
+        f1 = f2;
     }
-    Err("IRR failed to converge".to_string())
+    None
+}
+
+fn financial_irr(values: &[f64], guess: f64) -> Result<f64, String> {
+    financial_irr_rounded(values, guess).ok_or_else(|| "IRR failed to converge".to_string())
 }
 
 fn financial_mirr(values: &[f64], finance_rate: f64, reinvest_rate: f64) -> Result<f64, String> {
@@ -15008,12 +15296,18 @@ fn financial_npv(rate: f64, values: &[f64]) -> Result<f64, String> {
     if values.is_empty() || rate == -1.0 {
         return Err("invalid NPV cash flows or rate".to_string());
     }
-    let base = 1.0 + rate;
-    Ok(values
-        .iter()
-        .enumerate()
-        .map(|(period, cash_flow)| cash_flow / base.powf((period + 1) as f64))
-        .sum())
+    // Keep existing non-finite propagation pending its separate Native contract.
+    if !rate.is_finite() || values.iter().any(|value| !value.is_finite()) {
+        let base = 1.0 + rate;
+        return Ok(values.iter().enumerate()
+            .map(|(period, cash)| cash / base.powf((period + 1) as f64)).sum());
+    }
+    // The entry-point dispatcher preserves financial division and overflow errors.
+    match financial_npv_rounded(values, VbaFinancialWide::from_f64(rate)) {
+        Ok(value) => Ok(value.to_f64()),
+        Err(11) => Err("financial division by zero".to_string()),
+        Err(_) => Ok(f64::INFINITY),
+    }
 }
 
 fn annuity_factor(rate: f64, periods: f64) -> Result<f64, String> {
@@ -24748,7 +25042,6 @@ Private stored As Long
     }
 
     #[test]
-    #[ignore = "known Excel VBA IRR convergence differences"]
     fn irr_remaining_convergence_difference() {
         let value = run(
             "Public Function Probe() As Long\nDim v(2) As Double, result As Double\nv(0)=-100: v(2)=200\nOn Error Resume Next\nresult=IRR(v,1): Probe=Err.Number\nEnd Function\n", "Probe", vec![],
@@ -24757,7 +25050,6 @@ Private stored As Long
     }
 
     #[test]
-    #[ignore = "known Excel VBA IRR multiple-root selection differences"]
     fn irr_multiple_root_selection_matches_excel() {
         // Excel 16.0 build 20527 selects different roots for these initial
         // guesses, although both roots satisfy the same cash-flow equation.
