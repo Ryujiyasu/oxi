@@ -18,7 +18,7 @@ use quick_xml::writer::Writer;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-use crate::ir::{AutoFilter, BorderLine, CalculationMode, CalculationSettings, CellStyle, ConditionalRule, DataValidation, DiffStyle, Hyperlink, MergeCell, Workbook};
+use crate::ir::{CellValue, AutoFilter, BorderLine, CalculationMode, CalculationSettings, CellStyle, ConditionalRule, DataValidation, DiffStyle, Hyperlink, MergeCell, Workbook};
 use crate::parser::{parse_xlsx, XlsxError};
 use oxicells_calc::rename_sheet_in_formula;
 use oxidocs_common::archive::OoxmlArchive;
@@ -179,6 +179,7 @@ pub struct XlsxEditor {
     /// Final sheet-order dynamic-array owners, including one-cell and blocked
     /// arrays. Their extents are independent of adjacent spill members.
     dynamic_plan: Option<Vec<Vec<crate::ir::CachedSpill>>>,
+    external_plan: Option<Vec<crate::ir::ExternalBook>>,
     copy_instance_sources: HashMap<u32, usize>,
     source_copies_materialized: bool,
 }
@@ -216,6 +217,7 @@ impl XlsxEditor {
         Ok(Self {
             original_data: data.to_vec(),
             dynamic_plan: None,
+            external_plan: None,
             copy_instance_sources: HashMap::new(),
             source_copies_materialized: false,
             workbook,
@@ -344,6 +346,13 @@ impl XlsxEditor {
             ));
         }
         self.dynamic_plan = Some(dynamic_array_plan(edited));
+        let mut links=edited.external_books.clone();
+        for (index,link)in links.iter_mut().enumerate(){
+            if link.origin_part.is_none() && link.target.is_none() && link.absolute_target.is_none(){
+                if let Some(old)=self.workbook.external_books.get(index){link.origin_part=old.origin_part.clone();link.target=old.target.clone();link.absolute_target=old.absolute_target.clone();}
+            }
+        }
+        self.external_plan=(links!=self.workbook.external_books).then_some(links);
         self.indexed_colors = (edited.indexed_colors != self.workbook.indexed_colors)
             .then(|| edited.indexed_colors.clone());
         let originals:HashMap<u32,&crate::ir::Chart>=self.workbook.sheets.iter().flat_map(|sheet|&sheet.drawings)
@@ -1385,7 +1394,7 @@ impl XlsxEditor {
     }
 
     pub fn has_edits(&self) -> bool {
-        self.has_non_chart_edits() || !self.chart_edits.is_empty()
+        self.external_plan.is_some() || self.has_non_chart_edits() || !self.chart_edits.is_empty()
     }
 
     fn has_non_chart_edits(&self) -> bool {
@@ -1440,7 +1449,15 @@ impl XlsxEditor {
 
     /// Save edited xlsx.
     pub fn save(&self) -> Result<Vec<u8>, XlsxError> {
-        if !self.has_edits() {
+        let bytes=self.save_content()?;
+        match &self.external_plan {
+            Some(books)=>write_external_books(&bytes,&self.workbook.external_books,books),
+            None=>Ok(bytes),
+        }
+    }
+
+    fn save_content(&self) -> Result<Vec<u8>, XlsxError> {
+        if !self.has_non_chart_edits() && self.chart_edits.is_empty() {
             return Ok(self.original_data.clone());
         }
 
@@ -12086,6 +12103,856 @@ fn builtin_number_format_id(format: &str) -> Option<u32> {
     }
 }
 
+#[derive(Clone)]
+struct LinkXmlNode {
+    parent: Option<usize>,
+    name: String,
+    qualified: String,
+    namespace: String,
+    start: usize,
+    head: usize,
+    close: usize,
+    end: usize,
+    empty: bool,
+}
+
+fn link_xml_nodes(xml: &str) -> Result<Vec<LinkXmlNode>, XlsxError> {
+    use quick_xml::name::ResolveResult;
+    let mut reader = quick_xml::reader::NsReader::from_str(xml);
+    let mut nodes: Vec<LinkXmlNode> = Vec::new();
+    let mut stack = Vec::new();
+    loop {
+        let start = oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position());
+        let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let namespace = match namespace {
+            ResolveResult::Bound(uri) => String::from_utf8_lossy(uri.as_ref()).into_owned(),
+            ResolveResult::Unknown(prefix) => format!("?{}", String::from_utf8_lossy(&prefix)),
+            ResolveResult::Unbound => String::new(),
+        };
+        let end = oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position());
+        match event {
+            Event::Start(tag) | Event::Empty(tag) => {
+                let empty = xml[start..end].ends_with("/>");
+                let index = nodes.len();
+                nodes.push(LinkXmlNode {
+                    parent: stack.last().copied(),
+                    name: local_name(tag.name().as_ref()),
+                    qualified: String::from_utf8_lossy(tag.name().as_ref()).into_owned(),
+                    namespace,
+                    start,
+                    head: end,
+                    close: end,
+                    end,
+                    empty,
+                });
+                if !empty {
+                    stack.push(index);
+                }
+            }
+            Event::End(_) => {
+                let index = stack
+                    .pop()
+                    .ok_or_else(|| XlsxError::InvalidData("unbalanced external-link XML".into()))?;
+                nodes[index].close = start;
+                nodes[index].end = end;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    if !stack.is_empty() {
+        return Err(XlsxError::InvalidData(
+            "incomplete external-link XML".into(),
+        ));
+    }
+    Ok(nodes)
+}
+
+fn link_attr(xml: &str, node: &LinkXmlNode, name: &str) -> Option<String> {
+    let mut reader = Reader::from_str(&xml[node.start..node.head]);
+    match reader.read_event().ok()? {
+        Event::Start(tag) | Event::Empty(tag) => get_attr(&tag, name),
+        _ => None,
+    }
+}
+
+fn link_children(nodes: &[LinkXmlNode], parent: usize, name: &str) -> Vec<usize> {
+    nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, node)| {
+            (node.parent == Some(parent)
+                && node.name == name
+                && node.namespace == nodes[parent].namespace)
+                .then_some(index)
+        })
+        .collect()
+}
+
+fn link_insert(
+    xml: &str,
+    node: &LinkXmlNode,
+    at: usize,
+    fragment: &str,
+) -> Result<String, XlsxError> {
+    if node.empty {
+        let head = xml[node.start..node.head]
+            .strip_suffix("/>")
+            .ok_or_else(|| XlsxError::InvalidData("invalid empty link XML".into()))?;
+        apply_style_xml_edits(
+            xml,
+            vec![(
+                node.start,
+                node.end,
+                format!("{head}>{fragment}</{}>", node.qualified),
+            )],
+        )
+    } else {
+        apply_style_xml_edits(xml, vec![(at, at, fragment.into())])
+    }
+}
+
+fn link_replace_children(
+    xml: &str,
+    parent: usize,
+    nodes: &[LinkXmlNode],
+    name: &str,
+    records: &[String],
+) -> Result<String, XlsxError> {
+    let children = link_children(nodes, parent, name);
+    let mut edits = Vec::new();
+    for (index, child) in children.iter().enumerate() {
+        edits.push((
+            nodes[*child].start,
+            nodes[*child].end,
+            records.get(index).cloned().unwrap_or_default(),
+        ));
+    }
+    if records.len() > children.len() {
+        let extra = records[children.len()..].join("");
+        if nodes[parent].empty {
+            return link_insert(xml, &nodes[parent], nodes[parent].close, &extra);
+        }
+        edits.push((nodes[parent].close, nodes[parent].close, extra));
+    }
+    apply_style_xml_edits(xml, edits)
+}
+
+fn link_append(xml: &str, fragment: &str) -> Result<String, XlsxError> {
+    let nodes = link_xml_nodes(xml)?;
+    let root = nodes
+        .iter()
+        .find(|node| node.parent.is_none())
+        .ok_or_else(|| XlsxError::InvalidData("missing external metadata root".into()))?;
+    link_insert(xml, root, root.close, fragment)
+}
+
+fn link_book_section(xml: &str, name: &str, content: &str) -> Result<String, XlsxError> {
+    let nodes = link_xml_nodes(xml)?;
+    let root = nodes
+        .iter()
+        .position(|node| node.parent.is_none())
+        .ok_or_else(|| XlsxError::InvalidData("missing external link root".into()))?;
+    let book = *link_children(&nodes, root, "externalBook")
+        .first()
+        .ok_or_else(|| XlsxError::InvalidData("external link has no book element".into()))?;
+    let held = link_children(&nodes, book, name);
+    if held.len() > 1 {
+        return Err(XlsxError::InvalidData(
+            "duplicate external-book section".into(),
+        ));
+    }
+    if let Some(index) = held.first() {
+        return apply_style_xml_edits(
+            xml,
+            vec![(nodes[*index].start, nodes[*index].end, content.into())],
+        );
+    }
+    let at = nodes
+        .iter()
+        .filter(|node| node.parent == Some(book) && node.namespace == nodes[book].namespace)
+        .find(|node| {
+            if name == "sheetNames" {
+                true
+            } else {
+                node.name == "extLst"
+            }
+        })
+        .map_or(nodes[book].close, |node| node.start);
+    link_insert(xml, &nodes[book], at, content)
+}
+
+fn external_cache_cell(
+    reference: &str,
+    value: &CellValue,
+    old: Option<&str>,
+) -> Result<String, XlsxError> {
+    let (kind, text) = match value {
+        CellValue::Empty => (None, String::new()),
+        CellValue::Number(number) => {
+            if !number.is_finite() {
+                return Err(XlsxError::InvalidData("nonfinite linked cell value".into()));
+            }
+            (None, number.to_string())
+        }
+        CellValue::Boolean(value) => (Some("b"), if *value { "1".into() } else { "0".into() }),
+        CellValue::Error(value) => (Some("e"), value.clone()),
+        CellValue::String(value) => (
+            Some("str"),
+            crate::string_value::encode(&value.encode_utf16().collect::<Vec<_>>()),
+        ),
+        CellValue::Utf16(value) => (Some("str"), crate::string_value::encode(value)),
+    };
+    let xml = old
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("<cell r=\"{}\"/>", escape(reference)));
+    let xml = xml_root_attributes(
+        &xml,
+        &[
+            ("r", Some(reference.into())),
+            ("t", kind.map(str::to_owned)),
+        ],
+    )?;
+    let nodes = link_xml_nodes(&xml)?;
+    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let values = link_children(&nodes, root, "v");
+    let prefix = nodes[root]
+        .qualified
+        .rsplit_once(':')
+        .map_or(String::new(), |(prefix, _)| format!("{prefix}:"));
+    let replacement = format!("<{prefix}v>{}</{prefix}v>", escape(&text));
+    if let Some(index) = values.first() {
+        apply_style_xml_edits(
+            &xml,
+            vec![(nodes[*index].start, nodes[*index].end, replacement)],
+        )
+    } else {
+        link_insert(&xml, &nodes[root], nodes[root].head, &replacement)
+    }
+}
+
+fn external_cache_sheet(
+    sheet: &crate::ir::ExternalSheet,
+    index: usize,
+    old: Option<&str>,
+    before: Option<&crate::ir::ExternalSheet>,
+) -> Result<String, XlsxError> {
+    let xml = old
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("<sheetData sheetId=\"{index}\"/>"));
+    let xml = xml_root_attributes(&xml, &[("sheetId", Some(index.to_string()))])?;
+    let nodes = link_xml_nodes(&xml)?;
+    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let old_rows = link_children(&nodes, root, "row");
+    let mut rows = BTreeMap::<u32, Vec<(u32, &CellValue)>>::new();
+    let mut used = std::collections::HashSet::new();
+    for (row, col, value) in &sheet.cells {
+        if *row == 0 || *row > 1_048_576 || *col >= 16_384 || !used.insert((*row, *col)) {
+            return Err(XlsxError::InvalidData(
+                "invalid or duplicate linked cell address".into(),
+            ));
+        }
+        rows.entry(*row).or_default().push((*col, value));
+    }
+    let mut records = Vec::new();
+    for (row, mut cells) in rows {
+        cells.sort_by_key(|(col, _)| *col);
+        let held = old_rows.iter().find(|id| {
+            link_attr(&xml, &nodes[**id], "r").and_then(|s| s.parse::<u32>().ok()) == Some(row)
+        });
+        let row_xml = held
+            .map(|id| xml[nodes[*id].start..nodes[*id].end].to_owned())
+            .unwrap_or_else(|| {
+                let prefix = nodes[root]
+                    .qualified
+                    .rsplit_once(':')
+                    .map_or(String::new(), |(prefix, _)| format!("{prefix}:"));
+                format!("<{prefix}row r=\"{row}\"/>")
+            });
+        let row_nodes = link_xml_nodes(&row_xml)?;
+        let row_root = row_nodes
+            .iter()
+            .position(|node| node.parent.is_none())
+            .unwrap();
+        let old_cells = link_children(&row_nodes, row_root, "cell");
+        let mut values = Vec::new();
+        for (col, value) in cells {
+            let reference = format!("{}{row}", col_to_letter(col));
+            let held = old_cells.iter().find(|id| {
+                link_attr(&row_xml, &row_nodes[**id], "r")
+                    .is_some_and(|r| crate::parser::parse_cell_ref(&r) == (col, row - 1))
+            });
+            let original = held.map(|id| &row_xml[row_nodes[*id].start..row_nodes[*id].end]);
+            let unchanged = before.is_some_and(|sheet| {
+                sheet
+                    .cells
+                    .iter()
+                    .any(|(r, c, old)| *r == row && *c == col && old.storage_eq(value))
+            });
+            let prefix = row_nodes[row_root]
+                .qualified
+                .rsplit_once(':')
+                .map_or(String::new(), |(prefix, _)| format!("{prefix}:"));
+            let template = format!("<{prefix}cell/>");
+            values.push(if unchanged && original.is_some() {
+                original.unwrap().to_owned()
+            } else {
+                external_cache_cell(&reference, value, original.or(Some(template.as_str())))?
+            });
+        }
+        records.push(link_replace_children(
+            &row_xml, row_root, &row_nodes, "cell", &values,
+        )?);
+    }
+    link_replace_children(&xml, root, &nodes, "row", &records)
+}
+
+fn patch_external_cache(
+    xml: &str,
+    desired: &crate::ir::ExternalBook,
+    before: Option<&crate::ir::ExternalBook>,
+) -> Result<String, XlsxError> {
+    if before.is_some_and(|old| old.sheets == desired.sheets) {
+        return Ok(xml.into());
+    }
+    let nodes = link_xml_nodes(xml)?;
+    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let book = *link_children(&nodes, root, "externalBook")
+        .first()
+        .ok_or_else(|| XlsxError::InvalidData("not an external book cache".into()))?;
+    let names = link_children(&nodes, book, "sheetNames").first().copied();
+    let data = link_children(&nodes, book, "sheetDataSet").first().copied();
+    let mut name_xml = names
+        .map(|index| xml[nodes[index].start..nodes[index].end].to_owned())
+        .unwrap_or_else(|| format!("<sheetNames xmlns=\"{}\"/>", escape(&nodes[book].namespace)));
+    let name_nodes = link_xml_nodes(&name_xml)?;
+    let name_root = name_nodes
+        .iter()
+        .position(|node| node.parent.is_none())
+        .unwrap();
+    let old_names = link_children(&name_nodes, name_root, "sheetName");
+    let mut records = Vec::new();
+    for (index, sheet) in desired.sheets.iter().enumerate() {
+        let held = old_names
+            .iter()
+            .find(|id| {
+                link_attr(&name_xml, &name_nodes[**id], "val").as_deref() == Some(&sheet.name)
+            })
+            .copied()
+            .or_else(|| old_names.get(index).copied());
+        let source = held
+            .map(|id| name_xml[name_nodes[id].start..name_nodes[id].end].to_owned())
+            .unwrap_or_else(|| {
+                let prefix = name_nodes[name_root]
+                    .qualified
+                    .rsplit_once(':')
+                    .map_or(String::new(), |(prefix, _)| format!("{prefix}:"));
+                format!("<{prefix}sheetName/>")
+            });
+        records.push(xml_root_attributes(
+            &source,
+            &[("val", Some(sheet.name.clone()))],
+        )?);
+    }
+    name_xml = link_replace_children(&name_xml, name_root, &name_nodes, "sheetName", &records)?;
+    let data_xml = data
+        .map(|index| xml[nodes[index].start..nodes[index].end].to_owned())
+        .unwrap_or_else(|| {
+            format!(
+                "<sheetDataSet xmlns=\"{}\"/>",
+                escape(&nodes[book].namespace)
+            )
+        });
+    let data_nodes = link_xml_nodes(&data_xml)?;
+    let data_root = data_nodes
+        .iter()
+        .position(|node| node.parent.is_none())
+        .unwrap();
+    let old_data = link_children(&data_nodes, data_root, "sheetData");
+    let mut records = Vec::new();
+    for (index, sheet) in desired.sheets.iter().enumerate() {
+        let old_index = before
+            .and_then(|old| old.sheets.iter().position(|s| s.name == sheet.name))
+            .or_else(|| {
+                before
+                    .filter(|old| old.sheets.len() == desired.sheets.len())
+                    .map(|_| index)
+            });
+        let held = old_index
+            .and_then(|at| {
+                old_data.iter().find(|id| {
+                    link_attr(&data_xml, &data_nodes[**id], "sheetId")
+                        .and_then(|s| s.parse::<usize>().ok())
+                        == Some(at)
+                })
+            })
+            .copied();
+        if sheet.cells.is_empty() && held.is_none() {
+            continue;
+        }
+        let prefix = data_nodes[data_root]
+            .qualified
+            .rsplit_once(':')
+            .map_or(String::new(), |(prefix, _)| format!("{prefix}:"));
+        let template = format!("<{prefix}sheetData sheetId=\"{index}\"/>");
+        let old = held
+            .map(|id| &data_xml[data_nodes[id].start..data_nodes[id].end])
+            .or(Some(template.as_str()));
+        records.push(external_cache_sheet(
+            sheet,
+            index,
+            old,
+            before.and_then(|book| old_index.and_then(|at| book.sheets.get(at))),
+        )?);
+    }
+    let data_xml = link_replace_children(&data_xml, data_root, &data_nodes, "sheetData", &records)?;
+    let xml = link_book_section(xml, "sheetNames", &name_xml)?;
+    link_book_section(&xml, "sheetDataSet", &data_xml)
+}
+fn link_reference_identity(
+    xml: &str,
+    node: &LinkXmlNode,
+) -> Result<Option<(String, String)>, XlsxError> {
+    use quick_xml::name::ResolveResult;
+    let mut reader = quick_xml::reader::NsReader::from_str(xml);
+    loop {
+        let event = reader.read_event().map_err(XlsxError::Xml)?.into_owned();
+        let end = oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position());
+        if end == node.head {
+            if let Event::Start(tag) | Event::Empty(tag) = event {
+                for attribute in tag.attributes() {
+                    let attribute =
+                        attribute.map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+                    let (namespace, local) = reader.resolve_attribute(attribute.key);
+                    if local.as_ref() == b"id"
+                        && matches!(namespace,ResolveResult::Bound(uri)if matches!(uri.as_ref(),b"http://schemas.openxmlformats.org/officeDocument/2006/relationships"|b"http://purl.oclc.org/ooxml/officeDocument/relationships"))
+                    {
+                        return Ok(Some((
+                            String::from_utf8_lossy(attribute.key.as_ref()).into_owned(),
+                            attribute
+                                .decode_and_unescape_value(reader.decoder())
+                                .map_err(XlsxError::Xml)?
+                                .into_owned(),
+                        )));
+                    }
+                }
+            }
+            return Ok(None);
+        }
+        if matches!(event, Event::Eof) {
+            return Ok(None);
+        }
+    }
+}
+
+fn link_relation(
+    xml: &str,
+    id: &str,
+    kind: &str,
+    target: &str,
+    external: bool,
+) -> Result<String, XlsxError> {
+    let nodes = link_xml_nodes(xml)?;
+    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let matches = link_children(&nodes, root, "Relationship")
+        .into_iter()
+        .filter(|index| link_attr(xml, &nodes[*index], "Id").as_deref() == Some(id))
+        .collect::<Vec<_>>();
+    if matches.len() > 1 {
+        return Err(XlsxError::InvalidData(
+            "duplicate relationship identity".into(),
+        ));
+    }
+    if let Some(index) = matches.first() {
+        let node = &nodes[*index];
+        let record = xml_root_attributes(
+            &xml[node.start..node.end],
+            &[
+                ("Type", Some(kind.into())),
+                ("Target", Some(target.into())),
+                ("TargetMode", external.then(|| "External".into())),
+            ],
+        )?;
+        apply_style_xml_edits(xml, vec![(node.start, node.end, record)])
+    } else {
+        link_append(xml,&format!("<Relationship xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\" Id=\"{}\" Type=\"{}\" Target=\"{}\"{}/>",escape(id),escape(kind),escape(target),if external{" TargetMode=\"External\""}else{""}))
+    }
+}
+
+fn link_remove_relations(
+    xml: &str,
+    ids: &std::collections::HashSet<String>,
+) -> Result<String, XlsxError> {
+    let nodes = link_xml_nodes(xml)?;
+    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let edits = link_children(&nodes, root, "Relationship")
+        .into_iter()
+        .filter(|index| link_attr(xml, &nodes[*index], "Id").is_some_and(|id| ids.contains(&id)))
+        .map(|index| (nodes[index].start, nodes[index].end, String::new()))
+        .collect();
+    apply_style_xml_edits(xml, edits)
+}
+
+fn link_free_id(xml: &str) -> Result<String, XlsxError> {
+    let links =
+        parse_relationships(xml).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    (1u32..)
+        .map(|number| format!("rId{number}"))
+        .find(|id| !links.contains_key(id))
+        .ok_or_else(|| XlsxError::InvalidData("relationship identities exhausted".into()))
+}
+
+fn link_path_relationships(
+    xml: &str,
+    original_rels: &str,
+    book: &crate::ir::ExternalBook,
+) -> Result<(String, String), XlsxError> {
+    let nodes = link_xml_nodes(xml)?;
+    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let parent = *link_children(&nodes, root, "externalBook")
+        .first()
+        .ok_or_else(|| XlsxError::InvalidData("missing external-book element".into()))?;
+    let identity = link_reference_identity(xml, &nodes[parent])?;
+    let primary = identity
+        .as_ref()
+        .map(|(_, id)| id.clone())
+        .unwrap_or(link_free_id(original_rels)?);
+    let attribute = identity.as_ref().map_or("r:id", |(name, _)| name.as_str());
+    let original = parse_relationships(original_rels)
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    let target = book
+        .target
+        .as_deref()
+        .or_else(|| original.get(&primary).map(|link| link.target.as_str()))
+        .ok_or_else(|| XlsxError::InvalidData("new external book has no source target".into()))?;
+    let kind=original.get(&primary).map(|relation|relation.rel_type.as_str()).filter(|kind|kind.ends_with("/externalLinkPath")).unwrap_or(if nodes[root].namespace=="http://purl.oclc.org/ooxml/spreadsheetml/main"{"http://purl.oclc.org/ooxml/officeDocument/relationships/externalLinkPath"}else{"http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath"});
+    let relation_namespace = kind.strip_suffix("/externalLinkPath").unwrap();
+    let mut rels = link_relation(original_rels, &primary, kind, target, true)?;
+    let mut changed = xml_root_attributes(
+        &xml[nodes[parent].start..nodes[parent].end],
+        &[(attribute, Some(primary.clone()))],
+    )?;
+    // Preserve the source element's namespace declarations and opaque siblings.
+    if identity.is_none() && !changed.contains("xmlns:r=") {
+        changed = xml_root_attributes(&changed, &[("xmlns:r", Some(relation_namespace.into()))])?;
+    }
+    let mut output =
+        apply_style_xml_edits(xml, vec![(nodes[parent].start, nodes[parent].end, changed)])?;
+    let mut nodes = link_xml_nodes(&output)?;
+    let absolute = nodes.iter().position(|node| {
+        node.name == "absoluteUrl"
+            && node.namespace
+                == "http://schemas.microsoft.com/office/spreadsheetml/2021/extlinks2021"
+    });
+    match (&book.absolute_target, absolute) {
+        (Some(target), Some(index)) => {
+            let node = &nodes[index];
+            let identity = link_reference_identity(&output, node)?;
+            let id = identity
+                .as_ref()
+                .map(|(_, id)| id.clone())
+                .filter(|id| id != &primary)
+                .unwrap_or(link_free_id(&rels)?);
+            let attribute = identity.as_ref().map_or("r:id", |(name, _)| name.as_str());
+            rels = link_relation(&rels, &id, kind, target, true)?;
+            let patched =
+                xml_root_attributes(&output[node.start..node.end], &[(attribute, Some(id))])?;
+            output = apply_style_xml_edits(&output, vec![(node.start, node.end, patched)])?;
+        }
+        (Some(target), None) => {
+            let id = link_free_id(&rels)?;
+            rels = link_relation(&rels, &id, kind, target, true)?;
+            let parent = nodes
+                .iter()
+                .position(|node| node.name == "externalBook" && node.parent == Some(0))
+                .ok_or_else(|| XlsxError::InvalidData("missing external-book parent".into()))?;
+            let fragment=format!("<xxl21:alternateUrls xmlns:xxl21=\"http://schemas.microsoft.com/office/spreadsheetml/2021/extlinks2021\"><xxl21:absoluteUrl xmlns:r=\"{}\" r:id=\"{}\"/></xxl21:alternateUrls>",relation_namespace,escape(&id));
+            output = link_insert(&output, &nodes[parent], nodes[parent].head, &fragment)?;
+        }
+        (None, Some(index)) => {
+            if let Some(id) = link_reference_identity(&output, &nodes[index])?
+                .map(|(_, id)| id)
+                .filter(|id| id != &primary)
+            {
+                rels = link_remove_relations(&rels, &std::collections::HashSet::from([id]))?;
+            }
+            output = apply_style_xml_edits(
+                &output,
+                vec![(nodes[index].start, nodes[index].end, String::new())],
+            )?;
+        }
+        (None, None) => {}
+    }
+    nodes.clear();
+    Ok((output, rels))
+}
+
+fn write_external_books(
+    package: &[u8],
+    original: &[crate::ir::ExternalBook],
+    desired: &[crate::ir::ExternalBook],
+) -> Result<Vec<u8>, XlsxError> {
+    let mut archive = OoxmlArchive::new(package)?;
+    let mut workbook = archive.read_part("xl/workbook.xml")?;
+    let mut relationships = archive.read_part("xl/_rels/workbook.xml.rels")?;
+    let mut types = archive.read_part("[Content_Types].xml")?;
+    let parsed = parse_relationships(&relationships)
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    let root_nodes = link_xml_nodes(&workbook)?;
+    let root = root_nodes
+        .iter()
+        .position(|node| node.parent.is_none())
+        .unwrap();
+    let namespace = root_nodes[root].namespace.clone();
+    let relation_namespace = if namespace == "http://purl.oclc.org/ooxml/spreadsheetml/main" {
+        "http://purl.oclc.org/ooxml/officeDocument/relationships"
+    } else {
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    };
+    let known: std::collections::HashSet<_> = original
+        .iter()
+        .filter_map(|book| book.origin_part.clone())
+        .collect();
+    let old_ids: std::collections::HashSet<_> = parsed
+        .iter()
+        .filter_map(|(id, relation)| {
+            (relation.rel_type.ends_with("/externalLink")
+                && known.contains(&resolve_part_target("xl/workbook.xml", &relation.target)))
+            .then(|| id.clone())
+        })
+        .collect();
+    let mut occupied: std::collections::HashSet<_> = archive.file_names().into_iter().collect();
+    let mut used = std::collections::HashSet::new();
+    let mut used_ids = std::collections::HashSet::new();
+    let mut replacements = BTreeMap::<String, Vec<u8>>::new();
+    let mut references = Vec::new();
+    let mut parts = Vec::new();
+    for (index, asked) in desired.iter().enumerate() {
+        let before = if let Some(part) = &asked.origin_part {
+            Some(
+                original
+                    .iter()
+                    .find(|book| book.origin_part.as_ref() == Some(part))
+                    .ok_or_else(|| {
+                        XlsxError::InvalidData(
+                            "external book source identity is not in this workbook".into(),
+                        )
+                    })?,
+            )
+        } else {
+            original.get(index).filter(|old| {
+                asked
+                    .target
+                    .as_ref()
+                    .is_none_or(|target| old.target.as_ref() == Some(target))
+                    && asked
+                        .absolute_target
+                        .as_ref()
+                        .is_none_or(|target| old.absolute_target.as_ref() == Some(target))
+            })
+        };
+        let mut book = asked.clone();
+        if let Some(old) = before {
+            if book.target.is_none() {
+                book.target = old.target.clone();
+            }
+        }
+        let source = before.and_then(|book| book.origin_part.as_ref());
+        let part = source
+            .filter(|part| !used.contains(*part))
+            .cloned()
+            .unwrap_or_else(|| {
+                (1u32..)
+                    .map(|number| format!("xl/externalLinks/externalLink{number}.xml"))
+                    .find(|part| !occupied.iter().any(|held| held.eq_ignore_ascii_case(part)))
+                    .expect("finite occupied package paths")
+            });
+        occupied.insert(part.clone());
+        used.insert(part.clone());
+        parts.push(part.clone());
+        let rel_path = |part: &str| {
+            let (parent, leaf) = part.rsplit_once('/').unwrap_or(("", part));
+            format!("{parent}/_rels/{leaf}.rels")
+        };
+        let xml = if let Some(source) = source {
+            archive.read_part(source)?
+        } else {
+            format!("<externalLink xmlns=\"{}\"><externalBook xmlns:r=\"{}\" r:id=\"rId1\"><sheetNames/><sheetDataSet/></externalBook></externalLink>",if namespace.is_empty(){"http://schemas.openxmlformats.org/spreadsheetml/2006/main"}else{&namespace},relation_namespace)
+        };
+        let rels=source.map(|part|archive.try_read_part(&rel_path(part))).transpose()?.flatten().unwrap_or_else(||"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"/>".into());
+        let (xml, rels) = if before.is_some_and(|old| {
+            old.target == book.target && old.absolute_target == book.absolute_target
+        }) {
+            (xml, rels)
+        } else {
+            link_path_relationships(&xml, &rels, &book)?
+        };
+        let xml = patch_external_cache(&xml, &book, before)?;
+        replacements.insert(part.clone(), xml.into_bytes());
+        replacements.insert(rel_path(&part), rels.into_bytes());
+        let id = parsed
+            .iter()
+            .find_map(|(id, relation)| {
+                (old_ids.contains(id)
+                    && !used_ids.contains(id)
+                    && resolve_part_target("xl/workbook.xml", &relation.target) == part)
+                    .then(|| id.clone())
+            })
+            .unwrap_or(link_free_id(&relationships)?);
+        relationships = link_relation(
+            &relationships,
+            &id,
+            &format!("{relation_namespace}/externalLink"),
+            &relative_sheet_target("xl/workbook.xml", &part),
+            false,
+        )?;
+        used_ids.insert(id.clone());
+        references.push(format!(
+            "<externalReference xmlns=\"{}\" xmlns:r=\"{}\" r:id=\"{}\"/>",
+            escape(&namespace),
+            relation_namespace,
+            escape(&id)
+        ));
+    }
+    relationships = link_remove_relations(
+        &relationships,
+        &old_ids.difference(&used_ids).cloned().collect(),
+    )?;
+    let nodes = link_xml_nodes(&workbook)?;
+    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let held = link_children(&nodes, root, "externalReferences");
+    let section = if references.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<externalReferences xmlns=\"{}\">{}</externalReferences>",
+            escape(&namespace),
+            references.join("")
+        )
+    };
+    if held.len() > 1 {
+        return Err(XlsxError::InvalidData(
+            "duplicate workbook external reference lists".into(),
+        ));
+    }
+    workbook = if let Some(index) = held.first() {
+        // Keep unknown records and the original section attributes.
+        if references.is_empty() {
+            let patched =
+                link_replace_children(&workbook, *index, &nodes, "externalReference", &references)?;
+            let remaining = link_xml_nodes(&patched)?;
+            let node = remaining
+                .iter()
+                .find(|node| node.name == "externalReferences" && node.parent == Some(root))
+                .unwrap();
+            let mut reader = Reader::from_str(&patched[node.start..node.head]);
+            let attributes = match reader.read_event().map_err(XlsxError::Xml)? {
+                Event::Start(tag) | Event::Empty(tag) => tag
+                    .attributes()
+                    .flatten()
+                    .any(|a| !a.key.as_ref().starts_with(b"xmlns")),
+                _ => false,
+            };
+            if attributes || !patched[node.head..node.close].trim().is_empty() {
+                patched
+            } else {
+                apply_style_xml_edits(&patched, vec![(node.start, node.end, String::new())])?
+            }
+        } else {
+            link_replace_children(&workbook, *index, &nodes, "externalReference", &references)?
+        }
+    } else if section.is_empty() {
+        workbook
+    } else {
+        let at = nodes
+            .iter()
+            .filter(|node| {
+                node.parent == Some(root)
+                    && node.namespace == nodes[root].namespace
+                    && matches!(node.name.as_str(), "sheets" | "functionGroups")
+            })
+            .map(|node| node.end)
+            .max()
+            .unwrap_or(nodes[root].head);
+        link_insert(&workbook, &nodes[root], at, &section)?
+    };
+    let removed: std::collections::HashSet<_> = known.difference(&used).cloned().collect();
+    let nodes = link_xml_nodes(&types)?;
+    let root = nodes.iter().position(|node| node.parent.is_none()).unwrap();
+    let mut edits = Vec::new();
+    let mut declared = std::collections::HashSet::new();
+    for index in link_children(&nodes, root, "Override") {
+        let path = link_attr(&types, &nodes[index], "PartName").unwrap_or_default();
+        let path = path.trim_start_matches('/');
+        if removed.contains(path) {
+            edits.push((nodes[index].start, nodes[index].end, String::new()));
+        } else {
+            declared.insert(path.to_owned());
+        }
+    }
+    types = apply_style_xml_edits(&types, edits)?;
+    for part in &parts {
+        if !declared.contains(part) {
+            types=link_append(&types,&format!("<Override xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\" PartName=\"/{}\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml\"/>",escape(part)))?;
+        }
+    }
+    replacements.insert("xl/workbook.xml".into(), workbook.into_bytes());
+    replacements.insert(
+        "xl/_rels/workbook.xml.rels".into(),
+        relationships.into_bytes(),
+    );
+    replacements.insert("[Content_Types].xml".into(), types.into_bytes());
+    let mut removed_parts = removed.clone();
+    for part in &removed {
+        let (parent, leaf) = part.rsplit_once('/').unwrap_or(("", part));
+        removed_parts.insert(format!("{parent}/_rels/{leaf}.rels"));
+    }
+    let mut input = ZipArchive::new(Cursor::new(package))
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    let mut output = ZipWriter::new(Cursor::new(Vec::new()));
+    output.set_raw_comment(input.comment().into());
+    for index in 0..input.len() {
+        let entry = input
+            .by_index(index)
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        let name = entry.name().to_owned();
+        if removed_parts.contains(&name) {
+            continue;
+        }
+        if let Some(bytes) = replacements.remove(&name) {
+            let options = SimpleFileOptions::default()
+                .compression_method(entry.compression())
+                .last_modified_time(entry.last_modified().unwrap_or_default());
+            output
+                .start_file(name, options)
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            output
+                .write_all(&bytes)
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        } else {
+            output
+                .raw_copy_file(entry)
+                .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        }
+    }
+    for (part, bytes) in replacements {
+        output
+            .start_file(
+                part,
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
+            )
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+        output
+            .write_all(&bytes)
+            .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+    }
+    Ok(output
+        .finish()
+        .map_err(|error| XlsxError::InvalidData(error.to_string()))?
+        .into_inner())
+}
+
+
 /// Rewrites names with their current sheet index and retained attributes.
 fn patch_workbook_names(xml: &str, names: &[(String, String)], attributes: &crate::ir::DefinedNameAttributes) -> Result<String, XlsxError> {
     let (start, end) = match xml.find("<definedNames") {
@@ -18773,4 +19640,442 @@ xmlns:f="urn:oxi:foreign-style-probe" xmlns:mc="http://schemas.openxmlformats.or
         assert_eq!(patch_saved_font_descents(&changed, &unknown, Some((original, &unknown)), true).unwrap(), changed);
     }
 
+}
+
+#[cfg(test)]
+mod external_link_edit_tests {
+    use super::*;
+    fn linked_cell(workbook: &Workbook) -> &CellValue {
+        &workbook
+            .sheets
+            .iter()
+            .find(|sheet| sheet.name.starts_with("Source"))
+            .unwrap()
+            .rows
+            .iter()
+            .find(|row| row.index == 1)
+            .unwrap()
+            .cells
+            .iter()
+            .find(|cell| cell.col == 4)
+            .unwrap()
+            .value
+    }
+
+    fn replace_link_test_parts(bytes: &[u8], changes: &BTreeMap<String, String>) -> Vec<u8> {
+        let mut input = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut output = ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..input.len() {
+            let entry = input.by_index(index).unwrap();
+            if let Some(xml) = changes.get(entry.name()) {
+                output
+                    .start_file(
+                        entry.name(),
+                        SimpleFileOptions::default()
+                            .compression_method(zip::CompressionMethod::Deflated),
+                    )
+                    .unwrap();
+                output.write_all(xml.as_bytes()).unwrap();
+            } else {
+                output.raw_copy_file(entry).unwrap();
+            }
+        }
+        output.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn native_external_caches_update_without_losing_targets_or_unrelated_parts() {
+        let cases = crate::parser::native_external_link_corpus();
+        assert_eq!(cases.len(), 16);
+        for (case_index, (bytes, control)) in cases.into_iter().enumerate() {
+            let guard = bytes.clone();
+            let mut editor = XlsxEditor::new(&bytes).unwrap();
+            let mut desired = editor.workbook().clone();
+            let original = desired.external_books[0].clone();
+            desired.external_books[0].sheets.last_mut().unwrap().cells[0].2 =
+                CellValue::Number(201.0);
+            crate::formula::evaluate_workbook_formulas(&mut desired);
+            editor.apply_workbook(&desired).unwrap();
+            assert!(editor.has_edits());
+            let saved = editor.save().unwrap();
+            if let Some(directory) = std::env::var_os("OXI_VBA_EXTERNAL_CACHE_CAPTURE") {
+                let directory = std::path::PathBuf::from(directory);
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(directory.join(format!("case-{case_index:02}.xlsx")))
+                    .unwrap();
+                file.write_all(&saved).unwrap();
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(directory.join(format!("case-{case_index:02}.json")))
+                    .unwrap();
+                file.write_all(&serde_json::to_vec(&control).unwrap())
+                    .unwrap();
+            }
+            let mut reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+            assert_eq!(reopened.external_books[0].target, original.target);
+            assert_eq!(
+                reopened.external_books[0].absolute_target,
+                original.absolute_target
+            );
+            assert_eq!(reopened.external_books[0].origin_part, original.origin_part);
+            assert!(
+                matches!(linked_cell(&reopened),CellValue::Number(value)if value.to_bits()==201.0_f64.to_bits())
+            );
+            crate::formula::evaluate_workbook_formulas(&mut reopened);
+            assert!(matches!(linked_cell(&reopened),CellValue::Number(value)if *value==201.0));
+            let mut before = OoxmlArchive::new(&bytes).unwrap();
+            let mut after = OoxmlArchive::new(&saved).unwrap();
+            let part = control["part"].as_str().unwrap();
+            let (parent, leaf) = part.rsplit_once('/').unwrap();
+            let rels = format!("{parent}/_rels/{leaf}.rels");
+            assert_eq!(
+                before.read_binary_part(&rels).unwrap(),
+                after.read_binary_part(&rels).unwrap()
+            );
+            for part in [
+                "docProps/app.xml",
+                "docProps/core.xml",
+                "xl/theme/theme1.xml",
+            ] {
+                if let Some(original) = before.try_read_part(part).unwrap() {
+                    assert_eq!(after.read_part(part).unwrap(), original);
+                }
+            }
+            assert_eq!(bytes, guard);
+            assert_eq!(XlsxEditor::new(&saved).unwrap().save().unwrap(), saved);
+        }
+    }
+
+    #[test]
+    fn external_links_can_be_added_reordered_and_removed_with_stable_source_parts() {
+        let (bytes, _) = crate::parser::native_external_link_corpus()
+            .into_iter()
+            .next()
+            .unwrap();
+        let mut editor = XlsxEditor::new(&bytes).unwrap();
+        let mut desired = editor.workbook().clone();
+        let mut added = desired.external_books[0].clone();
+        added.origin_part = None;
+        added.target = Some("other.xlsx".into());
+        added.absolute_target = Some("file:///D:/other.xlsx".into());
+        added.sheets.last_mut().unwrap().cells[0].2 = CellValue::Number(300.0);
+        desired.external_books.push(added);
+        for sheet in &mut desired.sheets {
+            for row in &mut sheet.rows {
+                for cell in &mut row.cells {
+                    if let Some(formula) = &mut cell.formula {
+                        *formula = formula.replace("[1]", "[2]");
+                    }
+                }
+            }
+        }
+        crate::formula::evaluate_workbook_formulas(&mut desired);
+        editor.apply_workbook(&desired).unwrap();
+        let saved = editor.save().unwrap();
+        let mut desired = crate::parse_xlsx_preserving_values(&saved).unwrap();
+        assert_eq!(desired.external_books.len(), 2);
+        assert_eq!(
+            desired.external_books[1].target.as_deref(),
+            Some("other.xlsx")
+        );
+        assert!(matches!(linked_cell(&desired),CellValue::Number(value)if *value==300.0));
+        let parts = desired
+            .external_books
+            .iter()
+            .map(|book| book.origin_part.clone().unwrap())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(parts.len(), 2);
+        desired.external_books.swap(0, 1);
+        for sheet in &mut desired.sheets {
+            for row in &mut sheet.rows {
+                for cell in &mut row.cells {
+                    if let Some(formula) = &mut cell.formula {
+                        *formula = formula.replace("[2]", "[1]");
+                    }
+                }
+            }
+        }
+        let mut editor = XlsxEditor::new(&saved).unwrap();
+        editor.apply_workbook(&desired).unwrap();
+        let reordered = editor.save().unwrap();
+        let mut desired = crate::parse_xlsx_preserving_values(&reordered).unwrap();
+        assert_eq!(
+            desired.external_books[0].target.as_deref(),
+            Some("other.xlsx")
+        );
+        assert_eq!(
+            desired
+                .external_books
+                .iter()
+                .map(|book| book.origin_part.clone().unwrap())
+                .collect::<std::collections::HashSet<_>>(),
+            parts
+        );
+        crate::formula::evaluate_workbook_formulas(&mut desired);
+        assert!(matches!(linked_cell(&desired),CellValue::Number(value)if *value==300.0));
+        desired.external_books.clear();
+        for sheet in &mut desired.sheets {
+            for row in &mut sheet.rows {
+                for cell in &mut row.cells {
+                    cell.formula = None;
+                }
+            }
+        }
+        let mut editor = XlsxEditor::new(&reordered).unwrap();
+        editor.apply_workbook(&desired).unwrap();
+        let removed = editor.save().unwrap();
+        assert!(crate::parse_xlsx_preserving_values(&removed)
+            .unwrap()
+            .external_books
+            .is_empty());
+        let archive = OoxmlArchive::new(&removed).unwrap();
+        for part in parts {
+            assert!(!archive.file_names().contains(&part));
+        }
+        let mut editor = XlsxEditor::new(&bytes).unwrap();
+        let mut legacy = editor.workbook().clone();
+        for book in &mut legacy.external_books {
+            book.origin_part = None;
+            book.target = None;
+            book.absolute_target = None;
+        }
+        editor.apply_workbook(&legacy).unwrap();
+        assert!(!editor.has_edits());
+        assert_eq!(editor.save().unwrap(), bytes);
+    }
+
+    #[test]
+    fn external_cache_edits_preserve_prefixed_opaque_xml_and_relationship_metadata() {
+        let (bytes, control) = crate::parser::native_external_link_corpus()
+            .into_iter()
+            .next()
+            .unwrap();
+        let part = control["part"].as_str().unwrap().to_owned();
+        let mut source = OoxmlArchive::new(&bytes).unwrap();
+        let mut xml = source.read_part(&part).unwrap();
+        xml = xml
+            .replace(
+                "<externalBook ",
+                "<externalBook xmlns:u=\"urn:opaque\" u:book=\"keep\" u:id=\"foreign-id\" ",
+            )
+            .replace(
+                "<sheetName val=\"Kept\"",
+                "<sheetName u:name=\"keep\" val=\"Kept\"",
+            )
+            .replace(
+                "<sheetData sheetId=\"1\"",
+                "<sheetData u:sheet=\"keep\" sheetId=\"1\"",
+            )
+            .replace("<row r=\"1\"", "<row u:row=\"keep\" r=\"1\"")
+            .replace("<cell r=\"A1\"", "<cell u:cell=\"keep\" r=\"A1\"")
+            .replace("</sheetDataSet>", "<u:cache-extra/></sheetDataSet>");
+        xml = xml.replace(
+            "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"",
+            "xmlns:p=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"",
+        );
+        for name in [
+            "externalLink",
+            "externalBook",
+            "sheetNames",
+            "sheetName",
+            "sheetDataSet",
+            "sheetData",
+            "row",
+            "cell",
+            "v",
+        ] {
+            xml = xml
+                .replace(&format!("<{name}>"), &format!("<p:{name}>"))
+                .replace(&format!("<{name} "), &format!("<p:{name} "))
+                .replace(&format!("</{name}>"), &format!("</p:{name}>"));
+        }
+        let book = source.read_part("xl/workbook.xml").unwrap().replace(
+            "<externalReferences>",
+            "<externalReferences xmlns:u=\"urn:opaque\" u:keep=\"refs\"><u:kept/>",
+        );
+        let bytes = replace_link_test_parts(
+            &bytes,
+            &BTreeMap::from([(part.clone(), xml), ("xl/workbook.xml".into(), book)]),
+        );
+        let mut editor = XlsxEditor::new(&bytes).unwrap();
+        let mut desired = editor.workbook().clone();
+        desired.external_books[0].sheets.last_mut().unwrap().cells[0].2 =
+            CellValue::String("A&B <value>".into());
+        desired.external_books[0].target = Some("new&book.xlsx".into());
+        desired.external_books[0].absolute_target = Some("file:///D:/new%26book.xlsx".into());
+        editor.apply_workbook(&desired).unwrap();
+        let saved = editor.save().unwrap();
+        let reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+        assert_eq!(
+            reopened.external_books[0].target.as_deref(),
+            Some("new&book.xlsx")
+        );
+        assert!(
+            matches!(&reopened.external_books[0].sheets.last().unwrap().cells[0].2,CellValue::String(value)if value=="A&B <value>")
+        );
+        let mut archive = OoxmlArchive::new(&saved).unwrap();
+        let xml = archive.read_part(&part).unwrap();
+        for marker in [
+            "u:book=\"keep\"",
+            "u:id=\"foreign-id\"",
+            "u:name=\"keep\"",
+            "u:sheet=\"keep\"",
+            "u:row=\"keep\"",
+            "u:cell=\"keep\"",
+            "<u:cache-extra/>",
+        ] {
+            assert!(
+                xml.contains(marker),
+                "missing opaque marker {marker}: {xml}"
+            );
+        }
+        let workbook = archive.read_part("xl/workbook.xml").unwrap();
+        assert!(workbook.contains("u:keep=\"refs\""));
+        assert!(workbook.contains("<u:kept/>"));
+        let mut editor = XlsxEditor::new(&saved).unwrap();
+        let mut removed = editor.workbook().clone();
+        removed.external_books.clear();
+        for sheet in &mut removed.sheets {
+            for row in &mut sheet.rows {
+                for cell in &mut row.cells {
+                    cell.formula = None;
+                }
+            }
+        }
+        editor.apply_workbook(&removed).unwrap();
+        let removed = editor.save().unwrap();
+        let mut archive = OoxmlArchive::new(&removed).unwrap();
+        let workbook = archive.read_part("xl/workbook.xml").unwrap();
+        assert!(workbook.contains("u:keep=\"refs\""));
+        assert!(workbook.contains("<u:kept/>"));
+    }
+
+    #[test]
+    fn external_cache_values_keep_types_ieee_bits_and_utf16_across_repeated_edits() {
+        let (bytes, _) = crate::parser::native_external_link_corpus()
+            .into_iter()
+            .next()
+            .unwrap();
+        let values = [
+            CellValue::Number(-0.0),
+            CellValue::Number(0.0),
+            CellValue::Number(f64::from_bits(0x3ff0000000000001)),
+            CellValue::Number(f64::MIN_POSITIVE),
+            CellValue::Number(f64::from_bits(1)),
+            CellValue::Number(f64::MAX),
+            CellValue::Boolean(false),
+            CellValue::Boolean(true),
+            CellValue::Empty,
+            CellValue::String(String::new()),
+            CellValue::Error("#REF!".into()),
+            CellValue::String("A&B <value> _x0041_\r\n\0".into()),
+            CellValue::String("\u{65e5}\u{672c}\u{8a9e}\u{1f642}".into()),
+            CellValue::Utf16(vec![0xD800, 0x0041, 0xDC00, 0xD83D, 0xDE42]),
+        ];
+        let mut package = bytes;
+        for expected in values {
+            let mut editor = XlsxEditor::new(&package).unwrap();
+            let mut desired = editor.workbook().clone();
+            desired.external_books[0].sheets.last_mut().unwrap().cells[0].2 = expected.clone();
+            editor.apply_workbook(&desired).unwrap();
+            assert!(editor.has_edits(), "edit lost for {expected:?}");
+            package = editor.save().unwrap();
+            let reopened = crate::parse_xlsx_preserving_values(&package).unwrap();
+            let actual = &reopened.external_books[0].sheets.last().unwrap().cells[0].2;
+            match (&expected, actual) {
+                (CellValue::Number(expected), CellValue::Number(actual)) => {
+                    assert_eq!(actual.to_bits(), expected.to_bits())
+                }
+                _ => assert_eq!(actual, &expected),
+            }
+            assert_eq!(XlsxEditor::new(&package).unwrap().save().unwrap(), package);
+        }
+    }
+
+    #[test]
+    fn external_absolute_target_can_be_removed_without_rewriting_the_primary_target() {
+        let (bytes, _) = crate::parser::native_external_link_corpus()
+            .into_iter()
+            .next()
+            .unwrap();
+        let mut editor = XlsxEditor::new(&bytes).unwrap();
+        let mut desired = editor.workbook().clone();
+        let primary = desired.external_books[0].target.clone();
+        assert!(desired.external_books[0].absolute_target.is_some());
+        desired.external_books[0].absolute_target = None;
+        editor.apply_workbook(&desired).unwrap();
+        let saved = editor.save().unwrap();
+        let reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+        assert_eq!(reopened.external_books[0].absolute_target, None);
+        assert_eq!(reopened.external_books[0].target, primary);
+        let part = reopened.external_books[0].origin_part.as_ref().unwrap();
+        let (parent, leaf) = part.rsplit_once('/').unwrap();
+        let mut archive = OoxmlArchive::new(&saved).unwrap();
+        let relations = parse_relationships(
+            &archive
+                .read_part(&format!("{parent}/_rels/{leaf}.rels"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            relations
+                .values()
+                .filter(|relation| relation.rel_type.ends_with("/externalLinkPath"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn strict_external_links_use_strict_relationship_namespaces_when_adding_absolute_urls() {
+        let (bytes, _) = crate::parser::native_external_link_corpus()
+            .into_iter()
+            .next()
+            .unwrap();
+        let mut archive = OoxmlArchive::new(&bytes).unwrap();
+        let mut changes = BTreeMap::new();
+        for part in archive.file_names() {
+            if part.ends_with(".xml") || part.ends_with(".rels") {
+                let xml = archive
+                    .read_part(&part)
+                    .unwrap()
+                    .replace(
+                        "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                        "http://purl.oclc.org/ooxml/spreadsheetml/main",
+                    )
+                    .replace(
+                        "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+                        "http://purl.oclc.org/ooxml/officeDocument/relationships",
+                    );
+                changes.insert(part, xml);
+            }
+        }
+        let bytes = replace_link_test_parts(&bytes, &changes);
+        let mut editor = XlsxEditor::new(&bytes).unwrap();
+        let mut desired = editor.workbook().clone();
+        let mut new_book = desired.external_books[0].clone();
+        new_book.origin_part = None;
+        new_book.target = Some("strict-other.xlsx".into());
+        new_book.absolute_target = Some("file:///D:/strict-other.xlsx".into());
+        desired.external_books.push(new_book);
+        editor.apply_workbook(&desired).unwrap();
+        let saved = editor.save().unwrap();
+        let reopened = crate::parse_xlsx_preserving_values(&saved).unwrap();
+        assert_eq!(reopened.external_books.len(), 2);
+        assert_eq!(
+            reopened.external_books[1].absolute_target.as_deref(),
+            Some("file:///D:/strict-other.xlsx")
+        );
+        let part = reopened.external_books[1].origin_part.as_ref().unwrap();
+        let mut archive = OoxmlArchive::new(&saved).unwrap();
+        let xml = archive.read_part(part).unwrap();
+        assert!(
+            !xml.contains("http://schemas.openxmlformats.org/officeDocument/2006/relationships"),
+            "{xml}"
+        );
+        assert!(xml.contains("http://purl.oclc.org/ooxml/officeDocument/relationships"));
+    }
 }

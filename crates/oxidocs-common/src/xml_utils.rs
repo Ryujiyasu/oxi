@@ -2,6 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+/// Convert a slice-reader offset to a byte position in its original XML.
+/// quick-xml excludes a skipped UTF-8 BOM from its buffer position.
+pub fn xml_byte_position(xml: &str, reader_position: u64) -> usize {
+    reader_position as usize + if xml.as_bytes().starts_with(&[0xEF, 0xBB, 0xBF]) { 3 } else { 0 }
+}
+
 /// Extract local name from a potentially namespaced XML tag (e.g., "w:body" -> "body")
 pub fn local_name(name: &[u8]) -> String {
     let s = std::str::from_utf8(name).unwrap_or("");

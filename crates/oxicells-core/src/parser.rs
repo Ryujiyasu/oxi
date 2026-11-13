@@ -541,6 +541,42 @@ fn parse_external_references(xml: &str) -> Vec<String> {
 /// when it held text and `t="b"` for a Boolean 遯ｶ繝ｻthe same shorthand a
 /// worksheet uses, minus the shared-string table, since the text is written
 /// out here rather than pooled.
+fn parse_external_link_with_identity(archive: &mut OoxmlArchive, part: &str, xml: &str) -> Result<ExternalBook,XlsxError> {
+    use quick_xml::name::ResolveResult;
+    let mut book=parse_external_link(xml);book.origin_part=Some(part.to_owned());
+    let (parent,leaf)=part.rsplit_once('/').unwrap_or(("",part));
+    let rels=if parent.is_empty(){format!("_rels/{leaf}.rels")}else{format!("{parent}/_rels/{leaf}.rels")};
+    let Some(rels)=archive.try_read_part(&rels)? else {return Ok(book)};
+    let relationships=oxidocs_common::relationships::parse_relationships(&rels)?;
+    let mut primary=None;let mut absolute=None;
+    let mut reader=quick_xml::reader::NsReader::from_str(xml);
+    loop {
+        let event=reader.read_event().map_err(XlsxError::Xml)?.into_owned();
+        match event {
+            Event::Start(element)|Event::Empty(element)=>{
+                let (namespace,local)=reader.resolve_element(element.name());
+                let standard=matches!(namespace,ResolveResult::Bound(uri)if matches!(uri.as_ref(),b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"|b"http://purl.oclc.org/ooxml/spreadsheetml/main"));
+                let alternate=matches!(namespace,ResolveResult::Bound(uri)if uri.as_ref()==b"http://schemas.microsoft.com/office/spreadsheetml/2021/extlinks2021");
+                let destination=if standard && local.as_ref()==b"externalBook"{&mut primary}
+                    else if alternate && local.as_ref()==b"absoluteUrl"{&mut absolute}else{continue};
+                for attribute in element.attributes() {
+                    let attribute=attribute.map_err(|error|XlsxError::InvalidData(error.to_string()))?;
+                    let (namespace,local)=reader.resolve_attribute(attribute.key);
+                    let relationship=matches!(namespace,ResolveResult::Bound(uri)if matches!(uri.as_ref(),b"http://schemas.openxmlformats.org/officeDocument/2006/relationships"|b"http://purl.oclc.org/ooxml/officeDocument/relationships"));
+                    if relationship && local.as_ref()==b"id" {
+                        if destination.is_some(){return Err(XlsxError::InvalidData("duplicate external-book relationship identity".into()))}
+                        *destination=Some(attribute.decode_and_unescape_value(reader.decoder()).map_err(XlsxError::Xml)?.into_owned());
+                    }
+                }
+            },
+            Event::Eof=>break,
+            _=>{},
+        }
+    }
+    let target=|id:Option<String>|id.and_then(|id|relationships.get(&id)).filter(|relationship|relationship.rel_type.ends_with("/externalLinkPath") && relationship.target_mode.as_deref()==Some("External")).map(|relationship|relationship.target.clone());
+    book.target=target(primary);book.absolute_target=target(absolute);Ok(book)
+}
+
 fn parse_external_link(xml: &str) -> ExternalBook {
     let mut reader = Reader::from_str(xml);
     let mut sheets: Vec<ExternalSheet> = Vec::new();
@@ -587,13 +623,13 @@ fn parse_external_link(xml: &str) -> ExternalBook {
             _ => {}
         }
     }
-    ExternalBook { sheets }
+    ExternalBook { sheets, ..Default::default() }
 }
 
 /// What a cached cell held, from the shorthand the link part writes.
 fn cached_cell_value(kind: &str, text: &str) -> CellValue {
     match kind {
-        "str" | "s" => CellValue::String(text.to_string()),
+        "str" | "s" => CellValue::from_utf16(crate::string_value::decode(text)),
         "b" => CellValue::Boolean(text != "0"),
         "e" => CellValue::Error(text.to_string()),
         _ => match text.parse::<f64>() {
@@ -6288,7 +6324,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
             format!("xl/{target}")
         };
         match archive.try_read_part(&part)? {
-            Some(xml) => external_books.push(parse_external_link(&xml)),
+            Some(xml) => external_books.push(parse_external_link_with_identity(&mut archive,&part,&xml)?),
             None => external_books.push(ExternalBook::default()),
         }
     }
@@ -6607,7 +6643,54 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
 }
 
 #[cfg(test)]
+pub(crate) fn native_external_link_corpus() -> Vec<(Vec<u8>,serde_json::Value)> {
+        use std::io::Read;
+        // Self-authored complete Excel conformance corpus: CC BY-SA 4.0.
+        let bytes=include_bytes!("../../../tests/fixtures/external_link_native_caches.zip").as_slice();
+        let mut archive=zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut text=String::new();archive.by_name("controls.json").unwrap().read_to_string(&mut text).unwrap();
+        let rows:serde_json::Value=serde_json::from_str(&text).unwrap();assert_eq!(rows.as_array().unwrap().len(),16);
+        rows.as_array().unwrap().iter().map(|row|{
+            let mut bytes=Vec::new();archive.by_name(row["file"].as_str().unwrap()).unwrap().read_to_end(&mut bytes).unwrap();
+            (bytes,row.clone())
+        }).collect()
+}
+
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn native_external_link_identities_and_unrounded_caches_survive_parse_and_recalculation() {
+        for (bytes,row)in native_external_link_corpus() {
+            let mut workbook=crate::parse_xlsx_preserving_values(&bytes).unwrap();assert_eq!(workbook.external_books.len(),1);
+            let book=&workbook.external_books[0];
+            assert_eq!(book.origin_part.as_deref(),row["part"].as_str());
+            assert_eq!(book.target.as_deref(),row["target"].as_str());assert_eq!(book.absolute_target.as_deref(),row["absolute_target"].as_str());
+            let expected_names=row["sheets"].as_array().unwrap().iter().map(|name|name.as_str().unwrap()).collect::<Vec<_>>();
+            assert_eq!(book.sheets.iter().map(|sheet|sheet.name.as_str()).collect::<Vec<_>>(),expected_names);
+            assert_eq!(book.sheets.iter().map(|sheet|sheet.cells.len()).sum::<usize>(),row["cells"].as_array().unwrap().len());
+            for expected in row["cells"].as_array().unwrap() {
+                let sheet=book.sheets.iter().find(|sheet|sheet.name==expected["sheet"].as_str().unwrap()).unwrap();
+                let (col,index)=parse_cell_ref(expected["cell"].as_str().unwrap());
+                let cell=&sheet.cells.iter().find(|(r,c,_)|*r==index+1 && *c==col).unwrap().2;
+                match expected["kind"].as_str() {
+                    Some("str")=>assert!(matches!(cell,CellValue::String(value)if value==expected["value"].as_str().unwrap())),
+                    None=>assert!(matches!(cell,CellValue::Number(value)if value.to_bits()==expected["value"].as_str().unwrap().parse::<f64>().unwrap().to_bits())),
+                    other=>panic!("unexpected full Native cache kind {other:?}"),
+                }
+            }
+            let json=serde_json::to_vec(&workbook).unwrap();let restored:Workbook=serde_json::from_slice(&json).unwrap();
+            assert_eq!(serde_json::to_value(&restored.external_books).unwrap(),serde_json::to_value(&workbook.external_books).unwrap());
+            assert_eq!(crate::editor::XlsxEditor::new(&bytes).unwrap().save().unwrap(),bytes);
+            crate::formula::evaluate_workbook_formulas(&mut workbook);
+            let copied=workbook.sheets.iter().find(|sheet|sheet.name==expected_names[0]).unwrap();
+            let e1=&copied.rows.iter().find(|row|row.index==1).unwrap().cells.iter().find(|cell|cell.col==4).unwrap().value;
+            assert!(matches!(e1,CellValue::Number(value)if value.to_bits()==200.0_f64.to_bits()));
+        }
+        let legacy:ExternalBook=serde_json::from_str(r#"{"sheets":[]}"#).unwrap();
+        assert!(legacy.origin_part.is_none() && legacy.target.is_none() && legacy.absolute_target.is_none());
+    }
+
+
     #[test]
     fn saved_array_recalculation_is_driven_by_aca_not_cached_results() {
         let xml = r#"<worksheet><extLst><c r="Z1"><f t="array" aca="1">1</f></c></extLst>
