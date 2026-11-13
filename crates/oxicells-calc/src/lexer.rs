@@ -4377,3 +4377,86 @@ mod shift_tests {
     }
 
 }
+
+/// Map sheet qualifiers without changing literals, cell spelling or spacing
+/// elsewhere in the formula. A three-dimensional qualifier is passed whole.
+pub fn map_formula_sheet_references(
+    input: &str,
+    mut map: impl FnMut(&str) -> Option<String>,
+) -> Result<String, ParseError> {
+    let tokens = tokenize_spanned(input)?;
+    let mut output = String::with_capacity(input.len());
+    let mut from = 0;
+    for (index, (token, at)) in tokens.iter().enumerate() {
+        let Token::Name { sheet: Some(sheet), name } = token else { continue };
+        let next = tokens.get(index + 1).map_or(input.len(), |(_, at)| *at);
+        let written = input[*at..next].trim_end();
+        let Some(prefix) = written.strip_suffix(name.as_str()) else {
+            return Err(ParseError::UnexpectedToken(written.into()));
+        };
+        if !prefix.ends_with('!') {
+            return Err(ParseError::UnexpectedToken(prefix.into()));
+        }
+        let mut start = *at;
+        let mut qualifier = sheet.clone();
+        if index >= 2 && matches!(tokens[index - 1].0, Token::Colon) {
+            if let Token::Name { sheet: None, name: first } = &tokens[index - 2].0 {
+                start = tokens[index - 2].1;
+                qualifier = format!("{first}:{sheet}");
+            }
+        }
+        if start < from { continue }
+        let Some(replacement) = map(&qualifier).filter(|name| name != &qualifier) else { continue };
+        output.push_str(&input[from..start]);
+        if sheet_needs_quotes(&replacement) {
+            output.push('\'');
+            output.push_str(&replacement.replace('\'', "''"));
+            output.push('\'');
+        } else {
+            output.push_str(&replacement);
+        }
+        output.push('!');
+        from = at + prefix.len();
+    }
+    output.push_str(&input[from..]);
+    Ok(output)
+}
+
+#[cfg(test)]
+mod formula_sheet_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn sheet_mapping_preserves_unrelated_literal_bytes_and_reference_spelling() {
+        let input = " =SUM( Kept!$a$1:$B$2 , \"Kept!A1\", 1.23000e-12, Table1[Kept!A1] ) ";
+        let result = map_formula_sheet_references(input, |name| (name == "Kept").then(|| "[2]Kept".into())).unwrap();
+        assert_eq!(result, " =SUM( '[2]Kept'!$a$1:$B$2 , \"Kept!A1\", 1.23000e-12, Table1[Kept!A1] ) ");
+        assert_eq!(map_formula_sheet_references(input, |_| None).unwrap(), input);
+    }
+
+    #[test]
+    fn sheet_mapping_handles_escaped_quotes_unicode_and_existing_link_indices() {
+        let input = "='Kept ''one'''!$a1 + [1]Other!B2 + Source!C3";
+        let result = map_formula_sheet_references(input, |name| match name {
+            "Kept 'one'" => Some("[2]Kept 'one'".into()),
+            "[1]Other" => Some("[3]\u{65e5}\u{672c}\u{8a9e}".into()),
+            "Source" => Some("Source (2)".into()),
+            _ => None,
+        }).unwrap();
+        assert_eq!(result, "='[2]Kept ''one'''!$a1 + '[3]\u{65e5}\u{672c}\u{8a9e}'!B2 + 'Source (2)'!C3");
+    }
+
+    #[test]
+    fn sheet_mapping_passes_three_dimensional_qualifiers_to_the_caller_whole() {
+        for input in ["=SUM(Jan:Mar!$a$1)", "=SUM('Jan:Mar'!$a$1)"] {
+            let mut seen = Vec::new();
+            let result = map_formula_sheet_references(input, |name| {
+                seen.push(name.to_owned());
+                (name == "Jan:Mar").then(|| "[4]Jan:Mar".into())
+            }).unwrap();
+            assert_eq!(seen, ["Jan:Mar"]);
+            assert_eq!(result, "=SUM('[4]Jan:Mar'!$a$1)");
+        }
+        assert!(map_formula_sheet_references("='broken!A1", |_| Some("X".into())).is_err());
+    }
+}

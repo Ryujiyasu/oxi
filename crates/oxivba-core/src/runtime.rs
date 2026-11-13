@@ -20,7 +20,7 @@ use crate::errors::{vba_error_description, ErrorEnvironment};
 mod utf16;
 mod bstr;
 
-use crate::ast::{FileInputStmt, FileMode, FileOpenStmt, FileSeekStmt, FileTransferKind, FileTransferStmt, FileOutputKind, FileOutputSeparator, FileOutputStmt, FileSystemStmt, FileSystemUnaryKind,
+use crate::ast::{FileInputStmt, FileMode, FileOpenStmt, FileSeekStmt, FileTransferKind, FileTransferStmt, FileOutputKind, FileOutputSeparator, FileOutputStmt, FileSystemStmt, FileSystemUnaryKind, 
     AlignedAssignStmt, AlignmentKind, Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind,
     Expr, ForEachStmt, ForStmt, Literal, LoopTest, MidAssignStmt, Module, ModuleItem, ModuleOption,
     OnBranchKind, OnError, ParamMode, ProcKind, Procedure, ReDimItem, ResumeTarget, SelectCaseStmt,
@@ -416,6 +416,8 @@ pub trait Host {
     /// Newly opened native documents whose source contexts must be registered
     /// before VBA uses their document members or worksheet functions.
     fn take_application_projects(&mut self) -> Vec<u64> { Vec::new() }
+    /// Owners gaining native document modules without replacing existing code.
+    fn take_updated_application_projects(&mut self) -> Vec<u64> { Vec::new() }
 
     /// Closed documents whose source instances must be disconnected. Closing
     /// a project on the current call stack also cancels those active callers.
@@ -3960,9 +3962,64 @@ impl<'a> Runtime<'a> {
         self.register_application_project(context).map_err(|rejected|rejected.1)
     }
 
+    /// Add native document code while preserving all existing code and storage.
+    /// Validate the entire incoming context before changing the shared graph.
+    pub fn extend_application_project_documents(&mut self, mut context: Self) -> Result<(), Box<(Self, RuntimeError)>> {
+        let id = context.project_identity;
+        let reject = |context| Box::new((context, Self::context_error("Document imports must extend unchanged code and native identities")));
+        if !self.application_projects_enabled || !context.application_projects_enabled
+            || !context.pristine_document_objects() || !context.projects.is_empty() || context.project_loader.is_some()
+            || context.owner.is_some() || context.depth != 0 || context.module_initialized
+            || !context.files.pristine_application_context() || !context.due.borrow().is_empty() {
+            return Err(reject(context));
+        }
+        let target = if id == self.project_identity { &*self } else {
+            let Some(target) = self.projects.get(&id) else { return Err(reject(context)); };
+            target.as_ref()
+        };
+        if target.main_module != context.main_module
+            || target.classes.iter().any(|(name, module)| context.classes.get(name).is_none_or(|next| module != next))
+            || target.document_globals.iter().any(|(name, object)| context.document_globals.get(name)
+                .is_none_or(|next| object.handle != next.handle || object.kind != next.kind))
+            || context.classes.keys().any(|name| !target.classes.contains_key(name) && !context.document_globals.contains_key(name)) {
+            return Err(reject(context));
+        }
+        for (handle, object) in &context.internal_objects {
+            let Some(InternalObject::Instance(existing)) = self.internal_objects.get(handle) else {
+                if self.internal_objects.contains_key(handle) || self.object_projects.contains_key(handle) { return Err(reject(context)); }
+                continue;
+            };
+            if !matches!(object, InternalObject::Instance(incoming) if incoming.class == existing.class)
+                || self.object_projects.get(handle) != Some(&id) { return Err(reject(context)); }
+        }
+        for (handle, object) in std::mem::take(&mut context.internal_objects) {
+            if let std::collections::btree_map::Entry::Vacant(entry) = self.internal_objects.entry(handle) {
+                entry.insert(object);self.object_projects.insert(handle, id);
+            }
+        }
+        let target = if id == self.project_identity { self } else { self.projects.get_mut(&id).expect("validated owner").as_mut() };
+        for (name, module) in context.classes { target.classes.entry(name).or_insert(module); }
+        target.document_globals.extend(context.document_globals);
+        target.document_instances.extend(context.document_instances);
+        target.document_references = context.document_references;
+        Ok(())
+    }
+
+    fn refresh_host_application_project(&mut self, id: u64) -> Result<(), RuntimeError> {
+        self.ensure_application_project(id)?;
+        let Some(loader) = self.project_loader.take() else { return Err(Self::context_error("No application project loader")); };
+        let context = loader(id);
+        self.project_loader = Some(loader);
+        let context = context?;
+        if context.project_identity != id { return Err(Self::context_error("Application loader returned a different project identity")); }
+        self.extend_application_project_documents(context).map_err(|rejected| rejected.1)
+    }
+
     fn load_host_application_projects(&mut self)->Result<(),RuntimeError> {
         let requested=self.host.as_deref_mut().map(|host|host.take_application_projects()).unwrap_or_default();
         for id in requested {self.ensure_application_project(id)?;}
+        let updated=self.host.as_deref_mut().map(|host|host.take_updated_application_projects()).unwrap_or_default();
+        for id in updated { self.refresh_host_application_project(id)?; }
         let closed=self.host.as_deref_mut().map(|host|host.take_closed_application_projects()).unwrap_or_default();
         if closed.is_empty() { return Ok(()); }
         for id in &closed { self.ensure_application_project(*id)?; }
@@ -30580,6 +30637,69 @@ End Function
                 assert_eq!(result.unwrap(), Value::Integer(expected.parse().unwrap()), "{name}");
                 crate::compile_project(source).unwrap();
             }
+        }
+    }
+
+
+    #[test]
+    fn native_document_extension_preserves_active_and_inactive_project_storage() {
+        const SOURCE: &str = r#"Attribute VB_Name = "Driver"
+Public Count As Long
+Public Function NextValue() As Long
+ Count = Count + 1
+ NextValue = Count
+End Function
+Public Function Document() As Object
+ Set Document = ThisWorkbook
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "ThisWorkbook"
+Attribute VB_PredeclaredId = True
+Public Count As Long
+Public Function Bump() As Long
+ Count = Count + 1
+ Bump = Count
+End Function
+"#;
+        const EXTRA: &str = r#"VERSION 1.0 CLASS
+Attribute VB_Name = "Sheet1"
+Attribute VB_PredeclaredId = True
+Public Function Marker() As String
+ Marker = "copied-sheet"
+End Function
+"#;
+        let (old, old_classes) = crate::parse_project(SOURCE).unwrap();
+        let (new, new_classes) = crate::parse_project(&(SOURCE.to_owned() + EXTRA)).unwrap();
+        let changed = SOURCE.replace("Count + 1", "Count + 9") + EXTRA;
+        let (bad, bad_classes) = crate::parse_project(&changed).unwrap();
+        fn context<'a>(module: &'a Module, classes: &'a [(String, Module)], owner: u64, sheet: bool) -> Runtime<'a> {
+            let mut runtime = Runtime::new(module).with_classes(classes);
+            runtime.set_application_project_identity(owner).unwrap();
+            let mut bindings = vec![("ThisWorkbook".into(), ObjectRef::new((owner << 32) | 1, "Workbook"))];
+            let mut docs = vec![("ThisWorkbook".into(), "Workbook".into())];
+            if sheet { bindings.push(("Sheet1".into(), ObjectRef::new((owner << 32) | 2, "Worksheet")));docs.push(("Sheet1".into(), "Worksheet".into())); }
+            runtime.with_document_objects(bindings, std::sync::Arc::new(crate::CompileReferences {
+                document_modules: docs,
+                types: vec![("Workbook".into(),false),("Worksheet".into(),false)],
+                ..Default::default()
+            })).unwrap()
+        }
+        let mut root = context(&old, &old_classes, 1, false);
+        assert!(root.register_application_project(context(&old, &old_classes, 2, false)).is_ok());
+        for owner in [1, 2] {
+            assert_eq!(root.in_application_project(owner, |r| r.call("Driver.NextValue", vec![])).unwrap(), Value::Integer(1));
+            let Value::Object(held) = root.in_application_project(owner, |r| r.call("Driver.Document", vec![])).unwrap() else { panic!("document object expected") };
+            assert_eq!(root.invoke_member(&held, "Bump", 1, vec![]).unwrap(), Value::Integer(1));
+            assert!(root.extend_application_project_documents(context(&bad, &bad_classes, owner, true)).is_err());
+            assert!(root.extend_application_project_documents(context(&new, &new_classes, owner, true)).is_ok());
+            assert_eq!(root.in_application_project(owner, |r| r.call("Driver.NextValue", vec![])).unwrap(), Value::Integer(2));
+            assert_eq!(root.invoke_member(&held, "Bump", 1, vec![]).unwrap(), Value::Integer(2));
+            let sheet = ObjectRef::new((owner << 32) | 2, "Worksheet");
+            assert_eq!(root.invoke_member(&sheet, "Marker", 1, vec![]).unwrap(), Value::String("copied-sheet".into()));
+            // Native Application.Run suppresses document-function results.
+            assert_eq!(root.in_application_project(owner, |r| r.call_macro("Sheet1.Marker", vec![])).unwrap(), Value::Empty);
+            assert!(root.extend_application_project_documents(context(&new, &new_classes, owner, true)).is_ok());
+            assert_eq!(root.in_application_project(owner, |r| r.call("Driver.NextValue", vec![])).unwrap(), Value::Integer(3));
         }
     }
 

@@ -905,6 +905,9 @@ impl CellValue {
 /// these itself: no cell inside carries the header's fill or the banding.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Table {
+    /// Workbook-wide identity retained across edits, renames and saves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_id: Option<u32>,
     /// Source package part, used to preserve this table through simultaneous edits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_part: Option<String>,

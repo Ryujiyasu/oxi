@@ -314,6 +314,8 @@ pub(super) struct SeriesRecord {
     pub name_auto: bool,
     pub name_ref: Option<String>,
     pub values_ref: Option<String>,
+    /// Explicitly assigned worksheet data is live; imported caches retain file-open behavior.
+    pub values_live: bool,
     pub bubble_sizes: Option<Vec<Option<f64>>>,
     pub bubble_sizes_ref: Option<String>,
     pub shaded_bubbles: bool,
@@ -811,6 +813,7 @@ impl<'a> WorkbookHost<'a> {
                                     text_category_gaps: series.text_category_gaps,
                                     name_ref: series.name_reference.clone(),
                                     values_ref: series.values_reference.clone(),
+                                    values_live: false,
                                     bubble_sizes: series.bubble_sizes.clone(),
                                     bubble_sizes_ref: series.bubble_sizes_reference.clone(),
                                     shaded_bubbles: series.shaded_bubbles,
@@ -1059,7 +1062,11 @@ impl<'a> WorkbookHost<'a> {
                     record.group_parent_id = Some(id);
                 }
             }
-            self.shapes.push(group);
+            // The flattened IR retains anchor order through the first child.
+            // Put its synthetic parent there, rather than after later anchors.
+            let position = self.shapes.iter().position(|shape| shape.id == first_child.id)
+                .unwrap_or(self.shapes.len());
+            self.shapes.insert(position, group);
         }
     }
 

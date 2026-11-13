@@ -271,6 +271,7 @@ fn a_freeze_loses_only_the_rows_it_was_holding() {
 fn a_table_the_row_lands_inside_grows() {
     let mut book = a_workbook();
     book.sheets[0].tables = vec![Table {
+        origin_id: None,
         origin_part: None,
         name: "Staff".to_string(),
         columns: vec!["ID".to_string(), "PAY".to_string()],
