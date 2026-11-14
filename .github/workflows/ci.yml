@@ -58,12 +58,18 @@ jobs:
         run: >-
           cargo test -p oxicells-core --lib --locked
           --config profile.test.package.oxivba-core.opt-level=1 sheet_package_
+      - name: Document receiver native type binding
+        run: >-
+          cargo test -p oxivba-core --lib --locked
+          --config profile.test.package.oxivba-core.opt-level=1 -- --exact
+          runtime::tests::document_receivers_use_native_member_binding_without_changing_object_aliases
       - name: Sheet collection Add counts and binding diagnostics
         run: >-
           cargo test -p oxidocs-wasm --lib --features suite --locked
           --config profile.test.package.oxivba-core.opt-level=1 -- --exact
           spreadsheet_vba::tests::sheet_collection_add_count_matches_native_receivers_and_state
           spreadsheet_vba::tests::sheet_add_errors_match_native_binding_and_statement_forms
+          spreadsheet_vba::tests::chart_boundary_full_state_matches_actual_excel_before_and_after_save
       - name: Worksheet Add Count variant conversion and error state
         run: >-
           cargo test -p oxidocs-wasm --lib --features suite --locked

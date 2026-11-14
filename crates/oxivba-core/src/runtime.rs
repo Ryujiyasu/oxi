@@ -2838,7 +2838,15 @@ impl<'a> Runtime<'a> {
         if self.early_application_expression(object, frame) { return Some("Application".into()); }
         self.source_expression_type(object, frame)
             .filter(|kind| !matches!(key(&kind.name).as_str(), "object" | "variant"))
-            .map(|kind| kind.name).or_else(|| {
+            .map(|kind| {
+                // Host signatures belong to the document's native base;
+                // source member lookup retains the document code class.
+                self.document_references.as_ref()
+                    .and_then(|references| references.document_modules.iter()
+                        .find(|(code_name, _)| code_name.eq_ignore_ascii_case(&kind.name)))
+                    .map(|(_, native_type)| native_type.clone())
+                    .unwrap_or(kind.name)
+            }).or_else(|| {
                 if let Some(name) = expr_name(object) {
                     if self.lookup_slot(frame, name).is_some() || self.has_visible_procedure(name) { return None; }
                     return self.host.as_deref()?.assignment_global_type(name);
@@ -21083,6 +21091,67 @@ fn statement_name(statement: &Statement) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    // SPDX-License-Identifier: MPL-2.0
+    #[test]
+    fn document_receivers_use_native_member_binding_without_changing_object_aliases() {
+        use super::{host_error_from, Host, ObjectRef, Runtime, Value};
+        struct DocumentHost;
+        impl Host for DocumentHost {
+            fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+                Ok((receiver.kind == "Workbook" && name.eq_ignore_ascii_case("Sheets"))
+                    .then(|| Value::Object(ObjectRef::new(2, "Sheets"))))
+            }
+            fn set(&mut self, _: &ObjectRef, _: &str, _: Value) -> Result<bool, String> {
+                Ok(false)
+            }
+            fn call(&mut self, _: Option<&ObjectRef>, name: &str, _: &[Value]) -> Result<Option<Value>, String> {
+                if name.eq_ignore_ascii_case("Add") {
+                    Err(host_error_from(1004, "BindingHost", "base"))
+                } else { Ok(None) }
+            }
+            fn assignment_call_result(&self, owner: Option<&str>, name: &str) -> Option<String> {
+                (owner.is_some_and(|owner| owner.eq_ignore_ascii_case("Workbook"))
+                    && name.eq_ignore_ascii_case("Sheets")).then(|| "Sheets".into())
+            }
+            fn contextual_call_error(&self, _: Option<&ObjectRef>, name: &str,
+                late_bound: bool, value_context: bool, _: &str) -> Option<String> {
+                name.eq_ignore_ascii_case("Add").then(|| host_error_from(1004, "BindingHost",
+                    format!("{late_bound}:{value_context}")))
+            }
+        }
+        let module = crate::parse_module(r#"Option Explicit
+Public Function FromDocument() As String
+    Dim item As Object
+    On Error Resume Next
+    Set item = LedgerCode.Sheets.Add(Count:=0)
+    FromDocument = Err.Description
+End Function
+Public Function FromObject() As String
+    Dim owner As Object, item As Object
+    Set owner = LedgerCode
+    On Error Resume Next
+    Set item = owner.Sheets.Add(Count:=0)
+    FromObject = Err.Description
+End Function
+"#).unwrap();
+        let references = std::sync::Arc::new(crate::CompileReferences {
+            document_modules: vec![("LedgerCode".into(), "Workbook".into())],
+            types: vec![("Workbook".into(), false), ("Sheets".into(), false)],
+            library: std::sync::Arc::new(crate::CompileReferenceLibrary::from_tsv(
+                "I\tWorkbook\t1\nI\tSheets\t1\nM\tWorkbook\tSheets\t2\t4\tSheets\t0\t\nM\tSheets\tAdd\t1\t4\tObject\t0\tCount?\n"
+            ).unwrap()),
+            ..Default::default()
+        });
+        for (procedure, expected) in [("FromDocument", "false:true"), ("FromObject", "true:true")] {
+            let mut host = DocumentHost;
+            let mut runtime = Runtime::new(&module).with_host(&mut host)
+                .with_document_objects(vec![("LedgerCode".into(), ObjectRef::new(1, "Workbook"))],
+                    references.clone()).unwrap();
+            assert_eq!(runtime.call(procedure, vec![]).unwrap(), Value::String(expected.into()), "{procedure}");
+        }
+    }
+
+
 
 
     #[test]
