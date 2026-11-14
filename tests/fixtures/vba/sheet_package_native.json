@@ -58,7 +58,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_calibri11",
@@ -91,7 +93,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_calibri11",
@@ -124,7 +128,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_calibri11",
@@ -157,7 +163,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_calibri11",
@@ -190,7 +198,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_calibri11",
@@ -223,7 +233,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_calibri11",
@@ -256,7 +268,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_calibri11",
@@ -289,7 +303,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -322,7 +338,9 @@
           10.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -355,7 +373,9 @@
           10.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -388,7 +408,9 @@
           10.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -421,7 +443,9 @@
           10.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -454,7 +478,9 @@
           10.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -487,7 +513,9 @@
           10.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -520,7 +548,9 @@
           10.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -553,7 +583,9 @@
           10.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "missing_unstated",
@@ -586,7 +618,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 1
     },
     {
       "label": "missing_unstated",
@@ -619,7 +653,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 1
     },
     {
       "label": "missing_unstated",
@@ -652,7 +688,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 1
     },
     {
       "label": "missing_unstated",
@@ -685,7 +723,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 1
     },
     {
       "label": "missing_unstated",
@@ -718,7 +758,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 1
     },
     {
       "label": "missing_unstated",
@@ -751,7 +793,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 1
     },
     {
       "label": "missing_unstated",
@@ -784,7 +828,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 1
     },
     {
       "label": "missing_unstated",
@@ -817,7 +863,9 @@
           11.0,
           true
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 1
     }
   ],
   "row_order_program": "Attribute VB_Name = \"RowOrderOracle\"\nPublic Function Probe(ByVal mode As Long, ByVal inputPath As String, ByVal outputPath As String) As Variant\n    Set target = Workbooks.Open(inputPath, 0, True)\n    Set s = target.Worksheets(1)\n    s.Name = \"Original\"\n    If mode = 3 Then\n        Set other = target.Worksheets.Add(Before:=s)\n    Else\n        Set other = target.Worksheets.Add(After:=s)\n    End If\n    other.Name = \"Other\"\n    If mode = 2 Then s.Move After:=other\n    s.Cells.Font.Size = target.Styles(\"Normal\").Font.Size\n    If mode = 1 Then s.Move After:=other\n    before = Array(s.StandardHeight, s.Rows(100).RowHeight, s.Index)\n    target.SaveCopyAs outputPath\n    Set b = Workbooks.Open(outputPath, 0, True)\n    Set cold = b.Worksheets(\"Original\")\n    Probe = Array(before, Array(cold.StandardHeight, cold.Rows(100).RowHeight, cold.Index))\n    b.Close False\n    target.Close False\nEnd Function",
@@ -836,7 +884,9 @@
           15.0,
           1
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_calibri11",
@@ -852,7 +902,9 @@
           15.0,
           2
         ]
-      ]
+      ],
+      "saved_font_sheet": 2,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_calibri11",
@@ -868,7 +920,9 @@
           15.0,
           2
         ]
-      ]
+      ],
+      "saved_font_sheet": 2,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_calibri11",
@@ -884,7 +938,9 @@
           15.0,
           2
         ]
-      ]
+      ],
+      "saved_font_sheet": 2,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -900,7 +956,9 @@
           12.75,
           1
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -916,7 +974,9 @@
           12.75,
           2
         ]
-      ]
+      ],
+      "saved_font_sheet": 2,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -932,7 +992,9 @@
           12.75,
           2
         ]
-      ]
+      ],
+      "saved_font_sheet": 2,
+      "saved_font_grid": 0
     },
     {
       "label": "explicit_arial10",
@@ -948,7 +1010,9 @@
           12.75,
           2
         ]
-      ]
+      ],
+      "saved_font_sheet": 2,
+      "saved_font_grid": 0
     },
     {
       "label": "missing_unstated",
@@ -964,7 +1028,9 @@
           18.75,
           1
         ]
-      ]
+      ],
+      "saved_font_sheet": 1,
+      "saved_font_grid": 1
     },
     {
       "label": "missing_unstated",
@@ -980,7 +1046,9 @@
           18.75,
           2
         ]
-      ]
+      ],
+      "saved_font_sheet": 2,
+      "saved_font_grid": 1
     },
     {
       "label": "missing_unstated",
@@ -996,7 +1064,9 @@
           18.75,
           2
         ]
-      ]
+      ],
+      "saved_font_sheet": 2,
+      "saved_font_grid": 1
     },
     {
       "label": "missing_unstated",
@@ -1012,7 +1082,265 @@
           18.75,
           2
         ]
-      ]
+      ],
+      "saved_font_sheet": 2,
+      "saved_font_grid": 1
     }
+  ],
+  "saved_font_grids": [
+    [
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ],
+      [
+        -4105,
+        null,
+        5
+      ]
+    ],
+    [
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        1,
+        2,
+        0
+      ]
+    ]
   ]
 }

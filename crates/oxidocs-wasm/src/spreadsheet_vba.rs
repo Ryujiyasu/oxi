@@ -47242,6 +47242,10 @@ fn initialize_missing_package_styles(
         sheet.column_width_font = Some(face.clone());
         if !sheet.default_row_custom { sheet.default_row_height = height; }
     }
+    // Cells in a styleless package inherit the supplied Normal resource.
+    // Freeze that identity before a VBA font edit allocates a new resource;
+    // otherwise an omitted color becomes an independent automatic color.
+    resolve_implicit_cell_styles(workbook);
     Ok(true)
 }
 
@@ -144109,6 +144113,29 @@ End Function"#;
 
     #[test]
     fn sheet_structure_saved_state_matches_native_history() {
+        const FONT_SOURCE:&str=r#"Option Explicit
+Public Function SavedFont(ByVal inputPath As String, ByVal sheetIndex As Long) As Variant
+    Dim book As Object, ws As Object
+    Dim row As Long, col As Long, failed As Long
+    Dim color As Variant, theme As Variant
+    Dim values(0 To 24) As Variant
+    Set book = Workbooks.Open(inputPath, 0, True)
+    Set ws = book.Worksheets(sheetIndex)
+    For row = 1 To 5
+        For col = 1 To 5
+            color = ws.Cells(row, col).Font.ColorIndex
+            theme = Empty
+            On Error Resume Next
+            Err.Clear
+            theme = ws.Cells(row, col).Font.ThemeColor
+            failed = Err.Number
+            On Error GoTo 0
+            values((row - 1) * 5 + col - 1) = Array(color, theme, failed)
+        Next col
+    Next row
+    book.Close False
+    SavedFont = values
+End Function"#;
         let cases:serde_json::Value=serde_json::from_str(include_str!("../../../tests/fixtures/vba/sheet_package_native.json")).unwrap();
         let caller=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
         let startup:Vec<u16>=cases["startup_profile_utf16"].as_array().unwrap().iter().map(|x|u16::try_from(x.as_u64().unwrap()).unwrap()).collect();
@@ -144135,6 +144162,21 @@ End Function"#;
             ).collect();
             assert_eq!(serde_json::to_value(states).unwrap(),case["expected"],"{label} mode {mode}");
             assert!(result.files.iter().any(|file|file.path==r"C:\work\copy.xlsx"),"{label} mode {mode}: no exported copy");
+            let copy=result.files.iter().find(|file|file.path==r"C:\work\copy.xlsx").unwrap();
+            let mut font_context=failure_context();
+            font_context.application_state=Some(VbaApplicationState {standard_font_startup:Some(VbaStandardFontStartup {profile_utf16:Some(startup.clone())}),..Default::default()});
+            font_context.file_context=Some(file_io::FileContext {
+                package_bytes:Some(caller.to_vec()),full_name:Some(r"C:\work\caller.xlsx".into()),read_only:Some(true),
+                folders:vec![r"C:\work".into()],files:vec![file_io::ProducedFile {path:r"C:\work\copy.xlsx".into(),bytes:copy.bytes.clone()}],..Default::default()
+            });
+            let font=execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(caller).unwrap(),FONT_SOURCE,Some("SavedFont"),
+                vec![Value::String(r"C:\work\copy.xlsx".into()),Value::Integer(case["saved_font_sheet"].as_i64().unwrap())],0,font_context,&mut None).unwrap();
+            assert!(font.error.is_none(),"{label} mode {mode}: {}",serde_json::to_value(&font.error).unwrap());
+            let value=serde_json::to_value(font.result).unwrap();
+            let fonts:Vec<Vec<serde_json::Value>>=value["value"]["values"].as_array().unwrap().iter().map(|row|
+                row["value"]["values"].as_array().unwrap().iter().map(|cell|cell.get("value").cloned().unwrap_or(serde_json::Value::Null)).collect()
+            ).collect();
+            assert_eq!(serde_json::to_value(fonts).unwrap(),cases["saved_font_grids"][case["saved_font_grid"].as_u64().unwrap() as usize],"{label} mode {mode}: saved font identity");
           }
         }
     }
