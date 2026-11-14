@@ -4071,7 +4071,7 @@ fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, Drawi
                                         child_offset: root.2,
                                         child_extent: root.3,
                                     }),
-                                    group_child_transform: None,
+                                    group_child_transform: Some((own.0, own.1, size.0, size.1)),
                                     group_nested: !parent_groups.is_empty(),
                                 },
                                 DrawingImageRelationships {

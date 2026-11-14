@@ -1217,7 +1217,8 @@ pub struct Drawing {
     /// DrawingML coordinate systems for the parent group, shared by its leaves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_transform: Option<GroupTransform>,
-    /// DrawingML transform of this leaf when it belongs to a group being created.
+    /// This leaf's own DrawingML transform in its direct parent's coordinates,
+    /// retained on import and supplied when a group is created.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_child_transform: Option<(i64, i64, i64, i64)>,
     /// True when a leaf came through at least one nested DrawingML group.

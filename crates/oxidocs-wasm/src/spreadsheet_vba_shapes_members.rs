@@ -1621,6 +1621,103 @@ impl<'a> WorkbookHost<'a> {
         Ok(())
     }
 
+    pub(super) fn own_group_child_transform(&self, parent: &ShapeRecord, child: &ShapeRecord) -> Option<(i64,i64,i64,i64)> {
+        let candidate=if child.group_children.is_empty() {
+            child.original.as_ref().and_then(|drawing|drawing.group_child_transform)
+        } else { child.group_transform.map(|t|(t.offset.0,t.offset.1,t.extent.0,t.extent.1)) };
+        let emu=|n:f64|(n*EMU_PER_POINT).round() as i64;
+        if let Some(own)=candidate {
+            if let Some((x,y,w,h))=self.group_child_bounds(parent,own) {
+                if (emu(x),emu(y),emu(w),emu(h))==(emu(child.left),emu(child.top),emu(child.width),emu(child.height)) { return Some(own); }
+            }
+        }
+        let frame=parent.group_transform?;
+        if parent.width==0.0 || parent.height==0.0 { return None; }
+        let px=parent.left+parent.width/2.0;let py=parent.top+parent.height/2.0;
+        let dx=child.left+child.width/2.0-px;let dy=child.top+child.height/2.0-py;
+        let (sin,cos)=self.group_world_rotation(parent.id).to_radians().sin_cos();
+        let x=px+dx*cos+dy*sin-child.width/2.0;let y=py-dx*sin+dy*cos-child.height/2.0;
+        Some((frame.child_offset.0+((x-parent.left)/parent.width*frame.child_extent.0 as f64).round() as i64,
+              frame.child_offset.1+((y-parent.top)/parent.height*frame.child_extent.1 as f64).round() as i64,
+              (child.width/parent.width*frame.child_extent.0 as f64).round() as i64,
+              (child.height/parent.height*frame.child_extent.1 as f64).round() as i64))
+    }
+
+    fn project_local_group_child(frame: GroupTransform, rotation: f64, own: (i64,i64,i64,i64)) -> (i64,i64,i64,i64) {
+        let x=frame.offset.0 as f64+(own.0-frame.child_offset.0) as f64/frame.child_extent.0 as f64*frame.extent.0 as f64;
+        let y=frame.offset.1 as f64+(own.1-frame.child_offset.1) as f64/frame.child_extent.1 as f64*frame.extent.1 as f64;
+        let width=own.2 as f64/frame.child_extent.0 as f64*frame.extent.0 as f64;
+        let height=own.3 as f64/frame.child_extent.1 as f64*frame.extent.1 as f64;
+        let px=frame.offset.0 as f64+frame.extent.0 as f64/2.0;let py=frame.offset.1 as f64+frame.extent.1 as f64/2.0;
+        let dx=x+width/2.0-px;let dy=y+height/2.0-py;let (sin,cos)=rotation.to_radians().sin_cos();
+        ((px+dx*cos-dy*sin-width/2.0).round() as i64,(py+dx*sin+dy*cos-height/2.0).round() as i64,width.round() as i64,height.round() as i64)
+    }
+
+    fn set_group_child_transform(&mut self, id: u64, own: (i64,i64,i64,i64)) -> Result<(), String> {
+        let child=self.shape_mut(id)?;
+        if let Some(transform)=child.group_transform.as_mut().filter(|_|!child.group_children.is_empty()) {
+            transform.offset=(own.0,own.1);transform.extent=(own.2,own.3);
+        }
+        if let Some(original)=child.original.as_mut() {
+            original.group_child_transform=Some(own);
+            if let DrawingKind::Shape(shape)=&mut original.kind { shape.transform_offset=Some((own.0,own.1)); }
+        }
+        Ok(())
+    }
+
+    fn refresh_group_child_geometry(&mut self, parent: u64) -> Result<(), String> {
+        let mut pending=vec![parent];let mut seen=std::collections::HashSet::new();
+        while let Some(parent)=pending.pop() {
+            if !seen.insert(parent) { continue; }
+            let group=self.shape(parent)?.clone();
+            for id in group.group_children.clone() {
+                let child=self.shape(id)?.clone();
+                let own=if child.group_children.is_empty() {child.original.as_ref().and_then(|d|d.group_child_transform)}
+                    else {child.group_transform.map(|t|(t.offset.0,t.offset.1,t.extent.0,t.extent.1))};
+                if let Some(bounds)=own.and_then(|own|self.group_child_bounds(&group,own)) {
+                    let emu=|n:f64|(n*EMU_PER_POINT).round()/EMU_PER_POINT;
+                    let record=self.shape_mut(id)?;
+                    record.left=emu(bounds.0);record.top=emu(bounds.1);record.width=emu(bounds.2);record.height=emu(bounds.3);
+                    if !record.group_children.is_empty() { record.group_bounds=Some((record.left,record.top,record.width,record.height));pending.push(id); }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn promote_group_child(&mut self, parent: &ShapeRecord, id: u64) -> Result<(), String> {
+        let child=self.shape(id)?.clone();
+        let own=self.own_group_child_transform(parent,&child).ok_or_else(||host_error(1004,"the surviving group has no transform"))?;
+        let (left,top,width,height)=self.group_child_bounds(parent,own).ok_or_else(||host_error(1004,"the parent group has no child coordinate space"))?;
+        let rotation=(parent.rotation+child.rotation).rem_euclid(360.0);
+        let quarter=|angle:f64|((angle.rem_euclid(360.0)+45.0)/90.0).floor() as i64 % 4;
+        let swapped=quarter(rotation)%2!=0;
+        let (aw,ah)=if swapped {(height,width)} else {(width,height)};
+        let cx=left+width/2.0;let cy=top+height/2.0;
+        let mut ax=cx-aw/2.0;let mut ay=cy-ah/2.0;let bx=ax+aw;let by=ay+ah;
+        if quarter(parent.rotation)!=quarter(rotation) {
+            let first_width=f64::from(self.column_px(child.sheet,0));let first_height=f64::from(self.row_px(child.sheet,1));
+            // Cell offsets are stored in integral EMUs. Choose the pixel
+            // bucket there so trigonometric noise cannot add a whole pixel.
+            // Keep the raw fractional anchor for the final coordinate rounding.
+            let whole_pixels=|position:f64|((position*EMU_PER_POINT).round()/9_525.0).floor();
+            if first_width>0.0 && whole_pixels(ax)<=-first_width { ax-=whole_pixels(ax)*0.75; }
+            if first_height>0.0 && whole_pixels(ay)<=-first_height { ay-=whole_pixels(ay)*0.75; }
+        }
+        let aw=bx-ax;let ah=by-ay;let (width,height)=if swapped {(ah,aw)} else {(aw,ah)};
+        let left=(ax+bx)/2.0-width/2.0;let top=(ay+by)/2.0-height/2.0;
+        let emu=|n:f64|(n*EMU_PER_POINT).round() as i64;
+        let mut transform=child.group_transform.ok_or_else(||host_error(1004,"the surviving group has no transform"))?;
+        transform.offset=(emu(left),emu(top));transform.extent=(emu(width),emu(height));
+        for leaf in self.group_items(id)? { self.shape_mut(leaf)?.rotation-=child.rotation; }
+        let group=self.shape_mut(id)?;
+        group.group_parent_id=None;group.group_name=None;group.rotation=rotation;group.group_nested=false;
+        group.left=transform.offset.0 as f64/EMU_PER_POINT;group.top=transform.offset.1 as f64/EMU_PER_POINT;
+        group.width=transform.extent.0 as f64/EMU_PER_POINT;group.height=transform.extent.1 as f64/EMU_PER_POINT;
+        group.group_bounds=Some((left,top,width,height));group.group_transform=Some(transform);
+        self.refresh_group_child_geometry(id)
+    }
+
     fn delete_shape(&mut self, id: u64) -> Result<(), String> {
         let deleted = self.shape(id)?.clone();
         let sheet = deleted.sheet;
@@ -1660,17 +1757,23 @@ impl<'a> WorkbookHost<'a> {
                     }
                     collapsed_inner = true;
                 }
-                self.shapes.retain(|shape| shape.id != parent_id);
                 if let Some(child) = survivor {
-                    let shape = self.shape_mut(child)?;
-                    shape.group_parent_id = ancestor;
-                    if ancestor.is_none() {
-                        // Imported leaf angles already include hidden inner
-                        // rotations; only the exposed outer angle is missing.
-                        shape.rotation += group.rotation;
-                        shape.group_name = None;
+                    let record=self.shape(child)?.clone();
+                    if ancestor.is_none() && !record.group_children.is_empty() {
+                        self.promote_group_child(&group,child)?;
+                    } else {
+                        if ancestor.is_some() {
+                            if let (Some(frame),Some(own))=(group.group_transform,self.own_group_child_transform(&group,&record)) {
+                                self.set_group_child_transform(child,Self::project_local_group_child(frame,group.rotation,own))?;
+                            }
+                        }
+                        let shape=self.shape_mut(child)?;shape.group_parent_id=ancestor;
+                        if ancestor.is_none() {shape.rotation+=group.rotation;shape.group_name=None;}
+                        else if !shape.group_children.is_empty() {shape.rotation+=group.rotation;}
+                        if let Some(ancestor)=ancestor {self.refresh_group_child_geometry(ancestor)?;}
                     }
                 }
+                self.shapes.retain(|shape| shape.id != parent_id);
             } else if collapsed_inner {
                 // A dissolved inner group leaves its survivors in the outer
                 // coordinate system. Refit that container without detaching
@@ -1685,76 +1788,35 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn refit_group_after_child_delete(&mut self, parent: u64, children: &[u64]) -> Result<(), String> {
-        let group = self.shape(parent)?.clone();
-        let pivot = group.group_bounds.unwrap_or((group.left, group.top, group.width, group.height));
-        let pivot_x = pivot.0 + pivot.2 / 2.0;
-        let pivot_y = pivot.1 + pivot.3 / 2.0;
-        let angle = group.rotation.to_radians();
-        let (sin, cos) = angle.sin_cos();
-        let mut local = Vec::with_capacity(children.len());
-        for child_id in children {
-            let child = self.shape(*child_id)?.clone();
-            let dx = child.left + child.width / 2.0 - pivot_x;
-            let dy = child.top + child.height / 2.0 - pivot_y;
-            let center_x = pivot_x + dx * cos + dy * sin;
-            let center_y = pivot_y - dx * sin + dy * cos;
-            local.push((
-                *child_id,
-                center_x - child.width / 2.0,
-                center_y - child.height / 2.0,
-                child.width,
-                child.height,
-            ));
+        let group=self.shape(parent)?.clone();
+        let frame=group.group_transform.ok_or_else(||host_error(1004,"the group has no transform"))?;
+        let mut local=Vec::new();
+        for id in children {
+            let child=self.shape(*id)?.clone();
+            let own=self.own_group_child_transform(&group,&child).ok_or_else(||host_error(1004,"the child has no transform"))?;
+            local.push((*id,own));
         }
-        let min_x = local.iter().map(|item| item.1).fold(f64::INFINITY, f64::min);
-        let min_y = local.iter().map(|item| item.2).fold(f64::INFINITY, f64::min);
-        let max_x = local.iter().map(|item| item.1 + item.3).fold(f64::NEG_INFINITY, f64::max);
-        let max_y = local.iter().map(|item| item.2 + item.4).fold(f64::NEG_INFINITY, f64::max);
-        let width = max_x - min_x;
-        let height = max_y - min_y;
-        if width <= 0.0 || height <= 0.0 { return Ok(()); }
-        let local_center_x = (min_x + max_x) / 2.0;
-        let local_center_y = (min_y + max_y) / 2.0;
-        let center_x = pivot_x + (local_center_x - pivot_x) * cos - (local_center_y - pivot_y) * sin;
-        let center_y = pivot_y + (local_center_x - pivot_x) * sin + (local_center_y - pivot_y) * cos;
-        let left = center_x - width / 2.0;
-        let top = center_y - height / 2.0;
-        let from = self.anchor_at(group.sheet, left, top);
-        let to = self.anchor_at(group.sheet, left + width, top + height);
-        let width_emu = (width * EMU_PER_POINT).round() as i64;
-        let height_emu = (height * EMU_PER_POINT).round() as i64;
-        let group_transform = GroupTransform {
-            offset: ((left * EMU_PER_POINT).round() as i64, (top * EMU_PER_POINT).round() as i64),
-            extent: (width_emu, height_emu),
-            child_offset: (0, 0),
-            child_extent: (width_emu, height_emu),
-        };
-        for (child_id, child_left, child_top, child_width, child_height) in local {
-            if let Ok(child) = self.shape_mut(child_id) {
-                if let Some(drawing) = child.original.as_mut() {
-                    drawing.from = from;
-                    drawing.to = Some(to);
-                    drawing.frame = Some(Frame {
-                        x: (child_left - min_x) / width,
-                        y: (child_top - min_y) / height,
-                        w: child_width / width,
-                        h: child_height / height,
-                    });
-                    drawing.group_transform = Some(group_transform);
-                    drawing.group_nested = false;
-                }
+        let min_x=local.iter().map(|(_,b)|b.0).min().unwrap_or(0);let min_y=local.iter().map(|(_,b)|b.1).min().unwrap_or(0);
+        let max_x=local.iter().map(|(_,b)|b.0+b.2).max().unwrap_or(0);let max_y=local.iter().map(|(_,b)|b.1+b.3).max().unwrap_or(0);
+        let span=(max_x-min_x,max_y-min_y);if span.0<=0 || span.1<=0 { return Ok(()); }
+        let bounds=self.group_child_bounds(&group,(min_x,min_y,span.0,span.1)).ok_or_else(||host_error(1004,"the group has no child coordinate space"))?;
+        let emu=|n:f64|(n*EMU_PER_POINT).round() as i64;
+        let own=if group.group_parent_id.is_none() {(emu(bounds.0),emu(bounds.1),emu(bounds.2),emu(bounds.3))}
+            else {Self::project_local_group_child(frame,group.rotation,(min_x,min_y,span.0,span.1))};
+        let transform=GroupTransform {offset:(own.0,own.1),extent:(own.2,own.3),child_offset:(min_x,min_y),child_extent:span};
+        let from=self.anchor_at(group.sheet,bounds.0,bounds.1);let to=self.anchor_at(group.sheet,bounds.0+bounds.2,bounds.1+bounds.3);
+        for (id,own) in local {
+            self.set_group_child_transform(id,own)?;
+            if let Some(drawing)=self.shape_mut(id)?.original.as_mut() {
+                drawing.from=from;drawing.to=Some(to);drawing.group_transform=Some(transform);drawing.group_nested=false;
+                drawing.frame=Some(Frame {x:(own.0-min_x) as f64/span.0 as f64,y:(own.1-min_y) as f64/span.1 as f64,w:own.2 as f64/span.0 as f64,h:own.3 as f64/span.1 as f64});
             }
         }
-        if let Ok(group) = self.shape_mut(parent) {
-            group.left = left;
-            group.top = top;
-            group.width = width;
-            group.height = height;
-            group.group_bounds = Some((left, top, width, height));
-            group.group_transform = Some(group_transform);
-            group.group_nested = false;
-        }
-        Ok(())
+        let held=self.shape_mut(parent)?;
+        held.left=emu(bounds.0) as f64/EMU_PER_POINT;held.top=emu(bounds.1) as f64/EMU_PER_POINT;
+        held.width=emu(bounds.2) as f64/EMU_PER_POINT;held.height=emu(bounds.3) as f64/EMU_PER_POINT;
+        held.group_bounds=Some(bounds);held.group_transform=Some(transform);
+        self.refresh_group_child_geometry(parent)
     }
 
     /// A copy of a shape, twelve points down and across, numbered on:
@@ -3362,6 +3424,7 @@ impl<'a> WorkbookHost<'a> {
                 "width" => Some(Value::Single(shape.width as f32)),
                 "height" => Some(Value::Single(shape.height as f32)),
                 "rotation" => Some(Value::Single(shape.rotation as f32)),
+                "placement" => Some(Value::Integer(shape.placement)),
                 "child" => Some(mso(shape.group_parent_id.is_some())),
                 "visible" => Some(mso(shape.visible)),
                 "parent" => Some(self.object(HostObject::Worksheet(shape.sheet))),

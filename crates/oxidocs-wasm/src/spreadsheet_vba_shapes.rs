@@ -1045,7 +1045,11 @@ impl<'a> WorkbookHost<'a> {
             group_drawing.group_name = None;
             group_drawing.group_non_visual_id = None;
             group_drawing.group_rotation = 0;
-            let bounds = self.points_of_drawing(sheet, &group_drawing);
+            let mut bounds = self.points_of_drawing(sheet, &group_drawing);
+            let rotation=first_child.original.as_ref().map_or(0.0,|drawing|f64::from(drawing.group_rotation)/60_000.0);
+            if ((rotation.rem_euclid(360.0)+45.0)/90.0).floor() as i64 % 2 != 0 {
+                bounds=(bounds.0+bounds.2/2.0-bounds.3/2.0,bounds.1+bounds.3/2.0-bounds.2/2.0,bounds.3,bounds.2);
+            }
             let id = self.next_shape_id;
             self.next_shape_id += 1;
             let mut group = ShapeRecord::blank(id, sheet, name, ShapeKind::Other);
@@ -1093,6 +1097,10 @@ impl<'a> WorkbookHost<'a> {
             self.next_shape_id += 1;
             let mut record = ShapeRecord::blank(id, sheet, group.name.clone(), ShapeKind::Other);
             record.non_visual_id = group.non_visual_id;
+            record.name_is_automatic = record.name == generated_group_name(group.non_visual_id.saturating_sub(1), true);
+            if record.name_is_automatic {
+                record.name = generated_group_name(group.non_visual_id.saturating_sub(1), false);
+            }
             record.source_drawing_id = Some(group.non_visual_id);
             record.source_sheet_origin = self.workbook.sheets[sheet].origin_id;
             record.group_transform = Some(group.transform);
@@ -1127,19 +1135,55 @@ impl<'a> WorkbookHost<'a> {
             depth
         });
         for group in ordered {
-            let Some(parent) = group.parent_id.and_then(|parent| ids.get(&parent)).and_then(|id| self.shape(*id).ok()).cloned() else { continue };
-            let Some(frame) = parent.group_transform else { continue };
-            let scale = |position: i64, size: i64, offset: i64, extent: i64, left: f64, width: f64| {
-                if extent == 0 { (left, 0.0) } else { (left + (position - offset) as f64 / extent as f64 * width, size as f64 / extent as f64 * width) }
-            };
-            let (left,width) = scale(group.transform.offset.0,group.transform.extent.0,frame.child_offset.0,frame.child_extent.0,parent.left,parent.width);
-            let (top,height) = scale(group.transform.offset.1,group.transform.extent.1,frame.child_offset.1,frame.child_extent.1,parent.top,parent.height);
-            if let Ok(record) = self.shape_mut(ids[&group.non_visual_id]) {
-                record.left=left;record.top=top;record.width=width;record.height=height;
-                record.group_bounds=Some((left,top,width,height));
+            let Some(parent)=group.parent_id.and_then(|parent|ids.get(&parent)).and_then(|id|self.shape(*id).ok()).cloned() else { continue };
+            let own=(group.transform.offset.0,group.transform.offset.1,group.transform.extent.0,group.transform.extent.1);
+            if let Some((left,top,width,height))=self.group_child_bounds(&parent,own) {
+                let emu=|value:f64|(value*12_700.0).round()/12_700.0;
+                if let Ok(record)=self.shape_mut(ids[&group.non_visual_id]) {
+                    record.left=emu(left);record.top=emu(top);record.width=emu(width);record.height=emu(height);
+                    record.group_bounds=Some((record.left,record.top,record.width,record.height));
+                }
+            }
+        }
+        // A hidden container is rounded before its children are projected.
+        // Flattening the whole matrix first loses a physical coordinate unit.
+        let leaves:Vec<_>=self.shapes.iter().filter(|shape|shape.sheet==sheet && shape.group_children.is_empty())
+            .filter_map(|shape|Some((shape.id,shape.group_parent_id?,shape.original.as_ref()?.group_child_transform?))).collect();
+        for (id,parent,own) in leaves {
+            let Some(parent)=self.shape(parent).ok().cloned() else { continue };
+            if let Some((left,top,width,height))=self.group_child_bounds(&parent,own) {
+                let emu=|value:f64|(value*12_700.0).round()/12_700.0;
+                if let Ok(record)=self.shape_mut(id) {
+                    record.left=emu(left);record.top=emu(top);record.width=emu(width);record.height=emu(height);
+                }
             }
         }
     }
+
+    pub(super) fn group_world_rotation(&self, id: u64) -> f64 {
+        let mut current=Some(id);let mut rotation=0.0;
+        let mut seen=std::collections::HashSet::new();
+        while let Some(id)=current {
+            if !seen.insert(id) { break; }
+            let Ok(record)=self.shape(id) else { break; };
+            rotation+=record.rotation;current=record.group_parent_id;
+        }
+        rotation.rem_euclid(360.0)
+    }
+
+    pub(super) fn group_child_bounds(&self, parent: &ShapeRecord, own: (i64,i64,i64,i64)) -> Option<(f64,f64,f64,f64)> {
+        let frame=parent.group_transform?;
+        if frame.child_extent.0==0 || frame.child_extent.1==0 { return None; }
+        let x=parent.left+(own.0-frame.child_offset.0) as f64/frame.child_extent.0 as f64*parent.width;
+        let y=parent.top+(own.1-frame.child_offset.1) as f64/frame.child_extent.1 as f64*parent.height;
+        let width=own.2 as f64/frame.child_extent.0 as f64*parent.width;
+        let height=own.3 as f64/frame.child_extent.1 as f64*parent.height;
+        let px=parent.left+parent.width/2.0;let py=parent.top+parent.height/2.0;
+        let dx=x+width/2.0-px;let dy=y+height/2.0-py;
+        let (sin,cos)=self.group_world_rotation(parent.id).to_radians().sin_cos();
+        Some((px+dx*cos-dy*sin-width/2.0,py+dx*sin+dy*cos-height/2.0,width,height))
+    }
+
 
     pub(super) fn outer_shape_group(&self, id: u64) -> Option<u64> {
         let mut parent = self.shape(id).ok()?.group_parent_id;
@@ -1354,6 +1398,9 @@ impl<'a> WorkbookHost<'a> {
             (None, Some((cx, cy))) => (cx as f64 / EMU_PER_PX, cy as f64 / EMU_PER_PX),
             (None, None) => (0.0, 0.0),
         };
+        let (x,y,w,h)=if drawing.grouped && (((f64::from(drawing.group_rotation)/60_000.0).rem_euclid(360.0)+45.0)/90.0).floor() as i64 % 2 != 0 {
+            (x+w/2.0-h/2.0,y+h/2.0-w/2.0,h,w)
+        } else {(x,y,w,h)};
         let (x, y, w, h) = if drawing.grouped {
             drawing.frame.map_or((x, y, w, h), |frame| {
                 let child_x = x + w * frame.x;
@@ -1478,6 +1525,15 @@ impl<'a> WorkbookHost<'a> {
     }
 
     /// The sheet's drawings, rebuilt from its records.
+    fn group_anchor_box(record: &ShapeRecord) -> (f64,f64,f64,f64) {
+        let current=(record.left,record.top,record.width,record.height);
+        let emu=|b:(f64,f64,f64,f64)|((b.0*12_700.0).round() as i64,(b.1*12_700.0).round() as i64,(b.2*12_700.0).round() as i64,(b.3*12_700.0).round() as i64);
+        let bounds=record.group_bounds.filter(|b|emu(*b)==emu(current)).unwrap_or(current);
+        if ((record.rotation.rem_euclid(360.0)+45.0)/90.0).floor() as i64 % 2 != 0 {
+            (bounds.0+bounds.2/2.0-bounds.3/2.0,bounds.1+bounds.3/2.0-bounds.2/2.0,bounds.3,bounds.2)
+        } else { bounds }
+    }
+
     pub(super) fn mirror_drawings(&mut self, sheet: usize) {
         self.sync_legacy_drawing_order(sheet);
         let records: Vec<ShapeRecord> =
@@ -1490,7 +1546,11 @@ impl<'a> WorkbookHost<'a> {
         let slots: std::collections::HashMap<_, _> = self.shapes.iter().enumerate()
             .map(|(at, record)| (record.id, at)).collect();
         let groups: Vec<_> = records.iter().filter(|record| !record.group_children.is_empty()).filter_map(|record| {
-            let transform = record.group_transform?;
+            let mut transform = record.group_transform?;
+            if let Some(parent)=record.group_parent_id.and_then(|id|self.shape(id).ok()) {
+                if let Some(own)=self.own_group_child_transform(parent,record) {transform.offset=(own.0,own.1);transform.extent=(own.2,own.3);}
+            }
+            let anchor=Self::group_anchor_box(record);
             let mut children = record.group_children.clone();
             children.sort_by_key(|id| self.drawing_subtree_slot(*id, &slots));
             let existing = self.workbook.sheets[sheet].drawing_groups.iter().find(|group| group.non_visual_id == record.non_visual_id);
@@ -1503,9 +1563,9 @@ impl<'a> WorkbookHost<'a> {
                 children: children.iter().filter_map(|id| self.shape(*id).ok().map(|shape| shape.non_visual_id)).collect(),
                 transform,
                 from: if record.group_parent_id.is_some() { existing.map(|group| group.from) } else { None }
-                    .unwrap_or_else(|| self.anchor_at(sheet,record.left,record.top)),
+                    .unwrap_or_else(|| self.anchor_at(sheet,anchor.0,anchor.1)),
                 to: if record.group_parent_id.is_some() { existing.and_then(|group| group.to) } else { None }
-                    .or_else(|| Some(self.anchor_at(sheet,record.left+record.width,record.top+record.height))),
+                    .or_else(|| Some(self.anchor_at(sheet,anchor.0+anchor.2,anchor.1+anchor.3))),
                 rotation: (record.rotation * 60_000.0).round() as i32,
             })
         }).collect();
@@ -1688,10 +1748,10 @@ impl<'a> WorkbookHost<'a> {
         let parent = self.outer_shape_group(record.id).and_then(|id| self.shape(id).ok());
         let from = parent.map_or_else(
             || original.map_or_else(|| self.anchor_at(record.sheet, record.left, record.top), |drawing| drawing.from),
-            |group| self.anchor_at(record.sheet, group.left, group.top),
+            |group| { let anchor=Self::group_anchor_box(group);self.anchor_at(record.sheet,anchor.0,anchor.1) },
         );
         let to = if let Some(group) = parent {
-            Some(self.anchor_at(record.sheet, group.left + group.width, group.top + group.height))
+            { let anchor=Self::group_anchor_box(group);Some(self.anchor_at(record.sheet,anchor.0+anchor.2,anchor.1+anchor.3)) }
         } else {
             Some(self.anchor_at(record.sheet, record.left + record.width, record.top + record.height))
         };
@@ -1784,14 +1844,10 @@ impl<'a> WorkbookHost<'a> {
                 generated_group_name(group.non_visual_id.saturating_sub(1), true)
             } else { group.name.clone() }),
             group_non_visual_id: parent.map(|group| group.non_visual_id),
-            group_rotation: if grouped { original.map_or(0, |drawing| drawing.group_rotation) } else { 0 },
+            group_rotation: parent.map_or(0,|group|(group.rotation*60_000.0).round() as i32),
             group_transform: parent.and_then(|group| group.group_transform),
-            group_child_transform: grouped.then_some((
-                (record.left / 0.75 * EMU_PER_PX).round() as i64,
-                (record.top / 0.75 * EMU_PER_PX).round() as i64,
-                (record.width / 0.75 * EMU_PER_PX).round() as i64,
-                (record.height / 0.75 * EMU_PER_PX).round() as i64,
-            )),
+            group_child_transform: record.group_parent_id.and_then(|id|self.shape(id).ok())
+                .and_then(|parent|self.own_group_child_transform(parent,record)),
             group_nested: record.group_parent_id != self.outer_shape_group(record.id),
         }
     }
