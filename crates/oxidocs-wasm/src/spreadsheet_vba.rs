@@ -48102,7 +48102,7 @@ fn select_session_workbook_with_edits(
 
 fn select_session_workbook_with_revision(
     session: &mut Option<ProjectSessionState>, identity: &str,
-    workbook: Workbook, active_sheet: usize, edit_revision: Option<u64>,
+    mut workbook: Workbook, active_sheet: usize, edit_revision: Option<u64>,
 ) -> Result<WorkbookSelection, String> {
     let owner: u64 = identity.parse().map_err(|_| "invalid workbook identity".to_string())?;
     if owner.to_string() != identity { return Err("invalid workbook identity".into()); }
@@ -48119,12 +48119,13 @@ fn select_session_workbook_with_revision(
         return Err("workbook is not open in this session".into());
     }
     if active_sheet >= workbook.sheets.len() { return Err("active sheet is outside this workbook".into()); }
-    let old_workbook: Workbook = serde_json::from_slice(&previous.workbook).map_err(|error| error.to_string())?;
+    let mut old_workbook: Workbook = serde_json::from_slice(&previous.workbook).map_err(|error| error.to_string())?;
+    let input_changed=observable_workbook_bytes(&mut old_workbook)?!=observable_workbook_bytes(&mut workbook)?;
     let incoming = serde_json::to_vec(&workbook).map_err(|error| error.to_string())?;
     let mut previous = session.take().expect("validated project");
     let mut host = WorkbookHost::resume_storage(WorkbookStorage::Owned(Box::new(workbook)), previous.host);
     remap_workbook_host(&mut host, &old_workbook, &previous.documents, false);
-    if previous.workbook != incoming { host.saved = false; }
+    if input_changed { host.saved = false; }
     if let Some(revision) = edit_revision {
         if host.file_io.edit_revision.unwrap_or(0) != revision { host.saved = false; }
         host.file_io.edit_revision = Some(revision);
@@ -49018,7 +49019,15 @@ fn execute_workbook_action(
 
 fn observable_workbook_bytes(workbook: &mut Workbook) -> Result<Vec<u8>, String> {
     let calculation = std::mem::take(&mut workbook.recalculation);
+    // Discovering that an older IR has no dynamic-array spills is cache
+    // initialization, not an edit. Retain actual nonempty ownership changes.
+    let empty_spills=workbook.sheets.iter_mut().map(|sheet| {
+        if sheet.cached_spills.as_ref().is_some_and(Vec::is_empty) {sheet.cached_spills.take()} else {None}
+    }).collect::<Vec<_>>();
     let bytes = serde_json::to_vec(&*workbook).map_err(|error| error.to_string());
+    for (sheet,cache) in workbook.sheets.iter_mut().zip(empty_spills) {
+        if cache.is_some() {sheet.cached_spills=cache;}
+    }
     workbook.recalculation = calculation;
     bytes
 }
@@ -49140,7 +49149,7 @@ fn execute_workbook_invocation(
     let should_calculate = mode != -4135 || on_save;
     let project_compilation = matches!(&action, Some(ExternalObjectAction::CompileProject));
     let needs_runtime = !project_compilation && (procedure.is_some() || action.is_some() || should_calculate);
-    let previous_workbook:Option<Workbook>=session.as_ref().map(|previous|serde_json::from_slice(&previous.workbook))
+    let mut previous_workbook:Option<Workbook>=session.as_ref().map(|previous|serde_json::from_slice(&previous.workbook))
         .transpose().map_err(|error|error.to_string())?;
     let inherited_documents = || session.as_ref().map(|previous|previous.documents.clone()).unwrap_or_default();
     let documents = if let Some(documents) = context.document_modules.clone() {
@@ -49294,7 +49303,8 @@ fn execute_workbook_invocation(
             .unwrap_or(&application_font);
         initialize_initial_caller_styles(&mut workbook,package,font)?;
     }
-    let incoming = serde_json::to_vec(&workbook).map_err(|error| error.to_string())?;
+    let incoming = observable_workbook_bytes(&mut workbook)?;
+    let previous_input=previous_workbook.as_mut().map(observable_workbook_bytes).transpose()?;
     let mut next_files = session.as_ref().map(|previous| previous.host.file_io.clone()).unwrap_or_default();
     if let Some(state)=context.application_state.as_ref().and_then(|state|state.directory_state.as_ref()) {
         next_files.files.restore_directory_state(&state.core_state()?).map_err(|failure|format!("invalid VBA directory state: {}",failure.description()))?;
@@ -49353,7 +49363,7 @@ fn execute_workbook_invocation(
             let mut host=WorkbookHost::resume_storage(
                 WorkbookStorage::Owned(Box::new(workbook_slot.take().ok_or("missing workbook input")?)),previous.host);
             remap_workbook_host(&mut host, &old_workbook, &documents, refreshed_positions);
-            if previous.workbook != incoming { host.saved = false; }
+            if previous_input.as_ref()!=Some(&incoming) { host.saved = false; }
             host.activate_sheet(active_sheet);
             host.application_setting_dirtied = false;
             *host.user_functions.borrow_mut() = UserFunctions::default();
@@ -143789,7 +143799,7 @@ End Function"#;
         let mut session=None;
         let mut incoming=oxicells_core::parse_xlsx_preserving_values(package).unwrap();
         let mut expected_saved=false;
-        for procedure in ["Probe","MarkSaved","Probe","Export"] {
+        for procedure in ["Probe","MarkSaved","Probe","Export","Probe"] {
             // The page keeps document fields after a read-only call while
             // carrying its returned calculation metadata into the next call.
             let outcome=execute_workbook_action_in_session(
@@ -143798,7 +143808,7 @@ End Function"#;
             incoming.calculation=outcome.workbook.calculation.clone();
             if procedure=="MarkSaved" { expected_saved=true; }
             assert!(outcome.error.is_none(),"{:?}",outcome.error.as_ref().map(|error|&error.message));
-            assert!(!outcome.workbook_changed);
+            assert!(!outcome.workbook_changed,"unexpected document edit during {procedure}");
             if procedure=="Probe" {
                 let raw=serde_json::to_value(&outcome.result).unwrap();
                 let values=raw["value"]["values"].as_array().unwrap();
@@ -143815,6 +143825,24 @@ End Function"#;
             }
         }
         assert!(session.as_ref().unwrap().host.saved);
+    }
+
+    #[test]
+    fn initial_styleless_empty_spill_cache_is_not_an_edit() {
+        let package=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut workbook=oxicells_core::parse_xlsx_preserving_values(package).unwrap();
+        workbook.sheets[0].cached_spills=None;
+        let empty=observable_workbook_bytes(&mut workbook).unwrap();
+        workbook.sheets[0].cached_spills=Some(Vec::new());
+        assert_eq!(observable_workbook_bytes(&mut workbook).unwrap(),empty);
+        assert_eq!(workbook.sheets[0].cached_spills,Some(Vec::new()));
+        workbook.sheets[0].cached_spills=Some(vec![((0,0),(2,3))]);
+        let spill=observable_workbook_bytes(&mut workbook).unwrap();
+        assert_ne!(spill,empty);
+        assert_eq!(workbook.sheets[0].cached_spills,Some(vec![((0,0),(2,3))]));
+        workbook.sheets[0].cached_spills=None;
+        workbook.sheets[0].rows[0].cells[0].value=CellValue::String("real edit".into());
+        assert_ne!(observable_workbook_bytes(&mut workbook).unwrap(),empty);
     }
 
     #[test]

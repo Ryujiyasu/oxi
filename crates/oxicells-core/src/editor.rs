@@ -8023,8 +8023,136 @@ fn write_line_fill<W: Write>(writer: &mut Writer<W>, line: &crate::ir::ShapeLine
     Ok(())
 }
 
+/// Existing worksheet tags retain their qualified names and namespace scope.
+/// Generated tags use a fresh prefix when the input has prefixed sheet tags.
+/// This avoids changing default namespaces or rebinding an imported prefix.
+trait WorksheetXmlOutput {
+    fn write_event(&mut self, event: Event<'_>) -> std::io::Result<()>;
+}
+
+impl WorksheetXmlOutput for Writer<Cursor<Vec<u8>>> {
+    fn write_event(&mut self, event: Event<'_>) -> std::io::Result<()> {
+        Writer::write_event(self, event)
+    }
+}
+
+struct WorksheetXmlWriter {
+    inner: Writer<Cursor<Vec<u8>>>,
+    namespace: Option<Vec<u8>>,
+    generated_prefix: Option<String>,
+    root_written: bool,
+    has_merges: bool,
+    has_filter: bool,
+}
+
+impl WorksheetXmlWriter {
+    fn new(xml: &str) -> Result<Self, XlsxError> {
+        let mut reader = quick_xml::NsReader::from_str(xml);
+        let mut namespace = None;
+        let mut root_seen = false;
+        let mut prefixed = false;
+        let mut depth = 0usize;
+        let mut has_merges = false;
+        let mut has_filter = false;
+        loop {
+            let (resolved, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+            match event {
+                Event::Start(ref start) | Event::Empty(ref start) => {
+                    if !root_seen {
+                        root_seen = true;
+                        if let quick_xml::name::ResolveResult::Bound(ns) = &resolved {
+                            if matches!(ns.as_ref(), b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                                | b"http://purl.oclc.org/ooxml/spreadsheetml/main") {
+                                namespace = Some(ns.as_ref().to_vec());
+                            }
+                        }
+                    }
+                    let native = match (&namespace, &resolved) {
+                        (Some(want), quick_xml::name::ResolveResult::Bound(ns)) => ns.as_ref() == want.as_slice(),
+                        (None, quick_xml::name::ResolveResult::Unbound) => true,
+                        _ => false,
+                    };
+                    if native {
+                        prefixed |= start.name().as_ref().contains(&b':');
+                        if depth == 1 {
+                            has_merges |= start.local_name().as_ref() == b"mergeCells";
+                            has_filter |= start.local_name().as_ref() == b"autoFilter";
+                        }
+                    }
+                    if matches!(event, Event::Start(_)) { depth += 1; }
+                }
+                Event::End(_) => depth = depth.saturating_sub(1),
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        let generated_prefix = if prefixed && namespace.is_some() {
+            let mut number = 1usize;
+            loop {
+                let prefix = format!("oxi_edit{number}");
+                if !xml.contains(&format!("{prefix}:")) && !xml.contains(&format!("xmlns:{prefix}")) {
+                    break Some(prefix);
+                }
+                number += 1;
+            }
+        } else { None };
+        Ok(Self { inner: Writer::new(Cursor::new(Vec::new())), namespace, generated_prefix,
+            root_written: false, has_merges, has_filter })
+    }
+
+    fn is_native(&self, namespace: &quick_xml::name::ResolveResult<'_>) -> bool {
+        match (&self.namespace, namespace) {
+            (Some(want), quick_xml::name::ResolveResult::Bound(ns)) => ns.as_ref() == want.as_slice(),
+            (None, quick_xml::name::ResolveResult::Unbound) => true,
+            _ => false,
+        }
+    }
+
+    fn write_preserved_event(&mut self, event: Event<'_>) -> std::io::Result<()> {
+        if !self.root_written {
+            let empty = matches!(&event, Event::Empty(_));
+            let event = match event {
+                Event::Start(start) | Event::Empty(start) => {
+                    let mut start = start;
+                    self.root_written = true;
+                    if let (Some(prefix), Some(namespace)) = (&self.generated_prefix, &self.namespace) {
+                        let key = format!("xmlns:{prefix}");
+                        start.push_attribute((key.as_bytes(), namespace.as_slice()));
+                    }
+                    if empty { Event::Empty(start) } else { Event::Start(start) }
+                }
+                event => event,
+            };
+            return self.inner.write_event(event);
+        }
+        self.inner.write_event(event)
+    }
+
+    fn into_inner(self) -> Cursor<Vec<u8>> { self.inner.into_inner() }
+}
+
+impl WorksheetXmlOutput for WorksheetXmlWriter {
+    fn write_event(&mut self, event: Event<'_>) -> std::io::Result<()> {
+        let Some(prefix) = &self.generated_prefix else { return self.inner.write_event(event); };
+        let qualify = |start: BytesStart<'_>| {
+            if start.name().as_ref().contains(&b':') { return start.into_owned(); }
+            let mut qualified = BytesStart::new(format!("{prefix}:{}", String::from_utf8_lossy(start.name().as_ref())));
+            for attribute in start.attributes().flatten() { push_preserved_xml_attribute(&mut qualified, attribute); }
+            qualified
+        };
+        let event = match event {
+            Event::Start(start) => Event::Start(qualify(start)),
+            Event::Empty(start) => Event::Empty(qualify(start)),
+            Event::End(end) if !end.name().as_ref().contains(&b':') =>
+                Event::End(BytesEnd::new(format!("{prefix}:{}", String::from_utf8_lossy(end.name().as_ref())))),
+            event => event.into_owned(),
+        };
+        self.inner.write_event(event)
+    }
+}
+
 fn write_formula(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+    writer: &mut impl WorksheetXmlOutput,
     formula: &[u16],
     reach: Option<&str>,
 ) -> Result<(), XlsxError> {
@@ -8054,7 +8182,7 @@ fn write_formula(
 /// puts one on it, and without it the cell comes out under General however it
 /// was styled  Ewhich is how a date lands in the file as a bare serial number.
 fn write_cell_value(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+    writer: &mut impl WorksheetXmlOutput,
     row: u32,
     col: u32,
     value: &CellEditValue,
@@ -15884,7 +16012,7 @@ pub fn auto_filter_xml(filter: &AutoFilter) -> Result<String, XlsxError> {
 /// written as a plain value list when it names values, or as a custom filter
 /// when it compares.
 fn write_auto_filter(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+    writer: &mut impl WorksheetXmlOutput,
     filter: Option<&AutoFilter>,
 ) -> Result<(), XlsxError> {
     let Some(filter) = filter else {
@@ -15987,7 +16115,7 @@ fn filter_comparison(criterion: &str) -> Option<(&'static str, &str)> {
 
 /// Writes a `<mergeCells>` block, or nothing at all when there is none left.
 fn write_merges(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+    writer: &mut impl WorksheetXmlOutput,
     merges: &[MergeCell],
 ) -> Result<(), XlsxError> {
     if merges.is_empty() {
@@ -16057,7 +16185,7 @@ struct ColumnWant {
 /// A span reads `<col min="1" max="3" .../>` and covers three columns at once,
 /// so hiding the middle one means writing three spans in its place.
 fn write_col_span(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+    writer: &mut impl WorksheetXmlOutput,
     start: &BytesStart<'_>,
     pending: &mut BTreeMap<u32, ColumnWant>,
 ) -> Result<(), XlsxError> {
@@ -16145,7 +16273,7 @@ fn width_text(width: f32) -> String {
 /// this span does not decide for itself  Ea style, an outline level, a best
 /// fit that still stands.
 fn write_col(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+    writer: &mut impl WorksheetXmlOutput,
     from: Option<&BytesStart<'_>>,
     first: u32,
     last: u32,
@@ -16193,7 +16321,7 @@ fn write_col(
 
 /// Writes `<col>` spans for columns the sheet never described.
 fn write_new_cols(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+    writer: &mut impl WorksheetXmlOutput,
     pending: &mut BTreeMap<u32, ColumnWant>,
 ) -> Result<(), XlsxError> {
     let mut runs: Vec<(u32, u32, ColumnFace)> = Vec::new();
@@ -16226,7 +16354,7 @@ fn write_new_cols(
 /// Nothing is written when both are zero: an unfrozen sheet has no pane at
 /// all rather than one saying it holds nothing.
 fn write_pane(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+    writer: &mut impl WorksheetXmlOutput,
     rows: u32,
     cols: u32,
 ) -> Result<(), XlsxError> {
@@ -16262,7 +16390,7 @@ fn write_pane(
 
 /// Writes a whole `<sheetViews>` block, for a sheet that had none.
 fn write_sheet_views(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+    writer: &mut impl WorksheetXmlOutput,
     rows: u32,
     cols: u32,
 ) -> Result<(), XlsxError> {
@@ -16283,13 +16411,13 @@ fn write_sheet_views(
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
 }
 
-fn open_cols(writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<(), XlsxError> {
+fn open_cols(writer: &mut impl WorksheetXmlOutput) -> Result<(), XlsxError> {
     writer
         .write_event(Event::Start(BytesStart::new("cols")))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
 }
 
-fn close_cols(writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<(), XlsxError> {
+fn close_cols(writer: &mut impl WorksheetXmlOutput) -> Result<(), XlsxError> {
     writer
         .write_event(Event::End(BytesEnd::new("cols")))
         .map_err(|error| XlsxError::InvalidData(error.to_string()))
@@ -16336,7 +16464,7 @@ fn row_as_wanted(start: &BytesStart<'_>, want: &RowWant) -> BytesStart<'static> 
             (text, pinned)
         }),
     };
-    let mut rebuilt = BytesStart::new("row");
+    let mut rebuilt = BytesStart::new(String::from_utf8_lossy(start.name().as_ref()).into_owned());
     for attribute in start.attributes().flatten() {
         let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
         if matches!(key.as_str(), "hidden" | "ht" | "customHeight")
@@ -16391,7 +16519,7 @@ fn with_style(start: &BytesStart<'_>, style: u32) -> BytesStart<'static> {
 /// has to keep the height and span and hidden flag it was already carrying, is
 /// `row_as_wanted`'s job.
 fn write_inserted_row(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+    writer: &mut impl WorksheetXmlOutput,
     row: u32,
     cells: BTreeMap<u32, CellEditValue>,
     want: Option<RowWant>,
@@ -16443,7 +16571,7 @@ struct SheetEdits<'a> {
 
 /// Emit each missing row once, in order, merging cell and row-format edits.
 fn flush_inserted_rows(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
+    writer: &mut impl WorksheetXmlOutput,
     before: Option<u32>,
     pending: &mut BTreeMap<u32, BTreeMap<u32, CellEditValue>>,
     pending_rows: &mut std::collections::BTreeSet<u32>,
@@ -16679,8 +16807,8 @@ fn remove_tab_color(body: &str) -> String {
 
 fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String, XlsxError> {
     let edits = sheet_edits.cells;
-    let mut reader = Reader::from_str(xml);
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut reader = quick_xml::NsReader::from_str(xml);
+    let mut writer = WorksheetXmlWriter::new(xml)?;
     let mut pending: BTreeMap<u32, BTreeMap<u32, CellEditValue>> = BTreeMap::new();
     for (&(row, col), value) in edits {
         pending
@@ -16696,9 +16824,9 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
     let mut skip_merges_depth = 0_u32;
     // Whether the sheet already describes its merges decides where the new
     // block goes: in place of the old one, or straight after the data.
-    let has_merge_block = xml.contains("<mergeCells");
+    let has_merge_block = writer.has_merges;
     let mut wrote_merges = false;
-    let has_filter_block = xml.contains("<autoFilter");
+    let has_filter_block = writer.has_filter;
     let mut wrote_filter = false;
     let mut skip_filter_depth = 0_u32;
     // Whether we are inside a `<sheetView>` whose panes are being replaced.
@@ -16720,8 +16848,21 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
     let mut skip_value_text = false;
     let mut skip_replaced_content_depth = 0_u32;
 
+    let mut foreign_depth = 0usize;
     loop {
-        match reader.read_event().map_err(XlsxError::Xml)? {
+        let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let element = matches!(event, Event::Start(_) | Event::Empty(_) | Event::End(_));
+        if foreign_depth > 0 || (element && skip_filter_depth == 0 && skip_merges_depth == 0
+            && skip_replaced_content_depth == 0 && !writer.is_native(&namespace)) {
+            match &event {
+                Event::Start(_) => foreign_depth += 1,
+                Event::End(_) => foreign_depth = foreign_depth.saturating_sub(1),
+                _ => {}
+            }
+            writer.write_preserved_event(event).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            continue;
+        }
+        match event {
             Event::Eof => break,
             Event::Start(ref e) => {
                 if skip_filter_depth > 0 {
@@ -16746,7 +16887,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                 }
                 if name == "sheetView" && sheet_edits.panes.is_some() {
                     writer
-                        .write_event(Event::Start(e.clone()))
+                        .write_preserved_event(Event::Start(e.clone()))
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     if let Some((rows, cols)) = sheet_edits.panes {
                         write_pane(&mut writer, rows, cols)?;
@@ -16793,7 +16934,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                         pending_rows.remove(&next_row);
                         if let Some(hidden) = sheet_edits.rows.get(&next_row) {
                             writer
-                                .write_event(Event::Start(row_as_wanted(e, hidden)))
+                                .write_preserved_event(Event::Start(row_as_wanted(e, hidden)))
                                 .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                             continue;
                         }
@@ -16837,14 +16978,14 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                         if current_edit.is_none() {
                             if let Some(style) = restyle {
                                 writer
-                                    .write_event(Event::Start(with_style(e, style)))
+                                    .write_preserved_event(Event::Start(with_style(e, style)))
                                     .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                                 continue;
                             }
                         }
                         if let Some(value) = &current_edit {
                             // Rewrite the cell type while preserving its reference and style.
-                            let mut new_start = BytesStart::new("c");
+                            let mut new_start = BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
                             for attr in e.attributes().flatten() {
                                 let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                                 if key == "t" || (key == "s" && restyle.is_some()) {
@@ -16858,12 +16999,12 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                             if let Some(cell_type) = value.cell_type() {
                                 new_start.push_attribute(("t", cell_type));
                             }
-                            writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            writer.write_preserved_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                             if let Some(formula) = value.formula_units() {
                                 write_formula(&mut writer, &formula, value.array_reach())?;
                             }
                         } else {
-                            writer.write_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            writer.write_preserved_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         }
                         continue;
                     }
@@ -16872,7 +17013,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                         value_written = true;
                         skip_value_text = true;
                         // Write <v> start
-                        writer.write_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                        writer.write_preserved_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         // Write new value text
                         if let Some(text) = current_edit
                             .as_ref()
@@ -16886,7 +17027,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     }
                     _ => {}
                 }
-                writer.write_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                writer.write_preserved_event(Event::Start(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
             }
             Event::End(ref e) => {
                 if skip_filter_depth > 0 {
@@ -16966,7 +17107,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     }
                     _ => {}
                 }
-                writer.write_event(Event::End(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                writer.write_preserved_event(Event::End(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                 // A filter sits between the data and the merges.
                 if name == "sheetData" && !wrote_filter && !has_filter_block {
                     if let Some(filter) = sheet_edits.filter {
@@ -17012,13 +17153,13 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     // with nothing inside it, so it has to be opened up before
                     // a pane can be put in.
                     writer
-                        .write_event(Event::Start(e.clone()))
+                        .write_preserved_event(Event::Start(e.clone()))
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     if let Some((rows, cols)) = sheet_edits.panes {
                         write_pane(&mut writer, rows, cols)?;
                     }
                     writer
-                        .write_event(Event::End(BytesEnd::new("sheetView")))
+                        .write_preserved_event(Event::End(BytesEnd::new(String::from_utf8_lossy(e.name().as_ref()).into_owned())))
                         .map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                     wrote_views = true;
                     continue;
@@ -17065,11 +17206,11 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                 }
                 if name == "sheetData" && (!pending.is_empty() || !pending_rows.is_empty()) {
                     writer
-                        .write_event(Event::Start(e.clone()))
+                        .write_preserved_event(Event::Start(e.clone()))
                         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
                     flush_inserted_rows(&mut writer, None, &mut pending, &mut pending_rows, sheet_edits)?;
                     writer
-                        .write_event(Event::End(BytesEnd::new("sheetData")))
+                        .write_preserved_event(Event::End(BytesEnd::new(String::from_utf8_lossy(e.name().as_ref()).into_owned())))
                         .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
                     continue;
                 }
@@ -17082,19 +17223,19 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                     if let Some(cells) = pending.remove(&row_num) {
                         let row_start = sheet_edits.rows.get(&row_num)
                             .map(|want| row_as_wanted(e, want)).unwrap_or_else(|| e.clone());
-                        writer.write_event(Event::Start(row_start)).map_err(|error| {
+                        writer.write_preserved_event(Event::Start(row_start)).map_err(|error| {
                             XlsxError::InvalidData(error.to_string())
                         })?;
                         for (col, value) in cells {
                             write_cell_value(&mut writer, row_num, col, &value, sheet_edits.styles)?;
                         }
-                        writer.write_event(Event::End(BytesEnd::new("row"))).map_err(
+                        writer.write_preserved_event(Event::End(BytesEnd::new(String::from_utf8_lossy(e.name().as_ref()).into_owned()))).map_err(
                             |error| XlsxError::InvalidData(error.to_string()),
                         )?;
                         continue;
                     }
                     if let Some(want) = sheet_edits.rows.get(&row_num) {
-                        writer.write_event(Event::Empty(row_as_wanted(e, want)))
+                        writer.write_preserved_event(Event::Empty(row_as_wanted(e, want)))
                             .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
                         continue;
                     }
@@ -17124,7 +17265,7 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
 
                     if let Some(value) = edit {
                         // Convert the empty cell while preserving its reference and style.
-                        let mut new_start = BytesStart::new("c");
+                        let mut new_start = BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
                         let restyle = sheet_edits.styles.get(&(row_num, col));
                         for attr in e.attributes().flatten() {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
@@ -17138,38 +17279,38 @@ fn patch_worksheet_xml(xml: &str, sheet_edits: &SheetEdits<'_>) -> Result<String
                             new_start.push_attribute(("t", cell_type));
                         }
                         if let Some(formula) = value.formula_units() {
-                            writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            writer.write_preserved_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                             write_formula(&mut writer, &formula, value.array_reach())?;
                             if let Some(text) = value.value_text()? {
                                 writer.write_event(Event::Start(BytesStart::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                                 writer.write_event(Event::Text(BytesText::new(&text))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                                 writer.write_event(Event::End(BytesEnd::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                             }
-                            writer.write_event(Event::End(BytesEnd::new("c"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            writer.write_preserved_event(Event::End(BytesEnd::new(String::from_utf8_lossy(e.name().as_ref()).into_owned()))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         } else if let Some(text) = value.value_text()? {
-                            writer.write_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            writer.write_preserved_event(Event::Start(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                             writer.write_event(Event::Start(BytesStart::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                             writer.write_event(Event::Text(BytesText::new(&text))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                             writer.write_event(Event::End(BytesEnd::new("v"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
-                            writer.write_event(Event::End(BytesEnd::new("c"))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            writer.write_preserved_event(Event::End(BytesEnd::new(String::from_utf8_lossy(e.name().as_ref()).into_owned()))).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         } else {
-                            writer.write_event(Event::Empty(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                            writer.write_preserved_event(Event::Empty(new_start)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         }
                         continue;
                     }
                     if let Some(style) = sheet_edits.styles.get(&(row_num, col)) {
-                        let mut restyled = BytesStart::new("c");
+                        let mut restyled = BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
                         for attr in e.attributes().flatten() {
                             if attr.key.as_ref() != b"s" {
                                 push_preserved_xml_attribute(&mut restyled, attr);
                             }
                         }
                         if *style != 0 { restyled.push_attribute(("s", style.to_string().as_str())); }
-                        writer.write_event(Event::Empty(restyled)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                        writer.write_preserved_event(Event::Empty(restyled)).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
                         continue;
                     }
                 }
-                writer.write_event(Event::Empty(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
+                writer.write_preserved_event(Event::Empty(e.clone())).map_err(|e| XlsxError::InvalidData(e.to_string()))?;
             }
             event => {
                 if skip_replaced_content_depth > 0 {
@@ -22512,6 +22653,72 @@ xmlns:f="urn:oxi:foreign-style-probe" xmlns:mc="http://schemas.openxmlformats.or
             panes: None,
             hyperlinks: None,
             hyperlink_ids: &[],
+        }
+    }
+
+    fn assert_prefixed_sheet_namespaces(xml: &str, namespace: &str) {
+        let mut reader = quick_xml::NsReader::from_str(xml);
+        let mut foreign = false;
+        loop {
+            let (resolved, event) = reader.read_resolved_event().expect("balanced qualified tags");
+            match event {
+                Event::Start(ref tag) | Event::Empty(ref tag) => {
+                    let name = tag.local_name();
+                    let bound = match resolved {
+                        quick_xml::name::ResolveResult::Bound(ns) => ns.as_ref().to_vec(),
+                        _ => Vec::new(),
+                    };
+                    if name.as_ref() == b"payload" { foreign = true; }
+                    if !foreign {
+                        assert_eq!(bound, namespace.as_bytes(), "namespace of {:?} in {xml}", tag.name());
+                    }
+                }
+                Event::End(tag) if tag.local_name().as_ref() == b"payload" => foreign = false,
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn prefixed_worksheet_edits_keep_rows_cells_and_foreign_namespace_scopes() {
+        for namespace in ["http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "http://purl.oclc.org/ooxml/spreadsheetml/main"] {
+            let payload = r#"<u:payload xmlns:u="urn:foreign" xmlns="urn:data"><row r="1"><c r="A1">untouched</c></row></u:payload>"#;
+            let xml = format!(r#"<q:worksheet xmlns:q="{namespace}" xmlns:oxi_edit1="urn:occupied"><q:sheetViews><q:sheetView workbookViewId="0"/></q:sheetViews><q:sheetData><s:row xmlns:s="{namespace}" xmlns:q="urn:shadow" xmlns="urn:other" r="1"><s:c r="A1"><s:v>1</s:v></s:c><s:c r="B1"/><s:c r="C1"/></s:row><q:row r="2"/></q:sheetData><q:mergeCells count="1"><q:mergeCell ref="A1:B1"/></q:mergeCells><q:extLst><q:ext uri="keep">{payload}</q:ext></q:extLst></q:worksheet>"#);
+            let values = HashMap::from([((1,0),CellEditValue::Number(7.0)),
+                ((1,1),CellEditValue::Number(11.0)), ((2,0),CellEditValue::Number(13.0)),
+                ((9,0),CellEditValue::Formula("1+2".into()))]);
+            let cells = values.iter().map(|(key,value)|(*key,value)).collect();
+            let rows = BTreeMap::from([(1,RowWant {height:Some(Some(21.0)),..Default::default()}),
+                (2,RowWant {height:Some(Some(22.0)),..Default::default()})]);
+            let styles = BTreeMap::from([((1,2),1)]);
+            let cols = BTreeMap::from([(0,ColumnWant {best_fit:None,hidden:None,width:Some(12.0),custom:None,style:None,fallback_width:None})]);
+            let merges = [MergeCell {start_row:1,end_row:1,start_col:0,end_col:1}];
+            let mut edits = rows_only(&rows);edits.cells=&cells;edits.styles=&styles;
+            edits.cols=&cols;edits.panes=Some((1,1));edits.merges=Some(&merges);
+            let result = patch_worksheet_xml(&xml,&edits).expect("prefixed sheet edit");
+            assert_prefixed_sheet_namespaces(&result,namespace);
+            assert!(result.contains(payload),"foreign payload changed: {result}");
+            assert!(result.contains("xmlns:oxi_edit2="),"fresh prefix avoids imported declaration: {result}");
+            assert!(result.contains("xmlns:q=\"urn:shadow\" xmlns=\"urn:other\""),"imported default scope changed: {result}");
+            assert_eq!(result.matches("<oxi_edit2:mergeCells").count(),1,"{result}");
+            for expected in [">7<",">11<",">13<",">1+2<"] { assert!(result.contains(expected),"missing {expected}: {result}"); }
+        }
+    }
+
+    #[test]
+    fn prefixed_empty_sheet_data_insertion_keeps_qualified_closing_tags() {
+        for namespace in ["http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "http://purl.oclc.org/ooxml/spreadsheetml/main"] {
+            let xml = format!(r#"<q:worksheet xmlns:q="{namespace}"><q:sheetData/></q:worksheet>"#);
+            let value = CellEditValue::Number(17.0);
+            let cells = HashMap::from([((3,0),&value)]);let rows=BTreeMap::new();
+            let mut edits=rows_only(&rows);edits.cells=&cells;
+            let result=patch_worksheet_xml(&xml,&edits).expect("expand qualified empty sheetData");
+            assert_prefixed_sheet_namespaces(&result,namespace);
+            assert!(result.contains("</q:sheetData>"),"{result}");
+            assert!(result.contains(">17<"),"{result}");
         }
     }
 

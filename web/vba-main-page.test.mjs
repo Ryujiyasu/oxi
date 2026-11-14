@@ -558,9 +558,47 @@ vm.runInContext('let book=closeSeed.workbook, source=closePacketA, fileName="Clo
  +'const macroRun=document.getElementById("run"),macroCompile=document.getElementById("compile"),saveButton=document.getElementById("save"),macroProcList=document.getElementById("list");\n'
  +'const tabsBox=document.getElementById("tabs"),factsBox=document.getElementById("facts"),cellBox=document.getElementById("cell"),missingBox=document.getElementById("missing"),stateBox=document.getElementById("state");\n'
  +'const formulaBox=document.getElementById("formula"),whereBox=document.getElementById("where"),widthBox=document.getElementById("width");\n'
- +'const t=key=>key==="noWorkbook"?"No workbook is open.":key; const macroEditorSettings={options:()=>({}),beginOperation:()=>()=>{}};\n'
+ +'const t=key=>key==="saveSome"?(count=>`Save ${count}`):key==="noWorkbook"?"No workbook is open.":key; const macroEditorSettings={options:()=>({}),beginOperation:()=>()=>{}};\n'
  +demoFunctions.map(name=>lift(name,demoPage)).join('\n')
  +'\nconst macroWorkbookPicker=bindVbaWorkbookPicker(document.getElementById("picker"),{capture:captureMacroWorkbookView,apply:applyMacroWorkbookView,busy:()=>false,report:sayMacro});\n',demo);
+// A read-only result can supply missing loaded defaults. Both view handlers
+// must accept that IR while retaining independent edit and undo bookkeeping.
+const implicitPacket=new Uint8Array(await readFile(path.join(root,'tests/fixtures/basic_test.xlsx')));
+const implicitInput=wasm.parse_spreadsheet(implicitPacket);
+const implicitExecution=wasm.run_spreadsheet_vba_with_outcome(implicitInput,
+ 'Public Function Probe() As Double\n Probe = ActiveSheet.StandardHeight\nEnd Function',
+ 'Probe',[],0,'C:\\work\\implicit.xlsx',
+ {errorLanguage:'ja-JP',fileContext:{packageBytes:implicitPacket,fullName:'C:\\work\\implicit.xlsx',readOnly:true,folders:['C:\\work'],files:[]}});
+assert.equal(implicitExecution.error,undefined);
+assert.equal(implicitExecution.workbook_changed,false);
+assert.equal(implicitExecution.workbook_selection,undefined);
+assert.equal(implicitExecution.result.value,18.75);
+context.implicitInput=implicitInput;context.implicitExecution=implicitExecution;
+demo.implicitInput=implicitInput;demo.implicitExecution=implicitExecution;
+for(const dirty of [false,true]){
+ const beforePaints=demoPaints;
+ context.implicitDirty=dirty;demo.implicitDirty=dirty;
+ vm.runInContext('currentDocIR=implicitInput;currentXlsxSheetIndex=0;xlsxWorkbookChanged=implicitDirty;xlsxEditRevision=7;xlsxVbaEdits.clear();xlsxVbaEdits.set("kept",42);applyVbaExecution(implicitExecution,new Map());',context);
+ assert.equal(vm.runInContext('currentDocIR',context),implicitExecution.workbook);
+ assert.equal(vm.runInContext('currentDocIR.sheets[0].default_row_height',context),18.75);
+ assert.equal(vm.runInContext('xlsxWorkbookChanged',context),dirty);
+ assert.equal(vm.runInContext('xlsxEditRevision',context),7);
+ assert.equal(vm.runInContext('xlsxVbaEdits.get("kept")',context),42);
+ vm.runInContext('book=implicitInput;shown=0;beyondValues=implicitDirty;macroEditRevision=7;macroSavedEditRevision=5;changes.clear();changes.set("kept",42);pristine.clear();pristine.set("kept",1);undone.push({kind:"kept"});redone.push({kind:"kept"});applyMacroExecution(implicitExecution);',demo);
+ assert.equal(vm.runInContext('book',demo),implicitExecution.workbook);
+ assert.equal(vm.runInContext('book.sheets[0].default_row_height',demo),18.75);
+ assert.equal(vm.runInContext('beyondValues',demo),dirty);
+ assert.equal(vm.runInContext('macroEditRevision',demo),7);
+ assert.equal(vm.runInContext('macroSavedEditRevision',demo),5);
+ assert.equal(vm.runInContext('changes.get("kept")',demo),42);
+ assert.equal(vm.runInContext('pristine.get("kept")',demo),1);
+ assert.equal(vm.runInContext('undone.at(-1).kind',demo),'kept');
+ assert.equal(vm.runInContext('redone.at(-1).kind',demo),'kept');
+ assert.ok(demoPaints>beforePaints,'refreshed defaults repaint the canvas');
+}
+vm.runInContext('changes.clear();pristine.clear();undone.length=0;redone.length=0;digitWidth=7;macroEditRevision=0;macroSavedEditRevision=0;beyondValues=false;',demo);
+vm.runInContext('xlsxVbaEdits.clear();xlsxEditRevision=0;xlsxWorkbookChanged=false;',context);
+
 const handlerStart=demoPage.indexOf('macroRun.onclick = async () => {');
 vm.runInContext(demoPage.slice(handlerStart,demoPage.indexOf('macroCompile.onclick =',handlerStart)),demo);
 const compileHandlerStart = demoPage.indexOf('macroCompile.onclick = async () => {', handlerStart);
@@ -1089,4 +1127,4 @@ try {
 } finally { captionInvalidStateSession.free(); }
 closeVbaProject();
 
-console.log(JSON.stringify({ caption_state_sequences: 2, caption_unknown_field_controls: 1, caption_invalid_state_controls: 12, caption_frame_transport_controls: 3, caption_inactive_frame_sequences: 1, main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 8, canvas_project_compilation_ui_cases: 4, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, saved_state_validation_cases: 6, saved_state_worker_save: true, same_value_editor_save: true, saved_state_cancel_and_after_save_cases: 2, saved_state_read_only_case: 1, passed: true }));
+console.log(JSON.stringify({ initial_defaults_readonly_view_controls: 4, caption_state_sequences: 2, caption_unknown_field_controls: 1, caption_invalid_state_controls: 12, caption_frame_transport_controls: 3, caption_inactive_frame_sequences: 1, main_editor_failure_save_cases: 8, save_as_main_ui_cases: 3, save_as_canvas_ui_cases: 3, save_as_format_main_ui_cases:4, save_as_format_canvas_ui_cases:4, application_sequence: 1, calculation_save_cases: 6, source_edit_ui_cases: 5, project_compilation_ui_cases: 8, canvas_project_compilation_ui_cases: 4, band_grid_roundtrips: 2, typed_band_cells: 2, reference_release_ui_cases: 2, workbook_selection_ui_cases: 1, workbook_close_ui_cases: 3, canvas_workbook_close_ui_cases: 2, workbooks_collection_close_main_ui_cases: 2, workbooks_collection_close_canvas_ui_cases: 2, saved_preference_main_ui_cases:2, saved_preference_canvas_ui_cases:2, real_worker: true, selected_package_save: true, untitled_template_macro_save: true, pending_cells_cross_book: true, saved_state_validation_cases: 6, saved_state_worker_save: true, same_value_editor_save: true, saved_state_cancel_and_after_save_cases: 2, saved_state_read_only_case: 1, passed: true }));

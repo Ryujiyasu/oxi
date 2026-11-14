@@ -5531,9 +5531,7 @@ function applyMacroExecution(execution) {
     return;
   }
   const changed = execution.workbook_changed !== false;
-  const previousSheet = shown;
   if (changed) {
-    book = execution.workbook;
     // A macro can change formatting and structure before it fails.
     beyondValues = true;
     changes.clear();
@@ -5541,21 +5539,20 @@ function applyMacroExecution(execution) {
     undone.length = 0;
     redone.length = 0;
   }
-  book.calculation = execution.workbook.calculation;
+  // Accept refreshed defaults even when the macro made no document edit.
+  book = execution.workbook;
   markSaved();
   if (Number.isInteger(execution.active_sheet)
       && execution.active_sheet >= 0 && execution.active_sheet < book.sheets.length) {
     shown = execution.active_sheet;
   }
-  if (changed || previousSheet !== shown) {
-    weighCalc();
-    markFrozen();
-    markSaved();
-    markSteps();
-    draw();
-    describe();
-    sayFaces();
-  }
+  weighCalc();
+  markFrozen();
+  markSaved();
+  markSteps();
+  draw();
+  describe();
+  sayFaces();
 }
 
 document.getElementById('macros').onclick = () => {
