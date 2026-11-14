@@ -1048,7 +1048,8 @@ impl<'a> WorkbookHost<'a> {
             let mut bounds = self.points_of_drawing(sheet, &group_drawing);
             let rotation=first_child.original.as_ref().map_or(0.0,|drawing|f64::from(drawing.group_rotation)/60_000.0);
             if ((rotation.rem_euclid(360.0)+45.0)/90.0).floor() as i64 % 2 != 0 {
-                bounds=(bounds.0+bounds.2/2.0-bounds.3/2.0,bounds.1+bounds.3/2.0-bounds.2/2.0,bounds.3,bounds.2);
+                let shift=(((bounds.2*12_700.0).round()-(bounds.3*12_700.0).round())/2.0).round()/12_700.0;
+                bounds=(bounds.0+shift,bounds.1-shift,bounds.3,bounds.2);
             }
             let id = self.next_shape_id;
             self.next_shape_id += 1;
@@ -1399,7 +1400,7 @@ impl<'a> WorkbookHost<'a> {
             (None, None) => (0.0, 0.0),
         };
         let (x,y,w,h)=if drawing.grouped && (((f64::from(drawing.group_rotation)/60_000.0).rem_euclid(360.0)+45.0)/90.0).floor() as i64 % 2 != 0 {
-            (x+w/2.0-h/2.0,y+h/2.0-w/2.0,h,w)
+            {let shift=(((w*EMU_PER_PX).round()-(h*EMU_PER_PX).round())/2.0).round()/EMU_PER_PX;(x+shift,y-shift,h,w)}
         } else {(x,y,w,h)};
         let (x, y, w, h) = if drawing.grouped {
             drawing.frame.map_or((x, y, w, h), |frame| {

@@ -3423,7 +3423,7 @@ impl<'a> WorkbookHost<'a> {
                 "top" => Some(Value::Single(shape.top as f32)),
                 "width" => Some(Value::Single(shape.width as f32)),
                 "height" => Some(Value::Single(shape.height as f32)),
-                "rotation" => Some(Value::Single(shape.rotation as f32)),
+                "rotation" => Some(Value::Single(shape.rotation.rem_euclid(360.0) as f32)),
                 "placement" => Some(Value::Integer(shape.placement)),
                 "child" => Some(mso(shape.group_parent_id.is_some())),
                 "visible" => Some(mso(shape.visible)),
@@ -3480,7 +3480,7 @@ impl<'a> WorkbookHost<'a> {
                 let group_rotation = self.outer_shape_group(id)
                     .and_then(|parent| self.shape(parent).ok())
                     .map_or(0.0, |parent| parent.rotation);
-                Some(Value::Single((shape.rotation + group_rotation) as f32))
+                Some(Value::Single((shape.rotation + group_rotation).rem_euclid(360.0) as f32))
             }
             // The plain answers of a shape on its own: measured on an oval,
             // BackgroundStyle 0, BlackWhiteMode 1 (automatic), Child and
