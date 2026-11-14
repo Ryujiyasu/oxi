@@ -649,7 +649,20 @@ pub(super) fn from_chart(xml: &str, theme: &ThemeColors, w: f32, h: f32) -> Opti
     let frac = |k: &str| manual.and_then(|m| m.child(k)).and_then(|n| n.num("val"));
     let inner_manual = manual.and_then(|m| m.child("layoutTarget")).and_then(|t| t.attr("val")) == Some("inner");
     let plot = match (frac("x"), frac("y"), frac("w"), frac("h")) {
-        (Some(x), Some(y), Some(fw), Some(fh)) => (x * w, y * h, fw * w, fh * h),
+        // OXI_CHART_PLOT_CLAMP (2026-11-14, default ON, opt-out _DISABLE): a manual plot area
+        // that runs past the chart's right / bottom edge is moved back inside (x = 1 - w,
+        // y = 1 - h) when it fits. _pb_pie_place (7a8daf36's doughnut, y x h swept): y .118 /
+        // h .9997 draws as y 0 (ring top 19.66 = 19.62), y .3 / h .8 as y .2 (34.56); inside the
+        // chart the ring is centred in the plot as before. Oxi drew 7a8daf36's ring 20pt low.
+        (Some(x), Some(y), Some(fw), Some(fh)) => {
+            // pie / doughnut only: a category chart's overflowing plot stays where it is
+            // (7a8daf36 chart2, bars: Word keeps x + w > 1 in place).
+            let clamp = !crate::env_flag!("OXI_CHART_PLOT_CLAMP_DISABLE")
+                && matches!(kind, "pieChart" | "pie3DChart" | "doughnutChart");
+            let x = if clamp && fw <= 1.0 && x + fw > 1.0 { (1.0 - fw).max(0.0) } else { x };
+            let y = if clamp && fh <= 1.0 && y + fh > 1.0 { (1.0 - fh).max(0.0) } else { y };
+            (x * w, y * h, fw * w, fh * h)
+        }
         _ => (left, top, right - left, bottom - top),
     };
     if let Some(sp) = area.child("spPr") {
@@ -659,7 +672,7 @@ pub(super) fn from_chart(xml: &str, theme: &ThemeColors, w: f32, h: f32) -> Opti
     }
 
     match kind {
-        "pieChart" | "pie3DChart" | "doughnutChart" => draw_pie(&mut g, first, &all_series, vary, plot, &base, xml, theme),
+        "pieChart" | "pie3DChart" | "doughnutChart" => draw_pie(&mut g, first, &all_series, vary, plot, (w, h), &base, xml, theme),
         "scatterChart" => draw_scatter(&mut g, area, &all_series, plot, inner_manual, &base, xml, theme),
         _ => draw_category(&mut g, area, &plot_nodes, &all_series, plot, inner_manual, &base, xml, theme),
     }
@@ -1049,6 +1062,7 @@ fn draw_pie(
     sers: &[Series],
     vary: bool,
     plot: (f32, f32, f32, f32),
+    chart_wh: (f32, f32),
     base: &TextStyle,
     xml: &str,
     theme: &ThemeColors,
@@ -1067,10 +1081,20 @@ fn draw_pie(
         return;
     }
     let mut angle = plot_node.child("firstSliceAng").and_then(|n| n.num("val")).unwrap_or(0.0);
-    let dl = plot_node.child("dLbls");
+    // OXI_CHART_PIE_SER_DLBLS (2026-11-14, default ON, opt-out _DISABLE): a pie's labels
+    // set on its series (c:ser/c:dLbls) -- with each point's own c:dLbl rich text (runs +
+    // VALUE / CATEGORYNAME / PERCENTAGE / SERIESNAME fields, one line per a:p), its rPr and
+    // its manualLayout offset (x, y as fractions of the chart). blind-J ja/reports__7a8daf36's
+    // doughnuts «体感有（42）/ 66%» etc.: Word draws them, Oxi read only the plot's dLbls (absent)
+    // and drew no label.
+    let ser_dl_on = !crate::env_flag!("OXI_CHART_PIE_SER_DLBLS_DISABLE");
+    let ser_dl = plot_node.children.iter().find(|c| c.name == "ser").and_then(|n| n.child("dLbls")).filter(|_| ser_dl_on);
+    let dl = ser_dl.or(plot_node.child("dLbls"));
     let flag = |k: &str| dl.and_then(|d| d.child(k)).and_then(|n| n.attr("val")) == Some("1");
     let (show_val, show_pct, show_cat) = (flag("showVal"), flag("showPercent"), flag("showCatName"));
     let st_lbl = text_style(dl, xml, theme, base);
+    let point_lbl = |i: usize| dl.and_then(|d| d.children.iter().find(|c| c.name == "dLbl"
+        && c.child("idx").and_then(|n| n.num("val")).map(|v| v as usize) == Some(i))).filter(|_| ser_dl_on);
     for (i, v) in s.vals.iter().enumerate() {
         let Some(v) = v else { continue };
         let sweep = (v.abs() / total * 360.0) as f32;
@@ -1095,16 +1119,84 @@ fn draw_pie(
         }
         segs.push(PathSeg::Z);
         path(g, segs, Some(fill), Some(("FFFFFF".into(), 0.75)));
-        if show_val || show_pct || show_cat {
-            let mut parts = Vec::new();
-            if show_cat { parts.push(s.cats.get(i).cloned().unwrap_or_default()); }
-            if show_val { parts.push(format_number(*v, s.format_at(i))); }
-            if show_pct { parts.push(format!("{:.0}%", v.abs() / total * 100.0)); }
-            let txt = parts.join("; ");
-            let (lx, ly) = on_circle(cx, cy, (r + hole) / 2.0 + if hole > 0.0 { 0.0 } else { r * 0.2 }, angle + sweep / 2.0);
-            let lw = text_width(&txt, st_lbl.size) + 6.0;
-            let lh = st_lbl.size * 1.4;
-            label(g, &txt, &st_lbl, (lx - lw / 2.0, ly - lh / 2.0, lw, lh), Alignment::Center);
+        let pl = point_lbl(i);
+        let deleted = pl.and_then(|n| n.child("delete")).and_then(|n| n.attr("val")) == Some("1");
+        let rich = pl.and_then(|n| n.path(&["tx", "rich"]));
+        if !deleted && (show_val || show_pct || show_cat || rich.is_some()) {
+            let pct = format!("{:.0}%", v.abs() / total * 100.0);
+            let mut st = st_lbl.clone();
+            let txt = if let Some(rich) = rich {
+                let mut lines = Vec::new();
+                let mut first_rpr = true;
+                for para in rich.children.iter().filter(|c| c.name == "p") {
+                    let mut line = String::new();
+                    for r in para.children.iter().filter(|c| c.name == "r" || c.name == "fld") {
+                        if first_rpr {
+                            if let Some(rp) = r.child("rPr") {
+                                st = apply_rpr(Some(rp), xml, theme, st);
+                                first_rpr = false;
+                            }
+                        }
+                        let own = r.child("t").map(|t| t.text.clone()).unwrap_or_default();
+                        if r.name == "fld" {
+                            line.push_str(&match r.attr("type") {
+                                Some("VALUE") => format_number(*v, s.format_at(i)),
+                                Some("CATEGORYNAME") => s.cats.get(i).cloned().unwrap_or(own),
+                                Some("PERCENTAGE") => pct.clone(),
+                                Some("SERIESNAME") => s.name.clone(),
+                                _ => own,
+                            });
+                        } else {
+                            line.push_str(&own);
+                        }
+                    }
+                    // a data label wraps at a fifth of the chart's width (Word: «体感有（42）»
+                    // 9pt -> «体感有» / «（42）», «不明（1）» 8pt (37pt) stays whole; chart 211.5pt).
+                    let maxw = chart_wh.0 * 0.2;
+                    if !crate::env_flag!("OXI_CHART_LABEL_WRAP_DISABLE") && text_width(&line, st.size) > maxw {
+                        // break units: an opening bracket starts one, each CJK character
+                        // starts one, digits / Latin / closing marks stay with the unit before
+                        let mut units: Vec<String> = Vec::new();
+                        let mut prev_open = false;
+                        for ch in line.chars() {
+                            let open = matches!(ch, '（' | '(' | '「' | '【');
+                            let cjk = (ch as u32) >= 0x3040 && !matches!(ch, '）' | '、' | '。' | '，' | '％' | '」' | '】');
+                            if units.is_empty() || ((open || cjk) && !prev_open) {
+                                units.push(String::new());
+                            }
+                            units.last_mut().unwrap().push(ch);
+                            prev_open = open;
+                        }
+                        let mut cur = String::new();
+                        for u in units {
+                            let probe = format!("{cur}{u}");
+                            if !cur.is_empty() && text_width(&probe, st.size) > maxw {
+                                lines.push(std::mem::take(&mut cur));
+                            }
+                            cur.push_str(&u);
+                        }
+                        lines.push(cur);
+                    } else {
+                        lines.push(line);
+                    }
+                }
+                lines.join("\n")
+            } else {
+                let mut parts = Vec::new();
+                if show_cat { parts.push(s.cats.get(i).cloned().unwrap_or_default()); }
+                if show_val { parts.push(format_number(*v, s.format_at(i))); }
+                if show_pct { parts.push(pct); }
+                parts.join("; ")
+            };
+            let (mut lx, mut ly) = on_circle(cx, cy, (r + hole) / 2.0 + if hole > 0.0 { 0.0 } else { r * 0.2 }, angle + sweep / 2.0);
+            if let Some(m) = pl.and_then(|n| n.path(&["layout", "manualLayout"])) {
+                lx += m.child("x").and_then(|n| n.num("val")).unwrap_or(0.0) * chart_wh.0;
+                ly += m.child("y").and_then(|n| n.num("val")).unwrap_or(0.0) * chart_wh.1;
+            }
+            let n_lines = txt.split('\n').count().max(1) as f32;
+            let lw = txt.split('\n').map(|l| text_width(l, st.size)).fold(0.0f32, f32::max) + 6.0;
+            let lh = st.size * 1.4 * n_lines;
+            label(g, &txt, &st, (lx - lw / 2.0, ly - lh / 2.0, lw, lh), Alignment::Center);
         }
         angle = end;
     }
