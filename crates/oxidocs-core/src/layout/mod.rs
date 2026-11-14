@@ -2898,6 +2898,9 @@ pub struct TextEffects {
     pub glow: Option<(f32, u32, f32)>,
     /// OXI_TEXT_GLOW: a solid w14:textOutline (width pt, 0xRRGGBB).
     pub line: Option<(f32, u32)>,
+    /// OXI_WORDART_TEXTPLAIN: draw the element's text with its ink stretched to fill
+    /// this rect (x, y, w, h in points) -- WordArt `textPlain` warp.
+    pub fit_box: Option<[f32; 4]>,
 }
 
 impl TextEffects {
@@ -2912,6 +2915,7 @@ impl TextEffects {
             no_fill: st.no_fill,
             glow: st.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
             line: st.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
+            fit_box: None,
         }
     }
 }
@@ -9537,6 +9541,7 @@ cells={} pitch={:.2} text={:?}",
                     no_fill: style.no_fill,
                     glow: style.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                     line: style.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
+                    fit_box: None,
                 },
             },
         );
@@ -11063,8 +11068,61 @@ cells={} pitch={:.2} text={:?}",
         // in Word's PDF. (The parent canvas box itself carries no blocks.)
         let canvas_member_overflow = text_box.canvas && !text_box.blocks.is_empty()
             && !crate::env_flag!("OXI_CANVAS_OVERFLOW_DISABLE");
+        // OXI_WORDART_TEXTPLAIN (2026-11-14, default ON, opt-out _DISABLE): a WordArt text
+        // body with `a:prstTxWarp prst="textPlain"` draws each line with its INK stretched
+        // to fill an equal share of the inner box (box minus insets), never cut.
+        // _pb_wordart_cut (72pt box, 18pt «ABCあ», heights 10 / 16 / 22.9 / 40): with the warp
+        // the ink spans the inner box at every height (3.5 .. h-4, x 7.5 .. w-7.5); without it
+        // the line is laid out and clipped. blind-J ja/administrative__1fc69a4f's «練馬区» /
+        // «だより» titles (18pt in a 22.9pt box): Word stretches them into the box (the PDF's
+        // text layer keeps the 18pt line, invisible); Oxi cut the line and showed nothing.
+        // Same newsletter family: 105d627b / 15d27270 / 04a3e3e1.
+        let warp_plain = text_box.warp_plain && !text_box.vertical_text;
+        if warp_plain {
+            let mut lines: Vec<(f32, Vec<usize>)> = Vec::new();
+            for (i, el) in elements.iter().enumerate() {
+                if let LayoutContent::Text { text, .. } = &el.content {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    match lines.iter_mut().find(|l| (l.0 - el.y).abs() < 0.5) {
+                        Some(l) => l.1.push(i),
+                        None => lines.push((el.y, vec![i])),
+                    }
+                }
+            }
+            lines.retain(|l| l.1.iter().any(|&i| matches!(&elements[i].content,
+                LayoutContent::Text { text, .. } if !text.trim().is_empty())));
+            lines.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            let n = lines.len().max(1) as f32;
+            let (ix, iy) = (abs_x + inset_l, abs_y + inset_t);
+            let (iw, ih) = ((text_box.width - inset_l - inset_r).max(1.0), (text_box.height - inset_t - inset_b).max(1.0));
+            let mut drop = vec![false; elements.len()];
+            for (li, (_, idxs)) in lines.iter_mut().enumerate() {
+                idxs.sort_by(|&a, &b| elements[a].x.partial_cmp(&elements[b].x).unwrap_or(std::cmp::Ordering::Equal));
+                let first = idxs[0];
+                let joined: String = idxs.iter().filter_map(|&i| match &elements[i].content {
+                    LayoutContent::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                }).collect();
+                let last = *idxs.last().unwrap();
+                let right = elements[last].x + elements[last].width;
+                for &i in idxs.iter().skip(1) {
+                    drop[i] = true;
+                }
+                let band = [ix, iy + li as f32 * ih / n, iw, ih / n];
+                let el = &mut elements[first];
+                el.width = right - el.x;
+                if let LayoutContent::Text { text, effects, .. } = &mut el.content {
+                    *text = joined.trim().to_string();
+                    effects.fit_box = Some(band);
+                }
+            }
+            let mut k = 0;
+            elements.retain(|_| { k += 1; !drop[k - 1] });
+        }
         if !crate::env_flag!("OXI_TXBX_OVERFLOW_MID_DISABLE") && !text_box.vertical_text && !chain_head
-            && !canvas_member_overflow
+            && !canvas_member_overflow && !warp_plain
         {
             let inner_bottom = abs_y + text_box.height - inset_b - v_corner_inset;
             elements.retain(|el| match &el.content {

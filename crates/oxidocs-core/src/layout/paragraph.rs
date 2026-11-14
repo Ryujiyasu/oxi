@@ -9162,6 +9162,7 @@ impl<'a> ParagraphLayouter<'a> {
                             no_fill: frag.style.no_fill,
                             glow: frag.style.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                             line: frag.style.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
+                            fit_box: None,
                         },
                     },
                 );

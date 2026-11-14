@@ -1819,6 +1819,93 @@ fn watermark_path(x: f32, y: f32, w: f32, h: f32, text: &str, color: Option<&str
     Some(ContentElement::Path(PathData { operations: ops, stroke: None, fill: Some(fill) }))
 }
 
+/// OXI_WORDART_TEXTPLAIN: `text` as filled (and optionally stroked) glyph outlines whose
+/// ink box exactly fills `rect` (x, y, w, h) -- the WordArt textPlain warp. A requested
+/// italic the face lacks is slanted (tan 12deg), as Word synthesises it.
+fn fit_text_path(text: &str, family: Option<&str>, bold: bool, italic: bool, rect: [f32; 4],
+    color: Option<&str>, line: Option<(f32, u32)>) -> Option<ContentElement>
+{
+    use rustybuzz::ttf_parser;
+    let fam = family.filter(|f| !f.trim().is_empty()).unwrap_or("Times New Roman");
+    let found = face_file_cached(fam, bold, italic)
+        .or_else(|| face_file_cached(fam, false, false))
+        .or_else(|| resolve_face_path(fam, false, false).map(|p| (std::path::PathBuf::from(p), 0)))?;
+    let bytes = std::fs::read(&found.0).ok()?;
+    let face = ttf_parser::Face::parse(&bytes, found.1).ok()?;
+    let upem = face.units_per_em().max(1) as f64;
+    let slant = if italic && !face.is_italic() { 0.2126 } else { 0.0 };
+    struct Sink { ops: Vec<(u8, [f64; 6])>, pen: f64, k: f64, slant: f64 }
+    impl Sink {
+        fn p(&self, x: f32, y: f32) -> (f64, f64) {
+            let (gx, gy) = (x as f64 * self.k, y as f64 * self.k);
+            (self.pen + gx + gy * self.slant, -gy)
+        }
+    }
+    impl ttf_parser::OutlineBuilder for Sink {
+        fn move_to(&mut self, x: f32, y: f32) { let (a, b) = self.p(x, y); self.ops.push((0, [a, b, 0.0, 0.0, 0.0, 0.0])); }
+        fn line_to(&mut self, x: f32, y: f32) { let (a, b) = self.p(x, y); self.ops.push((1, [a, b, 0.0, 0.0, 0.0, 0.0])); }
+        fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+            let (px, py) = self.ops.last().map(|(t, p)| if *t == 2 { (p[4], p[5]) } else { (p[0], p[1]) }).unwrap_or((0.0, 0.0));
+            let (qx, qy) = self.p(x1, y1);
+            let (ex, ey) = self.p(x, y);
+            self.ops.push((2, [px + 2.0 / 3.0 * (qx - px), py + 2.0 / 3.0 * (qy - py),
+                ex + 2.0 / 3.0 * (qx - ex), ey + 2.0 / 3.0 * (qy - ey), ex, ey]));
+        }
+        fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+            let (a, b) = self.p(x1, y1);
+            let (c, d) = self.p(x2, y2);
+            let (e, f) = self.p(x, y);
+            self.ops.push((2, [a, b, c, d, e, f]));
+        }
+        fn close(&mut self) { self.ops.push((3, [0.0; 6])); }
+    }
+    let mut sink = Sink { ops: Vec::new(), pen: 0.0, k: 1.0 / upem, slant };
+    for ch in text.chars() {
+        let Some(g) = face.glyph_index(ch) else { continue };
+        let _ = face.outline_glyph(g, &mut sink);
+        sink.pen += face.glyph_hor_advance(g).unwrap_or(0) as f64 / upem;
+    }
+    if sink.ops.is_empty() {
+        return None;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for (t, p) in &sink.ops {
+        let n = match t { 0 | 1 => 1, 2 => 3, _ => 0 };
+        for i in 0..n {
+            x0 = x0.min(p[2 * i]); x1 = x1.max(p[2 * i]);
+            y0 = y0.min(p[2 * i + 1]); y1 = y1.max(p[2 * i + 1]);
+        }
+    }
+    if x1 - x0 <= 0.0 || y1 - y0 <= 0.0 {
+        return None;
+    }
+    let (rx, ry, rw, rh) = (rect[0] as f64, rect[1] as f64, rect[2] as f64, rect[3] as f64);
+    let (sx, sy) = (rw / (x1 - x0), rh / (y1 - y0));
+    let tf = |px: f64, py: f64| (rx + (px - x0) * sx, ry + (py - y0) * sy);
+    let mut ops = Vec::with_capacity(sink.ops.len());
+    for (t, p) in &sink.ops {
+        match t {
+            0 => { let (a, b) = tf(p[0], p[1]); ops.push(PathOp::MoveTo(a, b)); }
+            1 => { let (a, b) = tf(p[0], p[1]); ops.push(PathOp::LineTo(a, b)); }
+            2 => {
+                let (a, b) = tf(p[0], p[1]);
+                let (c, d) = tf(p[2], p[3]);
+                let (e, f) = tf(p[4], p[5]);
+                ops.push(PathOp::CurveTo(a, b, c, d, e, f));
+            }
+            _ => ops.push(PathOp::ClosePath),
+        }
+    }
+    let fill = color.and_then(parse_hex_color).unwrap_or(Color::Gray(0.0));
+    let stroke = line.map(|(w, c)| oxipdf_core::ir::StrokeStyle {
+        color: Color::Rgb(((c >> 16) & 255) as f64 / 255.0, ((c >> 8) & 255) as f64 / 255.0, (c & 255) as f64 / 255.0),
+        width: (w as f64).max(0.25),
+        line_cap: oxipdf_core::ir::LineCap::Butt,
+        line_join: oxipdf_core::ir::LineJoin::Miter,
+    });
+    Some(ContentElement::Path(PathData { operations: ops, stroke, fill: Some(fill) }))
+}
+
 fn parse_hex_color(hex: &str) -> Option<Color> {
     let hex = hex.strip_prefix('#').unwrap_or(hex);
     if hex.len() != 6 { return None; }
@@ -1995,6 +2082,15 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     // ja/creative__9aa11078: the white outlined title came out blue on blue).
                     let fx_on = std::env::var_os("OXI_PDF_TEXT_EFFECTS_DISABLE").is_none();
                     if fx_on && effects.no_fill {
+                        continue;
+                    }
+                    // OXI_WORDART_TEXTPLAIN: the line's ink stretched into its band of the box
+                    if let Some(rect) = effects.fit_box {
+                        if let Some(el) = fit_text_path(text, font_family.as_deref(), *bold, *italic, rect,
+                            color.as_deref(), effects.line)
+                        {
+                            contents.push(el);
+                        }
                         continue;
                     }
                     let fs = *font_size as f64;

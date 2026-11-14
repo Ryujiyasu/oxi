@@ -487,6 +487,12 @@ unsafe fn render_page_elements(
                 if effects.no_fill && std::env::var("OXI_S1327_DISABLE").is_err() {
                     continue;
                 }
+                // OXI_WORDART_TEXTPLAIN: the line's ink stretched into its band of the box
+                if let Some(rect) = effects.fit_box {
+                    render_fit_text(rt, dwrite_factory, rect, text, fam, *bold, *italic,
+                        color.as_deref(), effects.line)?;
+                    continue;
+                }
                 if let Some(glyph)=el.font_glyph {
                     render_font_glyph(rt,dwrite_factory,el.x,el.y+el.baseline_offset.unwrap_or(0.0),
                         glyph.index,el.width,*font_size,fam,*bold,*italic,color.as_deref())?;
@@ -569,6 +575,76 @@ unsafe fn render_page_elements(
             _ => {}
         }
     }
+    Ok(())
+}
+
+/// OXI_WORDART_TEXTPLAIN: draw `text` with its ink box stretched to fill `rect`
+/// (x, y, w, h in points); a w14:textOutline is drawn as the usual 8 offset copies.
+#[cfg(windows)]
+unsafe fn render_fit_text(
+    rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
+    dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    rect: [f32; 4], text: &str, family: &str, bold: bool, italic: bool,
+    color: Option<&str>, line: Option<(f32, u32)>,
+) -> windows::core::Result<()> {
+    use windows::Win32::Graphics::Direct2D::Common::*;
+    use windows::Win32::Graphics::DirectWrite::*;
+    use windows::core::PCWSTR;
+    let fam_w: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    let loc: Vec<u16> = "ja-jp".encode_utf16().chain(std::iter::once(0)).collect();
+    let size = 100.0f32;
+    let doc_coll = doc_font_collection(dwrite_factory);
+    let format = dwrite_factory.CreateTextFormat(
+        PCWSTR(fam_w.as_ptr()), doc_coll.as_ref(),
+        if bold { DWRITE_FONT_WEIGHT_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL },
+        if italic { DWRITE_FONT_STYLE_ITALIC } else { DWRITE_FONT_STYLE_NORMAL },
+        DWRITE_FONT_STRETCH_NORMAL, size, PCWSTR(loc.as_ptr()))?;
+    let text_w: Vec<u16> = text.encode_utf16().collect();
+    let probe = dwrite_factory.CreateTextLayout(&text_w, &format, 1.0e6, 1.0e6)?;
+    let mut m = DWRITE_TEXT_METRICS::default();
+    probe.GetMetrics(&mut m)?;
+    if m.width <= 0.0 { return Ok(()); }
+    let layout = dwrite_factory.CreateTextLayout(&text_w, &format, m.width + 1.0, m.height + 1.0)?;
+    let om: DWRITE_OVERHANG_METRICS = layout.GetOverhangMetrics()?;
+    let (ink_l, ink_t) = (-om.left, -om.top);
+    let (ink_r, ink_b) = (m.width + 1.0 + om.right, m.height + 1.0 + om.bottom);
+    let (ink_w, ink_h) = (ink_r - ink_l, ink_b - ink_t);
+    if ink_w <= 0.0 || ink_h <= 0.0 { return Ok(()); }
+    let (rx, ry, rw, rh) = (rect[0] * PT_TO_DIP, rect[1] * PT_TO_DIP, rect[2] * PT_TO_DIP, rect[3] * PT_TO_DIP);
+    let (sx, sy) = (rw / ink_w, rh / ink_h);
+    let m2 = windows::Foundation::Numerics::Matrix3x2 {
+        M11: sx, M12: 0.0, M21: 0.0, M22: sy,
+        M31: rx - ink_l * sx, M32: ry - ink_t * sy,
+    };
+    let mut saved = windows::Foundation::Numerics::Matrix3x2::default();
+    rt.GetTransform(&mut saved);
+    let full = windows::Foundation::Numerics::Matrix3x2 {
+        M11: m2.M11 * saved.M11 + m2.M12 * saved.M21,
+        M12: m2.M11 * saved.M12 + m2.M12 * saved.M22,
+        M21: m2.M21 * saved.M11 + m2.M22 * saved.M21,
+        M22: m2.M21 * saved.M12 + m2.M22 * saved.M22,
+        M31: m2.M31 * saved.M11 + m2.M32 * saved.M21 + saved.M31,
+        M32: m2.M31 * saved.M12 + m2.M32 * saved.M22 + saved.M32,
+    };
+    rt.SetTransform(&full);
+    let rgb = |c: u32| ((c >> 16) as u8, (c >> 8) as u8, c as u8);
+    let origin = D2D_POINT_2F { x: 0.0, y: 0.0 };
+    if let Some((w, c)) = line {
+        let (r, g, b) = rgb(c);
+        if let Ok(lb) = rt.CreateSolidColorBrush(&rgb_to_d2d_color(r, g, b), None) {
+            let (dx, dy) = ((w * 0.5).max(0.25) * PT_TO_DIP / sx, (w * 0.5).max(0.25) * PT_TO_DIP / sy);
+            for k in 0..8 {
+                let a = (k as f32) * std::f32::consts::PI / 4.0;
+                rt.DrawTextLayout(D2D_POINT_2F { x: a.cos() * dx, y: a.sin() * dy }, &layout, &lb,
+                    windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE);
+            }
+        }
+    }
+    let hex = color.unwrap_or("000000");
+    let p = |i: usize| u8::from_str_radix(hex.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0);
+    let brush = rt.CreateSolidColorBrush(&rgb_to_d2d_color(p(0), p(2), p(4)), None)?;
+    rt.DrawTextLayout(origin, &layout, &brush, windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE);
+    rt.SetTransform(&saved);
     Ok(())
 }
 

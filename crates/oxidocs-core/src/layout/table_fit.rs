@@ -3675,6 +3675,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         no_fill: first_run_style.no_fill,
                                                         glow: first_run_style.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                                                         line: first_run_style.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
+                                                        fit_box: None,
                                                     },
                                                 },
                                             );
@@ -3744,6 +3745,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 no_fill: first_run_style.no_fill,
                                                 glow: first_run_style.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                                                 line: first_run_style.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
+                                                fit_box: None,
                                             },
                                         },
                                     );

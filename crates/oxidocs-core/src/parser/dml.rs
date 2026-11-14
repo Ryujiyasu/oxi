@@ -170,7 +170,7 @@ pub(super) fn text_box(
     wrap_none: bool,
     (x, y, w, h): (f32, f32, f32, f32),
 ) -> TextBox {
-    TextBox {
+    TextBox { warp_plain: false,
         wrap_polygon: Vec::new(),
         text_outline_inset: 0.0,
         vertical_text: false,
