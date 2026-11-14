@@ -65,6 +65,8 @@ jobs:
           cargo test -p oxidocs-wasm --lib --features suite --locked
           --config profile.test.package.oxivba-core.opt-level=1 -- --exact
           spreadsheet_vba::tests::sparse_editor_fonts_inherit_only_omitted_color_and_keep_explicit_identity
+          spreadsheet_vba::tests::implicit_cell_export_defaults_preserve_explicit_edits_and_inheritance
+          spreadsheet_vba::tests::initial_editor_font_edits_keep_their_resource_when_normal_changes
           spreadsheet_vba::tests::save_copy_preserves_incoming_editor_value_font_geometry_and_format_edits
           spreadsheet_vba::tests::save_copy_keeps_partial_textbox_character_formatting_by_vba
           spreadsheet_vba::tests::save_copy_persists_a_comment_thread_created_by_vba
