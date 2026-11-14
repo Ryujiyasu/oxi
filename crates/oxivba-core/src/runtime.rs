@@ -445,6 +445,13 @@ pub trait Host {
         host_error(1004, format!("macro is unavailable: {requested}"))
     }
 
+    /// Hosts may retain binding- and expression-specific diagnostics after
+    /// dispatch fails. Context belongs to this call, including callback retries.
+    fn contextual_call_error(&self, _receiver: Option<&ObjectRef>, _name: &str,
+        _late_bound: bool, _value_context: bool, _message: &str) -> Option<String> {
+        None
+    }
+
     /// Boundaries of a runtime member call, including any callback retries.
     fn begin_member_call(&mut self, _receiver: Option<&ObjectRef>, _name: &str) {}
     fn end_member_call(&mut self, _receiver: Option<&ObjectRef>, _name: &str) {}
@@ -9572,12 +9579,13 @@ impl<'a> Runtime<'a> {
                         None => Value::Missing,
                     }});
                 }
-                let late_host_call = argument_names.iter().any(Option::is_some) || match target.as_ref() {
+                let late_bound_receiver = match target.as_ref() {
                     Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
                     Expr::WithMember(..) | Expr::WithBangMember(..) => matches!(
                         frame.with_objects.last(), Some(WithSubject::Object { assignment_type: None, .. })),
                     _ => false,
                 };
+                let late_host_call = argument_names.iter().any(Option::is_some) || late_bound_receiver;
                 if let Some(receiver) = receiver.as_ref() {
                     let name = match target.as_ref() {
                         Expr::Member { name, .. } | Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => name,
@@ -9641,12 +9649,13 @@ impl<'a> Runtime<'a> {
                             Some(&receiver), name, &values, &argument_names, span.line, frame,
                             if early_macro { None } else { evaluated.as_deref().map(|values| (args.as_slice(), values, *force_by_value)) },
                         ) { return result; }
-                        self.with_callback_error_context(frame, |runtime, _| runtime.host_call_named(
+                        self.with_callback_error_context(frame, |runtime, _| runtime.host_call_named_in_context(
                             Some(&receiver),
                             name,
                             &values,
                             &argument_names,
                             span.line,
+                            Some((late_bound_receiver, value_context)),
                         ))?
                         .ok_or_else(|| {
                             no_such_member(format!("host method is not available: {}.{name}", receiver.kind), Some(span.line))
@@ -9661,12 +9670,13 @@ impl<'a> Runtime<'a> {
                             Some(&receiver), name, &values, &argument_names, span.line, frame,
                             if early_macro { None } else { evaluated.as_deref().map(|values| (args.as_slice(), values, *force_by_value)) },
                         ) { return result; }
-                        self.with_callback_error_context(frame, |runtime, _| runtime.host_call_named(
+                        self.with_callback_error_context(frame, |runtime, _| runtime.host_call_named_in_context(
                             Some(&receiver),
                             name,
                             &values,
                             &argument_names,
                             span.line,
+                            Some((late_bound_receiver, value_context)),
                         ))?
                         .ok_or_else(|| {
                             no_such_member(format!("host method is not available: {}.{name}", receiver.kind), Some(span.line))
@@ -11421,6 +11431,18 @@ impl<'a> Runtime<'a> {
         argument_names: &[Option<String>],
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        self.host_call_named_in_context(receiver, name, args, argument_names, line, None)
+    }
+
+    fn host_call_named_in_context(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+        argument_names: &[Option<String>],
+        line: u32,
+        context: Option<(bool, bool)>,
+    ) -> Result<Option<Value>, RuntimeError> {
         let implicit=receiver.is_none().then(||self.implicit_document_receiver(name)).flatten();
         let receiver=receiver.or(implicit.as_ref());
         if let Some(result) = self.host_macro_call(receiver, name, args, argument_names, line) {
@@ -11483,7 +11505,11 @@ impl<'a> Runtime<'a> {
                 let answer = match host.call_named_with_files(receiver, name, args, argument_names, &mut self.files) {
                     Ok(None) if implicit.is_some() && args.is_empty()=>host.get(receiver.expect("implicit document receiver"),name),
                     answer=>answer,
-                };
+                }.map_err(|message| match context {
+                    Some((late_bound, value_context)) => host.contextual_call_error(
+                        receiver, name, late_bound, value_context, &message).unwrap_or(message),
+                    None => message,
+                });
                 if !self.work_out_user_functions()? {
                     return answer.map_err(|message| host_failure(message, line));
                 }

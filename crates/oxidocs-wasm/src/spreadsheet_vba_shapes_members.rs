@@ -2197,6 +2197,23 @@ impl<'a> WorkbookHost<'a> {
         })
     }
 
+    pub(super) fn contextual_sheet_add_error(&self, name: &str, late_bound: bool,
+        value_context: bool, message: &str) -> Option<String> {
+        if !name.eq_ignore_ascii_case("add") || message != self.sheet_add_argument_failure() {
+            return None;
+        }
+        if !late_bound {
+            return Some(self.sheet_add_failure());
+        }
+        if value_context {
+            return None;
+        }
+        Some(oxivba_core::host_error_from(1004, "Microsoft Excel", match self.error_language {
+            ErrorLanguage::Japanese => "Sheets \u{30af}\u{30e9}\u{30b9}\u{306e} Add \u{30e1}\u{30bd}\u{30c3}\u{30c9}\u{304c}\u{5931}\u{6557}\u{3057}\u{307e}\u{3057}\u{305f}\u{3002}",
+            ErrorLanguage::English => "Add method of Sheets class failed",
+        }))
+    }
+
     pub(super) fn add_sheet_collection(&mut self, collection: HostObject, args: &[Value]) -> Result<Value, String> {
         if args.len() > 4 { return Err(host_error(450, "Sheet Add argument count")); }
         let given = |i: usize| args.get(i).filter(|v| !matches!(v, Value::Missing | Value::Null));
@@ -2213,27 +2230,14 @@ impl<'a> WorkbookHost<'a> {
                 _ => return Err(self.sheet_add_failure()),
             },
         };
-        let count = match given(2) {
-            None => 1,
-            Some(Value::Boolean(v)) => i64::from(*v),
-            Some(value) => {
-                let number = match value {
-                    Value::String(s) => s.trim().parse::<f64>().ok(),
-                    _ => any_number(value),
-                }.ok_or_else(|| self.sheet_add_failure())?;
-                let rounded = number.trunc();
-                if !rounded.is_finite() || rounded < 1.0 || rounded > i32::MAX as f64 { return Err(self.sheet_add_failure()); }
-                rounded as i64
-            },
-        };
-        if count < 1 { return Err(self.sheet_add_failure()); }
+        let count = self.sheet_add_count(given(2), f64::from(i32::MAX) + 1.0)?;
         let placed = |v: &Value| match v {
             Value::Object(o) => self.worksheet(o).ok_or_else(|| self.sheet_add_failure()),
             _ => Err(self.sheet_add_failure()),
         };
         let before = given(0).map(placed).transpose()?;
         let after = given(1).map(placed).transpose()?;
-        if before.is_some() && after.is_some() { return Err(self.sheet_add_failure()); }
+        if before.is_some() && after.is_some() { return Err(self.sheet_add_argument_failure()); }
         let mut at = match (before, after) {
             (Some(i), _) => i,
             (_, Some(i)) => i + usize::from(!chart),
