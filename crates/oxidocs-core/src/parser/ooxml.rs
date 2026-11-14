@@ -8420,10 +8420,24 @@ pub(super) fn parse_color_modifiers_alpha(reader: &mut Reader<&[u8]>, base_hex: 
     }
 
     // Apply shade (move towards black)
+    // OXI_SHADE_LINEAR (2026-11-14, default ON, opt-out _DISABLE): a:shade scales LINEAR
+    // light (sRGB decoded, scaled, encoded), as OXI_TINT_LINEAR mixes. _pb_clrmod (one solid
+    // w14:textFill of accent4 8064A2 per arm, Word's PDF span colour): shade 20 -> 59,44,76
+    // (= encode(decode(128/255) x 0.2) = 58.8), shade 50 -> 92,71,118, shade 85 -> 119,93,150;
+    // the sRGB product gave 26,20,32 / 64,50,81 / 109,85,138. satMod / tint / lumMod / lumOff
+    // already matched. blind-J ja/creative__9540b8a7's gradient stops (shade 20 / 85 + satMod).
     if let Some(s) = shade {
-        r *= s;
-        g *= s;
-        b *= s;
+        if std::env::var_os("OXI_SHADE_LINEAR_DISABLE").is_none() {
+            let dec = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+            let enc = |c: f32| if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+            r = enc(dec(r) * s);
+            g = enc(dec(g) * s);
+            b = enc(dec(b) * s);
+        } else {
+            r *= s;
+            g *= s;
+            b *= s;
+        }
     }
 
     // Apply HLS modifiers: lumMod/lumOff on L, satMod on S (matches Word output)
@@ -13802,7 +13816,15 @@ fn parse_run_properties(
                                 if let Some(cv) = color {
                                     let ch = |sh: u32| {
                                         let x = ((cv >> sh) & 0xFF) as f32 / 255.0;
-                                        let y = match l.as_str() { "lumOff" => x + v, _ => x * v };
+                                        // OXI_SHADE_LINEAR: shade in linear light, as above
+                                        let y = match l.as_str() {
+                                            "lumOff" => x + v,
+                                            "shade" if std::env::var_os("OXI_SHADE_LINEAR_DISABLE").is_none() => {
+                                                let d = if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) } * v;
+                                                if d <= 0.0031308 { d * 12.92 } else { 1.055 * d.powf(1.0 / 2.4) - 0.055 }
+                                            }
+                                            _ => x * v,
+                                        };
                                         ((y.clamp(0.0, 1.0) * 255.0).round() as u32) << sh
                                     };
                                     color = Some(ch(16) | ch(8) | ch(0));
