@@ -786,6 +786,15 @@ impl WorkbookFiles {
         Self::replace_package_parts(&blank,replacements,&BTreeSet::new())
     }
 
+    pub(super) fn unstated_row_default_sheets(package:&[u8])->Result<Vec<usize>,String> {
+        Self::selection_parts(package)?.into_iter().filter_map(|(index,_,xml)|
+            match Self::xml_elements(&xml,b"sheetFormatPr",1) {
+                Ok(elements) if elements.is_empty()=>Some(Ok(index)),
+                Ok(_)=>None,
+                Err(error)=>Some(Err(error)),
+            }).collect()
+    }
+
     pub(super) fn copy_sheet_paths(package:&[u8])->Result<Vec<String>,String> {
         Self::selection_parts(package).map(|parts|parts.into_iter().map(|(_,path,_)|path).collect())
     }
@@ -3049,9 +3058,17 @@ impl WorkbookHost<'_> {
                 if std::env::var_os("OXI_VBA_SAVE_TRACE").is_some() { eprintln!("VBA save line {}: {:?}", line!(), _error); }
                 CopyFailure::Method(self.copy_method_failure())
             })?;
+            let unstated_defaults=if package_has_styles(&package)
+                .map_err(|_|CopyFailure::Method(self.copy_method_failure()))? {
+                WorkbookFiles::unstated_row_default_sheets(&package)
+                    .map_err(|_|CopyFailure::Method(self.copy_method_failure()))?
+            }else{Vec::new()};
             for (index, sheet) in self.workbook.sheets.iter().enumerate() {
                 if !sheet.default_row_custom {
-                    editor.set_edited_default_row_height(index,self.effective_default_row_height(index),false);
+                    let height=self.effective_default_row_height(index);
+                    if unstated_defaults.contains(&index) && !self.normal_row_defaults.contains_key(&index) {
+                        editor.materialize_edited_default_row_height(index,height,false);
+                    }else{editor.set_edited_default_row_height(index,height,false);}
                 }
             }
             let digit = self.digit_width();

@@ -55,7 +55,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Initial Normal font in a new style part
-        run: cargo test -p oxicells-core --lib --locked new_style_part_keeps_requested_normal_font_on_first_save
+        run: >-
+          cargo test -p oxicells-core --lib --locked -- --exact
+          editor::tests::new_style_part_keeps_requested_normal_font_on_first_save
+          editor::serialized_style_component_tests::explicit_default_row_record_distinguishes_initial_fallback
       - name: Initial caller defaults and editor formatting
         run: >-
           cargo test -p oxidocs-wasm --lib --features suite --locked
@@ -71,6 +74,15 @@ jobs:
           spreadsheet_vba::tests::save_copy_keeps_partial_textbox_character_formatting_by_vba
           spreadsheet_vba::tests::save_copy_persists_a_comment_thread_created_by_vba
           spreadsheet_vba::tests::save_copy_persists_legacy_comments_and_their_shape_style
+      - name: Loaded and fresh row-default history
+        run: >-
+          cargo test -p oxidocs-wasm --lib --features suite --locked
+          --config profile.test.package.oxivba-core.opt-level=1 -- --exact
+          spreadsheet_vba::tests::loaded_and_fresh_normal_row_defaults_match_native_history
+          spreadsheet_vba::tests::manual_row_height_records_and_normal_edits_match_native_excel
+          spreadsheet_vba::tests::column_formats_recompute_normal_default_height_live_and_cold_match_native_excel
+          spreadsheet_vba::tests::normal_font_column_and_used_row_geometry_full_history_matches_native_excel
+          spreadsheet_vba::tests::normal_font_geometry_cache_history_matches_native
       - name: Native defaults and saved drawing anchors
         run: >-
           cargo test -p oxidocs-wasm --lib --features suite --locked
