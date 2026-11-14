@@ -1417,6 +1417,18 @@ impl XlsxEditor {
         }
     }
 
+    /// Record an explicitly reset default even when its value equals the
+    /// parser's fallback for an absent worksheet default record.
+    pub fn materialize_edited_default_row_height(&mut self, sheet_index: usize, height: f32, pinned: bool) {
+        self.set_edited_default_row_height(sheet_index,height,pinned);
+        let origin=match self.sheet_plan.as_ref().and_then(|plan|plan.get(sheet_index)) {
+            Some(PlannedSheet::Held {origin,..})=>*origin,
+            Some(PlannedSheet::Added(_))=>return,
+            None=>sheet_index,
+        };
+        self.default_row.insert(origin,(height,pinned));
+    }
+
     /// Supply the stored default width for newly written column-style bands.
     /// Existing widths retain their exact representation and provenance.
     /// The index refers to the workbook already passed to `apply_workbook`.
@@ -24135,6 +24147,24 @@ mod installed_external_formula_map_tests {
 #[cfg(test)]
 mod serialized_style_component_tests {
     use super::*;
+
+    #[test]
+    fn explicit_default_row_record_distinguishes_initial_fallback() {
+        use std::io::Read;
+        let original=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut unchanged=XlsxEditor::new(original).unwrap();
+        unchanged.set_edited_default_row_height(0,15.0,false);
+        assert_eq!(unchanged.save().unwrap().as_slice(),original);
+        let mut edited=XlsxEditor::new(original).unwrap();
+        edited.materialize_edited_default_row_height(0,15.0,false);
+        let saved=edited.save().unwrap();
+        let mut archive=zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+        let mut sheet=String::new();archive.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut sheet).unwrap();
+        assert!(sheet.contains("defaultRowHeight=\"15\""));
+        let mut repeated=XlsxEditor::new(&saved).unwrap();
+        repeated.set_edited_default_row_height(0,15.0,false);
+        assert_eq!(repeated.save().unwrap(),saved);
+    }
 
     #[test]
     fn default_fill_presence_is_equal_but_real_fill_and_border_edits_differ() {

@@ -3492,6 +3492,12 @@ impl WorkbookStorage<'_> {
     }
 }
 
+#[derive(Clone,Copy,Debug)]
+struct RowDefaultCache {
+    height: f32,
+    inherited_rows: bool,
+}
+
 struct WorkbookHost<'a> {
     workbook: WorkbookStorage<'a>,
     active_sheet: usize,
@@ -3627,7 +3633,7 @@ struct WorkbookHost<'a> {
     templates: std::collections::HashMap<FormatScope, CellStyle>,
     /// A Normal-font edit preserves the live default of materialized sheets.
     /// Existing automatic rows are refreshed; reopening derives a new default.
-    normal_row_defaults: std::collections::HashMap<usize, f32>,
+    normal_row_defaults: std::collections::HashMap<usize, RowDefaultCache>,
     /// The number the next new table is named with. Measured: a workbook
     /// counter, not the lowest free number -- with テーブル1 renamed to T,
     /// the next table is still テーブル2.
@@ -7516,7 +7522,7 @@ impl<'a> WorkbookHost<'a> {
         }
         for (index,retained) in retained.into_iter().enumerate() {
             if let Some(height)=retained {
-                self.normal_row_defaults.insert(index,height);
+                self.normal_row_defaults.insert(index,RowDefaultCache {height,inherited_rows:false});
             } else {
                 self.normal_row_defaults.remove(&index);
                 if !self.workbook.sheets[index].default_row_custom || unrecorded_manual_defaults[index] {
@@ -15224,7 +15230,7 @@ impl<'a> WorkbookHost<'a> {
     fn effective_default_row_height(&self, index: usize) -> f32 {
         let sheet = &self.workbook.sheets[index];
         if sheet.default_row_custom { return sheet.default_row_height; }
-        self.normal_row_defaults.get(&index).copied()
+        self.normal_row_defaults.get(&index).map(|cache|cache.height)
             .unwrap_or_else(||self.automatic_default_row_height(index))
     }
 
@@ -15232,8 +15238,7 @@ impl<'a> WorkbookHost<'a> {
     /// sheet default initially uses the application font's cached height.
     fn stored_row_default_height(&self, index: usize) -> f32 {
         if !self.workbook.sheets[index].default_row_custom
-            && self.normal_row_defaults.contains_key(&index)
-            && self.workbook.default_style.normal_font_link==Some(true) {
+            && self.normal_row_defaults.get(&index).is_some_and(|cache|cache.inherited_rows) {
             self.automatic_default_row_height(index)
         } else {self.effective_default_row_height(index)}
     }
@@ -15248,7 +15253,7 @@ impl<'a> WorkbookHost<'a> {
         for index in sheets {
             if self.workbook.sheets.get(index).is_some_and(|sheet|
                 sheet.kind==oxicells_core::ir::SheetKind::Worksheet && !sheet.default_row_custom) {
-                self.normal_row_defaults.insert(index,height);
+                self.normal_row_defaults.insert(index,RowDefaultCache {height,inherited_rows:true});
             }
         }
         Ok(())
@@ -31076,7 +31081,7 @@ fn attach_copied_sheet_links(
         host.table_counter=host.table_counter.max(host.table_identity_counter);
         host.sheets_renumbered(&|was|Some(if was>=at{was+1}else{was}));
         host.import_sheet_side_tables(&imported,at,at);
-        host.normal_row_defaults.insert(at,copied_height);
+        host.normal_row_defaults.insert(at,RowDefaultCache {height:copied_height,inherited_rows:false});
         host.sheet_counter+=1;
         host.configure_documents(&documents)?;
         host.mirror_drawings(at);
@@ -31123,7 +31128,7 @@ fn attach_copied_sheet_links(
         // Reallocate copied drawing identities using the same parent-first
         // rules as a copy into an existing book, before publishing any object.
         host.notes.clear();host.links.clear();host.validations.clear();host.conditions.clear();host.shapes.clear();
-        host.import_sheet_side_tables(&imported,0,0);host.normal_row_defaults.insert(0,height);host.mirror_drawings(0);
+        host.import_sheet_side_tables(&imported,0,0);host.normal_row_defaults.insert(0,RowDefaultCache {height,inherited_rows:false});host.mirror_drawings(0);
         host.saved=false;host.wrote=true;let book=host.object(HostObject::Workbook);
         self.insert(host).map_err(|rejected|host_error(1004,rejected.1))?;
         self.code.insert(owner,ApplicationCode {source:code_source,project_name,documents});
@@ -47878,7 +47883,7 @@ struct WorkbookHostState {
     book_protected: bool,
     theme_fonts: std::collections::HashMap<CellAddress, i64>,
     templates: std::collections::HashMap<FormatScope, CellStyle>,
-    normal_row_defaults: std::collections::HashMap<usize, f32>,
+    normal_row_defaults: std::collections::HashMap<usize, RowDefaultCache>,
     table_counter: u32,
     table_identity_counter: u32,
     next_link: u64,

@@ -55,7 +55,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Initial Normal font in a new style part
-        run: cargo test -p oxicells-core --lib --locked new_style_part_keeps_requested_normal_font_on_first_save
+        run: >-
+          cargo test -p oxicells-core --lib --locked -- --exact
+          editor::tests::new_style_part_keeps_requested_normal_font_on_first_save
+          editor::serialized_style_component_tests::explicit_default_row_record_distinguishes_initial_fallback
       - name: Initial caller defaults and editor formatting
         run: >-
           cargo test -p oxidocs-wasm --lib --features suite --locked
