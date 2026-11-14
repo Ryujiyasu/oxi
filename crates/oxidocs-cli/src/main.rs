@@ -1906,6 +1906,110 @@ fn fit_text_path(text: &str, family: Option<&str>, bold: bool, italic: bool, rec
     Some(ContentElement::Path(PathData { operations: ops, stroke, fill: Some(fill) }))
 }
 
+/// OXI_GRAD_TEXT: `text` at (x, baseline) as glyph outlines that clip horizontal bands
+/// of the gradient over the line box (top, height); the advances are scaled to the
+/// element's width so the glyphs sit where the layout put them.
+#[allow(clippy::too_many_arguments)]
+fn grad_text_els(text: &str, family: Option<&str>, bold: bool, italic: bool, x: f64, baseline: f64, ew: f64,
+    fs: f64, hscale: f64, cs: f64, line: (f64, f64), gf: oxidocs_core::layout::GradFill,
+    stroke: Option<(f32, u32)>) -> Option<Vec<ContentElement>>
+{
+    use rustybuzz::ttf_parser;
+    let fam = family.filter(|f| !f.trim().is_empty())?;
+    let found = face_file_cached(fam, bold, italic).or_else(|| face_file_cached(fam, false, false))?;
+    let bytes = std::fs::read(&found.0).ok()?;
+    let face = ttf_parser::Face::parse(&bytes, found.1).ok()?;
+    let k = fs / face.units_per_em().max(1) as f64;
+    let hs = if hscale > 0.0 { hscale / 100.0 } else { 1.0 };
+    struct Sink { ops: Vec<(u8, [f64; 6])>, pen: f64, k: f64, hs: f64, base: f64 }
+    impl Sink {
+        fn p(&self, x: f32, y: f32) -> (f64, f64) { (self.pen + x as f64 * self.k * self.hs, self.base - y as f64 * self.k) }
+    }
+    impl ttf_parser::OutlineBuilder for Sink {
+        fn move_to(&mut self, x: f32, y: f32) { let (a, b) = self.p(x, y); self.ops.push((0, [a, b, 0.0, 0.0, 0.0, 0.0])); }
+        fn line_to(&mut self, x: f32, y: f32) { let (a, b) = self.p(x, y); self.ops.push((1, [a, b, 0.0, 0.0, 0.0, 0.0])); }
+        fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+            let (px, py) = self.ops.last().map(|(t, p)| if *t == 2 { (p[4], p[5]) } else { (p[0], p[1]) }).unwrap_or((0.0, 0.0));
+            let (qx, qy) = self.p(x1, y1);
+            let (ex, ey) = self.p(x, y);
+            self.ops.push((2, [px + 2.0 / 3.0 * (qx - px), py + 2.0 / 3.0 * (qy - py),
+                ex + 2.0 / 3.0 * (qx - ex), ey + 2.0 / 3.0 * (qy - ey), ex, ey]));
+        }
+        fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+            let (a, b) = self.p(x1, y1);
+            let (c, d) = self.p(x2, y2);
+            let (e, f) = self.p(x, y);
+            self.ops.push((2, [a, b, c, d, e, f]));
+        }
+        fn close(&mut self) { self.ops.push((3, [0.0; 6])); }
+    }
+    let mut sink = Sink { ops: Vec::new(), pen: x, k, hs, base: baseline };
+    let n_chars = text.chars().count();
+    for ch in text.chars() {
+        let Some(g) = face.glyph_index(ch) else { sink.pen += fs * hs + cs; continue };
+        let _ = face.outline_glyph(g, &mut sink);
+        sink.pen += face.glyph_hor_advance(g).unwrap_or(0) as f64 * k * hs + cs;
+    }
+    if sink.ops.is_empty() {
+        return None;
+    }
+    // fit the run to the element's width (justified / compressed lines)
+    let adv = sink.pen - x;
+    let fx = if ew > 0.0 && adv > 0.0 && n_chars > 0 && (adv - ew).abs() > 0.05 { ew / adv } else { 1.0 };
+    let tx = |px: f64| x + (px - x) * fx;
+    let mut ops = Vec::with_capacity(sink.ops.len());
+    for (t, p) in &sink.ops {
+        match t {
+            0 => ops.push(PathOp::MoveTo(tx(p[0]), p[1])),
+            1 => ops.push(PathOp::LineTo(tx(p[0]), p[1])),
+            2 => ops.push(PathOp::CurveTo(tx(p[0]), p[1], tx(p[2]), p[3], tx(p[4]), p[5])),
+            _ => ops.push(PathOp::ClosePath),
+        }
+    }
+    // the gradient spans the face's ascent + descent about the baseline (_pb_gradtext srgb2,
+    // 48pt: Word's ink covers t 0.08..0.86 of a ~56pt band = 1.17 em); the layout's line
+    // box (incl. spacing) is only the fallback
+    let _ = line;
+    let (asc, desc) = (face.ascender() as f64 * k, -(face.descender() as f64) * k);
+    let (top, h) = if asc + desc > 0.0 { (baseline - asc, asc + desc) } else { line };
+    let h = h.max(1.0);
+    let mut els = vec![ContentElement::SaveState, ContentElement::ClipPath(ClipPathData { operations: ops.clone(), even_odd: false })];
+    let bands = 32;
+    let (x0, x1) = (x - fs, x + ew.max(adv) + fs);
+    for i in 0..bands {
+        let (b0, b1) = (top + h * i as f64 / bands as f64, top + h * (i + 1) as f64 / bands as f64 + 0.05);
+        let (r, g, b) = gf.at(((i as f64 + 0.5) / bands as f64) as f32);
+        els.push(ContentElement::Path(PathData {
+            operations: vec![PathOp::MoveTo(x0, b0), PathOp::LineTo(x1, b0), PathOp::LineTo(x1, b1), PathOp::LineTo(x0, b1), PathOp::ClosePath],
+            stroke: None,
+            fill: Some(Color::Rgb(r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0)),
+        }));
+    }
+    // ink above or below the line box takes the end colours
+    for (b0, b1, t) in [(top - fs, top, 0.0f32), (top + h, top + h + fs, 1.0f32)] {
+        let (r, g, b) = gf.at(t);
+        els.push(ContentElement::Path(PathData {
+            operations: vec![PathOp::MoveTo(x0, b0), PathOp::LineTo(x1, b0), PathOp::LineTo(x1, b1), PathOp::LineTo(x0, b1), PathOp::ClosePath],
+            stroke: None,
+            fill: Some(Color::Rgb(r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0)),
+        }));
+    }
+    els.push(ContentElement::RestoreState);
+    if let Some((w, c)) = stroke {
+        els.push(ContentElement::Path(PathData {
+            operations: ops,
+            stroke: Some(oxipdf_core::ir::StrokeStyle {
+                color: Color::Rgb(((c >> 16) & 255) as f64 / 255.0, ((c >> 8) & 255) as f64 / 255.0, (c & 255) as f64 / 255.0),
+                width: (w as f64).max(0.25),
+                line_cap: oxipdf_core::ir::LineCap::Butt,
+                line_join: oxipdf_core::ir::LineJoin::Miter,
+            }),
+            fill: None,
+        }));
+    }
+    Some(els)
+}
+
 fn parse_hex_color(hex: &str) -> Option<Color> {
     let hex = hex.strip_prefix('#').unwrap_or(hex);
     if hex.len() != 6 { return None; }
@@ -2241,6 +2345,18 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     // column, with the face's own `vert` glyph (、。 in the upper right,
                     // brackets and ー turned). The CLI drew the horizontal forms
                     // (blind-J ja/creative__95f17b17, a tbRl novel).
+                    // OXI_GRAD_TEXT: a vertical textFill gradient -- the glyph outlines clip
+                    // bands of the gradient laid over the line box (the PDF writer has no
+                    // shading); see layout::GradFill.
+                    if let (Some(gf), false) = (effects.grad, *is_vertical) {
+                        if let Some(els) = grad_text_els(text, font_family.as_deref(), *bold, *italic,
+                            x, text_y, ew, fs, hscale, *character_spacing as f64,
+                            (elem.y as f64, elem.height as f64), gf, effects.line)
+                        {
+                            contents.extend(els);
+                            continue;
+                        }
+                    }
                     if *is_vertical && std::env::var_os("OXI_PDF_VERT_GLYPHS_DISABLE").is_none() {
                         let adv = fs + *character_spacing as f64;
                         let cx = x + ((ew - fs) * 0.5).max(0.0);

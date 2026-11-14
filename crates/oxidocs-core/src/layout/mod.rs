@@ -2901,6 +2901,68 @@ pub struct TextEffects {
     /// OXI_WORDART_TEXTPLAIN: draw the element's text with its ink stretched to fill
     /// this rect (x, y, w, h in points) -- WordArt `textPlain` warp.
     pub fit_box: Option<[f32; 4]>,
+    /// OXI_GRAD_TEXT: a top-to-bottom w14:textFill gradient over the line box.
+    pub grad: Option<GradFill>,
+}
+
+/// OXI_GRAD_TEXT: up to eight gradient stops (position 0..1, 0xRRGGBB).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct GradFill {
+    pub n: u8,
+    pub pos: [f32; 8],
+    pub rgb: [u32; 8],
+}
+
+impl GradFill {
+    /// The colour at `t` (0 = top of the line box), interpolated in linear light.
+    pub fn at(&self, t: f32) -> (u8, u8, u8) {
+        let n = self.n.max(1) as usize;
+        let dec = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+        let enc = |c: f32| if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+        let lin = |c: u32| [dec(((c >> 16) & 255) as f32 / 255.0), dec(((c >> 8) & 255) as f32 / 255.0), dec((c & 255) as f32 / 255.0)];
+        let c = if t <= self.pos[0] {
+            lin(self.rgb[0])
+        } else if t >= self.pos[n - 1] {
+            lin(self.rgb[n - 1])
+        } else {
+            let mut out = lin(self.rgb[n - 1]);
+            for i in 0..n - 1 {
+                if t >= self.pos[i] && t <= self.pos[i + 1] {
+                    let u = if self.pos[i + 1] > self.pos[i] { (t - self.pos[i]) / (self.pos[i + 1] - self.pos[i]) } else { 0.0 };
+                    let (a, b) = (lin(self.rgb[i]), lin(self.rgb[i + 1]));
+                    out = [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u];
+                    break;
+                }
+            }
+            out
+        };
+        let q = |v: f32| (enc(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+        (q(c[0]), q(c[1]), q(c[2]))
+    }
+
+    /// OXI_GRAD_TEXT (2026-11-15, OPT-IN `OXI_GRAD_TEXT=1`): a vertical (lin ang 90)
+    /// textFill gradient. _pb_gradtext srgb2 (FF0000 -> 0000FF, 48pt): Word's ink thirds
+    /// 230,8,127 / 194,6,179 / 142,6,222 give the same t from R and B only in LINEAR light
+    /// (0.21 / 0.46 / 0.73), and the ink covers t ~0.08..0.86 -- the gradient runs over the
+    /// line box, not the ink.
+    pub(crate) fn of_run(st: &crate::ir::RunStyle) -> Option<GradFill> {
+        // opt-in: the band's extent is confirmed on one face only (AR Pハイカラ 48pt: the face's
+        // ascent + descent); 9540b8a7's «メリット» (HGP平成角ｺﾞｼｯｸ体W9) needs a taller band.
+        if !crate::env_flag!("OXI_GRAD_TEXT") || crate::env_flag!("OXI_GRAD_TEXT_DISABLE") || st.no_fill {
+            return None;
+        }
+        let stops = st.text_fill_grad.as_ref()?;
+        if (st.text_fill_ang - 90.0).abs() > 0.5 || stops.len() < 2 {
+            return None;
+        }
+        let mut g = GradFill::default();
+        for (i, (p, hex)) in stops.iter().take(8).enumerate() {
+            g.pos[i] = p.clamp(0.0, 1.0);
+            g.rgb[i] = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0);
+            g.n = (i + 1) as u8;
+        }
+        Some(g)
+    }
 }
 
 impl TextEffects {
@@ -2916,6 +2978,7 @@ impl TextEffects {
             glow: st.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
             line: st.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
             fit_box: None,
+            grad: GradFill::of_run(st),
         }
     }
 }
@@ -9542,6 +9605,7 @@ cells={} pitch={:.2} text={:?}",
                     glow: style.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                     line: style.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                     fit_box: None,
+                    grad: crate::layout::GradFill::of_run(&style),
                 },
             },
         );

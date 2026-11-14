@@ -8473,8 +8473,19 @@ pub(super) fn parse_color_modifiers_alpha(reader: &mut Reader<&[u8]>, base_hex: 
                 (r - g) / d + 4.0
             } / 6.0;
             // Apply satMod to S
+            // OXI_SATMOD_UNCLAMPED (2026-11-15, default ON, opt-out _DISABLE): S x satMod is
+            // NOT capped at 1 -- the HSL -> RGB conversion runs with it and the channels clip.
+            // _pb_clrmod6 (accent6 F79646, S 0.91): satMod 220 -> Word 255,140,0 (unclamped)
+            // vs 255,149,62 (S capped); shade20+sat200 165,66,0; tint90+shade89+sat220
+            // 255,140,25; tint12+sat255 255,241,233; tint90+sat220 255,148,27 -- all exact
+            // unclamped. accent4 (S 0.25) never reaches 1, so _pb_clrmod matched either way.
+            // blind-J ja/creative__9540b8a7's «メリット» gradient stops.
             let s = if let Some(sm) = sat_mod {
-                (s_orig * sm).clamp(0.0, 1.0)
+                if std::env::var_os("OXI_SATMOD_UNCLAMPED_DISABLE").is_none() {
+                    (s_orig * sm).max(0.0)
+                } else {
+                    (s_orig * sm).clamp(0.0, 1.0)
+                }
             } else {
                 s_orig
             };
@@ -8534,6 +8545,7 @@ fn scene3d_blacken(blocks: &mut [Block]) {
                         r.style.color = Some("000000".to_string());
                         r.style.text_line = None;
                         r.style.text_glow = None;
+                        r.style.text_fill_grad = None;
                     }
                 }
             }
@@ -13999,6 +14011,13 @@ fn parse_run_properties(
                 // only the Start form was read, so a plain srgb gradient / solid textFill lost
                 // every stop and the text fell back to black (_pb_gradtext srgb2 / solid: Word
                 // red->blue / red, Oxi black).
+                if in_text_fill && local == "lin" {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "ang" {
+                            style.text_fill_ang = String::from_utf8_lossy(&attr.value).parse::<f32>().unwrap_or(0.0) / 60000.0;
+                        }
+                    }
+                }
                 if in_text_fill && text_fill_on && (local == "srgbClr" || local == "schemeClr")
                     && !crate::env_flag!("OXI_TEXT_FILL_EMPTY_CLR_DISABLE")
                 {
@@ -14467,6 +14486,9 @@ fn parse_run_properties(
                         add(&mut acc, 1.0 - last.0, last.1);
                         let q = |v: f32| v.round().clamp(0.0, 255.0) as u8;
                         style.color = Some(format!("{:02X}{:02X}{:02X}", q(acc.0), q(acc.1), q(acc.2)));
+                        if text_fill_stops.len() >= 2 {
+                            style.text_fill_grad = Some(text_fill_stops.clone());
+                        }
                     }
                 }
                 if local == "rPr" && depth == 0 {

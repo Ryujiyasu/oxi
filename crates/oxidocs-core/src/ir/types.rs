@@ -747,6 +747,12 @@ pub struct RunStyle {
     /// OXI_TEXT_GLOW: `w14:textOutline` with a solid fill -- (width pt, 0xRRGGBB).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_line: Option<(f32, u32)>,
+    /// OXI_GRAD_TEXT: a `w14:textFill` gradient's stops (position 0..1, hex), sorted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_fill_grad: Option<Vec<(f32, String)>>,
+    /// OXI_GRAD_TEXT: the gradient's `w14:lin@ang` in degrees (90 = top to bottom).
+    #[serde(default)]
+    pub text_fill_ang: f32,
     /// OXI_TXBX_SCENE3D_BLACK: the run carries its own `w14:props3d`.
     #[serde(default)]
     pub props3d: bool,
@@ -911,6 +917,8 @@ impl Default for RunStyle {
             no_fill: false,
             text_glow: None,
             text_line: None,
+            text_fill_grad: None,
+            text_fill_ang: 0.0,
             props3d: false,
             font_size_cs: None,
             bold_cs: false,

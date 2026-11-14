@@ -3676,6 +3676,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         glow: first_run_style.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                                                         line: first_run_style.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                                                         fit_box: None,
+                                                        grad: crate::layout::GradFill::of_run(&first_run_style),
                                                     },
                                                 },
                                             );
@@ -3746,6 +3747,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 glow: first_run_style.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                                                 line: first_run_style.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                                                 fit_box: None,
+                                                grad: crate::layout::GradFill::of_run(&first_run_style),
                                             },
                                         },
                                     );

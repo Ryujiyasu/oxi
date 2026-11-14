@@ -9163,6 +9163,7 @@ impl<'a> ParagraphLayouter<'a> {
                             glow: frag.style.text_glow.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                             line: frag.style.text_line.filter(|_| !crate::env_flag!("OXI_TEXT_GLOW_DISABLE")),
                             fit_box: None,
+                            grad: crate::layout::GradFill::of_run(&frag.style),
                         },
                     },
                 );
