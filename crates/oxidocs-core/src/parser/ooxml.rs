@@ -8580,6 +8580,8 @@ fn parse_drawing(
     let mut in_pos_offset = false;
     // Shape properties
     let mut shape_type: Option<String> = None;
+    // OXI_PICTURE_SOFT_EDGE: a:effectLst/a:softEdge@rad (points)
+    let mut soft_edge_pt = 0.0f32;
     let mut shape_fill: Option<String> = None;
     let mut shape_fill_alpha: Option<f32> = None;
     // S1326: wps:style/a:fontRef colour (the box text's default colour).
@@ -9936,6 +9938,13 @@ fn parse_drawing(
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "softEdge" {
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "rad" {
+                            soft_edge_pt = String::from_utf8_lossy(&attr.value).parse::<f32>().unwrap_or(0.0) / 12700.0;
+                        }
+                    }
+                }
                 match local.as_str() {
                     "chart" => {
                         chart_rel = e
@@ -10850,7 +10859,7 @@ fn parse_drawing(
                             }
                             let (cx, cy, cw, ch) = (x * e2p, y * e2p, cw * e2p, ch * e2p);
                             if cw > 0.0 && ch > 0.0 {
-                                let img = Image {
+                                let img = Image { soft_edge: 0.0, ellipse_clip: false,
                                     rotation: 0.0,
                                     paragraph_space_before: 0.0,
                                     paragraph_space_after: 0.0,
@@ -11022,7 +11031,10 @@ fn parse_drawing(
             ctx.media.get(&rid).cloned().unwrap_or_default()
         };
         let content_type = ctx.media_types.get(&rid).cloned();
+        let se_on = !crate::env_flag!("OXI_PICTURE_SOFT_EDGE_DISABLE");
         Some(Image {
+            soft_edge: if se_on { soft_edge_pt.max(0.0) } else { 0.0 },
+            ellipse_clip: se_on && shape_type.as_deref() == Some("ellipse"),
             rotation: picture_rotation,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
@@ -11464,7 +11476,7 @@ fn parse_drawing(
         && height > 0.0
         && std::env::var("OXI_S1182_DISABLE").is_err();
     let image = if s1182_visual {
-        Some(Image {
+        Some(Image { soft_edge: 0.0, ellipse_clip: false,
             rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
@@ -11498,7 +11510,7 @@ fn parse_drawing(
         && width > 0.0
         && height > 0.0
     {
-        Some(Image {
+        Some(Image { soft_edge: 0.0, ellipse_clip: false,
             rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
@@ -12477,7 +12489,7 @@ fn parse_vml_pict(
     {
         return Ok(DrawingResult {
             symbol_text: None,
-            image: Some(Image {
+            image: Some(Image { soft_edge: 0.0, ellipse_clip: false,
                 rotation: 0.0,
                 paragraph_space_before: 0.0,
                 paragraph_space_after: 0.0,
@@ -12595,7 +12607,7 @@ fn parse_vml_pict(
         } else {
             None
         };
-        Some(Image {
+        Some(Image { soft_edge: 0.0, ellipse_clip: false,
             rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
@@ -12968,7 +12980,7 @@ fn parse_vml_pict(
             chain: None,
             canvas: false,
         });
-        let placeholder = Some(Image {
+        let placeholder = Some(Image { soft_edge: 0.0, ellipse_clip: false,
             rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
@@ -13357,7 +13369,7 @@ fn parse_ole_object(
     let image = if let Some(rid) = rel_id {
         let data = ctx.media.get(&rid).cloned().unwrap_or_default();
         let content_type = ctx.media_types.get(&rid).cloned();
-        Some(Image {
+        Some(Image { soft_edge: 0.0, ellipse_clip: false,
             rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
@@ -15714,7 +15726,7 @@ fn parse_table_cell(
                             && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
                             && pr.math_blocks.is_empty();
                         if s838_visual_only {
-                            blocks.push(Block::Image(crate::ir::Image {
+                            blocks.push(Block::Image(crate::ir::Image { soft_edge: 0.0, ellipse_clip: false,
                                 rotation: 0.0,
                                 paragraph_space_before: 0.0,
                                 paragraph_space_after: 0.0,

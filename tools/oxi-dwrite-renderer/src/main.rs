@@ -544,10 +544,10 @@ unsafe fn render_page_elements(
                 if exclude.iter().any(|e| e == "clip") { continue; }
                 rt.PopAxisAlignedClip();
             }
-            LayoutContent::Image { ref data, ref crop, rotation, .. } => {
+            LayoutContent::Image { ref data, ref crop, rotation, soft_edge, ellipse_clip, .. } => {
                 if exclude.iter().any(|e| e == "image") { continue; }
                 if !data.is_empty() {
-                    render_image(rt, &page_factory_handle(rt)?, el.x, el.y, el.width, el.height, data, *crop, *rotation)?;
+                    render_image(rt, &page_factory_handle(rt)?, el.x, el.y, el.width, el.height, data, *crop, *rotation, *soft_edge, *ellipse_clip)?;
                 }
             }
             LayoutContent::PresetShape { shape_type, stroke_color, stroke_width, flip_h, flip_v, arrow_head, arrow_tail, dash } => {
@@ -752,6 +752,8 @@ unsafe fn render_image(
     data: &[u8],
     crop: Option<(f32, f32, f32, f32)>,
     rotation: f32,
+    soft_edge: f32,
+    ellipse_clip: bool,
 ) -> windows::core::Result<()> {
     use windows::Win32::Graphics::Direct2D::*;
     use windows::Win32::Graphics::Direct2D::Common::*;
@@ -840,8 +842,17 @@ unsafe fn render_image(
         270 if !box_unturned => img.rotate270(),
         _ => img,
     };
-    let rgba = img.to_rgba8();
+    let mut rgba = img.to_rgba8();
     let (pw, ph) = rgba.dimensions();
+    // OXI_PICTURE_SOFT_EDGE: fade / clip the pixels in the drawn box's frame
+    if soft_edge > 0.0 || ellipse_clip {
+        let (kx, ky) = (w_pt / pw.max(1) as f32, h_pt / ph.max(1) as f32);
+        for (px, py, p) in rgba.enumerate_pixels_mut() {
+            let c = oxidocs_core::layout::picture_edge_coverage(
+                (px as f32 + 0.5) * kx, (py as f32 + 0.5) * ky, w_pt, h_pt, soft_edge, ellipse_clip, kx.max(ky));
+            p.0[3] = (p.0[3] as f32 * c).round() as u8;
+        }
+    }
 
     // BGRA premul for D2D
     let mut bgra: Vec<u8> = Vec::with_capacity((pw * ph * 4) as usize);

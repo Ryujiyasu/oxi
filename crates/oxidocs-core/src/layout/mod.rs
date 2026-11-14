@@ -2916,6 +2916,50 @@ impl TextEffects {
     }
 }
 
+/// OXI_PICTURE_SOFT_EDGE (2026-11-14, default ON, opt-out _DISABLE): the coverage
+/// (0..1) Word gives a picture point (u, v) -- points from the drawn box's top-left,
+/// box w x h -- under `a:softEdge rad` and an ellipse `a:prstGeom`. _pb_softedge
+/// (flat red 144pt picture, rect / ellipse x rad 4 / 8.86 / 20pt, Word PDF at 288dpi):
+/// the edge is a Gaussian ramp of sigma = rad/3 centred 0.9 rad inside the outline
+/// (fit SSE <= 0.003 on every arm); rect and ellipse alike, the rect's corners being
+/// the product of its two edges. rad 0 on an ellipse is a hard (1px-antialiased) edge.
+/// blind-J ja/administrative__1fc69a4f's photos (rad 112500 EMU, two ellipses).
+pub fn picture_edge_coverage(u: f32, v: f32, w: f32, h: f32, rad: f32, ellipse: bool, px_pt: f32) -> f32 {
+    fn phi(x: f32) -> f32 {
+        // Abramowitz-Stegun 7.1.26 erf
+        let z = x / std::f32::consts::SQRT_2;
+        let t = 1.0 / (1.0 + 0.3275911 * z.abs());
+        let y = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * (-z * z).exp();
+        0.5 * (1.0 + if z >= 0.0 { y } else { -y })
+    }
+    let ramp = |d: f32| -> f32 {
+        if rad > 0.0 {
+            phi((d - 0.9 * rad) / (rad / 3.0))
+        } else {
+            (d / px_pt.max(1e-3) + 0.5).clamp(0.0, 1.0)
+        }
+    };
+    if ellipse {
+        let (a, b) = (w / 2.0, h / 2.0);
+        if a <= 0.0 || b <= 0.0 {
+            return 0.0;
+        }
+        let (x, y) = (u - a, v - b);
+        let rho = ((x / a).powi(2) + (y / b).powi(2)).sqrt();
+        // distance inward from the outline, first order: (1 - rho) / |grad rho|
+        let g = if rho > 1e-6 {
+            ((x / (a * a * rho)).powi(2) + (y / (b * b * rho)).powi(2)).sqrt()
+        } else {
+            1.0 / a.min(b)
+        };
+        ramp((1.0 - rho) / g.max(1e-6))
+    } else if rad > 0.0 {
+        ramp(u.min(w - u)) * ramp(v.min(h - v))
+    } else {
+        1.0
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum LayoutContent {
     Text {
@@ -2960,6 +3004,10 @@ pub enum LayoutContent {
         /// OXI_PICTURE_ROTATION: degrees clockwise (see ir::Image::rotation); the
         /// element box is already the visual one.
         rotation: f32,
+        /// OXI_PICTURE_SOFT_EDGE: softEdge radius in points (0 = none).
+        soft_edge: f32,
+        /// OXI_PICTURE_SOFT_EDGE: clip the picture to the ellipse inscribed in its box.
+        ellipse_clip: bool,
     },
     TableBorder {
         x1: f32,
@@ -7761,7 +7809,7 @@ impl LayoutEngine {
                 let target = Self::vertical_page_of(&block_starts, img.anchor_block_index);
                 let (x, y) = self.resolve_floating_image_position(img, page, &anchor_y, top);
                 drawings.push((img.behind_doc, img.relative_height, target, vec![
-                    LayoutElement::new(x, y, img.width, img.height, LayoutContent::Image {
+                    LayoutElement::new(x, y, img.width, img.height, LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
                         data: img.data.clone(), rotation: img.rotation,
                         content_type: img.content_type.clone(),
                         crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
@@ -9178,7 +9226,7 @@ cells={} pitch={:.2} text={:?}",
         }
         if col.image {
             if let Block::Image(img) = &page.blocks[recipe.block_idx] {
-                return vec![LayoutElement::new(x, y + col.top, img.width, img.height, LayoutContent::Image {
+                return vec![LayoutElement::new(x, y + col.top, img.width, img.height, LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
                     data: img.data.clone(), rotation: img.rotation,
                     content_type: img.content_type.clone(),
                     crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
@@ -9885,6 +9933,8 @@ cells={} pitch={:.2} text={:?}",
                             content_type: None,
                             crop: None,
                             rotation: 0.0,
+                            soft_edge: 0.0,
+                            ellipse_clip: false,
                         }));
                     } else if let (true, Some((fh, fv, head, tail))) = (vs.is_line, vs.arrow) {
                         // OXI_CANVAS_MEMBERS: a member connector with arrowheads is a
@@ -10871,7 +10921,7 @@ cells={} pitch={:.2} text={:?}",
                         cursor.visual_y,
                         img.width.min(inner_width),
                         img.height,
-                        LayoutContent::Image {
+                        LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
                             data: img.data.clone(), rotation: img.rotation,
                             content_type: img.content_type.clone(),
                             crop: img
@@ -23342,6 +23392,8 @@ cells={} pitch={:.2} text={:?}",
                         content_type: None,
                         crop: None,
                         rotation: 0.0,
+                        soft_edge: 0.0,
+                        ellipse_clip: false,
                     })
                 } else if vs.is_line {
                     LayoutElement::new(vx, vy, vs.w.max(0.1), vs.h.max(vs.stroke_width), LayoutContent::TableBorder {

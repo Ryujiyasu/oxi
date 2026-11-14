@@ -8925,7 +8925,7 @@ impl<'a> ParagraphLayouter<'a> {
                             image_y,
                             ow,
                             image_h,
-                            LayoutContent::Image {
+                            LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
                                 data: img.data.clone(), rotation: img.rotation,
                                 content_type: img.content_type.clone(),
                                 crop,
@@ -8990,6 +8990,8 @@ impl<'a> ParagraphLayouter<'a> {
                                     content_type: None,
                                     crop: None,
                                     rotation: 0.0,
+                                    soft_edge: 0.0,
+                                    ellipse_clip: false,
                                 });
                                 if let Some(pi) = body_para_index {
                                     e.paragraph_index = Some(pi);

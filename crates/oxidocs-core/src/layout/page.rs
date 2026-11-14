@@ -10086,7 +10086,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         img_y,
                         img.width,
                         img.height,
-                        LayoutContent::Image {
+                        LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
                             data: img.data.clone(), rotation: img.rotation,
                             content_type: img.content_type.clone(),
                             crop: img
@@ -11061,7 +11061,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             abs_y,
                             img.width,
                             img.height,
-                            LayoutContent::Image {
+                            LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
                                 data: img.data.clone(), rotation: img.rotation,
                                 content_type: img.content_type.clone(),
                                 crop: img
@@ -11095,7 +11095,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             0.0,
                             img.width,
                             img.height,
-                            LayoutContent::Image {
+                            LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
                                 data: img.data.clone(), rotation: img.rotation,
                                 content_type: img.content_type.clone(),
                                 crop: img
@@ -11523,7 +11523,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 cy.cursor_y,
                                 img.width,
                                 img.height,
-                                LayoutContent::Image {
+                                LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
                                     data: img.data.clone(), rotation: img.rotation,
                                     content_type: img.content_type.clone(),
                                     crop: img
@@ -11590,7 +11590,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 paint_y,
                                 paint_w,
                                 paint_h,
-                                LayoutContent::Image {
+                                LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
                                     data: img.data.clone(), rotation: img.rotation,
                                     content_type: img.content_type.clone(),
                                     crop: paint_crop
@@ -11891,7 +11891,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             let (ax, ay) = self.resolve_floating_image_position(img, page, &[], host_top);
                             lp.elements.push(LayoutElement::new(
                                 ax, ay, img.width, img.height,
-                                LayoutContent::Image {
+                                LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
                                     data: img.data.clone(), rotation: img.rotation,
                                     content_type: img.content_type.clone(),
                                     crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),

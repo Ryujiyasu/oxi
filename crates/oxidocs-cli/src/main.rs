@@ -1574,12 +1574,47 @@ fn pdf_image_crop_turn(
         let ba = w_pt / h_pt.max(1e-3);
         (ba - iw / ih.max(1.0)).abs() < (ba - ih / iw.max(1.0)).abs()
     };
+    // OXI_PDF_TURN_UNTURNED_BOX (2026-11-14, default ON, opt-out _DISABLE): an anchored
+    // picture keeps its UNTURNED box and the drawing turns about the box centre (the
+    // DirectWrite renderer sets a transform). The PDF writer has no transform, so the
+    // pixels turn here and the caller draws them into the box swapped about its centre
+    // (pdf_turned_box). blind-J ja/administrative__1fc69a4f's Christmas-tree photo (rot
+    // 5400000, 173 x 130 box) lay on its side.
+    let turn_box = box_unturned && std::env::var_os("OXI_PDF_TURN_UNTURNED_BOX_DISABLE").is_none();
     match turn_deg {
-        90 if !box_unturned => img.rotate90(),
+        90 if !box_unturned || turn_box => img.rotate90(),
         180 => img.rotate180(),
-        270 if !box_unturned => img.rotate270(),
+        270 if !box_unturned || turn_box => img.rotate270(),
         _ => img,
     }
+}
+
+/// OXI_PDF_TURN_UNTURNED_BOX: the drawn box of a picture whose quarter turn kept its
+/// unturned box -- width and height swapped about the same centre. None otherwise.
+fn pdf_turned_box(src_w: u32, src_h: u32, crop: Option<(f32, f32, f32, f32)>, rotation: f32,
+    x: f32, y: f32, w: f32, h: f32) -> Option<(f32, f32, f32, f32)>
+{
+    if std::env::var_os("OXI_PDF_TURN_UNTURNED_BOX_DISABLE").is_some() {
+        return None;
+    }
+    let turn_deg = rotation.rem_euclid(360.0).round() as i32;
+    if turn_deg != 90 && turn_deg != 270 {
+        return None;
+    }
+    let (mut iw, mut ih) = (src_w as f32, src_h as f32);
+    if let Some((t, r, b, l)) = crop {
+        if t > 0.0 || r > 0.0 || b > 0.0 || l > 0.0 {
+            iw *= (100.0 - l - r) / 100.0;
+            ih *= (100.0 - t - b) / 100.0;
+        }
+    }
+    let ba = w / h.max(1e-3);
+    let unturned = (ba - iw / ih.max(1.0)).abs() < (ba - ih / iw.max(1.0)).abs();
+    if !unturned {
+        return None;
+    }
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    Some((cx - h / 2.0, cy - w / 2.0, h, w))
 }
 
 /// `font::runtime::face_file`, remembered for the process. The lookup reads every
@@ -2352,7 +2387,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     }
                 }
 
-                oxidocs_core::layout::LayoutContent::Image { ref data, ref content_type, crop, rotation, .. } => {
+                oxidocs_core::layout::LayoutContent::Image { ref data, ref content_type, crop, rotation, soft_edge, ellipse_clip, .. } => {
                     // Decode image (PNG/JPEG/etc.) to raw RGB pixels
                     if !data.is_empty() {
                         // OXI_PDF_EMF: a metafile is played as vectors (emf.rs).
@@ -2375,6 +2410,12 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                                 contents.extend(els);
                             }
                         } else if let Ok(img) = image::load_from_memory(data) {
+                            let turned_box = if std::env::var_os("OXI_PDF_IMAGE_CROP_DISABLE").is_none() {
+                                pdf_turned_box(img.width(), img.height(), *crop, *rotation, elem.x, elem.y, elem.width, elem.height)
+                            } else {
+                                None
+                            };
+                            let (bx, by, bw, bh) = turned_box.unwrap_or((elem.x, elem.y, elem.width, elem.height));
                             // OXI_PDF_IMAGE_CROP (2026-11-09, default ON, opt-out _DISABLE):
                             // a:srcRect crops the source and quarter turns turn the pixels,
                             // as the DirectWrite renderer does (S775 / OXI_CROP_NEGATIVE /
@@ -2398,14 +2439,32 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                             } else {
                                 None
                             };
+                            // OXI_PICTURE_SOFT_EDGE: softEdge fade / ellipse clip as a soft mask
+                            let alpha = if *soft_edge > 0.0 || *ellipse_clip {
+                                let (iw, ih) = (img.width(), img.height());
+                                let (kx, ky) = (bw / iw.max(1) as f32, bh / ih.max(1) as f32);
+                                let mut a = alpha.unwrap_or_else(|| vec![255u8; (iw * ih) as usize]);
+                                for py in 0..ih {
+                                    for px in 0..iw {
+                                        let c = oxidocs_core::layout::picture_edge_coverage(
+                                            (px as f32 + 0.5) * kx, (py as f32 + 0.5) * ky, bw, bh,
+                                            *soft_edge, *ellipse_clip, kx.max(ky));
+                                        let i = (py * iw + px) as usize;
+                                        a[i] = (a[i] as f32 * c).round() as u8;
+                                    }
+                                }
+                                Some(a)
+                            } else {
+                                alpha
+                            };
                             let rgb = img.to_rgb8();
                             let (pw, ph) = rgb.dimensions();
                             let raw_pixels = rgb.into_raw();
                             contents.push(ContentElement::Image(ImageData {
-                                x: elem.x as f64,
-                                y: elem.y as f64,
-                                width: elem.width as f64,
-                                height: elem.height as f64,
+                                x: bx as f64,
+                                y: by as f64,
+                                width: bw as f64,
+                                height: bh as f64,
                                 data: raw_pixels,
                                 color_space: ColorSpace::DeviceRgb,
                                 bits_per_component: 8,

@@ -1090,6 +1090,12 @@ fn default_one() -> u32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Image {
+    /// OXI_PICTURE_SOFT_EDGE: `a:effectLst/a:softEdge@rad` in points (0 = none).
+    #[serde(default)]
+    pub soft_edge: f32,
+    /// OXI_PICTURE_SOFT_EDGE: the picture's `a:prstGeom` is an ellipse.
+    #[serde(default)]
+    pub ellipse_clip: bool,
     pub data: Vec<u8>,
     pub width: f32,
     pub height: f32,
