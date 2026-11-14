@@ -293,6 +293,7 @@ jobs:
               node "$suite" pkg "$RUNNER_TEMP/vba-ole-copy-state.json"
               node "$suite" pkg "$RUNNER_TEMP/vba-ole-legacy-layers-state.json" tests/fixtures/vba/ole_legacy_layers_native.json . 18
               node "$suite" pkg "$RUNNER_TEMP/vba-ole-layer-operations-state.json" tests/fixtures/vba/ole_layer_operations_native.json . 33
+              node "$suite" pkg "$RUNNER_TEMP/vba-group-layer-operations-state.json" tests/fixtures/vba/group_layer_operations_native.json . 39
             else
               node "$suite" pkg
             fi
@@ -314,6 +315,7 @@ jobs:
             ${{ runner.temp }}/vba-ole-copy-state.json
             ${{ runner.temp }}/vba-ole-legacy-layers-state.json
             ${{ runner.temp }}/vba-ole-layer-operations-state.json
+            ${{ runner.temp }}/vba-group-layer-operations-state.json
           if-no-files-found: ignore
       - name: Word vertical text rendering and WASM orientation
         if: ${{ matrix.shard == 1 }}

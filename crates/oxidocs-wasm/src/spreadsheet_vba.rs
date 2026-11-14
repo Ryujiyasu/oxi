@@ -16035,6 +16035,7 @@ impl<'a> WorkbookHost<'a> {
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         };
@@ -59555,15 +59556,58 @@ End Function"####;
         assert_complete_ole_native_group(group_id, 9);
     }
 
+    fn canonical_native_shape_views(value: &serde_json::Value) -> Option<serde_json::Value> {
+        use serde_json::{json, Value as Json};
+        fn array(value: &Json) -> Option<&Vec<Json>> {
+            (value["type"] == "array").then_some(())?;
+            value["value"]["values"].as_array()
+        }
+        fn scalar(value: &Json, kind: &str) -> Option<Json> {
+            (value["type"] == kind).then(|| value["value"].clone())
+        }
+        fn geometry(value: &Json) -> Option<Json> {
+            let value=scalar(value,"double")?.as_f64()?;
+            if !value.is_finite() || value != f64::from(value as f32) { return None; }
+            Some(json!(format!("0x{:08x}",(value as f32).to_bits())))
+        }
+        fn shape(value: &Json) -> Option<Json> {
+            let row=array(value)?;if row.len()!=12 { return None; }
+            let mut result=json!({"id":scalar(&row[0],"integer")?,"name":scalar(&row[1],"string")?,
+                "type":scalar(&row[2],"integer")?,"z":scalar(&row[3],"integer")?,
+                "child":scalar(&row[4],"integer")?,"placement":scalar(&row[5],"integer")?,
+                "geometry":{"Left":geometry(&row[6])?,"Top":geometry(&row[7])?,
+                "Width":geometry(&row[8])?,"Height":geometry(&row[9])?,"Rotation":geometry(&row[10])?}});
+            let children=array(&row[11])?;
+            if result["type"]==6 {
+                result["children"]=Json::Array(children.iter().map(shape).collect::<Option<Vec<_>>>()?);
+            } else if !children.is_empty() { return None; }
+            Some(result)
+        }
+        let phases=array(value)?;if phases.len()!=3 { return None; }
+        let mut result=json!({});
+        for (name,phase) in ["before","hot","cold"].into_iter().zip(phases) {
+            result[name]=Json::Array(array(phase)?.iter().map(shape).collect::<Option<Vec<_>>>()?);
+        }
+        Some(result)
+    }
+
     fn assert_complete_ole_native_group(group_id: &str, expected_cases: usize) {
-        let corpus_bytes: &[u8] = if matches!(group_id, "relative_layers24" | "repeat_save9") {
+        let corpus_bytes: &[u8] = if matches!(group_id, "group_relative24" | "group_views3" | "group_delete_plain4" | "group_delete_outer_rotated4" | "group_delete_inner_rotated4") {
+            include_bytes!("../../../tests/fixtures/vba/group_layer_operations_native.json")
+        } else if matches!(group_id, "relative_layers24" | "repeat_save9") {
             include_bytes!("../../../tests/fixtures/vba/ole_layer_operations_native.json")
         } else if matches!(group_id, "mixed_drawing_layers9" | "explicit_font9") {
             include_bytes!("../../../tests/fixtures/vba/ole_legacy_layers_native.json")
         } else { include_bytes!("../../../tests/fixtures/vba/ole_copy_native.json") };
         let corpus: serde_json::Value = serde_json::from_slice(corpus_bytes).unwrap();
         let group = corpus["groups"].as_array().unwrap().iter().find(|g| g["id"] == group_id).unwrap();
-        let bytes = include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
+        let bytes: &[u8] = match group["input_fixture"].as_str() {
+            Some("tests/fixtures/vba/grouped_shapes_nested.xlsx") => include_bytes!("../../../tests/fixtures/vba/grouped_shapes_nested.xlsx"),
+            Some("tests/fixtures/vba/grouped_shapes_nested_rotated.xlsx") => include_bytes!("../../../tests/fixtures/vba/grouped_shapes_nested_rotated.xlsx"),
+            Some("tests/fixtures/vba/grouped_shapes_nested_inner_rotated.xlsx") => include_bytes!("../../../tests/fixtures/vba/grouped_shapes_nested_inner_rotated.xlsx"),
+            None => include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx"),
+            Some(other) => panic!("unknown Native group input {other}"),
+        };
         let caller = include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
         let cases = group["cases"].as_array().unwrap();assert_eq!(cases.len(), expected_cases);
         let mut failures = Vec::new();
@@ -59594,12 +59638,36 @@ End Function"####;
                     }
                 }
             }
-            let actual = serde_json::to_value(&out.result).unwrap();
+            let raw = serde_json::to_value(&out.result).unwrap();
+            let actual = if group["view_schema"]=="shape_geometry_single_bits" {
+                canonical_native_shape_views(&raw).unwrap_or(raw)
+            } else { raw };
             if out.error.is_some() || actual != case["expected"] || out.workbook_changed {
                 failures.push(format!("{group_id}/mode{mode}: actual={actual}; expected={}; error={:?}; caller_changed={}",case["expected"],out.error.as_ref().map(|e|&e.message),out.workbook_changed));
             }
         }
         assert!(failures.is_empty(),"Complete Native OLE insertion vectors differ:\n{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn group_layers_native_delete12() {
+        let mut failed = Vec::new();
+        for group in ["group_delete_plain4", "group_delete_outer_rotated4", "group_delete_inner_rotated4"] {
+            if std::panic::catch_unwind(|| assert_complete_ole_native_group(group, 4)).is_err() {
+                failed.push(group);
+            }
+        }
+        assert!(failed.is_empty(), "Complete Native deletion groups differ: {failed:?}");
+    }
+
+    #[test]
+    fn group_layers_native_views3() {
+        assert_complete_ole_native_group("group_views3", 3);
+    }
+
+    #[test]
+    fn group_layers_native_relative24() {
+        assert_complete_ole_native_group("group_relative24", 24);
     }
 
     #[test]
@@ -108611,6 +108679,7 @@ End Function
                 tab_color: None,
                 drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
                 header_footer: None,
                 origin_id: None,
             }],
@@ -138131,6 +138200,7 @@ End Function
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -138211,6 +138281,7 @@ End Function
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146165,6 +146236,7 @@ End Function"#;
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146436,6 +146508,7 @@ End Function"#;
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146508,6 +146581,7 @@ End Function"#;
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146652,6 +146726,7 @@ End Function"#;
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });

@@ -1061,6 +1061,7 @@ mod tests {
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         }
