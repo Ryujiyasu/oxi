@@ -445,6 +445,13 @@ pub trait Host {
         host_error(1004, format!("macro is unavailable: {requested}"))
     }
 
+    /// Hosts may retain binding- and expression-specific diagnostics after
+    /// dispatch fails. Context belongs to this call, including callback retries.
+    fn contextual_call_error(&self, _receiver: Option<&ObjectRef>, _name: &str,
+        _late_bound: bool, _value_context: bool, _message: &str) -> Option<String> {
+        None
+    }
+
     /// Boundaries of a runtime member call, including any callback retries.
     fn begin_member_call(&mut self, _receiver: Option<&ObjectRef>, _name: &str) {}
     fn end_member_call(&mut self, _receiver: Option<&ObjectRef>, _name: &str) {}
@@ -2831,7 +2838,15 @@ impl<'a> Runtime<'a> {
         if self.early_application_expression(object, frame) { return Some("Application".into()); }
         self.source_expression_type(object, frame)
             .filter(|kind| !matches!(key(&kind.name).as_str(), "object" | "variant"))
-            .map(|kind| kind.name).or_else(|| {
+            .map(|kind| {
+                // Host signatures belong to the document's native base;
+                // source member lookup retains the document code class.
+                self.document_references.as_ref()
+                    .and_then(|references| references.document_modules.iter()
+                        .find(|(code_name, _)| code_name.eq_ignore_ascii_case(&kind.name)))
+                    .map(|(_, native_type)| native_type.clone())
+                    .unwrap_or(kind.name)
+            }).or_else(|| {
                 if let Some(name) = expr_name(object) {
                     if self.lookup_slot(frame, name).is_some() || self.has_visible_procedure(name) { return None; }
                     return self.host.as_deref()?.assignment_global_type(name);
@@ -9572,12 +9587,13 @@ impl<'a> Runtime<'a> {
                         None => Value::Missing,
                     }});
                 }
-                let late_host_call = argument_names.iter().any(Option::is_some) || match target.as_ref() {
+                let late_bound_receiver = match target.as_ref() {
                     Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
                     Expr::WithMember(..) | Expr::WithBangMember(..) => matches!(
                         frame.with_objects.last(), Some(WithSubject::Object { assignment_type: None, .. })),
                     _ => false,
                 };
+                let late_host_call = argument_names.iter().any(Option::is_some) || late_bound_receiver;
                 if let Some(receiver) = receiver.as_ref() {
                     let name = match target.as_ref() {
                         Expr::Member { name, .. } | Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => name,
@@ -9641,12 +9657,13 @@ impl<'a> Runtime<'a> {
                             Some(&receiver), name, &values, &argument_names, span.line, frame,
                             if early_macro { None } else { evaluated.as_deref().map(|values| (args.as_slice(), values, *force_by_value)) },
                         ) { return result; }
-                        self.with_callback_error_context(frame, |runtime, _| runtime.host_call_named(
+                        self.with_callback_error_context(frame, |runtime, _| runtime.host_call_named_in_context(
                             Some(&receiver),
                             name,
                             &values,
                             &argument_names,
                             span.line,
+                            Some((late_bound_receiver, value_context)),
                         ))?
                         .ok_or_else(|| {
                             no_such_member(format!("host method is not available: {}.{name}", receiver.kind), Some(span.line))
@@ -9661,12 +9678,13 @@ impl<'a> Runtime<'a> {
                             Some(&receiver), name, &values, &argument_names, span.line, frame,
                             if early_macro { None } else { evaluated.as_deref().map(|values| (args.as_slice(), values, *force_by_value)) },
                         ) { return result; }
-                        self.with_callback_error_context(frame, |runtime, _| runtime.host_call_named(
+                        self.with_callback_error_context(frame, |runtime, _| runtime.host_call_named_in_context(
                             Some(&receiver),
                             name,
                             &values,
                             &argument_names,
                             span.line,
+                            Some((late_bound_receiver, value_context)),
                         ))?
                         .ok_or_else(|| {
                             no_such_member(format!("host method is not available: {}.{name}", receiver.kind), Some(span.line))
@@ -11421,6 +11439,18 @@ impl<'a> Runtime<'a> {
         argument_names: &[Option<String>],
         line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        self.host_call_named_in_context(receiver, name, args, argument_names, line, None)
+    }
+
+    fn host_call_named_in_context(
+        &mut self,
+        receiver: Option<&ObjectRef>,
+        name: &str,
+        args: &[Value],
+        argument_names: &[Option<String>],
+        line: u32,
+        context: Option<(bool, bool)>,
+    ) -> Result<Option<Value>, RuntimeError> {
         let implicit=receiver.is_none().then(||self.implicit_document_receiver(name)).flatten();
         let receiver=receiver.or(implicit.as_ref());
         if let Some(result) = self.host_macro_call(receiver, name, args, argument_names, line) {
@@ -11483,7 +11513,11 @@ impl<'a> Runtime<'a> {
                 let answer = match host.call_named_with_files(receiver, name, args, argument_names, &mut self.files) {
                     Ok(None) if implicit.is_some() && args.is_empty()=>host.get(receiver.expect("implicit document receiver"),name),
                     answer=>answer,
-                };
+                }.map_err(|message| match context {
+                    Some((late_bound, value_context)) => host.contextual_call_error(
+                        receiver, name, late_bound, value_context, &message).unwrap_or(message),
+                    None => message,
+                });
                 if !self.work_out_user_functions()? {
                     return answer.map_err(|message| host_failure(message, line));
                 }
@@ -21057,6 +21091,67 @@ fn statement_name(statement: &Statement) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    // SPDX-License-Identifier: MPL-2.0
+    #[test]
+    fn document_receivers_use_native_member_binding_without_changing_object_aliases() {
+        use super::{host_error_from, Host, ObjectRef, Runtime, Value};
+        struct DocumentHost;
+        impl Host for DocumentHost {
+            fn get(&mut self, receiver: &ObjectRef, name: &str) -> Result<Option<Value>, String> {
+                Ok((receiver.kind == "Workbook" && name.eq_ignore_ascii_case("Sheets"))
+                    .then(|| Value::Object(ObjectRef::new(2, "Sheets"))))
+            }
+            fn set(&mut self, _: &ObjectRef, _: &str, _: Value) -> Result<bool, String> {
+                Ok(false)
+            }
+            fn call(&mut self, _: Option<&ObjectRef>, name: &str, _: &[Value]) -> Result<Option<Value>, String> {
+                if name.eq_ignore_ascii_case("Add") {
+                    Err(host_error_from(1004, "BindingHost", "base"))
+                } else { Ok(None) }
+            }
+            fn assignment_call_result(&self, owner: Option<&str>, name: &str) -> Option<String> {
+                (owner.is_some_and(|owner| owner.eq_ignore_ascii_case("Workbook"))
+                    && name.eq_ignore_ascii_case("Sheets")).then(|| "Sheets".into())
+            }
+            fn contextual_call_error(&self, _: Option<&ObjectRef>, name: &str,
+                late_bound: bool, value_context: bool, _: &str) -> Option<String> {
+                name.eq_ignore_ascii_case("Add").then(|| host_error_from(1004, "BindingHost",
+                    format!("{late_bound}:{value_context}")))
+            }
+        }
+        let module = crate::parse_module(r#"Option Explicit
+Public Function FromDocument() As String
+    Dim item As Object
+    On Error Resume Next
+    Set item = LedgerCode.Sheets.Add(Count:=0)
+    FromDocument = Err.Description
+End Function
+Public Function FromObject() As String
+    Dim owner As Object, item As Object
+    Set owner = LedgerCode
+    On Error Resume Next
+    Set item = owner.Sheets.Add(Count:=0)
+    FromObject = Err.Description
+End Function
+"#).unwrap();
+        let references = std::sync::Arc::new(crate::CompileReferences {
+            document_modules: vec![("LedgerCode".into(), "Workbook".into())],
+            types: vec![("Workbook".into(), false), ("Sheets".into(), false)],
+            library: std::sync::Arc::new(crate::CompileReferenceLibrary::from_tsv(
+                "I\tWorkbook\t1\nI\tSheets\t1\nM\tWorkbook\tSheets\t2\t4\tSheets\t0\t\nM\tSheets\tAdd\t1\t4\tObject\t0\tCount?\n"
+            ).unwrap()),
+            ..Default::default()
+        });
+        for (procedure, expected) in [("FromDocument", "false:true"), ("FromObject", "true:true")] {
+            let mut host = DocumentHost;
+            let mut runtime = Runtime::new(&module).with_host(&mut host)
+                .with_document_objects(vec![("LedgerCode".into(), ObjectRef::new(1, "Workbook"))],
+                    references.clone()).unwrap();
+            assert_eq!(runtime.call(procedure, vec![]).unwrap(), Value::String(expected.into()), "{procedure}");
+        }
+    }
+
+
 
 
     #[test]

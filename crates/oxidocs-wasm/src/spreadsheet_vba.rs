@@ -15967,6 +15967,27 @@ impl<'a> WorkbookHost<'a> {
         Ok(Value::Integer(1))
     }
 
+    fn sheet_add_argument_failure(&self) -> String {
+        oxivba_core::host_error_from(1004, "Microsoft Excel", match self.error_language {
+            ErrorLanguage::Japanese => "Sheets \u{30af}\u{30e9}\u{30b9}\u{306e} Add \u{30d7}\u{30ed}\u{30d1}\u{30c6}\u{30a3}\u{3092}\u{53d6}\u{5f97}\u{3067}\u{304d}\u{307e}\u{305b}\u{3093}\u{3002}",
+            ErrorLanguage::English => "Unable to get the Add property of the Sheets class",
+        })
+    }
+
+    fn sheet_add_count(&self, value: Option<&Value>, upper_exclusive: f64) -> Result<i64, String> {
+        // These VARIANT arguments share conversion but retain their existing
+        // collection limits. Binding-specific diagnostics are applied per call.
+        match value {
+            None => Ok(1),
+            Some(value) => match Self::legacy_assignment_number(value) {
+                Ok(None) => Ok(1),
+                Ok(Some(count)) if count >= 1.0 && count < upper_exclusive => Ok(count as i64),
+                Ok(_) | Err(1004) => Err(self.sheet_add_argument_failure()),
+                Err(number) => Err(host_error(number, "Sheet Add Count conversion failed")),
+            },
+        }
+    }
+
     /// `Worksheets.Add` puts a sheet in front of the active one unless told
     /// otherwise, makes it active, and hands it back.
     fn add_worksheet(&mut self, args: &[Value]) -> Result<Value, String> {
@@ -15987,13 +16008,7 @@ impl<'a> WorkbookHost<'a> {
         // Count adds that many, each in front of the one before: measured,
         // `Worksheets.Add Count:=2` puts Sheet11 before Sheet10 and leaves
         // Sheet11 active.
-        let count = match given(2) {
-            None => 1,
-            Some(value) => match any_whole_number(value) {
-                Some(count) if count >= 1 => count,
-                _ => return Err(host_error(1004, "Worksheets.Add Count must be at least one")),
-            },
-        };
+        let count = self.sheet_add_count(given(2), 9.2e18)?;
         if count > 1 {
             // The first where it was asked for, and each after it in front of
             // the last one added: measured, `Add Before:=Worksheets(1),
@@ -16016,7 +16031,7 @@ impl<'a> WorkbookHost<'a> {
         let before = given(0).map(|value| placed(self, value)).transpose()?;
         let after = given(1).map(|value| placed(self, value)).transpose()?;
         if before.is_some() && after.is_some() {
-            return Err("Worksheets.Add takes Before or After, not both".to_string());
+            return Err(self.sheet_add_argument_failure());
         }
         let at = match (before, after) {
             (Some(before), _) => before,
@@ -32146,6 +32161,12 @@ impl Host for ApplicationHost<'_> {
             host.scalar_argument_type(receiver.expect("native receiver"), name, args, argument_names, index)
         })
     }
+    fn contextual_call_error(&self, receiver: Option<&ObjectRef>, name: &str,
+        late_bound: bool, value_context: bool, message: &str) -> Option<String> {
+        self.read(receiver, name, false, |host, receiver|
+            host.contextual_call_error(receiver, name, late_bound, value_context, message))
+    }
+
     fn prepare_late_bound_call(&self, receiver: &ObjectRef, name: &str,
         args: &[Value], argument_names: &[Option<String>])
         -> Result<Option<(String, Vec<Value>)>, String> {
@@ -32518,6 +32539,11 @@ impl Host for WorkbookHost<'_> {
             return None;
         }
         Some(oxivba_core::runtime::AutomationScalarType::Long)
+    }
+
+    fn contextual_call_error(&self, _receiver: Option<&ObjectRef>, name: &str,
+        late_bound: bool, value_context: bool, message: &str) -> Option<String> {
+        self.contextual_sheet_add_error(name, late_bound, value_context, message)
     }
 
     fn prepare_late_bound_call(&self, receiver: &ObjectRef, name: &str,
@@ -144110,6 +144136,67 @@ End Function"#;
     }
 
 
+
+    fn sheet_add_native_group(group_index: usize) {
+        let fixture:serde_json::Value=serde_json::from_str(include_str!("../../../tests/fixtures/vba/sheet_add_collections_native.json")).unwrap();
+        let packages:serde_json::Value=serde_json::from_str(include_str!("../../../tests/fixtures/vba/sheet_package_native.json")).unwrap();
+        let hex=packages["inputs"][fixture["input_label"].as_str().unwrap()]["bytes_hex"].as_str().unwrap();
+        let input:Vec<u8>=(0..hex.len()).step_by(2).map(|at|u8::from_str_radix(&hex[at..at+2],16).unwrap()).collect();
+        let startup:Vec<u16>=fixture["startup_profile_utf16"].as_array().unwrap().iter().map(|v|u16::try_from(v.as_u64().unwrap()).unwrap()).collect();
+        let caller=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let group=&fixture["groups"][group_index];
+        for case in group["cases"].as_array().unwrap() {
+            let mut context=failure_context();
+            context.application_state=Some(VbaApplicationState {enable_events:false,display_alerts:false,
+                standard_font_startup:Some(VbaStandardFontStartup {profile_utf16:Some(startup.clone())}),..Default::default()});
+            context.file_context=Some(file_io::FileContext {package_bytes:Some(caller.to_vec()),full_name:Some(r"C:\work\caller.xlsx".into()),read_only:Some(true),
+                folders:vec![r"C:\work".into()],files:vec![file_io::ProducedFile {path:r"C:\work\input.xlsx".into(),bytes:input.clone()}],..Default::default()});
+            let mut args=vec![Value::Integer(case["receiver"].as_i64().unwrap()),Value::Integer(case["mode"].as_i64().unwrap())];
+            if let Some(binding)=case.get("binding") { args.push(Value::Integer(binding.as_i64().unwrap())); }
+            args.push(Value::String(r"C:\work\input.xlsx".into()));
+            let result=execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(caller).unwrap(),group["program"].as_str().unwrap(),Some("Probe"),
+                args,0,context,&mut None).unwrap();
+            assert!(result.error.is_none(),"{} {case}: {}",group["id"],serde_json::to_value(&result.error).unwrap());
+            let value=serde_json::to_value(result.result).unwrap();
+            let actual:Vec<serde_json::Value>=value["value"]["values"].as_array().unwrap().iter().map(|v|v["value"].clone()).collect();
+            assert_eq!(serde_json::to_value(actual).unwrap(),case["expected"],"{} {case}",group["id"]);
+        }
+    }
+
+    #[test]
+    fn sheet_collection_add_count_matches_native_receivers_and_state() {
+        sheet_add_native_group(0);
+    }
+
+    #[test]
+    fn sheet_add_errors_match_native_binding_and_statement_forms() {
+        sheet_add_native_group(1);
+    }
+
+    #[test]
+    fn worksheet_add_count_arguments_match_native_types_errors_and_state() {
+        let cases:serde_json::Value=serde_json::from_str(include_str!("../../../tests/fixtures/vba/worksheet_add_count_native.json")).unwrap();
+        let packages:serde_json::Value=serde_json::from_str(include_str!("../../../tests/fixtures/vba/sheet_package_native.json")).unwrap();
+        let hex=packages["inputs"][cases["input_label"].as_str().unwrap()]["bytes_hex"].as_str().unwrap();
+        let input:Vec<u8>=(0..hex.len()).step_by(2).map(|at|u8::from_str_radix(&hex[at..at+2],16).unwrap()).collect();
+        let startup:Vec<u16>=cases["startup_profile_utf16"].as_array().unwrap().iter().map(|v|u16::try_from(v.as_u64().unwrap()).unwrap()).collect();
+        let caller=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        for case in cases["cases"].as_array().unwrap() {
+            let mode=case["mode"].as_i64().unwrap();
+            let mut context=failure_context();
+            context.application_state=Some(VbaApplicationState {standard_font_startup:Some(VbaStandardFontStartup {profile_utf16:Some(startup.clone())}),..Default::default()});
+            context.file_context=Some(file_io::FileContext {
+                package_bytes:Some(caller.to_vec()),full_name:Some(r"C:\work\caller.xlsx".into()),read_only:Some(true),
+                folders:vec![r"C:\work".into()],files:vec![file_io::ProducedFile {path:r"C:\work\input.xlsx".into(),bytes:input.clone()}],..Default::default()
+            });
+            let result=execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(caller).unwrap(),cases["program"].as_str().unwrap(),Some("Probe"),
+                vec![Value::Integer(mode),Value::String(r"C:\work\input.xlsx".into())],0,context,&mut None).unwrap();
+            assert!(result.error.is_none(),"mode {mode}: {}",serde_json::to_value(&result.error).unwrap());
+            let value=serde_json::to_value(result.result).unwrap();
+            let actual:Vec<serde_json::Value>=value["value"]["values"].as_array().unwrap().iter().map(|v|v["value"].clone()).collect();
+            assert_eq!(serde_json::to_value(actual).unwrap(),case["expected"],"mode {mode}");
+        }
+    }
 
     #[test]
     fn sheet_structure_saved_state_matches_native_history() {
