@@ -6207,13 +6207,37 @@ impl<'a> TableFitLayouter<'a> {
                                             // quarter-space capacity for interior and terminal words.
                                             let effective_wrap = effective_wrap
                                                 + if s1082_cell_shrink {
-                                                    (current_line_chars
+                                                    let space_credit = (current_line_chars
                                                         .iter()
                                                         .chain(buf_chars.iter())
                                                         .filter(|c| c.ch == ' ')
                                                         .map(|c| c.natural_advance)
                                                         .sum::<f32>())
-                                                        * 0.25
+                                                        * 0.25;
+                                                    // OXI_CELL_JSHRINK_WORD_CAP (2026-11-14, default ON, opt-out
+                                                    // _DISABLE): the body's s1475 last-word ceiling in the cell
+                                                    // wrapper too -- the squeeze that keeps a word is at most
+                                                    // 0.35 x (that word + the spaces before it). The word is the
+                                                    // tail of the line after its last space (the wrapper's buffer
+                                                    // holds the whole line). blind-J en/policies__00d0246e
+                                                    // (ListParagraph bullets in a 458pt cell, Calibri Light 11, jc
+                                                    // both): the quarter-space pool (~8.7pt) kept «is» / «in» that
+                                                    // Word wraps and the unsqueezed lines ran 6-9pt past the edge.
+                                                    if ch != ' ' && !crate::env_flag!("OXI_CELL_JSHRINK_WORD_CAP_DISABLE") {
+                                                        let all: Vec<(char, f32)> = current_line_chars.iter()
+                                                            .chain(buf_chars.iter())
+                                                            .map(|c| (c.ch, c.natural_advance)).collect();
+                                                        let word_w: f32 = all.iter().rev()
+                                                            .take_while(|c| c.0 != ' ')
+                                                            .map(|c| c.1).sum::<f32>() + cw;
+                                                        let n_word = all.iter().rev().take_while(|c| c.0 != ' ').count();
+                                                        let sp_w: f32 = all[..all.len() - n_word].iter().rev()
+                                                            .take_while(|c| c.0 == ' ')
+                                                            .map(|c| c.1).sum();
+                                                        if sp_w > 0.0 {
+                                                            space_credit.min(0.35 * (word_w + sp_w))
+                                                        } else { space_credit }
+                                                    } else { space_credit }
                                                 } else {
                                                     0.0
                                                 };
@@ -6288,6 +6312,12 @@ impl<'a> TableFitLayouter<'a> {
                                             { font_size * 0.5 } else { 0.0 };
                                             let would_overflow_natural =
                                                 line_x + buf_w + cw - pair_end_credit > effective_wrap;
+                                            if let Ok(n) = std::env::var("OXI_DBG_CELLWRAP") {
+                                                if !n.is_empty() && para.runs.iter().any(|r| r.text.contains(n.as_str())) {
+                                                    eprintln!("[CELLWRAP] ch={:?} line_x={:.2} buf={:.2} cw={:.2} eff={:.2} wrap_w={:.2} first={:.2} over={}",
+                                                        ch, line_x, buf_w, cw, effective_wrap, wrap_w, first_line_wrap_w, would_overflow_natural);
+                                                }
+                                            }
                                             let run_has_neg_cs = cs <= -0.1;
                                             // S586 orphan + small-overflow + 約物→opener oikomi (scaffold).
                                             let s586_overflow_fixed = if s586_orphan
@@ -9067,6 +9097,13 @@ impl<'a> TableFitLayouter<'a> {
                                         // 2026-04-19: allow single-fragment justify for CJK content.
                                         // Word distributes chars within a single CJK run for jc=both
                                         // non-last lines (b35 "組織的管" row: 4 chars spread across cell).
+                                        if let Ok(n) = std::env::var("OXI_DBG_CELLWRAP") {
+                                            if !n.is_empty() && para.runs.iter().any(|r| r.text.contains(n.as_str())) {
+                                                eprintln!("[CELLJUST] line={} last={} just={} eff={:.2} total={:.2} adj={:.2} nfrag={} tail={:?}",
+                                                    line_idx, is_last_line, should_justify, effective_wrap, line_total_w,
+                                                    frag_width_adj.iter().sum::<f32>(), line.len(), line.last().map(|f| f.0.clone()));
+                                            }
+                                        }
                                         if should_justify && !line.is_empty() {
                                             let mut slack = effective_wrap - line_total_w - frag_width_adj.iter().sum::<f32>();
 
@@ -9096,6 +9133,37 @@ impl<'a> TableFitLayouter<'a> {
                                                             frag_char_width_adj[fi][char_index] -= savings;
                                                             slack += savings;
                                                         }
+                                                    }
+                                                }
+                                            }
+
+                                            // OXI_CELL_JSHRINK_RENDER (2026-11-14, default ON, opt-out _DISABLE): a
+                                            // justified Latin cell line the wrapper kept on S1082's space-shrink
+                                            // credit is drawn with its inter-word spaces squeezed by the deficit,
+                                            // as Word draws it. The positive-slack branch below was the only one,
+                                            // so the kept word ran past the cell edge (blind-J en/policies__00d0246e
+                                            // p2 «…you'll be keen to operate»: Word squeezes to 535.34, Oxi 544.9).
+                                            if slack < 0.0 && !crate::env_flag!("OXI_CELL_JSHRINK_RENDER_DISABLE")
+                                                && !line.iter().any(|f| f.0.chars().any(|c| c >= '\u{2E80}' && kinsoku::is_cjk(c)))
+                                            {
+                                                // Trailing blanks hang past the edge (Word: «Total heat   » in
+                                                // technical__01242a0a keeps «heat» at its natural x) -- only the
+                                                // visible extent can be in deficit, and only the spaces before it
+                                                // are squeezed.
+                                                if let Some(last_visible) = line.iter().rposition(|f| !f.0.trim().is_empty()) {
+                                                    let visible_w: f32 = line[..=last_visible].iter().map(|f| f.2).sum::<f32>()
+                                                        + frag_width_adj[..=last_visible].iter().sum::<f32>();
+                                                    let deficit = visible_w - effective_wrap;
+                                                    let space_idx: Vec<usize> = (0..last_visible)
+                                                        .filter(|&i| !line[i].0.is_empty() && line[i].0.trim().is_empty()
+                                                            && !line[i].0.contains('\t'))
+                                                        .collect();
+                                                    if deficit > 0.0 && !space_idx.is_empty() {
+                                                        let per = -deficit / space_idx.len() as f32;
+                                                        for i in space_idx {
+                                                            frag_spacing[i] += per;
+                                                        }
+                                                        slack = 0.0;
                                                     }
                                                 }
                                             }
