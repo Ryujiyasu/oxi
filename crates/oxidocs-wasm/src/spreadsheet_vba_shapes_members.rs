@@ -778,7 +778,12 @@ impl<'a> WorkbookHost<'a> {
         }
         // Notes belong to Shapes but follow the ordinary drawing layer, even
         // when the note was created before the first ordinary shape.
-        listed.sort_by_key(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_some()));
+        let positions: std::collections::HashMap<_, _> = self.workbook.sheets[sheet].legacy_drawing_order.iter()
+            .enumerate().map(|(at, id)| (*id, at)).collect();
+        let notes: std::collections::HashMap<_, _> = self.shapes.iter()
+            .filter(|shape| shape.sheet == sheet && shape.comment_at.is_some())
+            .map(|shape| (shape.id, positions.get(&shape.non_visual_id).copied().unwrap_or(usize::MAX))).collect();
+        listed.sort_by_key(|id| notes.get(id).map_or((false, 0), |at| (true, *at)));
         listed
     }
 
@@ -914,6 +919,70 @@ impl<'a> WorkbookHost<'a> {
         let value = self.shape_range_object(ids);
         self.shape_ranges.last_mut().unwrap().legacy_ole = true;
         value
+    }
+
+    /// Move within the requested layer. Ordinary anchors and legacy objects
+    /// share object identities but have independent stacking orders.
+    fn move_shape_in_layer(&mut self, id: u64, command: i64, legacy: bool) -> Result<(), String> {
+        let shape = self.shape(id)?.clone();
+        let sheet = shape.sheet;
+        self.sync_legacy_drawing_order(sheet);
+        let destination = |at: usize, len: usize| match command {
+            0 => len.saturating_sub(1),
+            1 => 0,
+            2 => (at + 1).min(len.saturating_sub(1)),
+            3 => at.saturating_sub(1),
+            _ => at,
+        };
+        if legacy {
+            let order = &mut self.workbook.sheets[sheet].legacy_drawing_order;
+            if let Some(at) = order.iter().position(|held| *held == shape.non_visual_id) {
+                let to = destination(at, order.len());
+                let physical = order.remove(at);
+                order.insert(to, physical);
+            }
+        } else {
+            let mut order: Vec<_> = if let Some(parent) = shape.group_parent_id {
+                self.shape(parent)?.group_children.clone()
+            } else {
+                self.shapes_on(sheet).into_iter().filter(|held| self.shape(*held).is_ok_and(|shape| shape.comment_at.is_none())).collect()
+            };
+            if let Some(at) = order.iter().position(|held| *held == id) {
+                let to = destination(at, order.len());
+                if at != to {
+                    let target = order[to];
+                    let descendants = |root| {
+                        let mut ids = std::collections::HashSet::new();
+                        let mut pending = vec![root];
+                        while let Some(id) = pending.pop() {
+                            if ids.insert(id) {
+                                if let Ok(shape) = self.shape(id) { pending.extend(shape.group_children.iter().copied()); }
+                            }
+                        }
+                        ids
+                    };
+                    let moving = descendants(id);
+                    let target_ids = descendants(target);
+                    if !moving.is_disjoint(&target_ids) || !self.shapes.iter().any(|shape| target_ids.contains(&shape.id)) {
+                        return Err(host_error(1004, "the target shape is no longer on its worksheet"));
+                    }
+                    let (moved, mut held): (Vec<_>, Vec<_>) = std::mem::take(&mut self.shapes).into_iter()
+                        .partition(|shape| moving.contains(&shape.id));
+                    let insert = if to > at {
+                        held.iter().rposition(|shape| target_ids.contains(&shape.id)).map(|at| at + 1)
+                    } else { held.iter().position(|shape| target_ids.contains(&shape.id)) }
+                    .ok_or_else(|| host_error(1004, "the target shape is no longer on its worksheet"))?;
+                    held.splice(insert..insert, moved);
+                    self.shapes = held;
+                    if let Some(parent) = shape.group_parent_id {
+                        let id = order.remove(at);
+                        order.insert(to, id);
+                        self.shape_mut(parent)?.group_children = order;
+                    }
+                }
+            }
+        }
+        self.redraw(id)
     }
 
     fn move_shape_in_z_order(&mut self, id: u64, to_front: bool) -> Result<(), String> {
@@ -4845,10 +4914,9 @@ impl<'a> WorkbookHost<'a> {
                     Ok(Some(Value::Boolean(true)))
                 }
                 "zorder" => {
-                    match args.first().and_then(any_whole_number) {
-                        Some(0) => self.move_shape_in_z_order(id, true)?,
-                        Some(1) => self.move_shape_in_z_order(id, false)?,
-                        _ => {},
+                    if let Some(command @ 0..=3) = args.first().and_then(any_whole_number) {
+                        let legacy = self.shape(id)?.comment_at.is_some();
+                        self.move_shape_in_layer(id, command, legacy)?;
                     }
                     Ok(Some(Value::Empty))
                 },
@@ -5209,6 +5277,12 @@ impl<'a> WorkbookHost<'a> {
                     "count" => self.shape_range_count(index).map(|count| Some(Value::Integer(count))),
                     "name" | "left" | "top" | "width" | "height" => self.shape_range_scalar_get(index, lower.as_str()),
                     "shaperange" => Ok(Some(self.part(part))),
+                    "zorder" if self.shape_ranges[index].legacy_ole => {
+                        if let (Some(id), Some(command @ 0..=3)) = (ids.first(), args.first().and_then(any_whole_number)) {
+                            self.move_shape_in_layer(*id, command, true)?;
+                        }
+                        Ok(Some(Value::Empty))
+                    },
                     "delete" => {
                         for id in ids {
                             self.delete_shape(id)?;

@@ -59552,14 +59552,20 @@ End Function"####;
     }
 
     fn assert_complete_ole_insert_native9(group_id: &str) {
-        let corpus_bytes: &[u8] = if matches!(group_id, "mixed_drawing_layers9" | "explicit_font9") {
+        assert_complete_ole_native_group(group_id, 9);
+    }
+
+    fn assert_complete_ole_native_group(group_id: &str, expected_cases: usize) {
+        let corpus_bytes: &[u8] = if matches!(group_id, "relative_layers24" | "repeat_save9") {
+            include_bytes!("../../../tests/fixtures/vba/ole_layer_operations_native.json")
+        } else if matches!(group_id, "mixed_drawing_layers9" | "explicit_font9") {
             include_bytes!("../../../tests/fixtures/vba/ole_legacy_layers_native.json")
         } else { include_bytes!("../../../tests/fixtures/vba/ole_copy_native.json") };
         let corpus: serde_json::Value = serde_json::from_slice(corpus_bytes).unwrap();
         let group = corpus["groups"].as_array().unwrap().iter().find(|g| g["id"] == group_id).unwrap();
         let bytes = include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
         let caller = include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
-        let cases = group["cases"].as_array().unwrap();assert_eq!(cases.len(), 9);
+        let cases = group["cases"].as_array().unwrap();assert_eq!(cases.len(), expected_cases);
         let mut failures = Vec::new();
         for case in cases {
             let mode = case["mode"].as_i64().unwrap();
@@ -59594,6 +59600,16 @@ End Function"####;
             }
         }
         assert!(failures.is_empty(),"Complete Native OLE insertion vectors differ:\n{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn legacy_layers_native_relative_channels24() {
+        assert_complete_ole_native_group("relative_layers24", 24);
+    }
+
+    #[test]
+    fn legacy_layers_native_repeated_saves9() {
+        assert_complete_ole_native_group("repeat_save9", 9);
     }
 
     #[test]

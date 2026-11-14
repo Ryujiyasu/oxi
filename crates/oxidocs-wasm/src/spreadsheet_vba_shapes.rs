@@ -1571,6 +1571,10 @@ impl<'a> WorkbookHost<'a> {
             record.original=Some(drawing.clone());
             record.ole_clone_of=None;
         }
+        // The saved package is now the source for both live records and the
+        // workbook IR. Clear pending OLE additions even when no later edit
+        // happens to rebuild the drawing list before another save.
+        for sheet in 0..self.workbook.sheets.len() { self.mirror_drawings(sheet); }
     }
 
     pub(super) fn drawing_of(&self, record: &ShapeRecord) -> Drawing {

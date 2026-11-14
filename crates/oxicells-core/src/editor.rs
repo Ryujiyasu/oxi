@@ -11218,12 +11218,15 @@ fn patch_vml_notes(xml: &str, comments: &[crate::ir::Comment], blocks: &[u32], o
     let mut ids = HashMap::new();
     let mut owned: std::collections::BTreeSet<_> = blocks.iter().copied().collect();
     let mut generated = String::new();
-    for (ordinal, comment) in comments.iter().enumerate() {
+    let mut last_z_index = max_vml_z_index(&base)?;
+    for comment in comments {
         let id = comment.shape_id.unwrap_or_else(|| { max_id += 1; while used.contains(&max_id) { max_id += 1; } used.insert(max_id); max_id });
         owned.insert(id / 1024);
         ids.insert(comment.cell, id);
         if !old_notes.contains_key(&comment.cell) {
-            generated.push_str(&write_vml_note(comment, id, ordinal as u32 + 1));
+            last_z_index = last_z_index.checked_add(1)
+                .ok_or_else(|| XlsxError::InvalidData("legacy drawing order overflow".into()))?;
+            generated.push_str(&write_vml_note(comment, id, last_z_index));
         }
     }
     let mut replacements = Vec::new();
@@ -11231,7 +11234,11 @@ fn patch_vml_notes(xml: &str, comments: &[crate::ir::Comment], blocks: &[u32], o
         let changed = if let Some(comment) = comments.iter().find(|comment| comment.cell == cell) {
             if original.iter().find(|old| old.cell == cell).is_some_and(|old| vml_note_appearance_equal(old, comment)) {
                 vml_note_identity(&base[start..end], comment, ids[&cell])?
-            } else { write_vml_note(comment, ids[&cell], comments.iter().position(|note| note.cell == cell).unwrap() as u32 + 1) }
+            } else {
+                // Appearance edits must retain the note's place among OLE
+                // fallbacks and other legacy shapes, not its comment ordinal.
+                write_vml_note(comment, ids[&cell], max_vml_z_index(&base[start..end])?)
+            }
         } else { String::new() };
         replacements.push((start, end, changed));
     }
@@ -18693,6 +18700,33 @@ mod tests {
         assert_eq!(text.paragraphs[0].color.as_deref(), Some("112233"));
         assert!(text.paragraphs[0].bold);
         assert!(text.paragraphs[0].italic);
+    }
+
+    #[test]
+    fn vml_note_appearance_preserves_shared_legacy_order_and_new_note_slots() {
+        let note = crate::ir::Comment {
+            position: Some((10.0, 10.0)), shape_id: Some(1027), shape_name: None,
+            author: "Oxi".into(), utf16_text: None,
+            from: crate::ir::Anchor { col: 3, col_off: 0, row: 1, row_off: 0 },
+            size: (96.0, 59.25), to: None,
+            text: crate::ir::ShapeText { paragraphs: Vec::new(), anchor: Some("t".into()), insets: (0, 0, 0, 0), wrap: true, clip: true },
+            fill: None, fill_visible: true, fill_transparency: 0.0,
+            line_color: None, line_visible: true, line_weight: 0.75, line_transparency: 0.0,
+            cell: (1, 3), visible: false,
+        };
+        let first = r#"<v:shape id="_x0000_s1025" style="z-index:1" data-preserve="first"><x:ClientData ObjectType="Pict"/></v:shape>"#;
+        let second = r#"<v:shape id="_x0000_s1026" style="z-index:2" data-preserve="second"><x:ClientData ObjectType="Pict"/></v:shape>"#;
+        let xml = format!(r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">{first}{second}{}</xml>"#, write_vml_note(&note, 1027, 3));
+        let mut resized = note.clone(); resized.size.0 = 144.0;
+        let mut added = note.clone(); added.cell = (2, 3); added.shape_id = Some(1028);
+        let saved = patch_vml_notes(&xml, &[resized, added], &[1], &[note]).unwrap();
+        assert!(saved.contains(first) && saved.contains(second));
+        let mut positions = HashMap::new();
+        for (start, end) in root_child_spans(&saved, "shape").unwrap() {
+            let one = &saved[start..end];
+            positions.insert(vml_shape_numeric_id(one).unwrap(), max_vml_z_index(one).unwrap());
+        }
+        assert_eq!(positions, HashMap::from([(1025, 1), (1026, 2), (1027, 3), (1028, 4)]));
     }
 
     #[test]
