@@ -59690,7 +59690,7 @@ End Function"####;
                 let bytes = &out.files.iter().find(|file| file.path == r"C:\work\mixed-source.xlsx").unwrap().bytes;
                 let mut saved = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
                 let drawing = &saved.sheets[0].drawings[0];
-                let DrawingKind::Shape(shape) = &drawing.kind else { panic!("ordinary shape expected") };
+                let oxicells_core::ir::DrawingKind::Shape(shape) = &drawing.kind else { panic!("ordinary shape expected") };
                 let odd = ((f64::from(shape.rotation)/60_000.0).rem_euclid(360.0)+45.0) as i64 / 90 % 2 != 0;
                 // Independently saved Native source packages, all sixteen
                 // angles per profile, include odd positive/negative EMU spans.
