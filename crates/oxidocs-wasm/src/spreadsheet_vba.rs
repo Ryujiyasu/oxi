@@ -16008,16 +16008,46 @@ impl<'a> WorkbookHost<'a> {
         // Count adds that many, each in front of the one before: measured,
         // `Worksheets.Add Count:=2` puts Sheet11 before Sheet10 and leaves
         // Sheet11 active.
+        let default_count = given(2).is_none_or(|value| matches!(value, Value::Null));
         let count = self.sheet_add_count(given(2), 9.2e18)?;
+        let count = if default_count {
+            self.selected_group
+                .and_then(|group| self.sheet_groups.get(group))
+                .filter(|sheets| sheets.contains(&self.active_sheet))
+                .map_or(1, |sheets| sheets.len() as i64)
+        } else {
+            count
+        };
+        if default_count && count > 1 {
+            // Omitted/Null Count inserts the selected-sheet batch in creation
+            // order and returns its first sheet. Explicit Count returns the
+            // last-created sheet, handled by the existing branch below.
+            let mut placing: Vec<Value> = args.iter().take(2).cloned().collect();
+            placing.resize(3, Value::Missing);
+            placing[2] = Value::Integer(1);
+            let first = self.add_worksheet(&placing)?;
+            let mut previous = first.clone();
+            for _ in 1..count {
+                previous = self.add_worksheet(&[Value::Missing, previous, Value::Integer(1)])?;
+            }
+            if let Value::Object(object) = &first {
+                let sheet = self.worksheet(object)
+                    .ok_or_else(|| "The newly added worksheet is no longer present".to_string())?;
+                self.activate_sheet(sheet);
+            }
+            return Ok(first);
+        }
         if count > 1 {
             // The first where it was asked for, and each after it in front of
             // the last one added: measured, `Add Before:=Worksheets(1),
             // Count:=2` leaves Sheet4, Sheet3 at the front.
             let mut placing: Vec<Value> = args.iter().take(2).cloned().collect();
+            placing.resize(3, Value::Missing);
+            placing[2] = Value::Integer(1);
             let mut added = Value::Empty;
             for _ in 0..count {
                 added = self.add_worksheet(&placing)?;
-                placing = vec![added.clone()];
+                placing = vec![added.clone(), Value::Missing, Value::Integer(1)];
             }
             return Ok(added);
         }
@@ -144151,9 +144181,16 @@ End Function"#;
                 standard_font_startup:Some(VbaStandardFontStartup {profile_utf16:Some(startup.clone())}),..Default::default()});
             context.file_context=Some(file_io::FileContext {package_bytes:Some(caller.to_vec()),full_name:Some(r"C:\work\caller.xlsx".into()),read_only:Some(true),
                 folders:vec![r"C:\work".into()],files:vec![file_io::ProducedFile {path:r"C:\work\input.xlsx".into(),bytes:input.clone()}],..Default::default()});
-            let mut args=vec![Value::Integer(case["receiver"].as_i64().unwrap()),Value::Integer(case["mode"].as_i64().unwrap())];
-            if let Some(binding)=case.get("binding") { args.push(Value::Integer(binding.as_i64().unwrap())); }
-            args.push(Value::String(r"C:\work\input.xlsx".into()));
+            let mut args = if let Some(order) = group["argument_order"].as_array() {
+                order.iter().map(|name| Value::Integer(case[name.as_str().unwrap()].as_i64().unwrap())).collect()
+            } else {
+                let mut args=vec![Value::Integer(case["receiver"].as_i64().unwrap()),Value::Integer(case["mode"].as_i64().unwrap())];
+                if let Some(binding)=case.get("binding") { args.push(Value::Integer(binding.as_i64().unwrap())); }
+                args
+            };
+            if group["append_input_argument"].as_bool().unwrap_or(true) {
+                args.push(Value::String(r"C:\work\input.xlsx".into()));
+            }
             let result=execute_workbook_action_in_session(oxicells_core::parse_xlsx_preserving_values(caller).unwrap(),group["program"].as_str().unwrap(),Some("Probe"),
                 args,0,context,&mut None).unwrap();
             assert!(result.error.is_none(),"{} {case}: {}",group["id"],serde_json::to_value(&result.error).unwrap());
@@ -144171,6 +144208,22 @@ End Function"#;
     #[test]
     fn sheet_add_errors_match_native_binding_and_statement_forms() {
         sheet_add_native_group(1);
+    }
+
+    #[test]
+    fn selected_sheet_add_defaults_match_native_count_and_state() {
+        sheet_add_native_group(2);
+    }
+
+    #[test]
+    fn selected_sheet_add_return_and_order_match_native_explicit_controls() {
+        sheet_add_native_group(3);
+    }
+
+    #[test]
+    fn selected_sheet_add_positions_match_native_count_variants() {
+        sheet_add_native_group(4);
+        sheet_add_native_group(5);
     }
 
     #[test]

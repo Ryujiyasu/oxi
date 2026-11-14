@@ -2238,9 +2238,20 @@ impl<'a> WorkbookHost<'a> {
         let before = given(0).map(placed).transpose()?;
         let after = given(1).map(placed).transpose()?;
         if before.is_some() && after.is_some() { return Err(self.sheet_add_argument_failure()); }
+        if !chart {
+            // Retain the collection's validation while the worksheet path
+            // distinguishes selected-sheet defaults from explicit Count.
+            let mut worksheet_args: Vec<Value> = args.iter().take(3).cloned().collect();
+            for argument in worksheet_args.iter_mut().take(2) {
+                if matches!(argument, Value::Null) { *argument = Value::Missing; }
+            }
+            return self.add_worksheet(&worksheet_args);
+        }
+
         let mut at = match (before, after) {
             (Some(i), _) => i,
-            (_, Some(i)) => i + usize::from(!chart),
+            // Excel keeps an After insertion before the original final tab.
+            (_, Some(i)) => (i + 1).min(self.workbook.sheets.len().saturating_sub(1)),
             _ => self.active_sheet,
         };
         // Retain a range object, whose sheet identity follows insertion.
@@ -2251,9 +2262,9 @@ impl<'a> WorkbookHost<'a> {
         let mut result = Value::Empty;
         for _ in 0..count {
             let destination = if at < self.workbook.sheets.len() {
-                vec![self.object(HostObject::Worksheet(at))]
+                vec![self.object(HostObject::Worksheet(at)), Value::Missing, Value::Integer(1)]
             } else {
-                vec![Value::Missing, self.object(HostObject::Worksheet(self.workbook.sheets.len()-1))]
+                vec![Value::Missing, self.object(HostObject::Worksheet(self.workbook.sheets.len()-1)), Value::Integer(1)]
             };
             let worksheet_counter = self.sheet_counter;
             result = self.add_worksheet(&destination).map_err(|_| self.sheet_add_failure())?;

@@ -70,6 +70,9 @@ jobs:
           spreadsheet_vba::tests::sheet_collection_add_count_matches_native_receivers_and_state
           spreadsheet_vba::tests::sheet_add_errors_match_native_binding_and_statement_forms
           spreadsheet_vba::tests::chart_boundary_full_state_matches_actual_excel_before_and_after_save
+          spreadsheet_vba::tests::selected_sheet_add_defaults_match_native_count_and_state
+          spreadsheet_vba::tests::selected_sheet_add_return_and_order_match_native_explicit_controls
+          spreadsheet_vba::tests::selected_sheet_add_positions_match_native_count_variants
       - name: Worksheet Add Count variant conversion and error state
         run: >-
           cargo test -p oxidocs-wasm --lib --features suite --locked
