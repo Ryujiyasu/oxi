@@ -59686,6 +59686,42 @@ End Function"####;
                     }
                 }
             }
+            if group_id.starts_with("rotation_") {
+                let bytes = &out.files.iter().find(|file| file.path == r"C:\work\mixed-source.xlsx").unwrap().bytes;
+                let mut saved = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+                let drawing = &saved.sheets[0].drawings[0];
+                let oxicells_core::ir::DrawingKind::Shape(shape) = &drawing.kind else { panic!("ordinary shape expected") };
+                let odd = ((f64::from(shape.rotation)/60_000.0).rem_euclid(360.0)+45.0) as i64 / 90 % 2 != 0;
+                // Independently saved Native source packages, all sixteen
+                // angles per profile, include odd positive/negative EMU spans.
+                let (from,to) = match (group_id,odd) {
+                    ("rotation_integer16",false) => ((0,254_000,1,142_875),(1,76_200,2,31_750)),
+                    ("rotation_integer16",true) => ((0,444_500,0,190_500),(0,571_500,2,222_250)),
+                    ("rotation_fractional_wide16",false) => ((0,255_568,1,145_854),(1,82_158,2,40_530)),
+                    ("rotation_fractional_wide16",true) => ((0,445_362,0,194_185),(0,578_163,2,230_325)),
+                    ("rotation_fractional_tall16",false) => ((0,255_568,1,145_854),(0,388_369,3,181_994)),
+                    ("rotation_fractional_tall16",true) => ((0,65_774,2,97_523),(0,578_164,2,230_324)),
+                    _ => unreachable!(),
+                };
+                let marker = |a:oxicells_core::ir::Anchor| (a.col,a.col_off,a.row,a.row_off);
+                assert_eq!(marker(drawing.from),from,"Native source from {group_id}/{mode}");
+                assert_eq!(marker(drawing.to.unwrap()),to,"Native source to {group_id}/{mode}");
+                let reopened = WorkbookHost::new(&mut saved,0).unwrap();
+                let expected = case["expected"]["before"].as_array().unwrap();
+                assert_eq!(reopened.shapes.len(),expected.len());
+                for (record,expected) in reopened.shapes.iter().zip(expected) {
+                    assert_eq!(record.non_visual_id,expected["id"].as_u64().unwrap() as u32);
+                    assert_eq!(record.name,expected["name"].as_str().unwrap());
+                    let geometry = serde_json::json!({
+                        "Left":format!("0x{:08x}",(record.left as f32).to_bits()),
+                        "Top":format!("0x{:08x}",(record.top as f32).to_bits()),
+                        "Width":format!("0x{:08x}",(record.width as f32).to_bits()),
+                        "Height":format!("0x{:08x}",(record.height as f32).to_bits()),
+                        "Rotation":format!("0x{:08x}",(record.rotation as f32).to_bits()),
+                    });
+                    assert_eq!(geometry,expected["geometry"],"Native source geometry {group_id}/{mode}");
+                }
+            }
             let raw = serde_json::to_value(&out.result).unwrap();
             let actual = if group["view_schema"]=="shape_geometry_single_bits" {
                 canonical_native_shape_views(&raw).unwrap_or(raw)
