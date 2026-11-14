@@ -7456,6 +7456,11 @@ impl<'a> WorkbookHost<'a> {
 
     fn set_normal_style_font(&mut self,name:&str,value:&Value) -> Result<bool,String> {
         let old_digit = self.digit_width();
+        let old=self.normal_style().clone();let old_font=Dress::of_style(&old);
+        let parent=self.named_normal_style().map_or(0,|style|style.source_id);
+        let inherits=|style:&CellStyle|style.normal_font_link.unwrap_or_else(||
+            style.format_reference.as_ref().and_then(|reference|reference.style_id)
+                .is_none_or(|id|id==parent)) && Dress::of_style(style)==old_font;
         // A manual sheet default without saved row records follows Normal.
         let unrecorded_manual_defaults: Vec<_> = self.workbook.sheets.iter()
             .map(|sheet|sheet.default_row_custom && sheet.rows.is_empty()).collect();
@@ -7463,10 +7468,10 @@ impl<'a> WorkbookHost<'a> {
             let column_formatted = self.templates.keys().any(|scope| matches!(scope,
                 FormatScope::Column(held, _) if *held == index));
             let populated=sheet.rows.iter().any(|row|!row.cells.is_empty());
-            (!sheet.default_row_custom && !sheet.rows.is_empty() && (!column_formatted || populated))
+            (!inherits(&self.workbook.default_style) && !sheet.default_row_custom
+                && !sheet.rows.is_empty() && (!column_formatted || populated))
                 .then(|| self.effective_default_row_height(index))
         }).collect();
-        let old=self.normal_style().clone();let old_font=Dress::of_style(&old);
         let mut font=old_font.clone();
         match name.to_ascii_lowercase().as_str() {
             "name"=>{if let Some(name)=cell_font_name(value)?{font.set_name(Some(name));}},
@@ -7479,10 +7484,6 @@ impl<'a> WorkbookHost<'a> {
                 font.set_color(color,automatic);},
             _=>return Ok(false),
         }
-        let parent=self.named_normal_style().map_or(0,|style|style.source_id);
-        let inherits=|style:&CellStyle|style.normal_font_link.unwrap_or_else(||
-            style.format_reference.as_ref().and_then(|reference|reference.style_id)
-                .is_none_or(|id|id==parent)) && Dress::of_style(style)==old_font;
         if inherits(&self.workbook.default_style){font.write_font(&mut self.workbook.default_style);}
         if let Some(index)=self.named_normal_style_index() {
             font.write_font(&mut self.workbook.named_styles[index].style);
@@ -15228,6 +15229,32 @@ impl<'a> WorkbookHost<'a> {
             .unwrap_or_else(||self.automatic_default_row_height(index))
     }
 
+    /// Allocated rows are fitted to their own font even when an omitted
+    /// sheet default initially uses the application font's cached height.
+    fn stored_row_default_height(&self, index: usize) -> f32 {
+        if !self.workbook.sheets[index].default_row_custom
+            && self.normal_row_defaults.contains_key(&index)
+            && self.workbook.default_style.normal_font_link==Some(true) {
+            self.automatic_default_row_height(index)
+        } else {self.effective_default_row_height(index)}
+    }
+
+    /// A package without sheetFormatPr starts with the application default
+    /// for unused rows. Existing rows still use their workbook font.
+    fn initialize_unstated_row_defaults(&mut self) -> Result<(),String> {
+        let Some(package)=self.file_io.package.as_deref() else {return Ok(());};
+        if !package_has_styles(package)? {return Ok(());}
+        let sheets=file_io::WorkbookFiles::unstated_row_default_sheets(package)?;
+        let height=fresh_workbook_row_points(&self.application_font);
+        for index in sheets {
+            if self.workbook.sheets.get(index).is_some_and(|sheet|
+                sheet.kind==oxicells_core::ir::SheetKind::Worksheet && !sheet.default_row_custom) {
+                self.normal_row_defaults.insert(index,height);
+            }
+        }
+        Ok(())
+    }
+
     fn automatic_default_row_height(&self, index: usize) -> f32 {
         let sheet = &self.workbook.sheets[index];
         let face = sheet.column_width_font.as_deref()
@@ -15273,7 +15300,7 @@ impl<'a> WorkbookHost<'a> {
         if stated.is_some_and(|row| row.hidden) {
             return 0.0;
         }
-        let points = stated.and_then(|row| row.height).unwrap_or_else(|| self.effective_default_row_height(sheet));
+        let points = stated.and_then(|row| row.height).unwrap_or_else(|| if stated.is_some() {self.stored_row_default_height(sheet)} else {self.effective_default_row_height(sheet)});
         oxicells_core::row_height::pixels(points)
     }
 
@@ -23614,7 +23641,7 @@ impl<'a> WorkbookHost<'a> {
         let default = oxicells_core::row_height::logical_points(self.effective_default_row_height(range.sheet));
         let requested = sheet.rows.iter().find(|row| row.index == requested_row)
             .map_or(default, |row| if row.hidden { 0.0 } else {
-                oxicells_core::row_height::logical_points(row.height.unwrap_or_else(|| self.effective_default_row_height(range.sheet)))
+                oxicells_core::row_height::logical_points(row.height.unwrap_or_else(|| self.stored_row_default_height(range.sheet)))
             });
         let mut first = (existing_rows < selected_rows).then_some(default);
         for row in rows {
@@ -23623,7 +23650,7 @@ impl<'a> WorkbookHost<'a> {
             let height = if row.hidden {
                 0.0
             } else {
-                oxicells_core::row_height::logical_points(row.height.unwrap_or_else(|| self.effective_default_row_height(range.sheet)))
+                oxicells_core::row_height::logical_points(row.height.unwrap_or_else(|| self.stored_row_default_height(range.sheet)))
             };
             if first.is_some_and(|first| first != height) {
                 return Ok(Value::Null);
@@ -25060,12 +25087,13 @@ impl<'a> WorkbookHost<'a> {
         self.guard_row_formats(range.sheet, "AutoFit")?;
         if range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW {
             let height = self.automatic_default_row_height(range.sheet);
+            self.normal_row_defaults.remove(&range.sheet);
             let sheet = &mut self.workbook.sheets[range.sheet];
             sheet.default_row_height = height;
             sheet.default_row_custom = false;
-        } else if self.workbook.sheets[range.sheet].default_row_custom {
-            // AutoFit explicitly overrides a manually sized sheet default,
-            // even for rows which have never contained an allocated cell.
+        } else {
+            // AutoFit creates row geometry even when the selected rows have
+            // never contained an allocated cell.
             let sheet = &mut self.workbook.sheets[range.sheet];
             let existing: std::collections::HashSet<_> = sheet.rows.iter().map(|row| row.index).collect();
             for index in range.start_row..=range.end_row {
@@ -25080,6 +25108,8 @@ impl<'a> WorkbookHost<'a> {
         for row in &mut self.workbook.sheets[range.sheet].rows {
             if (range.start_row..=range.end_row).contains(&row.index) { row.hidden = false; }
         }
+        // An accepted AutoFit dirties even an unused, already fitting row.
+        self.saved=false;
         Ok(result)
     }
 
@@ -31227,6 +31257,7 @@ fn attach_copied_sheet_links(
         host.initialize_loaded_external_link_order(active_sheet);
         let caller = self.hosts.get(&code_owner).expect("creating code owner");
         host.error_language = caller.error_language;
+        host.application_font = caller.application_font.clone();
         host.automation_code_page = caller.automation_code_page;
         host.now = caller.now;
         host.file_name = Some(name);
@@ -31328,6 +31359,7 @@ fn attach_copied_sheet_links(
         host.initialize_loaded_external_link_order(active_sheet);
         let caller = self.hosts.get(&code_owner).expect("opening code owner");
         host.error_language = caller.error_language;
+        host.application_font = caller.application_font.clone();
         host.automation_code_page = caller.automation_code_page;
         host.now = caller.now;
         host.file_name = Some(path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string());
@@ -31337,6 +31369,7 @@ fn attach_copied_sheet_links(
         host.file_io.read_only = read_only;
         host.file_io.source = source.clone();
         host.configure_documents(&documents)?;
+        host.initialize_unstated_row_defaults()?;
         host.refresh_imported_auto_row_caches()?;
         host.saved = true;
         let Value::Object(book) = host.object(HostObject::Workbook) else {
@@ -49540,6 +49573,7 @@ fn execute_workbook_invocation(
     host.calculation = mode;
     host.app_settings.insert("calculatebeforesave".to_string(), Value::Boolean(on_save));
     if let Some(state) = context.application_state { state.restore(&mut host); }
+    if !was_loaded {host.initialize_unstated_row_defaults()?;}
     host.sync_calculation_settings();
     host.user_functions.borrow_mut().force_full_calculation = procedure.is_none() && action.is_none()
         && should_calculate
@@ -144063,6 +144097,103 @@ End Function"#;
         let before=serde_json::to_value(&workbook).unwrap();
         resolve_implicit_cell_styles(&mut workbook);
         assert_eq!(serde_json::to_value(&workbook).unwrap(),before);
+    }
+
+
+    #[test]
+    fn loaded_and_fresh_normal_row_defaults_match_native_history() {
+        use std::io::{Read,Write};
+        const SOURCE:&str=r####"Public Function Probe(ByVal mode As Long) As Variant
+    ThisWorkbook.Saved = True
+    Set ws = ThisWorkbook.Worksheets(1)
+    before = State(ThisWorkbook)
+    Select Case mode
+    Case 0
+    Case 1
+        ThisWorkbook.Styles("Normal").Font.Size = ThisWorkbook.Styles("Normal").Font.Size
+    Case 2
+        ThisWorkbook.Styles("Normal").Font.Size = 16
+    Case 3
+        ws.Cells.Clear
+    Case 4
+        ws.Rows(100).AutoFit
+    Case 5
+        ws.Cells.Font.Size = ThisWorkbook.Styles("Normal").Font.Size
+    End Select
+    after = State(ThisWorkbook)
+    ThisWorkbook.SaveCopyAs "C:\work\loaded-row-copy.xlsx"
+    hot = State(ThisWorkbook)
+    Set copied = Workbooks.Open("C:\work\loaded-row-copy.xlsx", 0, True)
+    cold = State(copied)
+    Probe = Array(before, after, hot, cold)
+End Function
+Public Function State(ByVal b As Object) As Variant
+    Set ws = b.Worksheets(1)
+    State = Array(ws.StandardHeight, ws.Rows(1).RowHeight, ws.Rows(100).RowHeight, ws.Cells(100,100).Font.Name, ws.Cells(100,100).Font.Size, b.Styles("Normal").Font.Size, b.Saved)
+End Function"####;
+        const STYLES:&str=r####"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><name val="{face}"/><sz val="{size}"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"####;
+        let expected:serde_json::Value=serde_json::from_str(r####"[[[[18.75,15.0,18.75,"Calibri",11.0,11.0,true],[18.75,15.0,18.75,"Calibri",11.0,11.0,true],[18.75,15.0,18.75,"Calibri",11.0,11.0,true],[15.0,15.0,15.0,"Calibri",11.0,11.0,true]],[[18.75,15.0,18.75,"Calibri",11.0,11.0,true],[15.0,15.0,15.0,"Calibri",11.0,11.0,false],[15.0,15.0,15.0,"Calibri",11.0,11.0,false],[15.0,15.0,15.0,"Calibri",11.0,11.0,true]],[[18.75,15.0,18.75,"Calibri",11.0,11.0,true],[21.0,21.0,21.0,"Calibri",16.0,16.0,false],[21.0,21.0,21.0,"Calibri",16.0,16.0,false],[21.0,21.0,21.0,"Calibri",16.0,16.0,true]],[[18.75,15.0,18.75,"Calibri",11.0,11.0,true],[18.75,15.0,18.75,"Calibri",11.0,11.0,false],[18.75,15.0,18.75,"Calibri",11.0,11.0,false],[15.0,15.0,15.0,"Calibri",11.0,11.0,true]],[[18.75,15.0,18.75,"Calibri",11.0,11.0,true],[18.75,15.0,15.0,"Calibri",11.0,11.0,false],[18.75,15.0,15.0,"Calibri",11.0,11.0,false],[15.0,15.0,15.0,"Calibri",11.0,11.0,true]],[[18.75,15.0,18.75,"Calibri",11.0,11.0,true],[15.0,15.0,15.0,"Calibri",11.0,11.0,false],[15.0,15.0,15.0,"Calibri",11.0,11.0,false],[15.0,15.0,15.0,"Calibri",11.0,11.0,true]]],[[[18.75,12.75,18.75,"Arial",10.0,10.0,true],[18.75,12.75,18.75,"Arial",10.0,10.0,true],[18.75,12.75,18.75,"Arial",10.0,10.0,true],[12.75,12.75,12.75,"Arial",10.0,10.0,true]],[[18.75,12.75,18.75,"Arial",10.0,10.0,true],[12.75,12.75,12.75,"Arial",10.0,10.0,false],[12.75,12.75,12.75,"Arial",10.0,10.0,false],[12.75,12.75,12.75,"Arial",10.0,10.0,true]],[[18.75,12.75,18.75,"Arial",10.0,10.0,true],[20.25,20.25,20.25,"Arial",16.0,16.0,false],[20.25,20.25,20.25,"Arial",16.0,16.0,false],[20.25,20.25,20.25,"Arial",16.0,16.0,true]],[[18.75,12.75,18.75,"Arial",10.0,10.0,true],[18.75,12.75,18.75,"Arial",10.0,10.0,false],[18.75,12.75,18.75,"Arial",10.0,10.0,false],[12.75,12.75,12.75,"Arial",10.0,10.0,true]],[[18.75,12.75,18.75,"Arial",10.0,10.0,true],[18.75,12.75,12.75,"Arial",10.0,10.0,false],[18.75,12.75,12.75,"Arial",10.0,10.0,false],[12.75,12.75,12.75,"Arial",10.0,10.0,true]],[[18.75,12.75,18.75,"Arial",10.0,10.0,true],[12.75,12.75,12.75,"Arial",10.0,10.0,false],[12.75,12.75,12.75,"Arial",10.0,10.0,false],[12.75,12.75,12.75,"Arial",10.0,10.0,true]]],[[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true]]],[[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,false],[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true]]]]"####).unwrap();
+        let fresh_expected:serde_json::Value=serde_json::from_str(r####"[[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,true]],[[18.75,18.75,18.75,"\u6e38\u30b4\u30b7\u30c3\u30af",11.0,11.0,true],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,false],[25.5,25.5,25.5,"\u6e38\u30b4\u30b7\u30c3\u30af",16.0,16.0,true]]]"####).unwrap();
+        let original=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let base:std::collections::BTreeMap<String,Vec<u8>>={
+            let mut archive=zip::ZipArchive::new(std::io::Cursor::new(original)).unwrap();
+            (0..archive.len()).map(|i|{let mut f=archive.by_index(i).unwrap();let name=f.name().to_owned();let mut data=Vec::new();f.read_to_end(&mut data).unwrap();(name,data)}).collect()
+        };
+        assert!(!base.contains_key("xl/styles.xml"));
+        let state_values=|value:serde_json::Value|->serde_json::Value {
+            value["value"]["values"].as_array().unwrap().iter().map(|state|
+                state["value"]["values"].as_array().unwrap().iter().map(|v|v["value"].clone()).collect::<Vec<_>>()
+            ).collect::<Vec<_>>().into()
+        };
+        let run=|bytes:&[u8],source:&str,mode:usize| {
+            let workbook=oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+            let mut context=failure_context();
+            context.application_state=Some(VbaApplicationState {standard_font_startup:Some(VbaStandardFontStartup {
+                profile_utf16:Some(vec![28216,12468,12471,12483,12463,44,49,49])}),..Default::default()});
+            context.file_context=Some(file_io::FileContext {
+                package_bytes:Some(bytes.to_vec()),full_name:Some(r"C:\work\original.xlsx".into()),
+                read_only:Some(true),folders:vec![r"C:\work".into()],..Default::default()
+            });
+            let result=execute_workbook_action_in_session(workbook,source,Some("Probe"),vec![Value::Long(mode as i32)],0,context,&mut None).unwrap();
+            assert!(result.error.is_none(),"mode {mode}: {:?}",result.error);
+            state_values(serde_json::to_value(result.result).unwrap())
+        };
+        for kind in 0..4 {
+            let mut parts=base.clone();
+            if kind<2 {
+                let (face,size)=if kind==0 {("Calibri","11")}else{("Arial","10")};
+                parts.insert("xl/styles.xml".into(),STYLES.replace("{face}",face).replace("{size}",size).into_bytes());
+                for (name,close,extra)in [
+                    ("xl/_rels/workbook.xml.rels","</Relationships>",r#"<Relationship Id="probeStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#),
+                    ("[Content_Types].xml","</Types>",r#"<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>"#),
+                ] {
+                    let text=String::from_utf8(parts[name].clone()).unwrap();assert!(text.contains(close));
+                    parts.insert(name.into(),text.replace(close,&format!("{extra}{close}")).into_bytes());
+                }
+            } else if kind==3 {
+                let name="xl/worksheets/sheet1.xml";let text=String::from_utf8(parts[name].clone()).unwrap();assert!(text.contains("<sheetData>"));
+                parts.insert(name.into(),text.replace("<sheetData>",r#"<sheetFormatPr defaultRowHeight="15" defaultColWidth="10"/><sheetData>"#).into_bytes());
+            }
+            let mut writer=zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            for (name,data)in parts {writer.start_file(name,zip::write::SimpleFileOptions::default()).unwrap();writer.write_all(&data).unwrap();}
+            let bytes=writer.finish().unwrap().into_inner();
+            for mode in 0..6 {assert_eq!(run(&bytes,SOURCE,mode),expected[kind][mode],"loaded kind {kind}, operation {mode}");}
+        }
+        let fresh=SOURCE.replace("ThisWorkbook","b").replace(
+            "    b.Saved = True",
+            r#"    Set b = Workbooks.Add
+                If mode = 1 Then b.Worksheets(1).Cells(1,1).Value2 = "first"
+                If mode = 2 Then
+                    b.Worksheets(1).Cells(1,1).Value2 = "first"
+                    b.Worksheets(1).Cells.Clear
+                End If
+                If mode = 3 Then b.Worksheets(1).Cells(1,1).Font.Size = b.Styles("Normal").Font.Size
+                b.Saved = True"#);
+        // Every fresh history changes Normal to 16 after its setup, rather
+        // than choosing the unrelated loaded-book operation for that mode.
+        let start=fresh.find("    Select Case mode").unwrap();let end=fresh[start..].find("    End Select").unwrap()+start+"    End Select".len();
+        let fresh=format!("{}    b.Styles(\"Normal\").Font.Size = 16{}",&fresh[..start],&fresh[end..]);
+        for mode in 0..4 {assert_eq!(run(original,&fresh,mode),fresh_expected[mode],"fresh history {mode}");}
     }
 
     #[test]

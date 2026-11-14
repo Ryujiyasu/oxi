@@ -786,6 +786,15 @@ impl WorkbookFiles {
         Self::replace_package_parts(&blank,replacements,&BTreeSet::new())
     }
 
+    pub(super) fn unstated_row_default_sheets(package:&[u8])->Result<Vec<usize>,String> {
+        Self::selection_parts(package)?.into_iter().filter_map(|(index,_,xml)|
+            match Self::xml_elements(&xml,b"sheetFormatPr",1) {
+                Ok(elements) if elements.is_empty()=>Some(Ok(index)),
+                Ok(_)=>None,
+                Err(error)=>Some(Err(error)),
+            }).collect()
+    }
+
     pub(super) fn copy_sheet_paths(package:&[u8])->Result<Vec<String>,String> {
         Self::selection_parts(package).map(|parts|parts.into_iter().map(|(_,path,_)|path).collect())
     }
