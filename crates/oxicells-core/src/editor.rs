@@ -1937,7 +1937,10 @@ impl XlsxEditor {
         if !distinct.is_empty() || self.indexed_colors.is_some() || !conditional_styles.is_empty() || !self.named_style_fonts.is_empty() || self.named_style_plan.is_some() {
             let mut xml = String::new();
             if create_styles_part {
-                xml = default_styles_xml();
+                let normal = self.named_style_plan.as_deref()
+                    .and_then(|styles| styles.iter().find(|style| style.builtin_id == Some(0)))
+                    .map(|style| &style.style);
+                xml = initial_styles_xml(normal)?;
             } else {
                 archive
                     .by_name("xl/styles.xml")
@@ -9911,6 +9914,30 @@ fn patch_styles_xml_with_font_references(
     patched = append_named_style_resources(&patched, "borders", &borders, false)?;
     patched = append_named_style_resources(&patched, "cellXfs", &xfs, false)?;
     Ok((patched, indices))
+}
+
+fn initial_styles_xml(normal: Option<&CellStyle>) -> Result<String, XlsxError> {
+    let mut xml = default_styles_xml();
+    let Some(normal) = normal else { return Ok(xml) };
+    // A new Normal owns physical font0 on the very first save. Retain the
+    // seed's unspecified font fields when the requested style is partial.
+    let mut font = normal.clone();
+    let explicit_face = font.font_name.is_some() || font.font_reference.as_ref()
+        .is_some_and(|reference| reference.latin_name.is_some() || reference.latin_name_utf16.is_some());
+    font.font_name.get_or_insert_with(|| "Calibri".into());
+    font.font_size.get_or_insert(11.0);
+    font.font_family.get_or_insert(2);
+    let face = font.font_name.clone();
+    let reference = font.font_reference.get_or_insert_with(Default::default);
+    if reference.latin_name.is_none() && reference.latin_name_utf16.is_none() { reference.latin_name = face; }
+    if !explicit_face && reference.scheme.is_none() { reference.scheme = Some("minor".into()); }
+    if normal.font_color.is_none() && reference.color_reference().is_none() { reference.theme = Some(1); }
+    let nodes = style_xml_nodes(&xml)?;
+    let physical = nodes.iter().find(|node| node.standard && node.name == "font"
+        && node.parent.is_some_and(|parent| nodes[parent].standard && nodes[parent].name == "fonts"))
+        .ok_or_else(|| XlsxError::InvalidData("new style seed has no Normal font".into()))?;
+    xml.replace_range(physical.start..physical.end, &font_xml(&font));
+    Ok(xml)
 }
 
 fn default_styles_xml() -> String {
@@ -21826,6 +21853,45 @@ xmlns:f="urn:oxi:foreign-style-probe" xmlns:mc="http://schemas.openxmlformats.or
         assert_eq!(restored.sheets[1].default_row_height,18.75);
         assert!(!restored.sheets[0].default_row_custom);
         assert!(!restored.sheets[1].default_row_custom);
+    }
+
+    #[test]
+    fn new_style_part_keeps_requested_normal_font_on_first_save() {
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut untouched = XlsxEditor::new(original).unwrap();
+        untouched.apply_workbook(&untouched.workbook().clone()).unwrap();
+        assert_eq!(untouched.save().unwrap(), original);
+        for (face, size, expected_face, expected_size, expected_scheme) in [
+            (Some("Arial"), Some(10.0), "Arial", 10.0, None),
+            (Some("Arial"), None, "Arial", 11.0, None),
+            (None, Some(17.0), "Calibri", 17.0, Some("minor")),
+        ] {
+            let mut editor = XlsxEditor::new(original).unwrap();
+            let mut edited = editor.workbook().clone();
+            let normal = CellStyle {font_name:face.map(str::to_owned),font_size:size,..Default::default()};
+            edited.default_style = normal.clone();
+            edited.named_styles = vec![crate::ir::NamedCellStyle {
+                name:"Normal".into(),builtin_id:Some(0),source_id:0,number_format_id:0,style:normal,
+            }];
+            editor.apply_workbook(&edited).unwrap();
+            let saved = editor.save().unwrap();
+            let restored = parse_xlsx(&saved).unwrap();
+            assert_eq!(restored.default_style.latin_font_name(), Some(expected_face));
+            assert_eq!(restored.default_style.font_size, Some(expected_size));
+            assert_eq!(restored.default_style.font_reference.as_ref().and_then(|r|r.scheme.as_deref()),expected_scheme);
+            let mut archive = ZipArchive::new(Cursor::new(&saved)).unwrap();
+            let mut xml = String::new();
+            archive.by_name("xl/styles.xml").unwrap().read_to_string(&mut xml).unwrap();
+            let nodes = style_xml_nodes(&xml).unwrap();
+            let section = nodes.iter().position(|n|n.standard && n.name=="fonts").unwrap();
+            let font = nodes.iter().find(|n|n.standard && n.name=="font" && n.parent==Some(section)).unwrap();
+            let raw = &xml[font.start..font.end];
+            assert!(raw.contains(&format!("name val=\"{expected_face}\"")));
+            assert_eq!(raw.contains("<scheme"), expected_scheme.is_some());
+            let mut again = XlsxEditor::new(&saved).unwrap();
+            again.apply_workbook(&again.workbook().clone()).unwrap();
+            assert_eq!(again.save().unwrap(), saved);
+        }
     }
 
     #[test]
