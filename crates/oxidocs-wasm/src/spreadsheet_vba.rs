@@ -143590,6 +143590,70 @@ End Function"#;
     }
 
     #[test]
+    fn grouping_fractional_rotated_shapes_matches_native_frames() {
+        let base = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut failures = Vec::new();
+        // Native Excel observations, including odd positive/negative EMU spans.
+        for (angle, width, height, added_top, expected) in [
+            (0, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (44, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (45, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (46, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (89, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (90, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (134, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (135, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (136, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (179, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (224, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (225, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (269, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (314, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (315, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (316, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (0, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (44, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (45, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (46, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (89, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (90, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (134, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (135, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (136, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (179, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (224, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (225, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (269, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (314, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (315, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (316, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+        ] {
+            let book = oxicells_core::parse_xlsx(base).unwrap();
+            let source = format!(r#"Public Function GroupRotated() As Variant
+                Set a = ActiveSheet.Shapes.AddShape(1, 20.12345, 30.23456, {width}, {height})
+                a.Name = "Rotated"
+                a.Rotation = {angle}
+                Set b = ActiveSheet.Shapes.AddShape(1, 120, {added_top}, 15, 10)
+                b.Name = "Added"
+                Set g = ActiveSheet.Shapes.Range(Array("Rotated", "Added")).Group
+                GroupRotated = Array(g.Left, g.Top, g.Width, g.Height, g.Rotation)
+            End Function"#);
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(
+                book, &source, Some("GroupRotated"), vec![], 0, failure_context(), &mut session,
+            ).unwrap();
+            assert!(outcome.error.is_none(), "angle={angle}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+            let raw = serde_json::to_value(&outcome.result).unwrap();
+            let actual = raw["value"]["values"].as_array().unwrap().iter()
+                .map(|value| (value["value"].as_f64().unwrap() as f32).to_bits()).collect::<Vec<_>>();
+            if actual != expected {
+                failures.push(format!("angle={angle}, width={width}, height={height}: actual={actual:x?}, expected={expected:x?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
     fn grouping_rotated_shapes_matches_native_quarter_turn_frames() {
         let base = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
         // Fixed observations from grouping two rectangles in native Excel.

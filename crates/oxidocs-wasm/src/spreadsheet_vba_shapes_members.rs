@@ -916,8 +916,13 @@ impl<'a> WorkbookHost<'a> {
                 (shape.left, shape.top, shape.width, shape.height);
             let quarter = ((shape.rotation.rem_euclid(360.0) + 45.0) / 90.0).floor() as i64 % 4;
             if quarter % 2 != 0 {
-                child_left += (child_width - child_height) / 2.0;
-                child_top += (child_height - child_width) / 2.0;
+                // Drawing positions use integral EMUs. Excel truncates the
+                // half-difference before translating either axis.
+                let width_emu = (child_width * 12_700.0).round() as i64;
+                let height_emu = (child_height * 12_700.0).round() as i64;
+                let shift = ((width_emu - height_emu) / 2) as f64 / 12_700.0;
+                child_left += shift;
+                child_top -= shift;
                 std::mem::swap(&mut child_width, &mut child_height);
             }
             bounds = Some(match bounds {
