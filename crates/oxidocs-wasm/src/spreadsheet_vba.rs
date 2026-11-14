@@ -144154,8 +144154,8 @@ End Function"####;
                 package_bytes:Some(bytes.to_vec()),full_name:Some(r"C:\work\original.xlsx".into()),
                 read_only:Some(true),folders:vec![r"C:\work".into()],..Default::default()
             });
-            let result=execute_workbook_action_in_session(workbook,source,Some("Probe"),vec![Value::Long(mode as i32)],0,context,&mut None).unwrap();
-            assert!(result.error.is_none(),"mode {mode}: {:?}",result.error);
+            let result=execute_workbook_action_in_session(workbook,source,Some("Probe"),vec![Value::Integer(mode as i64)],0,context,&mut None).unwrap();
+            assert!(result.error.is_none(),"mode {mode}: {}",serde_json::to_value(&result.error).unwrap());
             state_values(serde_json::to_value(result.result).unwrap())
         };
         for kind in 0..4 {
