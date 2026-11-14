@@ -2626,18 +2626,17 @@ function applyVbaExecution(execution, before) {
     }
     updateVbaReferenceButton();
     const changed = execution.workbook_changed !== false;
-    const previousSheet = currentXlsxSheetIndex;
     if (changed) {
         recordVbaWorkbookChanges(before, execution.workbook);
-        currentDocIR = execution.workbook;
         xlsxWorkbookChanged = true;
     }
-    currentDocIR.calculation = execution.workbook.calculation;
+    // Loaded defaults and calculated values can be refreshed without a document edit.
+    currentDocIR = execution.workbook;
     if (Number.isInteger(execution.active_sheet)
         && execution.active_sheet >= 0 && execution.active_sheet < currentDocIR.sheets.length) {
         currentXlsxSheetIndex = execution.active_sheet;
     }
-    if (changed || previousSheet !== currentXlsxSheetIndex) renderEditableXlsx(currentDocIR);
+    renderEditableXlsx(currentDocIR);
 }
 
 function xlsxRuntimeOptions() {
