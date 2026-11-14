@@ -1515,8 +1515,9 @@ fn reconcile_imported_styles_xml(xml: &str, normalize_normal_font: bool) -> Resu
     // components remain those of its named-style definition.
     if let (Some(normal), Some(default)) = (parents.first_mut(), cell_xfs.children.first()) {
         let font_id = default.attributes.get("fontId").map(String::as_str).unwrap_or("0");
+        let font_changed = normal.id("fontId") != default.id("fontId");
         normal.attributes.insert("fontId".into(), font_id.to_string());
-        if let (true, Event::Start(tag) | Event::Empty(tag)) = (normalize_normal_font, &events[normal.start]) {
+        if let (true, Event::Start(tag) | Event::Empty(tag)) = (normalize_normal_font && font_changed, &events[normal.start]) {
             let mut updated = tag.clone();
             updated.clear_attributes();
             for attribute in tag.attributes() {
@@ -1562,6 +1563,11 @@ fn reconcile_imported_styles_xml(xml: &str, normalize_normal_font: bool) -> Resu
             component(xf, "alignment") != component(parent, "alignment"),
             component(xf, "protection") != component(parent, "protection"),
         ];
+        let flags_changed = FLAGS.iter().zip(differs).any(|(flag, differs)| {
+            !matches!((xf.attributes.get(*flag).map(String::as_str), differs),
+                (Some("1"), true) | (None, false))
+        });
+        if !flags_changed { continue; }
         let (Event::Start(tag) | Event::Empty(tag)) = &events[xf.start] else { continue; };
         let mut updated = tag.clone();
         updated.clear_attributes();
@@ -1578,6 +1584,7 @@ fn reconcile_imported_styles_xml(xml: &str, normalize_normal_font: bool) -> Resu
             Event::Empty(updated)
         } else { Event::Start(updated) });
     }
+    if replacements.is_empty() { return Ok(xml.to_string()); }
     let mut writer = Writer::new(Vec::new());
     for (index, event) in events.into_iter().enumerate() {
         writer.write_event(replacements.remove(&index).unwrap_or(event))
@@ -11386,5 +11393,31 @@ mod utf8_bom_table_fragment_tests {
         let bom=super::table_filter_xml_with_namespaces(&format!("\u{feff}{xml}"),&namespaces).unwrap();
         assert_eq!(bom,format!("\u{feff}{plain}"));
         assert!(bom.contains("ref=\"A1:B2\"")||bom.contains("ref='A1:B2'"));
+    }
+}
+
+#[cfg(test)]
+mod imported_style_idempotence_tests {
+    use super::*;
+
+    #[test]
+    fn already_reconciled_styles_keep_attribute_order_quotes_and_whitespace() {
+        let xml = r#"<?xml version="1.0"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+ <fonts count='1'><font><name val='Calibri'/><sz val='11'/></font></fonts>
+ <cellStyleXfs count='1'><xf numFmtId='0' fontId='0' fillId='0' borderId='0'/></cellStyleXfs>
+ <cellXfs count='1'><xf numFmtId='0' fontId='0' fillId='0' borderId='0' xfId='0'/></cellXfs>
+</styleSheet>"#;
+        assert_eq!(import_styles_xml(xml).unwrap(), xml);
+        assert_eq!(reconcile_imported_styles_xml(xml, false).unwrap(), xml);
+    }
+
+    #[test]
+    fn changed_normal_font_is_reconciled_once_and_then_stays_byte_identical() {
+        let xml = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><name val="Arial"/></font><font><name val="Calibri"/></font></fonts><cellStyleXfs><xf fontId="0" fillId="0" borderId="0" numFmtId="0"/></cellStyleXfs><cellXfs><xf fontId="1" fillId="0" borderId="0" numFmtId="0" xfId="0"/></cellXfs></styleSheet>"#;
+        let imported = import_styles_xml(xml).unwrap();
+        assert_ne!(imported, xml);
+        assert!(imported.contains(r#"numFmtId="0" fontId="1""#));
+        assert_eq!(import_styles_xml(&imported).unwrap(), imported);
     }
 }

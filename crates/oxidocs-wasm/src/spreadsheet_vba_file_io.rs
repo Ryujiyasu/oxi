@@ -567,6 +567,43 @@ enum CopyFailure {
 }
 
 impl WorkbookFiles {
+    /// Recompression alone must not replace an unchanged copy's raw archive.
+    /// Compare every named part byte-for-byte with bounded buffers, including
+    /// unsupported parts. CRCs alone cannot establish document identity.
+    fn same_package_contents(before: &[u8], after: &[u8]) -> Result<bool, String> {
+        use std::io::Read;
+        if before == after { return Ok(true); }
+        let mut before = zip::ZipArchive::new(std::io::Cursor::new(before)).map_err(|error| error.to_string())?;
+        let mut after = zip::ZipArchive::new(std::io::Cursor::new(after)).map_err(|error| error.to_string())?;
+        if before.len() != after.len() { return Ok(false); }
+        let mut names = BTreeSet::new();
+        let mut left_buffer = [0u8; 32 * 1024];
+        let mut right_buffer = [0u8; 32 * 1024];
+        for index in 0..before.len() {
+            let mut left = before.by_index(index).map_err(|error| error.to_string())?;
+            if !names.insert(left.name().to_owned()) { return Ok(false); }
+            let mut right = match after.by_name(left.name()) {
+                Ok(part) => part,
+                Err(zip::result::ZipError::FileNotFound) => return Ok(false),
+                Err(error) => return Err(error.to_string()),
+            };
+            if left.size() != right.size() || left.is_dir() != right.is_dir() { return Ok(false); }
+            let mut remaining = left.size();
+            while remaining > 0 {
+                let count = remaining.min(left_buffer.len() as u64) as usize;
+                left.read_exact(&mut left_buffer[..count]).map_err(|error| error.to_string())?;
+                right.read_exact(&mut right_buffer[..count]).map_err(|error| error.to_string())?;
+                if left_buffer[..count] != right_buffer[..count] { return Ok(false); }
+                remaining -= count as u64;
+            }
+            if left.read(&mut left_buffer[..1]).map_err(|error| error.to_string())? != 0
+                || right.read(&mut right_buffer[..1]).map_err(|error| error.to_string())? != 0 {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
 
     /// Move the shared namespace together with consumed mount identities.
     /// Package bytes, source and filename continue to belong to each book.
@@ -2917,6 +2954,10 @@ impl WorkbookHost<'_> {
         self.sync_band_styles_to_workbook();
         self.sync_legacy_notes_for_save();
         self.sync_links_for_save();
+        let unchanged_implicit = copy_only && !self.wrote
+            && self.file_io.edit_revision.unwrap_or(0) == 0
+            && unchanged_implicit_package(&package, &self.workbook, &self.application_font)
+                .map_err(|_| CopyFailure::Method(self.copy_method_failure()))?;
         let mut editor = oxicells_core::XlsxEditor::new(&package).map_err(|_error| {
             #[cfg(test)]
             if std::env::var_os("OXI_VBA_SAVE_TRACE").is_some() { eprintln!("VBA save line {}: {:?}", line!(), _error); }
@@ -3000,23 +3041,26 @@ impl WorkbookHost<'_> {
                 && record.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some())) { return None; }
             Some(((record.sheet,record.non_visual_id),record.source_drawing_id))
         }).collect();
-        editor.apply_workbook_with_drawing_id_sources(export_workbook.as_ref(), &drawing_sources)
-            .map_err(|_error| {
-            #[cfg(test)]
-            if std::env::var_os("OXI_VBA_SAVE_TRACE").is_some() { eprintln!("VBA save line {}: {:?}", line!(), _error); }
-            CopyFailure::Method(self.copy_method_failure())
-        })?;
-        for (index, sheet) in self.workbook.sheets.iter().enumerate() {
-            if !sheet.default_row_custom {
-                editor.set_edited_default_row_height(index,self.effective_default_row_height(index),false);
+        resolve_implicit_cell_styles(export_workbook.to_mut());
+        if !unchanged_implicit {
+            editor.apply_workbook_with_drawing_id_sources(export_workbook.as_ref(), &drawing_sources)
+                .map_err(|_error| {
+                #[cfg(test)]
+                if std::env::var_os("OXI_VBA_SAVE_TRACE").is_some() { eprintln!("VBA save line {}: {:?}", line!(), _error); }
+                CopyFailure::Method(self.copy_method_failure())
+            })?;
+            for (index, sheet) in self.workbook.sheets.iter().enumerate() {
+                if !sheet.default_row_custom {
+                    editor.set_edited_default_row_height(index,self.effective_default_row_height(index),false);
+                }
             }
-        }
-        let digit = self.digit_width();
-        for (index, sheet) in self.workbook.sheets.iter().enumerate() {
-            let width = if sheet.has_default_column_width() { sheet.default_col_width } else {
-                (oxicells_calc::column_width::default_column_pixels(f64::from(digit)) / f64::from(digit)) as f32
-            };
-            editor.set_edited_column_style_default_width(index, width);
+            let digit = self.digit_width();
+            for (index, sheet) in self.workbook.sheets.iter().enumerate() {
+                let width = if sheet.has_default_column_width() { sheet.default_col_width } else {
+                    (oxicells_calc::column_width::default_column_pixels(f64::from(digit)) / f64::from(digit)) as f32
+                };
+                editor.set_edited_column_style_default_width(index, width);
+            }
         }
         let mut bytes = editor.save().map_err(|_error| {
             #[cfg(test)]
@@ -3166,6 +3210,13 @@ impl WorkbookHost<'_> {
         }
         bytes = self.package_with_cell_selections(&bytes).map_err(|_|failure())?;
         bytes = WorkbookFiles::package_without_saved_phonetic_defaults(&bytes).map_err(|_|failure())?;
+        if copy_only {
+            if let Some(original) = self.file_io.package.as_deref() {
+                if WorkbookFiles::same_package_contents(original, &bytes).map_err(|_| failure())? {
+                    bytes = original.to_vec();
+                }
+            }
+        }
         // Save/SaveAs back up the previous destination, not the new bytes.
         // SaveCopyAs preserves the preference but does not create a backup.
         let backup_file = if backup && !copy_only {
@@ -3507,4 +3558,35 @@ pub(super) fn saved_window_state_for_test(package: &[u8]) -> serde_json::Value {
         .collect::<Vec<_>>();
     serde_json::json!({"active_tabs": active_tabs, "active_sheet_names": active_sheet_names,
         "selected_sheet_names": selected_sheet_names})
+}
+
+#[cfg(test)]
+mod saved_package_identity_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn package(entries: &[(&str, &[u8])], compression: zip::CompressionMethod) -> Vec<u8> {
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, bytes) in entries {
+            archive.start_file(*name, zip::write::SimpleFileOptions::default().compression_method(compression)).unwrap();
+            archive.write_all(bytes).unwrap();
+        }
+        archive.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn unchanged_parts_keep_identity_across_recompression_but_real_edits_do_not() {
+        let large = vec![42u8; 70_001];
+        let before = package(&[("xl/workbook.xml", b"<workbook/>"), ("opaque/data.bin", &large)], zip::CompressionMethod::Stored);
+        let reordered = package(&[("opaque/data.bin", &large), ("xl/workbook.xml", b"<workbook/>")], zip::CompressionMethod::Deflated);
+        assert_ne!(before, reordered);
+        assert!(WorkbookFiles::same_package_contents(&before, &reordered).unwrap());
+        let changed = package(&[("xl/workbook.xml", b"<workbook />"), ("opaque/data.bin", &large)], zip::CompressionMethod::Deflated);
+        assert!(!WorkbookFiles::same_package_contents(&before, &changed).unwrap());
+        let mut changed_opaque = large.clone();changed_opaque[65_536] = 43;
+        let changed = package(&[("xl/workbook.xml", b"<workbook/>"), ("opaque/data.bin", &changed_opaque)], zip::CompressionMethod::Deflated);
+        assert!(!WorkbookFiles::same_package_contents(&before, &changed).unwrap());
+        let removed = package(&[("xl/workbook.xml", b"<workbook/>")], zip::CompressionMethod::Stored);
+        assert!(!WorkbookFiles::same_package_contents(&before, &removed).unwrap());
+    }
 }
