@@ -54,6 +54,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Sheet package namespaces through rename and Add
+        run: >-
+          cargo test -p oxicells-core --lib --locked
+          --config profile.test.package.oxivba-core.opt-level=1 sheet_package_
       - name: Initial Normal font in a new style part
         run: >-
           cargo test -p oxicells-core --lib --locked -- --exact

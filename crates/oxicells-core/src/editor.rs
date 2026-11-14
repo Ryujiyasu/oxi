@@ -9276,6 +9276,7 @@ struct StyleXmlNode {
     name: String,
     qualified: String,
     standard: bool,
+    unbound: bool,
     start: usize,
     head_end: usize,
     close_start: usize,
@@ -9284,6 +9285,10 @@ struct StyleXmlNode {
 }
 
 fn style_xml_nodes(xml: &str) -> Result<Vec<StyleXmlNode>, XlsxError> {
+    xml_nodes_in_namespace(xml, "http://schemas.openxmlformats.org/spreadsheetml/2006/main")
+}
+
+fn xml_nodes_in_namespace(xml: &str, expected_namespace: &str) -> Result<Vec<StyleXmlNode>, XlsxError> {
     use quick_xml::name::ResolveResult;
     let mut reader = quick_xml::reader::NsReader::from_str(xml);
     let mut nodes: Vec<StyleXmlNode> = Vec::new();
@@ -9291,8 +9296,9 @@ fn style_xml_nodes(xml: &str) -> Result<Vec<StyleXmlNode>, XlsxError> {
     loop {
         let start = oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position());
         let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let unbound = matches!(&namespace, ResolveResult::Unbound);
         let standard = matches!(namespace, ResolveResult::Bound(namespace)
-            if namespace.as_ref() == b"http://schemas.openxmlformats.org/spreadsheetml/2006/main");
+            if namespace.as_ref() == expected_namespace.as_bytes());
         let end = oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position());
         match event {
             Event::Start(tag) | Event::Empty(tag) => {
@@ -9302,7 +9308,7 @@ fn style_xml_nodes(xml: &str) -> Result<Vec<StyleXmlNode>, XlsxError> {
                     parent: stack.last().copied(),
                     name: local_name(tag.name().as_ref()).to_string(),
                     qualified: String::from_utf8_lossy(tag.name().as_ref()).into_owned(),
-                    standard, start, head_end: end, close_start: end, end, empty,
+                    standard, unbound, start, head_end: end, close_start: end, end, empty,
                 });
                 if !empty { stack.push(index); }
             }
@@ -13995,23 +14001,23 @@ fn patch_data_validations_xml(xml: &str, before: &[DataValidation], after: &[Dat
 }
 
 fn append_content_type(xml: &str, part: &str, kind: &str) -> Result<String, XlsxError> {
-    if xml.contains(&format!("PartName=\"/{}\"", part)) { return Ok(xml.to_string()); }
-    let at = xml.rfind("</Types>")
-        .ok_or_else(|| XlsxError::InvalidData("content types part has no closing element".into()))?;
-    let mut output = xml.to_string();
-    output.insert_str(at, &format!("<Override PartName=\"/{}\" ContentType=\"{}\"/>", escape(part), escape(kind)));
-    Ok(output)
+    const NAMESPACE: &str = "http://schemas.openxmlformats.org/package/2006/content-types";
+    let nodes = package_xml_nodes(xml, "Types", NAMESPACE)?;
+    for node in nodes.iter().filter(|node| package_xml_child(&nodes, node, "Override")) {
+        if named_node_attributes(xml, node)?.get("PartName").is_some_and(|held| held.trim_start_matches('/') == part) { return Ok(xml.to_owned()); }
+    }
+    let added = format!("<Override xmlns=\"{NAMESPACE}\" PartName=\"/{}\" ContentType=\"{}\"/>", escape(part), escape(kind));
+    replace_package_xml_records(xml, &nodes, Vec::new(), &added)
 }
 
 fn append_default_content_type(xml: &str, extension: &str, kind: &str) -> Result<String, XlsxError> {
-    if xml.to_ascii_lowercase().contains(&format!("extension=\"{}\"", extension.to_ascii_lowercase())) {
-        return Ok(xml.to_string());
+    const NAMESPACE: &str = "http://schemas.openxmlformats.org/package/2006/content-types";
+    let nodes = package_xml_nodes(xml, "Types", NAMESPACE)?;
+    for node in nodes.iter().filter(|node| package_xml_child(&nodes, node, "Default")) {
+        if named_node_attributes(xml, node)?.get("Extension").is_some_and(|held| held.eq_ignore_ascii_case(extension)) { return Ok(xml.to_owned()); }
     }
-    let at = xml.rfind("</Types>")
-        .ok_or_else(|| XlsxError::InvalidData("content types part has no closing element".into()))?;
-    let mut output = xml.to_string();
-    output.insert_str(at, &format!("<Default Extension=\"{}\" ContentType=\"{}\"/>", escape(extension), escape(kind)));
-    Ok(output)
+    let added = format!("<Default xmlns=\"{NAMESPACE}\" Extension=\"{}\" ContentType=\"{}\"/>", escape(extension), escape(kind));
+    replace_package_xml_records(xml, &nodes, Vec::new(), &added)
 }
 
 fn set_legacy_drawing(xml: &str, relationship_id: &str) -> Result<String, XlsxError> {
@@ -15317,44 +15323,62 @@ fn patch_workbook_names(xml: &str, names: &[(String, String)], attributes: &crat
     Ok(format!("{}{}{}", &xml[..start], listed, &xml[end..]))
 }
 
+/// Select actual direct children in a package part's namespace. Keep the
+/// original byte ranges so foreign extensions and untouched records survive.
+fn package_xml_nodes(xml: &str, root: &str, namespace: &str) -> Result<Vec<StyleXmlNode>, XlsxError> {
+    let nodes = xml_nodes_in_namespace(xml, namespace)?;
+    if nodes.first().is_none_or(|node| node.parent.is_some() || node.name != root
+        || !(node.standard || node.unbound))
+        || nodes.iter().filter(|node| node.parent.is_none()).count() != 1 {
+        return Err(XlsxError::InvalidData(format!("XML part has no native {root} root")));
+    }
+    Ok(nodes)
+}
+
+fn package_xml_child(nodes: &[StyleXmlNode], node: &StyleXmlNode, name: &str) -> bool {
+    node.parent == Some(0) && node.name == name
+        && (node.standard || (nodes[0].unbound && node.unbound))
+}
+
+fn replace_package_xml_records(xml: &str, nodes: &[StyleXmlNode], removed: Vec<usize>, added: &str) -> Result<String, XlsxError> {
+    let root = &nodes[0];
+    let mut edits: Vec<_> = removed.into_iter().map(|index| {
+        let node = &nodes[index]; (node.start, node.end, String::new())
+    }).collect();
+    if root.empty {
+        let head = xml[root.start..root.head_end].strip_suffix("/>")
+            .ok_or_else(|| XlsxError::InvalidData("invalid empty package root".into()))?;
+        edits.push((root.start, root.end, format!("{head}>{added}</{}>", root.qualified)));
+    } else if !added.is_empty() {
+        edits.push((root.close_start, root.close_start, added.to_owned()));
+    }
+    apply_style_xml_edits(xml, edits)
+}
+
 /// Rewrites the `<sheets>` list of `xl/workbook.xml`.
 ///
 /// Each sheet is named in order and given a relationship id matching its
 /// position, which is what `patch_workbook_rels` writes on the other side.
-fn patch_workbook_sheets(
-    xml: &str,
-    names: &[(String, Option<&'static str>)],
-) -> Result<String, XlsxError> {
-    let start = xml.find("<sheets").ok_or_else(|| {
-        XlsxError::InvalidData("the workbook does not list its sheets".to_string())
-    })?;
-    let end = xml[start..]
-        .find("</sheets>")
-        .map(|at| start + at + "</sheets>".len())
-        .or_else(|| {
-            // A self-closing <sheets/> holds nothing, but is still the place.
-            xml[start..].find("/>").map(|at| start + at + 2)
-        })
-        .ok_or_else(|| {
-            XlsxError::InvalidData("the workbook's sheet list has no end".to_string())
-        })?;
-
-    let mut listed = String::from("<sheets>");
+fn patch_workbook_sheets(xml: &str, names: &[(String, Option<&'static str>)]) -> Result<String, XlsxError> {
+    const MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    const STRICT: &str = "http://purl.oclc.org/ooxml/spreadsheetml/main";
+    let (nodes, namespace) = match package_xml_nodes(xml, "workbook", MAIN) {
+        Ok(nodes) => (nodes, MAIN),
+        Err(_) => (package_xml_nodes(xml, "workbook", STRICT)?, STRICT),
+    };
+    let sections: Vec<_> = nodes.iter().filter(|node| package_xml_child(&nodes, node, "sheets")).collect();
+    if sections.len() != 1 { return Err(XlsxError::InvalidData("the workbook must list its sheets once".into())); }
+    let relationships = if namespace == STRICT { "http://purl.oclc.org/ooxml/officeDocument/relationships" }
+        else { "http://schemas.openxmlformats.org/officeDocument/2006/relationships" };
+    let mut listed = format!("<sheets xmlns=\"{namespace}\" xmlns:r=\"{relationships}\">");
     for (position, (name, state)) in names.iter().enumerate() {
-        // A hidden sheet says so here and nowhere else, so writing the list
-        // without its state would quietly bring it back into view.
-        let state = state
-            .map(|state| format!(" state=\"{state}\""))
-            .unwrap_or_default();
-        listed.push_str(&format!(
-            "<sheet name=\"{}\"{state} sheetId=\"{}\" r:id=\"rIdSheet{}\"/>",
-            escape(name),
-            position + 1,
-            position + 1
-        ));
+        let state = state.map(|state| format!(" state=\"{state}\"")).unwrap_or_default();
+        listed.push_str(&format!("<sheet name=\"{}\"{state} sheetId=\"{}\" r:id=\"rIdSheet{}\"/>",
+            escape(name), position + 1, position + 1));
     }
     listed.push_str("</sheets>");
-    Ok(format!("{}{}{}", &xml[..start], listed, &xml[end..]))
+    let section = sections[0];
+    apply_style_xml_edits(xml, vec![(section.start, section.end, listed)])
 }
 
 /// The same XML with any element naming the calculation chain taken out.
@@ -15383,98 +15407,46 @@ fn without_calc_chain(xml: &str) -> String {
 /// Rewrites the worksheet relationships of `xl/_rels/workbook.xml.rels`,
 /// leaving every other relationship  Estyles, theme, shared strings  Eas it is.
 fn patch_workbook_rels(xml: &str, targets: &[String]) -> Result<String, XlsxError> {
-    const WORKSHEET: &str =
-        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
-    let original_types:HashMap<String,String>=parse_relationships(xml)?.into_values()
-        .map(|rel|(rel.target.trim_start_matches('/').strip_prefix("xl/").unwrap_or(rel.target.trim_start_matches('/')).to_string(),rel.rel_type)).collect();
-
-    let mut kept = String::new();
-    let mut rest = xml;
-    let end = rest.find("</Relationships>").ok_or_else(|| {
-        XlsxError::InvalidData("the workbook has no relationships".to_string())
-    })?;
-    let tail = &rest[end..];
-    rest = &rest[..end];
-
-    // Keep everything that is not a worksheet, in the order it was written.
-    let head_end = rest.find('>').map(|at| at + 1).unwrap_or(0);
-    let mut head = rest[..head_end].to_string();
-    if !head.contains("<Relationships") {
-        // The declaration came first; find the real opening tag.
-        let at = rest.find("<Relationships").ok_or_else(|| {
-            XlsxError::InvalidData("the workbook has no relationships".to_string())
-        })?;
-        let close = rest[at..].find('>').map(|offset| at + offset + 1).unwrap();
-        head = rest[..close].to_string();
-        rest = &rest[close..];
-    } else {
-        rest = &rest[head_end..];
-    }
-
-    for piece in rest.split_inclusive("/>") {
-        if piece.contains("/worksheet\"") || piece.contains("/chartsheet\"")
-            || piece.contains("/xlMacrosheet\"") || piece.contains("/xlIntlMacrosheet\"") {
-            continue;
+    const NAMESPACE: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+    const OFFICE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let nodes = package_xml_nodes(xml, "Relationships", NAMESPACE)?;
+    let mut original_types = HashMap::new(); let mut removed = Vec::new();
+    for (index, node) in nodes.iter().enumerate().filter(|(_, node)| package_xml_child(&nodes, node, "Relationship")) {
+        let attrs = named_node_attributes(xml, node)?;
+        if let (Some(target), Some(kind)) = (attrs.get("Target"), attrs.get("Type")) {
+            original_types.insert(target.trim_start_matches('/').strip_prefix("xl/").unwrap_or(target.trim_start_matches('/')).to_owned(), kind.clone());
+            if matches!(kind.rsplit('/').next(), Some("worksheet" | "chartsheet" | "xlMacrosheet" | "xlIntlMacrosheet")) { removed.push(index); }
         }
-        kept.push_str(piece);
     }
-
     let mut added = String::new();
     for (position, target) in targets.iter().enumerate() {
-        let relationship_type=original_types.get(target).map(String::as_str).unwrap_or_else(||
-            if target.starts_with("chartsheets/") { "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" } else { WORKSHEET });
-        added.push_str(&format!(
-            "<Relationship Id=\"rIdSheet{}\" Type=\"{}\" Target=\"{}\"/>",
-            position + 1,
-            escape(relationship_type),
-            escape(target)
-        ));
+        let fallback = format!("{OFFICE}/{}", if target.starts_with("chartsheets/") { "chartsheet" } else { "worksheet" });
+        let kind = original_types.get(target).map(String::as_str).unwrap_or(&fallback);
+        added.push_str(&format!("<Relationship xmlns=\"{NAMESPACE}\" Id=\"rIdSheet{}\" Type=\"{}\" Target=\"{}\"/>", position + 1, escape(kind), escape(target)));
     }
-    Ok(format!("{head}{added}{kept}{tail}"))
+    replace_package_xml_records(xml, &nodes, removed, &added)
 }
 
 /// Rewrites the worksheet overrides of `[Content_Types].xml`.
 fn patch_content_types(xml: &str, parts: &[String]) -> Result<String, XlsxError> {
-    const WORKSHEET: &str =
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
-    let mut original_types=HashMap::new();
-    let mut reader=Reader::from_str(xml);
-    loop {
-        match reader.read_event().map_err(XlsxError::Xml)? {
-            Event::Empty(element)|Event::Start(element) if local_name(element.name().as_ref())=="Override"=> {
-                if let (Some(part),Some(kind))=(get_attr(&element,"PartName"),get_attr(&element,"ContentType")) {
-                    original_types.insert(part.trim_start_matches('/').to_string(),kind);
-                }
-            }
-            Event::Eof=>break,
-            _=>{}
+    const NAMESPACE: &str = "http://schemas.openxmlformats.org/package/2006/content-types";
+    const WORKSHEET: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+    const CHARTSHEET: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml";
+    let nodes = package_xml_nodes(xml, "Types", NAMESPACE)?;
+    let mut original_types = HashMap::new(); let mut removed = Vec::new();
+    for (index, node) in nodes.iter().enumerate().filter(|(_, node)| package_xml_child(&nodes, node, "Override")) {
+        let attrs = named_node_attributes(xml, node)?;
+        if let (Some(part), Some(kind)) = (attrs.get("PartName"), attrs.get("ContentType")) {
+            original_types.insert(part.trim_start_matches('/').to_owned(), kind.clone());
+            if matches!(kind.as_str(), WORKSHEET | CHARTSHEET | "application/vnd.ms-excel.macrosheet+xml" | "application/vnd.ms-excel.intlmacrosheet+xml") { removed.push(index); }
         }
     }
-
-    let end = xml.find("</Types>").ok_or_else(|| {
-        XlsxError::InvalidData("the package has no content types".to_string())
-    })?;
-    let (body, tail) = xml.split_at(end);
-
-    let mut kept = String::new();
-    for piece in body.split_inclusive("/>") {
-        if piece.contains("spreadsheetml.worksheet+xml") || piece.contains("spreadsheetml.chartsheet+xml")
-            || piece.contains("vnd.ms-excel.macrosheet+xml") || piece.contains("vnd.ms-excel.intlmacrosheet+xml") {
-            continue;
-        }
-        kept.push_str(piece);
-    }
-
     let mut added = String::new();
     for part in parts {
-        let content_type=original_types.get(part).map(String::as_str).unwrap_or_else(||
-            if part.starts_with("xl/chartsheets/") { "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml" } else { WORKSHEET });
-        added.push_str(&format!(
-            "<Override PartName=\"/{}\" ContentType=\"{}\"/>",
-            escape(part),escape(content_type)
-        ));
+        let kind = original_types.get(part).map(String::as_str).unwrap_or(if part.starts_with("xl/chartsheets/") { CHARTSHEET } else { WORKSHEET });
+        added.push_str(&format!("<Override xmlns=\"{NAMESPACE}\" PartName=\"/{}\" ContentType=\"{}\"/>", escape(part), escape(kind)));
     }
-    Ok(format!("{kept}{added}{tail}"))
+    replace_package_xml_records(xml, &nodes, removed, &added)
 }
 
 /// Writes a worksheet part from scratch, for a sheet the file never held.
@@ -24147,6 +24119,98 @@ mod installed_external_formula_map_tests {
 #[cfg(test)]
 mod serialized_style_component_tests {
     use super::*;
+
+
+    fn direct_package_records(xml: &str) -> Vec<(String, String, BTreeMap<String, String>)> {
+        use quick_xml::{name::ResolveResult, reader::NsReader};
+        let mut reader=NsReader::from_str(xml);let mut depth=0usize;let mut result=Vec::new();
+        loop {
+            let (namespace,event)=reader.read_resolved_event().unwrap();
+            let uri=match namespace {ResolveResult::Bound(uri)=>String::from_utf8(uri.as_ref().to_vec()).unwrap(),ResolveResult::Unbound=>String::new(),_=>panic!("unresolved prefix")};
+            match event {
+                Event::Start(ref tag)|Event::Empty(ref tag)=>{
+                    if depth==1 {
+                        let attrs=tag.attributes().map(|attr|{let attr=attr.unwrap();(String::from_utf8(attr.key.as_ref().to_vec()).unwrap(),attr.unescape_value().unwrap().into_owned())}).collect();
+                        result.push((uri,local_name(tag.name().as_ref()).to_owned(),attrs));
+                    }
+                    if matches!(event,Event::Start(_)){depth+=1;}
+                },
+                Event::End(_)=>depth-=1,
+                Event::Eof=>break,
+                _=>{},
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn sheet_package_metadata_namespaces_preserve_opaque_children() {
+        const CT:&str="http://schemas.openxmlformats.org/package/2006/content-types";
+        const REL:&str="http://schemas.openxmlformats.org/package/2006/relationships";
+        let opaque=r#"<u:Override xmlns:u="urn:future" PartName="/xl/opaque.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"><ct:Override PartName="/xl/nested.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></u:Override>"#;
+        let types=format!(r#"\u{{feff}}<ct:Types xmlns:ct="{CT}" xmlns="urn:future"><!--keep-->{opaque}<ct:Override PartName='/xl/styles.xml' ContentType='style'/><ct:Override PartName='/xl/worksheets/sheet1.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'></ct:Override></ct:Types>"#).replace("\\u{feff}","\u{feff}");
+        let result=patch_content_types(&types,&["xl/worksheets/sheet2.xml".into()]).unwrap();
+        assert!(result.contains(opaque)&&result.contains("<!--keep-->")&&result.contains("<ct:Override PartName='/xl/styles.xml' ContentType='style'/>"));
+        let native:Vec<_>=direct_package_records(&result).into_iter().filter(|x|x.0==CT&&x.1=="Override").collect();
+        assert_eq!(native.len(),2);assert_eq!(native[1].2["PartName"],"/xl/worksheets/sheet2.xml");
+        let foreign=r#"<u:Relationship xmlns:u="urn:future" Id="opaque" Type="urn:future/worksheet" Target="keep.bin"><p:Relationship Id="nested" Type="urn:future/worksheet" Target="also-keep.bin"/></u:Relationship>"#;
+        let rels=format!(r#"<p:Relationships xmlns:p="{REL}" xmlns="urn:future">{foreign}<p:Relationship Id='style' Type='urn:office/styles' Target='styles.xml'/><p:Relationship Id='old' Type='urn:office/worksheet' Target='worksheets/sheet1.xml'></p:Relationship></p:Relationships>"#);
+        let result=patch_workbook_rels(&rels,&["worksheets/sheet1.xml".into()]).unwrap();assert!(result.contains(foreign)&&result.contains("<p:Relationship Id='style' Type='urn:office/styles' Target='styles.xml'/>"));
+        let native:Vec<_>=direct_package_records(&result).into_iter().filter(|x|x.0==REL&&x.1=="Relationship").collect();
+        assert_eq!(native.len(),2);assert_eq!(native[1].2["Type"],"urn:office/worksheet");assert_eq!(native[1].2["Id"],"rIdSheet1");
+        for (main,relationships)in [("http://schemas.openxmlformats.org/spreadsheetml/2006/main","http://schemas.openxmlformats.org/officeDocument/2006/relationships"),("http://purl.oclc.org/ooxml/spreadsheetml/main","http://purl.oclc.org/ooxml/officeDocument/relationships")] {
+            let book=format!(r#"<s:workbook xmlns:s="{main}" xmlns="urn:future"><u:sheets xmlns:u="urn:future"/><s:sheets/><s:extLst/></s:workbook>"#);
+            let result=patch_workbook_sheets(&book,&[("A & B".into(),Some("hidden"))]).unwrap();
+            assert!(result.contains("<u:sheets xmlns:u=\"urn:future\"/>")&&result.contains("<s:extLst/>"));
+            let records=direct_package_records(&result);assert_eq!(records.iter().filter(|x|x.0==main&&x.1=="sheets").count(),1);
+            assert!(result.contains(&format!("xmlns:r=\"{relationships}\""))&&result.contains("name=\"A &amp; B\" state=\"hidden\""));
+        }
+    }
+
+    #[test]
+    fn sheet_package_empty_roots_and_existing_entries_keep_identity() {
+        const NS:&str="http://schemas.openxmlformats.org/package/2006/content-types";
+        for xml in [format!("<ct:Types xmlns:ct=\"{NS}\"/>"),"<Types/>".into(),format!("\u{feff}<Types xmlns=\"{NS}\"></Types>")] {
+            let changed=append_content_type(&xml,"xl/a&b.xml","application/test").unwrap();
+            let changed=append_default_content_type(&changed,"PNG","image/png").unwrap();
+            let records=direct_package_records(&changed);assert_eq!(records.len(),2);assert!(records.iter().all(|x|x.0==NS));assert_eq!(records[0].2["PartName"],"/xl/a&b.xml");
+            assert_eq!(append_content_type(&changed,"xl/a&b.xml","application/test").unwrap(),changed);
+            assert_eq!(append_default_content_type(&changed,"png","image/png").unwrap(),changed);
+        }
+        let xml=format!(r#"<ct:Types xmlns:ct="{NS}"><u:Override xmlns:u="urn:future" PartName="/xl/a.xml"/><u:Default xmlns:u="urn:future" Extension="png"/></ct:Types>"#);
+        let changed=append_content_type(&xml,"xl/a.xml","application/test").unwrap();let changed=append_default_content_type(&changed,"png","image/png").unwrap();
+        assert_eq!(direct_package_records(&changed).iter().filter(|x|x.0==NS).count(),2);
+        assert!(append_content_type("<Types xmlns='urn:wrong'/>","xl/a.xml","application/test").is_err());
+    }
+
+    #[test]
+    fn sheet_package_rename_and_add_roundtrip_prefixed_parts() {
+        use std::io::{Read,Write};
+        let original=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut input=zip::ZipArchive::new(std::io::Cursor::new(original)).unwrap();let mut writer=zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..input.len(){
+            let mut part=input.by_index(i).unwrap();let name=part.name().to_owned();let mut bytes=Vec::new();part.read_to_end(&mut bytes).unwrap();
+            let mut xml=String::from_utf8(bytes.clone()).ok();
+            if let Some(text)=xml.as_mut(){
+                if name=="[Content_Types].xml"{*text=text.replace("<Types ","<ct:Types ").replace("</Types>","</ct:Types>").replace("xmlns=","xmlns:ct=").replace("<Default ","<ct:Default ").replace("<Override ","<ct:Override ");}
+                if name=="xl/_rels/workbook.xml.rels"{*text=text.replace("<Relationships ","<p:Relationships ").replace("</Relationships>","</p:Relationships>").replace("xmlns=","xmlns:p=").replace("<Relationship ","<p:Relationship ");}
+                if name=="xl/workbook.xml"{*text=text.replace("<workbook ","<s:workbook ").replace("</workbook>","</s:workbook>").replace("xmlns=","xmlns:s=").replace("<sheets>","<s:sheets>").replace("</sheets>","</s:sheets>").replace("<sheet ","<s:sheet ");}
+                bytes=text.as_bytes().to_vec();
+            }
+            writer.start_file(name,zip::write::SimpleFileOptions::default()).unwrap();writer.write_all(&bytes).unwrap();
+        }
+        let bytes=writer.finish().unwrap().into_inner();let book=crate::parse_xlsx_preserving_values(&bytes).unwrap();
+        for add in [false,true]{
+            let mut edited=book.clone();edited.sheets[0].name="Renamed & Sheet".into();
+            if add{let mut sheet=book.sheets[0].clone();sheet.origin_id=None;sheet.name="Added".into();sheet.rows.clear();edited.sheets.push(sheet);}
+            let mut editor=XlsxEditor::new(&bytes).unwrap();editor.apply_workbook(&edited).unwrap();let saved=editor.save().unwrap();
+            let reopened=crate::parse_xlsx_preserving_values(&saved).unwrap();assert_eq!(reopened.sheets.len(),if add{2}else{1});assert_eq!(reopened.sheets[0].name,"Renamed & Sheet");
+            assert_eq!(serde_json::to_value(&reopened.sheets[0].rows).unwrap(),serde_json::to_value(&book.sheets[0].rows).unwrap());
+            let mut before=OoxmlArchive::new(&bytes).unwrap();let mut after=OoxmlArchive::new(&saved).unwrap();
+            for name in ["_rels/.rels","xl/sharedStrings.xml"]{assert_eq!(before.read_binary_part(name).unwrap(),after.read_binary_part(name).unwrap());}
+            assert_eq!(XlsxEditor::new(&saved).unwrap().save().unwrap(),saved);
+        }
+    }
 
     #[test]
     fn explicit_default_row_record_distinguishes_initial_fallback() {
