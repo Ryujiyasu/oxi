@@ -1,0 +1,823 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "scope": "Self-authored prefixed-package worksheet structure/Saved conformance cases, actual Excel.Application.Run repeated in two processes and opposite orders.",
+  "startup_profile_utf16": [
+    28216,
+    12468,
+    12471,
+    12483,
+    12463,
+    44,
+    49,
+    49
+  ],
+  "program": "Attribute VB_Name = \"PackageOracle\"\nPublic Function Probe(ByVal mode As Long, ByVal inputPath As String, ByVal outputPath As String) As Variant\n    Set b = Workbooks.Open(inputPath, 0, True)\n    Set s = b.Worksheets(1)\n    Select Case mode\n    Case 1\n        s.Name = \"Original\"\n    Case 2\n        Set other = b.Worksheets.Add(After:=s)\n    Case 3\n        s.Cells.Font.Size = b.Styles(\"Normal\").Font.Size\n    Case 4\n        s.Name = \"Original\"\n        Set other = b.Worksheets.Add(After:=s)\n        s.Cells.Font.Size = b.Styles(\"Normal\").Font.Size\n    Case 5\n        s.Name = s.Name\n    Case 6\n        On Error Resume Next\n        s.Name = \"Invalid/Name\"\n        On Error GoTo 0\n    Case 7\n        oldName = s.Name\n        s.Name = \"Temporary\"\n        s.Name = oldName\n    End Select\n    before = State(b)\n    b.SaveCopyAs outputPath\n    hot = State(b)\n    Set copied = Workbooks.Open(outputPath, 0, True)\n    cold = State(copied)\n    Probe = Array(before, hot, cold)\n    copied.Close False\n    b.Close False\nEnd Function\nPublic Function State(ByVal b As Object) As Variant\n    State = Array(b.Worksheets.Count, b.Worksheets(1).Name, b.Worksheets(b.Worksheets.Count).Name, b.Worksheets(1).StandardHeight, b.Worksheets(1).Rows(100).RowHeight, b.Styles(\"Normal\").Font.Size, b.Saved)\nEnd Function",
+  "inputs": {
+    "explicit_calibri11": {
+      "bytes_hex": "504b03041400000008005c7c6e5df4c940150101000032030000130000005b436f6e74656e745f54797065735d2e786d6cad933b4ec43010867b4e61b9456b070a8a28d966a10524b8c0e04c122b7ec9e35db2b7c70910a108228aadacd1fc8fcf965c392acad7734062a3358eca3cd7bc4f29945292ead102091fd0e56deba38594c7d8c9006a800ee56d51dc49e55d42977669cae1fb2bc6aa29f61e5b389ac41ec6bc25ed5dcd231ae2ecf0a99f6a6b0e2118ad20e5bd3cb96655b6fb2a12d9396ba8d781aeb38033b9d5342bfe2c5af99f4e18a36e903d434c8f60b35a8e46befb38bc793f88edb05fa87ddb6a858d57479b2d82424468a8474cd688f91416b45bdf63836336919c8f9b0b032df9ffe4a11e22362f296ad7d1c51fe747f6c2b34993ce062f8e31877ef75772f926fb0f504b03041400000008005c7c6e5d5d87f42eb40000002c0100000b0000005f72656c732f2e72656c738dcfbf0e82301006f09da7686e9782833186c2624c580d3e402dc79f507a4d5b15dede8e621c1c2f77dfeff215d5326bf644e7473202f234038646513b9a5ec0adb9ec8ec07c90a6959a0c0a58d1435526c515b50c31e387d17a1611e3050c21d813e75e0d384b9f924513371db9598638ba9e5ba926d923df67d981bb4f03ca84b10dcbea5680abdb1c58b35afc87a7ae1b159e493d6634e1c797af8b284bd76310b068fe2237dd89a634a2c06347be2959be01504b03041400000008005c7c6e5dd2f8356cc3000000290100000f000000786c2f776f726b626f6f6b2e786d6c8d8fcd4ec3300c80ef7d8ac877968e0342559a5d10d2ce8307308dbb464bec2acef8797ba20e38e38bffe4cffadce13327f34e45a3f008fb5d0f86789210f93cc2ebcbf3dd2318adc80193308df0450a07dfb90f299737918b69f7ac232cb5ae83b53a2d945177b212b7cd2c25636d6d395b5d0b61d085a8e664effbfec1668c0c9df98b8d3594ffd0649ee3444f325d3371bde10a25accd4397b82af80676db3bf5b76c18735338616a12661b1d4393065386d88a720c7bb0ded99fabced95f4dff0d504b03041400000008005c7c6e5d346d0062bf000000260200001a000000786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c73ad923d0ec2300c46774e11e500b87460a85a261656e002a1759b8a36896c23e8ed892a957f210626ebfb2c3dbfc1b9e324db6267a4f58e6d1b585dface7116fb425b9190017069b1373cf7015ddcd69e7a23315203c19447d320a449b2047ae4e8d54ca9fc15af3655a169532db4da0f017f39e1ebba2d71edcb538f4e3e5c82b3a7235b448950430d4aa16f15c33816f348d50abe4aa5ff94626b08ab9d50eb1abe8b3dd537a9cf4a81fc01773274c87f359b8893d29827971cde5e627505504b03041400000008005c7c6e5d122cc3caba0000003501000014000000786c2f736861726564537472696e67732e786d6c65cdc14a04310c06e0fb3e45c8ddedec2aae48db4505cf0a8ae7328d3385693a3619d1b77796d55d702e81ff4b7e62f75f79804faa920a3bdcac1b04e2b6c4c49dc3d797c78b1b04d1c0310c85c9e13709eefdca8a28cc551687bdea786b8cb43de520eb3212cf9bf75273d039d6cec8582944e989340f66db34d72687c4086d99581dee10264e1f133dfc65bf02b092bc55ff544b9c5ab546bd35073af2f36621db855c2ee4ea24e70f6f2976a470f7fff8d7efcf95798afa1f504b03041400000008005c7c6e5dcaf6a76f320100004103000018000000786c2f776f726b7368656574732f7368656574312e786d6c8592d16e83201486effb14845d4f14676317a4e96677b9abed01a8b26aa66080d8eeed47c52d485c7679feef9c932f07c8feda7760e44ab7521430896208b8a864dd8a7301dfdf5eee7308b461a2669d14bc805f5cc33ddd908b549fbae1dc00bb40e80236c60c8f08e9aae13dd3911cb8b0e443aa9e195baa33d283e2ac9e86fa0ee138dea29eb502d20d00648a4b66d8adb2b59217a0ac1074b54daa5b7d48203005d4909291c6048d94a08a3af6e4b3e4872dc69ffd16bc1c2f7d962ed9d1670f8bd50459d5a5340ea5b1379d05d2d8e9da73ac1bcf3c8be328182d1ddae5c11d8e2ec749b072c5340d4d53cf741b98a6539aff25eaf00e0736a5cb13cf66d69c419afdab99859ad9a4795abef4ace9189fd8dd2b3aacdbba2e6dd4d4d78aae151c187e35eb2e04791f94a0dfdf4fbf01504b03041400000008005c7c6e5d9634072ff50000001c0200000d000000786c2f7374796c65732e786d6ca592b16ec4200c865f05f10025e9d0a102964a2775b9e53a742589d3208189c0a9727dfa4248ef1aa95b27fbff6d3e2c834c747570990088adde61527c229a9f8548fd04dea4873003e6ca18a2379465fc10698e6086540e79271e9be6497863916b3906a4c4fab02029deee8696683cb04fe3147f31ce76d172a165faaa56db16256ae716523e679d3b82b2a1e56c8820e2290bb6e76fd71914c78050315bdf1632a60b7180780055abb4ee452d7b70ee52f6f03e1e5ad791e1e24f9e5e07c51bceca6c3f69e6ef69c55451b0bf6995fd6f2c5bc723ff86de2e3ad06f2e2b5b57fc5c1ecedd11ac5bac238b7f0c9c99e2fe1ff437504b010214001400000008005c7c6e5df4c9401501010000320300001300000000000000000000008001000000005b436f6e74656e745f54797065735d2e786d6c504b010214001400000008005c7c6e5d5d87f42eb40000002c0100000b00000000000000000000008001320100005f72656c732f2e72656c73504b010214001400000008005c7c6e5dd2f8356cc3000000290100000f000000000000000000000080010f020000786c2f776f726b626f6f6b2e786d6c504b010214001400000008005c7c6e5d346d0062bf000000260200001a00000000000000000000008001ff020000786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c73504b010214001400000008005c7c6e5d122cc3caba000000350100001400000000000000000000008001f6030000786c2f736861726564537472696e67732e786d6c504b010214001400000008005c7c6e5dcaf6a76f32010000410300001800000000000000000000008001e2040000786c2f776f726b7368656574732f7368656574312e786d6c504b010214001400000008005c7c6e5d9634072ff50000001c0200000d000000000000000000000080014a060000786c2f7374796c65732e786d6c504b05060000000007000700c20100006a0700000000",
+      "sha256": "f98f88d02cd892f55751ffde0154224e924534201b66962619b552d57bc7802f"
+    },
+    "explicit_arial10": {
+      "bytes_hex": "504b03041400000008005c7c6e5df4c940150101000032030000130000005b436f6e74656e745f54797065735d2e786d6cad933b4ec43010867b4e61b9456b070a8a28d966a10524b8c0e04c122b7ec9e35db2b7c70910a108228aadacd1fc8fcf965c392acad7734062a3358eca3cd7bc4f29945292ead102091fd0e56deba38594c7d8c9006a800ee56d51dc49e55d42977669cae1fb2bc6aa29f61e5b389ac41ec6bc25ed5dcd231ae2ecf0a99f6a6b0e2118ad20e5bd3cb96655b6fb2a12d9396ba8d781aeb38033b9d5342bfe2c5af99f4e18a36e903d434c8f60b35a8e46befb38bc793f88edb05fa87ddb6a858d57479b2d82424468a8474cd688f91416b45bdf63836336919c8f9b0b032df9ffe4a11e22362f296ad7d1c51fe747f6c2b34993ce062f8e31877ef75772f926fb0f504b03041400000008005c7c6e5d5d87f42eb40000002c0100000b0000005f72656c732f2e72656c738dcfbf0e82301006f09da7686e9782833186c2624c580d3e402dc79f507a4d5b15dede8e621c1c2f77dfeff215d5326bf644e7473202f234038646513b9a5ec0adb9ec8ec07c90a6959a0c0a58d1435526c515b50c31e387d17a1611e3050c21d813e75e0d384b9f924513371db9598638ba9e5ba926d923df67d981bb4f03ca84b10dcbea5680abdb1c58b35afc87a7ae1b159e493d6634e1c797af8b284bd76310b068fe2237dd89a634a2c06347be2959be01504b03041400000008005c7c6e5dd2f8356cc3000000290100000f000000786c2f776f726b626f6f6b2e786d6c8d8fcd4ec3300c80ef7d8ac877968e0342559a5d10d2ce8307308dbb464bec2acef8797ba20e38e38bffe4cffadce13327f34e45a3f008fb5d0f86789210f93cc2ebcbf3dd2318adc80193308df0450a07dfb90f299737918b69f7ac232cb5ae83b53a2d945177b212b7cd2c25636d6d395b5d0b61d085a8e664effbfec1668c0c9df98b8d3594ffd0649ee3444f325d3371bde10a25accd4397b82af80676db3bf5b76c18735338616a12661b1d4393065386d88a720c7bb0ded99fabced95f4dff0d504b03041400000008005c7c6e5d346d0062bf000000260200001a000000786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c73ad923d0ec2300c46774e11e500b87460a85a261656e002a1759b8a36896c23e8ed892a957f210626ebfb2c3dbfc1b9e324db6267a4f58e6d1b585dface7116fb425b9190017069b1373cf7015ddcd69e7a23315203c19447d320a449b2047ae4e8d54ca9fc15af3655a169532db4da0f017f39e1ebba2d71edcb538f4e3e5c82b3a7235b448950430d4aa16f15c33816f348d50abe4aa5ff94626b08ab9d50eb1abe8b3dd537a9cf4a81fc01773274c87f359b8893d29827971cde5e627505504b03041400000008005c7c6e5d122cc3caba0000003501000014000000786c2f736861726564537472696e67732e786d6c65cdc14a04310c06e0fb3e45c8ddedec2aae48db4505cf0a8ae7328d3385693a3619d1b77796d55d702e81ff4b7e62f75f79804faa920a3bdcac1b04e2b6c4c49dc3d797c78b1b04d1c0310c85c9e13709eefdca8a28cc551687bdea786b8cb43de520eb3212cf9bf75273d039d6cec8582944e989340f66db34d72687c4086d99581dee10264e1f133dfc65bf02b092bc55ff544b9c5ab546bd35073af2f36621db855c2ee4ea24e70f6f2976a470f7fff8d7efcf95798afa1f504b03041400000008005c7c6e5dcaf6a76f320100004103000018000000786c2f776f726b7368656574732f7368656574312e786d6c8592d16e83201486effb14845d4f14676317a4e96677b9abed01a8b26aa66080d8eeed47c52d485c7679feef9c932f07c8feda7760e44ab7521430896208b8a864dd8a7301dfdf5eee7308b461a2669d14bc805f5cc33ddd908b549fbae1dc00bb40e80236c60c8f08e9aae13dd3911cb8b0e443aa9e195baa33d283e2ac9e86fa0ee138dea29eb502d20d00648a4b66d8adb2b59217a0ac1074b54daa5b7d48203005d4909291c6048d94a08a3af6e4b3e4872dc69ffd16bc1c2f7d962ed9d1670f8bd50459d5a5340ea5b1379d05d2d8e9da73ac1bcf3c8be328182d1ddae5c11d8e2ec749b072c5340d4d53cf741b98a6539aff25eaf00e0736a5cb13cf66d69c419afdab99859ad9a4795abef4ace9189fd8dd2b3aacdbba2e6dd4d4d78aae151c187e35eb2e04791f94a0dfdf4fbf01504b03041400000008005c7c6e5d77a3cf22f40000001a0200000d000000786c2f7374796c65732e786d6ca592b16ec4200c865f05f10025d7a14305485d4eea72cb75e8ca254e13c998089c2ad7a72f84f4ae91ba75b2ffdfe6c332e8c45784f300c062f148c9c881797a562ab50378971ec204942b7d88de7196f143a52982eb5239e4513d36cd93f26e2469751f889368c34c6ce46133ac26e7417c3a34f2258e0ea5b23a7d55e3d014a56adf1a523e3522ee31d9b07a72cc10e99885d8f2b7eb04465220a898b56f0d197309b183b80355abb46e45ab5b403c972dbcf7bbd6a51734fba3e7d7cec8468a32db4f9af95b5a315514ec6f5a65ff1b2b967ecfbfa1d78b76f49b2bcace8d3c9567c33b425ce61179a43f06ce4c75ff0df61b504b010214001400000008005c7c6e5df4c9401501010000320300001300000000000000000000008001000000005b436f6e74656e745f54797065735d2e786d6c504b010214001400000008005c7c6e5d5d87f42eb40000002c0100000b00000000000000000000008001320100005f72656c732f2e72656c73504b010214001400000008005c7c6e5dd2f8356cc3000000290100000f000000000000000000000080010f020000786c2f776f726b626f6f6b2e786d6c504b010214001400000008005c7c6e5d346d0062bf000000260200001a00000000000000000000008001ff020000786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c73504b010214001400000008005c7c6e5d122cc3caba000000350100001400000000000000000000008001f6030000786c2f736861726564537472696e67732e786d6c504b010214001400000008005c7c6e5dcaf6a76f32010000410300001800000000000000000000008001e2040000786c2f776f726b7368656574732f7368656574312e786d6c504b010214001400000008005c7c6e5d77a3cf22f40000001a0200000d000000000000000000000080014a060000786c2f7374796c65732e786d6c504b05060000000007000700c2010000690700000000",
+      "sha256": "25ed70d6ff255a180d90b775e34f57d8426e2ef2c7c3df440b4c596bcd0e6fed"
+    },
+    "missing_unstated": {
+      "bytes_hex": "504b030414000000080057046d5c73cf20a712010000c6020000130000005b436f6e74656e745f54797065735d2e786d6cad52c94ec33010bdf72b2c5fabd82d078450d21e588e8044f980c19e2456bcc9e396f6ef715336210a1c7a1a8ddeaad1d4cbadb36c83894cf00d9f8b1967e855d0c6770d7f5add56179c5106afc1068f0ddf21f1e56252af76118915b1a786f739c74b2949f5e8804488e80bd286e42097357532821aa04379369b9d4b157c469fabbcf7e08b0963f535b6b0b699dd6c0b72e892d012675707ee3eaee110a3350a72c1e5c6eb6f41d55b8828ca9143bd89342d042e8f85ecc1e3199fd2fb72a26434b20748f90e5c21caad952f210dcf210ce2779f1fba86b6350a75506b5724826242d0d4236667c5388503e3a7ffaa30f2498e637ee22e1ffe7f57a11e12eac79ccaf3d0c94ff2c5fbbd4a2dc7375cbc02504b030414000000080057046d5c5d87f42eb40000002c0100000b0000005f72656c732f2e72656c738dcfbf0e82301006f09da7686e9782833186c2624c580d3e402dc79f507a4d5b15dede8e621c1c2f77dfeff215d5326bf644e7473202f234038646513b9a5ec0adb9ec8ec07c90a6959a0c0a58d1435526c515b50c31e387d17a1611e3050c21d813e75e0d384b9f924513371db9598638ba9e5ba926d923df67d981bb4f03ca84b10dcbea5680abdb1c58b35afc87a7ae1b159e493d6634e1c797af8b284bd76310b068fe2237dd89a634a2c06347be2959be01504b030414000000080057046d5cd2f8356cc3000000290100000f000000786c2f776f726b626f6f6b2e786d6c8d8fcd4ec3300c80ef7d8ac877968e0342559a5d10d2ce8307308dbb464bec2acef8797ba20e38e38bffe4cffadce13327f34e45a3f008fb5d0f86789210f93cc2ebcbf3dd2318adc80193308df0450a07dfb90f299737918b69f7ac232cb5ae83b53a2d945177b212b7cd2c25636d6d395b5d0b61d085a8e664effbfec1668c0c9df98b8d3594ffd0649ee3444f325d3371bde10a25accd4397b82af80676db3bf5b76c18735338616a12661b1d4393065386d88a720c7bb0ded99fabced95f4dff0d504b030414000000080057046d5c6e7bfc7ccf000000bd0100001a000000786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c73ad90cf6ac3300c87ef7d0aa37ba3a48731469c5e4aa1d7ae7b00612b7168621bcb6dd7b79f19ec4f60831d761292d0a78f5fbb7d9d2775e52463f01a9aaa06c5de043bfa41c3cb69bf7e042599bca52978d67067816db76a8f3c512e37e2c628aa40bc687039c72744318e67922a44f665d38734532e6d1a309239d3c0b8a9eb074cdf19d0ad945a60d5c16a4807db803add23ff051ffa7e34bc0be632b3cf3f7cc15b486771ccb940290d9c357c8e04df4b53152ae0af3e9bfff4114789ed734e2570f9725a8c3f7c5a5ca4debd01504b030414000000080057046d5c122cc3caba0000003501000014000000786c2f736861726564537472696e67732e786d6c65cdc14a04310c06e0fb3e45c8ddedec2aae48db4505cf0a8ae7328d3385693a3619d1b77796d55d702e81ff4b7e62f75f79804faa920a3bdcac1b04e2b6c4c49dc3d797c78b1b04d1c0310c85c9e13709eefdca8a28cc551687bdea786b8cb43de520eb3212cf9bf75273d039d6cec8582944e989340f66db34d72687c4086d99581dee10264e1f133dfc65bf02b092bc55ff544b9c5ab546bd35073af2f36621db855c2ee4ea24e70f6f2976a470f7fff8d7efcf95798afa1f504b030414000000080057046d5ccaf6a76f320100004103000018000000786c2f776f726b7368656574732f7368656574312e786d6c8592d16e83201486effb14845d4f14676317a4e96677b9abed01a8b26aa66080d8eeed47c52d485c7679feef9c932f07c8feda7760e44ab7521430896208b8a864dd8a7301dfdf5eee7308b461a2669d14bc805f5cc33ddd908b549fbae1dc00bb40e80236c60c8f08e9aae13dd3911cb8b0e443aa9e195baa33d283e2ac9e86fa0ee138dea29eb502d20d00648a4b66d8adb2b59217a0ac1074b54daa5b7d48203005d4909291c6048d94a08a3af6e4b3e4872dc69ffd16bc1c2f7d962ed9d1670f8bd50459d5a5340ea5b1379d05d2d8e9da73ac1bcf3c8be328182d1ddae5c11d8e2ec749b072c5340d4d53cf741b98a6539aff25eaf00e0736a5cb13cf66d69c419afdab99859ad9a4795abef4ace9189fd8dd2b3aacdbba2e6dd4d4d78aae151c187e35eb2e04791f94a0dfdf4fbf01504b0102140314000000080057046d5c73cf20a712010000c60200001300000000000000000000008001000000005b436f6e74656e745f54797065735d2e786d6c504b0102140314000000080057046d5c5d87f42eb40000002c0100000b00000000000000000000008001430100005f72656c732f2e72656c73504b0102140314000000080057046d5cd2f8356cc3000000290100000f0000000000000000000000800120020000786c2f776f726b626f6f6b2e786d6c504b0102140314000000080057046d5c6e7bfc7ccf000000bd0100001a0000000000000000000000800110030000786c2f5f72656c732f776f726b626f6f6b2e786d6c2e72656c73504b0102140314000000080057046d5c122cc3caba00000035010000140000000000000000000000800117040000786c2f736861726564537472696e67732e786d6c504b0102140314000000080057046d5ccaf6a76f3201000041030000180000000000000000000000800103050000786c2f776f726b7368656574732f7368656574312e786d6c504b05060000000006000600870100006b0600000000",
+      "sha256": "6f69abba4c160582438f289ac828b69e2e622fccacdcf993c5f55a44c36cdafd"
+    }
+  },
+  "cases": [
+    {
+      "label": "explicit_calibri11",
+      "mode": 0,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          15.0,
+          15.0,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_calibri11",
+      "mode": 1,
+      "expected": [
+        [
+          1,
+          "Original",
+          "Original",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Original",
+          "Original",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Original",
+          "Original",
+          15.0,
+          15.0,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_calibri11",
+      "mode": 2,
+      "expected": [
+        [
+          2,
+          "Sales",
+          "Sheet1",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          2,
+          "Sales",
+          "Sheet1",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          2,
+          "Sales",
+          "Sheet1",
+          15.0,
+          15.0,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_calibri11",
+      "mode": 3,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          15.0,
+          15.0,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          15.0,
+          15.0,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          15.0,
+          15.0,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_calibri11",
+      "mode": 4,
+      "expected": [
+        [
+          2,
+          "Original",
+          "Sheet1",
+          15.0,
+          15.0,
+          11.0,
+          false
+        ],
+        [
+          2,
+          "Original",
+          "Sheet1",
+          15.0,
+          15.0,
+          11.0,
+          false
+        ],
+        [
+          2,
+          "Original",
+          "Sheet1",
+          15.0,
+          15.0,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_calibri11",
+      "mode": 5,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          15.0,
+          15.0,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_calibri11",
+      "mode": 6,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          15.0,
+          15.0,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_calibri11",
+      "mode": 7,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          15.0,
+          15.0,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 0,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          10.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          10.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          12.75,
+          12.75,
+          10.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 1,
+      "expected": [
+        [
+          1,
+          "Original",
+          "Original",
+          18.75,
+          18.75,
+          10.0,
+          false
+        ],
+        [
+          1,
+          "Original",
+          "Original",
+          18.75,
+          18.75,
+          10.0,
+          false
+        ],
+        [
+          1,
+          "Original",
+          "Original",
+          12.75,
+          12.75,
+          10.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 2,
+      "expected": [
+        [
+          2,
+          "Sales",
+          "Sheet1",
+          18.75,
+          18.75,
+          10.0,
+          false
+        ],
+        [
+          2,
+          "Sales",
+          "Sheet1",
+          18.75,
+          18.75,
+          10.0,
+          false
+        ],
+        [
+          2,
+          "Sales",
+          "Sheet1",
+          12.75,
+          12.75,
+          10.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 3,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          12.75,
+          12.75,
+          10.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          12.75,
+          12.75,
+          10.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          12.75,
+          12.75,
+          10.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 4,
+      "expected": [
+        [
+          2,
+          "Original",
+          "Sheet1",
+          12.75,
+          12.75,
+          10.0,
+          false
+        ],
+        [
+          2,
+          "Original",
+          "Sheet1",
+          12.75,
+          12.75,
+          10.0,
+          false
+        ],
+        [
+          2,
+          "Original",
+          "Sheet1",
+          12.75,
+          12.75,
+          10.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 5,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          10.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          10.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          12.75,
+          12.75,
+          10.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 6,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          10.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          10.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          12.75,
+          12.75,
+          10.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 7,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          10.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          10.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          12.75,
+          12.75,
+          10.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 0,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 1,
+      "expected": [
+        [
+          1,
+          "Original",
+          "Original",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Original",
+          "Original",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Original",
+          "Original",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 2,
+      "expected": [
+        [
+          2,
+          "Sales",
+          "Sheet1",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          2,
+          "Sales",
+          "Sheet1",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          2,
+          "Sales",
+          "Sheet1",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 3,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 4,
+      "expected": [
+        [
+          2,
+          "Original",
+          "Sheet1",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          2,
+          "Original",
+          "Sheet1",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          2,
+          "Original",
+          "Sheet1",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 5,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 6,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 7,
+      "expected": [
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          false
+        ],
+        [
+          1,
+          "Sales",
+          "Sales",
+          18.75,
+          18.75,
+          11.0,
+          true
+        ]
+      ]
+    }
+  ]
+}

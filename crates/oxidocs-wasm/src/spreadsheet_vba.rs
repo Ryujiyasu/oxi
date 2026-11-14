@@ -16073,6 +16073,7 @@ impl<'a> WorkbookHost<'a> {
         self.workbook.sheets.insert(at, sheet);
         self.sheets_renumbered(&|was| Some(if was >= at { was + 1 } else { was }));
         self.activate_sheet(at);
+        self.saved = false;
         Ok(self.object(HostObject::Worksheet(at)))
     }
 
@@ -16865,6 +16866,7 @@ impl<'a> WorkbookHost<'a> {
         }
         self.rewrite_every_formula(&|formula| oxicells_calc::rename_sheet_in_formula(formula, &old, &new));
         oxicells_core::recalculation::rename_sheet(&mut self.workbook, &old, &new);
+        self.saved = false;
         Ok(())
     }
 
@@ -144103,6 +144105,35 @@ End Function"#;
         assert_eq!(serde_json::to_value(&workbook).unwrap(),before);
     }
 
+
+
+    #[test]
+    fn sheet_structure_saved_state_matches_native_history() {
+        let cases:serde_json::Value=serde_json::from_str(include_str!("../../../tests/fixtures/vba/sheet_package_native.json")).unwrap();
+        let caller=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let source=cases["program"].as_str().unwrap();
+        let startup:Vec<u16>=cases["startup_profile_utf16"].as_array().unwrap().iter().map(|x|u16::try_from(x.as_u64().unwrap()).unwrap()).collect();
+        for case in cases["cases"].as_array().unwrap() {
+            let label=case["label"].as_str().unwrap();let mode=case["mode"].as_i64().unwrap();
+            let hex=cases["inputs"][label]["bytes_hex"].as_str().unwrap();
+            let input:Vec<u8>=(0..hex.len()).step_by(2).map(|at|u8::from_str_radix(&hex[at..at+2],16).unwrap()).collect();
+            let workbook=oxicells_core::parse_xlsx_preserving_values(caller).unwrap();
+            let mut context=failure_context();
+            context.application_state=Some(VbaApplicationState {standard_font_startup:Some(VbaStandardFontStartup {profile_utf16:Some(startup.clone())}),..Default::default()});
+            context.file_context=Some(file_io::FileContext {
+                package_bytes:Some(caller.to_vec()),full_name:Some(r"C:\work\caller.xlsx".into()),read_only:Some(true),
+                folders:vec![r"C:\work".into()],files:vec![file_io::ProducedFile {path:r"C:\work\input.xlsx".into(),bytes:input}],..Default::default()
+            });
+            let result=execute_workbook_action_in_session(workbook,source,Some("Probe"),vec![Value::Integer(mode),Value::String(r"C:\work\input.xlsx".into()),Value::String(r"C:\work\copy.xlsx".into())],0,context,&mut None).unwrap();
+            assert!(result.error.is_none(),"{label} mode {mode}: {}",serde_json::to_value(&result.error).unwrap());
+            let value=serde_json::to_value(result.result).unwrap();
+            let states:Vec<Vec<serde_json::Value>>=value["value"]["values"].as_array().unwrap().iter().map(|state|
+                state["value"]["values"].as_array().unwrap().iter().map(|cell|cell["value"].clone()).collect()
+            ).collect();
+            assert_eq!(serde_json::to_value(states).unwrap(),case["expected"],"{label} mode {mode}");
+            assert!(result.files.iter().any(|file|file.path==r"C:\work\copy.xlsx"),"{label} mode {mode}: no exported copy");
+        }
+    }
 
     #[test]
     fn loaded_and_fresh_normal_row_defaults_match_native_history() {
