@@ -16999,7 +16999,11 @@ fn extract_vml_watermark(xml: &str) -> Option<crate::ir::Watermark> {
     });
     // textpath style font-family:"CG Times" (entities already decoded? raw
     // part text has &quot; — strip both)
-    let font_family = attr(&tp_tag, "style").and_then(|s| {
+    // OXI_WATERMARK_FONT_QUOT (2026-11-14): decode &quot; BEFORE splitting on ';' -- the
+    // entity's own ';' cut «font-family:&quot;Calibri&quot;» into «&quot», so every
+    // watermark fell back to Times New Roman (corpus: 8 of 10 text watermarks are Calibri
+    // or Arial; Word's DRAFT ink 158pt = Calibri, Oxi drew 168 = TNR).
+    let font_family = attr(&tp_tag, "style").map(|s| if crate::env_flag!("OXI_WATERMARK_FONT_QUOT_DISABLE") { s } else { s.replace("&quot;", "\"") }).and_then(|s| {
         for part in s.split(';') {
             let mut kv = part.splitn(2, ':');
             if kv.next().map(|k| k.trim()) == Some("font-family") {

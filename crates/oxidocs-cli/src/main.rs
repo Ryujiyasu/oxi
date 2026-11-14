@@ -1734,9 +1734,15 @@ fn watermark_path(x: f32, y: f32, w: f32, h: f32, text: &str, color: Option<&str
         Some(f) if !f.trim().is_empty() && !f.eq_ignore_ascii_case("CG Times") => f,
         _ => "Times New Roman",
     };
-    let path = resolve_face_path(fam, false, false).or_else(|| resolve_face_path("Times New Roman", false, false))?;
-    let bytes = std::fs::read(path).ok()?;
-    let face = ttf_parser::Face::parse(&bytes, 0).ok()?;
+    // OXI_PDF_WATERMARK_FONT (2026-11-14): the system face first, as text runs do --
+    // the bundled-only lookup missed Calibri and drew every Calibri watermark in Times
+    // New Roman (DRAFT ink 168pt tall vs Word's 158 = Calibri's 0.6377 em x box 247.45).
+    let found = face_file_cached(fam, false, false)
+        .or_else(|| resolve_face_path(fam, false, false).map(|p| (std::path::PathBuf::from(p), 0)))
+        .or_else(|| face_file_cached("Times New Roman", false, false))
+        .or_else(|| resolve_face_path("Times New Roman", false, false).map(|p| (std::path::PathBuf::from(p), 0)))?;
+    let bytes = std::fs::read(&found.0).ok()?;
+    let face = ttf_parser::Face::parse(&bytes, found.1).ok()?;
     let upem = face.units_per_em().max(1) as f64;
     // glyph outlines in em units, y down, pen advancing along x
     struct Sink { ops: Vec<(u8, [f64; 6])>, pen: f64, k: f64 }
