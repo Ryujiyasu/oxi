@@ -23,7 +23,7 @@ cleanup() {
   if [ "$fail" -gt 0 ] || [ "${KEEP:-}" = 1 ]; then
     $docker exec "$name" sh -c 'tail -n 30 /var/www/html/data/nextcloud.log' 2>/dev/null || true
   fi
-  [ "${KEEP:-}" = 1 ] && echo "kept container $name" || $docker rm -f "$name" >/dev/null 2>&1 || true
+  [ "${KEEP:-}" = 1 ] && echo "kept container $name" || $docker rm -fv "$name" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
