@@ -1399,7 +1399,16 @@ impl<'a> WorkbookHost<'a> {
             (None, Some((cx, cy))) => (cx as f64 / EMU_PER_PX, cy as f64 / EMU_PER_PX),
             (None, None) => (0.0, 0.0),
         };
-        let (x,y,w,h)=if drawing.grouped && (((f64::from(drawing.group_rotation)/60_000.0).rem_euclid(360.0)+45.0)/90.0).floor() as i64 % 2 != 0 {
+        // Two-cell markers enclose the nearest quarter-turn frame. The
+        // shape transform retains its unrotated dimensions independently.
+        let ordinary_rotation = match &drawing.kind {
+            DrawingKind::Shape(shape) if !drawing.grouped && drawing.to.is_some() => f64::from(shape.rotation) / 60_000.0,
+            _ => 0.0,
+        };
+        let (x,y,w,h)=if ((ordinary_rotation.rem_euclid(360.0)+45.0)/90.0).floor() as i64 % 2 != 0 {
+            let shift = (((w*EMU_PER_PX).round() as i64 - (h*EMU_PER_PX).round() as i64) / 2) as f64 / EMU_PER_PX;
+            (x+shift,y-shift,h,w)
+        } else if drawing.grouped && (((f64::from(drawing.group_rotation)/60_000.0).rem_euclid(360.0)+45.0)/90.0).floor() as i64 % 2 != 0 {
             {let shift=(((w*EMU_PER_PX).round()-(h*EMU_PER_PX).round())/2.0).round()/EMU_PER_PX;(x+shift,y-shift,h,w)}
         } else {(x,y,w,h)};
         let (x, y, w, h) = if drawing.grouped {
@@ -1526,6 +1535,17 @@ impl<'a> WorkbookHost<'a> {
     }
 
     /// The sheet's drawings, rebuilt from its records.
+    fn ordinary_shape_anchor_box(record: &ShapeRecord) -> (f64,f64,f64,f64) {
+        let current = (record.left,record.top,record.width,record.height);
+        if ((record.rotation.rem_euclid(360.0)+45.0)/90.0).floor() as i64 % 2 == 0 { return current; }
+        let (x,y,w,h) = ((current.0*12_700.0).round() as i64,(current.1*12_700.0).round() as i64,
+            (current.2*12_700.0).round() as i64,(current.3*12_700.0).round() as i64);
+        // Excel divides the signed EMU difference toward zero, including
+        // odd extents. Rounding each floating-point half moves one EMU.
+        let shift = (w-h)/2;
+        ((x+shift) as f64/12_700.0,(y-shift) as f64/12_700.0,h as f64/12_700.0,w as f64/12_700.0)
+    }
+
     fn group_anchor_box(record: &ShapeRecord) -> (f64,f64,f64,f64) {
         let current=(record.left,record.top,record.width,record.height);
         let emu=|b:(f64,f64,f64,f64)|((b.0*12_700.0).round() as i64,(b.1*12_700.0).round() as i64,(b.2*12_700.0).round() as i64,(b.3*12_700.0).round() as i64);
@@ -1747,14 +1767,17 @@ impl<'a> WorkbookHost<'a> {
         let grouped = record.group_parent_id.is_some();
         let original = grouped.then_some(record.original.as_ref()).flatten();
         let parent = self.outer_shape_group(record.id).and_then(|id| self.shape(id).ok());
+        let anchor = if !grouped && matches!(&record.kind, ShapeKind::Auto(_) | ShapeKind::TextBox | ShapeKind::Line) {
+            Self::ordinary_shape_anchor_box(record)
+        } else { (record.left,record.top,record.width,record.height) };
         let from = parent.map_or_else(
-            || original.map_or_else(|| self.anchor_at(record.sheet, record.left, record.top), |drawing| drawing.from),
+            || original.map_or_else(|| self.anchor_at(record.sheet, anchor.0, anchor.1), |drawing| drawing.from),
             |group| { let anchor=Self::group_anchor_box(group);self.anchor_at(record.sheet,anchor.0,anchor.1) },
         );
         let to = if let Some(group) = parent {
             { let anchor=Self::group_anchor_box(group);Some(self.anchor_at(record.sheet,anchor.0+anchor.2,anchor.1+anchor.3)) }
         } else {
-            Some(self.anchor_at(record.sheet, record.left + record.width, record.top + record.height))
+            Some(self.anchor_at(record.sheet, anchor.0 + anchor.2, anchor.1 + anchor.3))
         };
         let extent = if grouped {
             original.and_then(|drawing| drawing.extent)
