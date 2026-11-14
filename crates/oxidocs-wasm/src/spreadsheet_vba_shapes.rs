@@ -1045,6 +1045,8 @@ impl<'a> WorkbookHost<'a> {
             group_drawing.group_name = None;
             group_drawing.group_non_visual_id = None;
             group_drawing.group_rotation = 0;
+            // This probe reads the container anchor, independently of its first leaf.
+            group_drawing.kind = DrawingKind::Other;
             let mut bounds = self.points_of_drawing(sheet, &group_drawing);
             let rotation=first_child.original.as_ref().map_or(0.0,|drawing|f64::from(drawing.group_rotation)/60_000.0);
             if ((rotation.rem_euclid(360.0)+45.0)/90.0).floor() as i64 % 2 != 0 {
