@@ -170,6 +170,9 @@ pub struct MasterStyleLevel {
     /// is what horizontally centres title placeholders (V4/P2 render-truth).
     #[serde(default)]
     pub algn: Option<SlideAlignment>,
+    /// `a:defRPr/@kern` of the level, in points (see `SlideRun::kern`).
+    #[serde(default)]
+    pub kern: Option<f32>,
 }
 
 pub fn default_l_ins() -> f32 {
@@ -1057,6 +1060,12 @@ pub struct SlideRun {
     /// the last deck in the blind set that LibreOffice rendered better.
     #[serde(default)]
     pub spacing: Option<f32>,
+    /// `a:rPr/@kern` -- the SMALLEST size, in points, at which the run's pairs
+    /// are kerned (`kern="1200"` = 12pt and up; `kern="0"` = never). None when
+    /// the run does not say: the level's `defRPr/@kern` decides, and with no
+    /// attribute anywhere PowerPoint kerns (`gen_pptx_kern.py`).
+    #[serde(default)]
+    pub kern: Option<f32>,
 }
 
 static BZERO_OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

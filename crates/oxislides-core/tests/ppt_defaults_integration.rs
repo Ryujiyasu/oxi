@@ -122,6 +122,17 @@ fn master_body_level_carries_its_pitch_and_colour() {
     assert_eq!(b.color.as_deref(), Some("000000"));
 }
 
+/// The Office master kerns from 12pt up (`defRPr kern="1200"`) in every text
+/// style; PowerPoint's PDF of this deck shows the legacy-table pairs applied
+/// ('Te' -1.55pt at 20pt).
+#[test]
+fn master_levels_carry_their_kerning_threshold() {
+    let p = deck();
+    for lv in p.master_styles.body.iter().chain(&p.master_styles.title).chain(&p.master_styles.other) {
+        assert_eq!(lv.kern, Some(12.0));
+    }
+}
+
 #[test]
 fn shrunk_body_is_drawn_at_the_rounded_scaled_size() {
     let p = deck();
