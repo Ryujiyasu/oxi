@@ -909,13 +909,24 @@ impl<'a> WorkbookHost<'a> {
         let mut bounds = None::<(f64, f64, f64, f64)>;
         for id in &children {
             let shape = self.shape(*id)?;
+            // Excel encloses each selected root's quarter-turn anchor frame.
+            // At 45/135/225/315 degrees its width and height exchange axes;
+            // the continuously rotated visual bounding box is not used here.
+            let (mut child_left, mut child_top, mut child_width, mut child_height) =
+                (shape.left, shape.top, shape.width, shape.height);
+            let quarter = ((shape.rotation.rem_euclid(360.0) + 45.0) / 90.0).floor() as i64 % 4;
+            if quarter % 2 != 0 {
+                child_left += (child_width - child_height) / 2.0;
+                child_top += (child_height - child_width) / 2.0;
+                std::mem::swap(&mut child_width, &mut child_height);
+            }
             bounds = Some(match bounds {
-                None => (shape.left, shape.top, shape.width, shape.height),
+                None => (child_left, child_top, child_width, child_height),
                 Some((left, top, width, height)) => {
-                    let right = (left + width).max(shape.left + shape.width);
-                    let bottom = (top + height).max(shape.top + shape.height);
-                    let left = left.min(shape.left);
-                    let top = top.min(shape.top);
+                    let right = (left + width).max(child_left + child_width);
+                    let bottom = (top + height).max(child_top + child_height);
+                    let left = left.min(child_left);
+                    let top = top.min(child_top);
                     (left, top, right - left, bottom - top)
                 }
             });

@@ -143590,6 +143590,51 @@ End Function"#;
     }
 
     #[test]
+    fn grouping_rotated_shapes_matches_native_quarter_turn_frames() {
+        let base = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        // Fixed observations from grouping two rectangles in native Excel.
+        for (angle, expected) in [
+            (0, ["20", "30", "115", "20", "0"]),
+            (44, ["20", "30", "115", "20", "0"]),
+            (45, ["35", "15", "100", "40", "0"]),
+            (46, ["35", "15", "100", "40", "0"]),
+            (89, ["35", "15", "100", "40", "0"]),
+            (90, ["35", "15", "100", "40", "0"]),
+            (134, ["35", "15", "100", "40", "0"]),
+            (135, ["20", "30", "115", "20", "0"]),
+            (136, ["20", "30", "115", "20", "0"]),
+            (179, ["20", "30", "115", "20", "0"]),
+            (224, ["20", "30", "115", "20", "0"]),
+            (225, ["35", "15", "100", "40", "0"]),
+            (269, ["35", "15", "100", "40", "0"]),
+            (314, ["35", "15", "100", "40", "0"]),
+            (315, ["20", "30", "115", "20", "0"]),
+            (316, ["20", "30", "115", "20", "0"]),
+        ] {
+            let book = oxicells_core::parse_xlsx(base).unwrap();
+            let source = format!(r#"Public Sub GroupRotated()
+                Set a = ActiveSheet.Shapes.AddShape(1, 20, 30, 40, 10)
+                a.Name = "Rotated"
+                a.Rotation = {angle}
+                Set b = ActiveSheet.Shapes.AddShape(1, 120, 40, 15, 10)
+                b.Name = "Added"
+                Set g = ActiveSheet.Shapes.Range(Array("Rotated", "Added")).Group
+                Debug.Print g.Left
+                Debug.Print g.Top
+                Debug.Print g.Width
+                Debug.Print g.Height
+                Debug.Print g.Rotation
+            End Sub"#);
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(
+                book, &source, Some("GroupRotated"), vec![], 0, failure_context(), &mut session,
+            ).unwrap();
+            assert!(outcome.error.is_none(), "angle={angle}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(outcome.debug_output, expected, "angle={angle}");
+        }
+    }
+
+    #[test]
     fn shape_rotation_matches_excels_normalized_degrees() {
         let base = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
         let book = oxicells_core::parse_xlsx(base).unwrap();
