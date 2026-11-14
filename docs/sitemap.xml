@@ -73,4 +73,22 @@
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
+  <url>
+    <loc>https://oxi-dd65f4.gitlab.io/articles/excel-two-sheets.ja.html</loc>
+    <lastmod>2026-11-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://oxi-dd65f4.gitlab.io/articles/excel-two-sheets.ja.html"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://oxi-dd65f4.gitlab.io/articles/excel-two-sheets.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://oxi-dd65f4.gitlab.io/articles/excel-two-sheets.html"/>
+  </url>
+  <url>
+    <loc>https://oxi-dd65f4.gitlab.io/articles/excel-two-sheets.html</loc>
+    <lastmod>2026-11-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://oxi-dd65f4.gitlab.io/articles/excel-two-sheets.ja.html"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://oxi-dd65f4.gitlab.io/articles/excel-two-sheets.html"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://oxi-dd65f4.gitlab.io/articles/excel-two-sheets.html"/>
+  </url>
 </urlset>

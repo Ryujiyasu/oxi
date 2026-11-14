@@ -167,6 +167,9 @@ footer { background: var(--primary-dark); color: rgba(255,255,255,.85); padding:
 footer a { color: #fff; }
 footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space-between; }
 .small { font-size: 13px; color: var(--text2); }
+
+/* Illustrated field notes and the existing engineering articles. */
+#articles{scroll-margin-top:130px}.article-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:20px;margin-top:24px}.article-feature,.article-related{min-width:0}.article-feature{padding:0;overflow:hidden}.article-feature img{display:block;width:100%;height:300px;object-fit:contain;background:#f1f5f2}.article-body{padding:22px}.article-category{font-size:12px!important;font-weight:700;letter-spacing:.04em;margin-bottom:8px!important;color:var(--primary)!important}.article-related{display:grid;gap:16px}.article-related .card{height:100%}.article-grid h3{line-height:1.55;overflow-wrap:anywhere}.article-grid p{line-height:1.8}@media(max-width:680px){.article-grid{grid-template-columns:minmax(0,1fr)}.article-feature img{height:auto;max-height:360px}}
 </style>
 </head>
 <body>
@@ -179,6 +182,7 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
       <a href="#demo">デモ</a>
       <a href="#accuracy">再現度</a>
       <a href="#japanese">日本語組版</a>
+      <a href="#articles">開発ノート</a>
       <a href="#tech">技術</a>
       <a href="#faq">FAQ</a>
       <a href="https://gitlab.com/Ryujiyasu/oxi">GitLab</a>
@@ -1247,6 +1251,20 @@ footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space
         <li><strong>文字グリッド（docGrid）</strong> — Word の行グリッド・字送りモデルを忠実に再現。</li>
         <li><strong>判子</strong> — 丸印・角印・小判型の電子印鑑生成と PAdES PDF 署名。</li>
       </ul>
+    </div>
+  </section>
+
+  <section id="articles" aria-labelledby="articles-heading">
+    <div class="wrap">
+      <h2 id="articles-heading">開発ノート</h2>
+      <p class="sub">身近なExcelの操作から、互換性づくりの裏側まで。</p>
+      <div class="article-grid">
+        <a class="card article-feature" href="../articles/excel-two-sheets.ja.html"><img src="../articles/images/excel-two-sheets.ja.png" alt="" width="1472" height="1578" loading="lazy"><div class="article-body"><p class="article-category">Excelの小さな発見 · 約3分</p><h3>「シートを2枚追加する」だけなのに、Excelは頼み方で順番を変えた</h3><p>同じ2枚が増えても、並び順と次の処理に渡されるシートが違う。実Excelで見つけた違いを図で紹介します。</p></div></a>
+        <div class="article-related">
+          <a class="card" href="../articles/vba-object-lifetimes-rc.ja.html"><p class="article-category">技術記事 · VBA / Rust</p><h3>VBAのオブジェクトの寿命をRustで再現する</h3><p>マクロがオブジェクトを手放す瞬間まで、Excelと動きを合わせるには。</p></a>
+          <a class="card" href="../articles/word-pagination-gdi-rounding.ja.html"><p class="article-category">技術記事 · Word / フォント</p><h3>Wordの改ページ位置は、GDIの整数丸めで決まっている</h3><p>文字幅の小さな違いが、ページ全体の見た目を変える理由。</p></a>
+        </div>
+      </div>
     </div>
   </section>
 
