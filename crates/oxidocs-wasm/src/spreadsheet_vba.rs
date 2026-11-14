@@ -31189,6 +31189,10 @@ fn attach_copied_sheet_links(
         };
         let mut workbook = oxicells_core::parse_xlsx_preserving_values(&package)
             .map_err(|error| host_error(1004, error.to_string()))?;
+        if !empty_source {
+            initialize_missing_package_styles(&mut workbook, &package, &settings.application_font)
+                .map_err(|error| host_error(1004, error))?;
+        }
         if chart {
             workbook.sheets[0].name = format!("{prefix}1");
         }
@@ -31299,8 +31303,12 @@ fn attach_copied_sheet_links(
         if !editable && matches!(file_io::WorkbookFiles::package_format(package)?, 53 | 54) {
             return self.add_workbook(code_owner, WorkbookTemplate::OpenFile(path), Some(files));
         }
-        let workbook = oxicells_core::parse_xlsx_preserving_values(package)
+        let mut workbook = oxicells_core::parse_xlsx_preserving_values(package)
             .map_err(|error| host_error(1004, error.to_string()))?;
+        self.ensure_application_owner(self.active);
+        let font = &self.hosts.get(&self.active).expect("active workbook").application_font;
+        initialize_missing_package_styles(&mut workbook, package, font)
+            .map_err(|error| host_error(1004, error))?;
         let source = crate::vba_project::read_project_source_with_code_page(package, None)
             .map_err(|error| host_error(1004, error))?.unwrap_or_default();
         let project_name = crate::vba_project::read_project_name(package, None)
@@ -47167,6 +47175,43 @@ fn store_browser_standard_font_preference(units: &[u16]) -> Result<(), String> {
     Ok(())
 }
 
+/// Supply the application's explicit Normal font when a package omits styles.
+/// This must happen before shape anchors are projected onto the worksheet grid.
+fn initialize_missing_package_styles(
+    workbook: &mut Workbook,
+    package: &[u8],
+    application_font: &CellStyle,
+) -> Result<bool, String> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(package))
+        .map_err(|error| error.to_string())?;
+    match archive.by_name("xl/styles.xml") {
+        Ok(_) => return Ok(false),
+        Err(zip::result::ZipError::FileNotFound) => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    let mut normal = application_font.clone();
+    let face = normal.font_name.clone()
+        .or_else(|| normal.latin_font_name().map(str::to_owned))
+        .ok_or_else(|| "the application Normal font has no face".to_string())?;
+    let reference = normal.font_reference.get_or_insert_with(Default::default);
+    reference.scheme = None;
+    if reference.latin_name_utf16.is_none() { reference.latin_name = Some(face.clone()); }
+    let height = fresh_workbook_row_points(&normal);
+    let seed = file_io::WorkbookFiles::blank_package(
+        oxicells_core::ir::SheetKind::Worksheet, 1, &normal, (0.0, height),
+    )?;
+    let seed = oxicells_core::parse_xlsx_preserving_values(&seed)
+        .map_err(|error| error.to_string())?;
+    workbook.default_style = seed.default_style;
+    workbook.named_styles = seed.named_styles;
+    for sheet in &mut workbook.sheets {
+        sheet.normal_font = Some((face.clone(), normal.font_size.unwrap_or(11.0)));
+        sheet.column_width_font = Some(face.clone());
+        if !sheet.default_row_custom { sheet.default_row_height = height; }
+    }
+    Ok(true)
+}
+
 fn default_application_font() -> CellStyle {
     CellStyle {
         font_name: Some("游ゴシック".into()),
@@ -59592,7 +59637,7 @@ End Function"####;
     }
 
     fn assert_complete_ole_native_group(group_id: &str, expected_cases: usize) {
-        let corpus_bytes: &[u8] = if matches!(group_id, "group_relative24" | "group_views3" | "group_delete_plain4" | "group_delete_outer_rotated4" | "group_delete_inner_rotated4" | "group_promotion_rounding7" | "group_promotion_profiles6" | "group_promotion_grid6" | "group_delete_regroup_plain4" | "group_delete_regroup_outer_rotated4" | "group_delete_regroup_inner_rotated4") {
+        let corpus_bytes: &[u8] = if matches!(group_id, "group_relative24" | "group_views3" | "group_delete_plain4" | "group_delete_outer_rotated4" | "group_delete_inner_rotated4" | "group_promotion_rounding7" | "group_promotion_profiles6" | "group_promotion_grid6" | "group_delete_regroup_plain4" | "group_delete_regroup_outer_rotated4" | "group_delete_regroup_inner_rotated4" | "rotation_integer16" | "rotation_fractional_wide16" | "rotation_fractional_tall16") {
             include_bytes!("../../../tests/fixtures/vba/group_layer_operations_native.json")
         } else if matches!(group_id, "relative_layers24" | "repeat_save9") {
             include_bytes!("../../../tests/fixtures/vba/ole_layer_operations_native.json")
@@ -59605,6 +59650,7 @@ End Function"####;
             Some("tests/fixtures/vba/grouped_shapes_nested.xlsx") => include_bytes!("../../../tests/fixtures/vba/grouped_shapes_nested.xlsx"),
             Some("tests/fixtures/vba/grouped_shapes_nested_rotated.xlsx") => include_bytes!("../../../tests/fixtures/vba/grouped_shapes_nested_rotated.xlsx"),
             Some("tests/fixtures/vba/grouped_shapes_nested_inner_rotated.xlsx") => include_bytes!("../../../tests/fixtures/vba/grouped_shapes_nested_inner_rotated.xlsx"),
+            Some("tests/fixtures/basic_test.xlsx") => include_bytes!("../../../tests/fixtures/basic_test.xlsx"),
             None => include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx"),
             Some(other) => panic!("unknown Native group input {other}"),
         };
@@ -59649,6 +59695,17 @@ End Function"####;
             }
         }
         assert!(failures.is_empty(),"Complete Native OLE insertion vectors differ:\n{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn group_layers_native_rotation_save48() {
+        let mut failed = Vec::new();
+        for group in ["rotation_integer16", "rotation_fractional_wide16", "rotation_fractional_tall16"] {
+            if std::panic::catch_unwind(|| assert_complete_ole_native_group(group, 16)).is_err() {
+                failed.push(group);
+            }
+        }
+        assert!(failed.is_empty(), "Complete Native rotation/save groups differ: {failed:?}");
     }
 
     #[test]
@@ -143587,6 +143644,68 @@ End Function"#;
         assert_ne!(moved.from, original_drawing.from);
         assert_ne!(moved.to, original_drawing.to);
         assert_eq!(saved.sheets[0].drawings.len(), 1);
+    }
+
+    #[test]
+    fn opened_styleless_workbook_uses_native_normal_grid_in_saved_shapes() {
+        let provider = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let caller = include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
+        let source = r#"Public Function Probe() As Variant
+            Set b = Workbooks.Open("C:\work\provider.xlsx")
+            Set ws = b.Worksheets(1)
+            Set s = ws.Shapes.AddShape(1, 20, 30, 40, 10)
+            s.Name = "Rotated"
+            Probe = Array(ws.Cells(100, 100).Font.Name, ws.StandardHeight, ws.Columns(100).Width, ws.Rows(1).RowHeight, ws.Cells(100, 100).Font.Size, ws.Cells(100, 100).Font.ThemeFont, ws.Cells(100, 100).Font.ColorIndex, ws.Cells(100, 100).Font.ThemeColor)
+            b.SaveCopyAs "C:\work\implicit-normal.xlsx"
+        End Function"#;
+        let mut context = failure_context();
+        context.file_context = Some(file_io::FileContext {
+            package_bytes: Some(caller.to_vec()), full_name: Some(r"C:\work\caller.xlsm".into()),
+            read_only: Some(true), folders: vec![r"C:\work".into()],
+            files: vec![file_io::ProducedFile {path:r"C:\work\provider.xlsx".into(),bytes:provider.to_vec()}],
+            ..Default::default()
+        });
+        let outcome = execute_workbook_action_in_session(
+            oxicells_core::parse_xlsx_preserving_values(caller).unwrap(), source,
+            Some("Probe"), vec![], 0, context, &mut None,
+        ).unwrap();
+        assert!(outcome.error.is_none(), "{:?}", outcome.error.as_ref().map(|error| &error.message));
+        assert!(!outcome.workbook_changed);
+        let raw = serde_json::to_value(&outcome.result).unwrap();
+        let values = raw["value"]["values"].as_array().unwrap();
+        assert_eq!(values[0]["value"].as_str(), Some("\u{6e38}\u{30b4}\u{30b7}\u{30c3}\u{30af}"));
+        let numbers = values[1..].iter().map(|v| v["value"].as_f64().unwrap()).collect::<Vec<_>>();
+        assert_eq!(numbers, [18.75, 54.0, 18.75, 11.0, 0.0, 1.0, 2.0]);
+        let bytes = &outcome.files.iter().find(|file| file.path==r"C:\work\implicit-normal.xlsx").unwrap().bytes;
+        let saved = oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+        assert_eq!(saved.default_style.font_name.as_deref(), Some("\u{6e38}\u{30b4}\u{30b7}\u{30c3}\u{30af}"));
+        assert_eq!(saved.sheets[0].default_row_height, 18.75);
+        let shape = &saved.sheets[0].drawings[0];
+        // Native Excel's grid markers for the same 20/30/40/10 point rectangle.
+        assert_eq!((shape.from.col,shape.from.col_off,shape.from.row,shape.from.row_off),(0,254_000,1,142_875));
+        let to = shape.to.unwrap();
+        assert_eq!((to.col,to.col_off,to.row,to.row_off),(1,76_200,2,31_750));
+    }
+
+    #[test]
+    fn missing_style_normal_preserves_pinned_geometry_and_existing_styles() {
+        let package = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut workbook = oxicells_core::parse_xlsx_preserving_values(package).unwrap();
+        workbook.sheets[0].default_row_height = 15.0;
+        workbook.sheets[0].default_row_custom = true;
+        workbook.sheets[0].default_col_width = 10.0;
+        workbook.sheets[0].default_col_width_explicit = true;
+        assert!(initialize_missing_package_styles(&mut workbook, package, &default_application_font()).unwrap());
+        assert_eq!(workbook.sheets[0].default_row_height, 15.0);
+        assert!(workbook.sheets[0].default_row_custom);
+        assert_eq!(workbook.sheets[0].default_col_width, 10.0);
+        assert!(workbook.sheets[0].default_col_width_explicit);
+        assert_eq!(workbook.default_style.font_reference.as_ref().unwrap().scheme, None);
+        let package = include_bytes!("../../../tests/fixtures/vba/grouped_shapes_nested.xlsx");
+        let mut workbook = oxicells_core::parse_xlsx_preserving_values(package).unwrap();
+        let before = serde_json::to_value(&workbook).unwrap();
+        assert!(!initialize_missing_package_styles(&mut workbook, package, &default_application_font()).unwrap());
+        assert_eq!(serde_json::to_value(&workbook).unwrap(), before);
     }
 
     #[test]
