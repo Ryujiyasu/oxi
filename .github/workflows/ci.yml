@@ -60,6 +60,15 @@ jobs:
         run: >-
           cargo test -p oxidocs-wasm --lib --features suite --locked
           --config profile.test.package.oxivba-core.opt-level=1 initial_styleless_
+      - name: Editor save font-color identity and unchanged copies
+        run: >-
+          cargo test -p oxidocs-wasm --lib --features suite --locked
+          --config profile.test.package.oxivba-core.opt-level=1 -- --exact
+          spreadsheet_vba::tests::sparse_editor_fonts_inherit_only_omitted_color_and_keep_explicit_identity
+          spreadsheet_vba::tests::save_copy_preserves_incoming_editor_value_font_geometry_and_format_edits
+          spreadsheet_vba::tests::save_copy_keeps_partial_textbox_character_formatting_by_vba
+          spreadsheet_vba::tests::save_copy_persists_a_comment_thread_created_by_vba
+          spreadsheet_vba::tests::save_copy_persists_legacy_comments_and_their_shape_style
       - name: Native defaults and saved drawing anchors
         run: >-
           cargo test -p oxidocs-wasm --lib --features suite --locked
