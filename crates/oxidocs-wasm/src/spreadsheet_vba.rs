@@ -47182,13 +47182,7 @@ fn initialize_missing_package_styles(
     package: &[u8],
     application_font: &CellStyle,
 ) -> Result<bool, String> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(package))
-        .map_err(|error| error.to_string())?;
-    match archive.by_name("xl/styles.xml") {
-        Ok(_) => return Ok(false),
-        Err(zip::result::ZipError::FileNotFound) => {}
-        Err(error) => return Err(error.to_string()),
-    }
+    if package_has_styles(package)? { return Ok(false); }
     let mut normal = application_font.clone();
     let face = normal.font_name.clone()
         .or_else(|| normal.latin_font_name().map(str::to_owned))
@@ -47208,6 +47202,70 @@ fn initialize_missing_package_styles(
         sheet.normal_font = Some((face.clone(), normal.font_size.unwrap_or(11.0)));
         sheet.column_width_font = Some(face.clone());
         if !sheet.default_row_custom { sheet.default_row_height = height; }
+    }
+    Ok(true)
+}
+
+fn package_has_styles(package: &[u8]) -> Result<bool, String> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(package))
+        .map_err(|error| error.to_string())?;
+    let present = match archive.by_name("xl/styles.xml") {
+        Ok(_) => true,
+        Err(zip::result::ZipError::FileNotFound) => false,
+        Err(error) => return Err(error.to_string()),
+    };
+    Ok(present)
+}
+
+/// The initially loaded editor IR may already contain user edits. Supply
+/// implicit package defaults without replacing explicit fonts or geometry.
+fn initialize_initial_caller_styles(
+    workbook: &mut Workbook, package: &[u8], application_font: &CellStyle,
+) -> Result<bool, String> {
+    if package_has_styles(package)? { return Ok(false); }
+    let original = oxicells_core::parse_xlsx_preserving_values(package)
+        .map_err(|error| error.to_string())?;
+    let mut loaded = original.clone();
+    initialize_missing_package_styles(&mut loaded, package, application_font)?;
+    let old_normal = original.named_styles.iter().find(|style|style.builtin_id==Some(0))
+        .map(|style|&style.style).unwrap_or(&original.default_style);
+    let wanted = workbook.named_styles.iter().find(|style|style.builtin_id==Some(0)
+        && Dress::of_style(&style.style)!=Dress::of_style(old_normal))
+        .map(|style|style.style.clone()).unwrap_or_else(||loaded.default_style.clone());
+    if workbook.default_style==original.default_style {
+        workbook.default_style=wanted;
+    } else if Dress::of_style(&workbook.default_style)==Dress::of_style(&original.default_style) {
+        Dress::of_style(&wanted).write_font(&mut workbook.default_style);
+    }
+    if let Some(normal)=workbook.named_styles.iter_mut().find(|style|style.builtin_id==Some(0)) {
+        if Dress::of_style(&normal.style)==Dress::of_style(old_normal) {
+            Dress::of_style(&workbook.default_style).write_font(&mut normal.style);
+        }
+    } else {
+        let mut normal=loaded.named_styles.iter().find(|style|style.builtin_id==Some(0))
+            .ok_or_else(||"the implicit package has no Normal style".to_string())?.clone();
+        normal.style=workbook.default_style.clone();
+        workbook.named_styles.push(normal);
+    }
+    let face=workbook.default_style.font_name.clone()
+        .or_else(||workbook.default_style.latin_font_name().map(str::to_owned))
+        .or_else(||loaded.default_style.font_name.clone())
+        .ok_or_else(||"the loaded Normal font has no face".to_string())?;
+    let size=workbook.default_style.font_size.unwrap_or(11.0);
+    let height=fresh_workbook_row_points(&workbook.default_style);
+    for (index,sheet) in workbook.sheets.iter_mut().enumerate() {
+        let before=sheet.origin_id.and_then(|id|original.sheets.iter().find(|old|old.origin_id==Some(id)))
+            .or_else(||original.sheets.get(index).filter(|old|old.name==sheet.name));
+        if sheet.normal_font.as_ref()==before.and_then(|old|old.normal_font.as_ref()) {
+            sheet.normal_font=Some((face.clone(),size));
+        }
+        if sheet.column_width_font.as_ref()==before.and_then(|old|old.column_width_font.as_ref()) {
+            sheet.column_width_font=Some(face.clone());
+        }
+        if !sheet.default_row_custom && (sheet.default_row_height==before.map_or(15.0,|old|old.default_row_height)
+            || before.is_some_and(|old|old.default_row_custom)) {
+            sheet.default_row_height=height;
+        }
     }
     Ok(true)
 }
@@ -48532,7 +48590,26 @@ impl VbaApplicationState {
         Ok(self)
     }
 
+    fn restored_application_font(&self, previous: &CellStyle) -> CellStyle {
+        let mut font=self.new_workbook_font.clone().unwrap_or_else(||previous.clone());
+        if let Some(startup)=&self.standard_font_startup {
+            font=default_application_font();
+            if let Some(units)=&startup.profile_utf16 {
+                let profile=crate::vba_automation::StandardFontProfile(units.clone());
+                if let Some((face,points))=profile.parsed() {
+                    font.font_name=Some(String::from_utf16_lossy(face));
+                    font.font_size=Some(f32::from(points));
+                    let reference=font.font_reference.get_or_insert_with(Default::default);
+                    reference.latin_name=None;reference.scheme=None;
+                    reference.latin_name_utf16=String::from_utf16(face).err().map(|_|face.to_vec());
+                }
+            }
+        }
+        font
+    }
+
     fn restore(self, host: &mut WorkbookHost<'_>) {
+        host.application_font=self.restored_application_font(&host.application_font);
         host.calculation = self.calculation;
         host.app_settings.insert("calculatebeforesave".to_string(), Value::Boolean(self.calculate_before_save));
         host.screen_updating = self.screen_updating;
@@ -48541,22 +48618,7 @@ impl VbaApplicationState {
         host.status_bar = self.status_bar;
         host.cursor = self.cursor;
         host.interactive = self.interactive;
-        if let Some(font)=self.new_workbook_font {host.application_font=font;}
         let startup_pending = self.standard_font_startup.as_ref().map(|startup| startup.profile_utf16.clone());
-        if let Some(startup) = self.standard_font_startup {
-            host.application_font = default_application_font();
-            if let Some(units) = startup.profile_utf16 {
-                let profile = crate::vba_automation::StandardFontProfile(units);
-                if let Some((face, points)) = profile.parsed() {
-                    host.application_font.font_name = Some(String::from_utf16_lossy(face));
-                    host.application_font.font_size = Some(f32::from(points));
-                    let reference = host.application_font.font_reference.get_or_insert_with(Default::default);
-                    reference.latin_name = None;
-                    reference.scheme = None;
-                    reference.latin_name_utf16 = String::from_utf16(face).err().map(|_| face.to_vec());
-                }
-            }
-        }
         if let Some(units) = self.pending_standard_font_profile_utf16.or_else(|| startup_pending.clone().flatten()) {
             host.persist_standard_font_profile(crate::vba_automation::StandardFontProfile(units));
         } else {
@@ -49070,7 +49132,6 @@ fn execute_workbook_invocation(
     let should_calculate = mode != -4135 || on_save;
     let project_compilation = matches!(&action, Some(ExternalObjectAction::CompileProject));
     let needs_runtime = !project_compilation && (procedure.is_some() || action.is_some() || should_calculate);
-    let incoming = serde_json::to_vec(&workbook).map_err(|error| error.to_string())?;
     let previous_workbook:Option<Workbook>=session.as_ref().map(|previous|serde_json::from_slice(&previous.workbook))
         .transpose().map_err(|error|error.to_string())?;
     let inherited_documents = || session.as_ref().map(|previous|previous.documents.clone()).unwrap_or_default();
@@ -49212,6 +49273,20 @@ fn execute_workbook_invocation(
             } else { false }
         } else { false }
     } else { false };
+    // Loading implicit defaults is not a document edit. Check the original
+    // saved package first, then normalize before constructing drawing hosts
+    // and before comparing a resumed invocation with its previous workbook.
+    if let Some(package)=context.file_context.as_ref().and_then(|file|file.package_bytes.as_deref()) {
+        let application_font=session.as_ref().map(|previous|previous.host.application_font.clone())
+            .unwrap_or_else(default_application_font);
+        let application_font=context.application_state.as_ref()
+            .map_or_else(||application_font.clone(),|state|state.restored_application_font(&application_font));
+        let font=previous_workbook.as_ref().map(|previous|&previous.default_style)
+            .filter(|font|font.font_name.is_some() || font.latin_font_name().is_some())
+            .unwrap_or(&application_font);
+        initialize_initial_caller_styles(&mut workbook,package,font)?;
+    }
+    let incoming = serde_json::to_vec(&workbook).map_err(|error| error.to_string())?;
     let mut next_files = session.as_ref().map(|previous| previous.host.file_io.clone()).unwrap_or_default();
     if let Some(state)=context.application_state.as_ref().and_then(|state|state.directory_state.as_ref()) {
         next_files.files.restore_directory_state(&state.core_state()?).map_err(|failure|format!("invalid VBA directory state: {}",failure.description()))?;
@@ -143680,6 +143755,95 @@ End Function"#;
         assert_ne!(moved.from, original_drawing.from);
         assert_ne!(moved.to, original_drawing.to);
         assert_eq!(saved.sheets[0].drawings.len(), 1);
+    }
+
+    #[test]
+    fn initial_styleless_caller_uses_native_defaults_and_keeps_saved_state() {
+        let package=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let source=r#"Public Function Probe() As Variant
+            Set ws = ActiveSheet
+            Probe = Array(ws.Cells(100, 100).Font.Name, ws.Cells(100, 100).Font.Size, ws.Cells(100, 100).Font.ThemeFont, ws.StandardHeight, ws.Columns(100).Width, ws.Rows(1).RowHeight, ThisWorkbook.Saved)
+        End Function
+        Public Sub MarkSaved()
+            ThisWorkbook.Saved = True
+        End Sub
+        Public Sub Export()
+            ThisWorkbook.SaveCopyAs "C:\work\initial-normal.xlsx"
+        End Sub"#;
+        let context=|| {
+            let mut context=failure_context();
+            context.file_context=Some(file_io::FileContext {
+                package_bytes:Some(package.to_vec()),full_name:Some(r"C:\work\original.xlsx".into()),
+                read_only:Some(true),folders:vec![r"C:\work".into()],..Default::default()
+            });
+            context
+        };
+        let mut session=None;
+        let mut incoming=oxicells_core::parse_xlsx_preserving_values(package).unwrap();
+        let mut expected_saved=false;
+        for procedure in ["Probe","MarkSaved","Probe","Export"] {
+            // The page keeps document fields after a read-only call while
+            // carrying its returned calculation metadata into the next call.
+            let outcome=execute_workbook_action_in_session(
+                incoming.clone(),source,Some(procedure),vec![],0,context(),&mut session,
+            ).unwrap();
+            incoming.calculation=outcome.workbook.calculation.clone();
+            if procedure=="MarkSaved" { expected_saved=true; }
+            assert!(outcome.error.is_none(),"{:?}",outcome.error.as_ref().map(|error|&error.message));
+            assert!(!outcome.workbook_changed);
+            if procedure=="Probe" {
+                let raw=serde_json::to_value(&outcome.result).unwrap();
+                let values=raw["value"]["values"].as_array().unwrap();
+                assert_eq!(values[0]["value"].as_str(),Some("\u{6e38}\u{30b4}\u{30b7}\u{30c3}\u{30af}"));
+                assert_eq!(values[1..6].iter().map(|v|v["value"].as_f64().unwrap()).collect::<Vec<_>>(),[11.0,0.0,18.75,54.0,18.75]);
+                assert_eq!(values[6]["value"].as_bool(),Some(expected_saved));
+            }
+            if procedure=="MarkSaved" || procedure=="Export" {assert!(session.as_ref().unwrap().host.saved);}
+            if procedure=="Export" {
+                let bytes=&outcome.files.iter().find(|file|file.path==r"C:\work\initial-normal.xlsx").unwrap().bytes;
+                let saved=oxicells_core::parse_xlsx_preserving_values(bytes).unwrap();
+                assert_eq!(saved.default_style.font_name.as_deref(),Some("\u{6e38}\u{30b4}\u{30b7}\u{30c3}\u{30af}"));
+                assert_eq!(saved.sheets[0].default_row_height,18.75);
+            }
+        }
+        assert!(session.as_ref().unwrap().host.saved);
+    }
+
+    #[test]
+    fn initial_styleless_defaults_preserve_editor_fonts_styles_and_geometry() {
+        let package=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut workbook=oxicells_core::parse_xlsx_preserving_values(package).unwrap();
+        let mut seed=workbook.clone();
+        initialize_missing_package_styles(&mut seed,package,&default_application_font()).unwrap();
+        let mut custom=seed.named_styles.iter().find(|style|style.builtin_id==Some(0)).unwrap().clone();
+        custom.name="EditorStyle".into();custom.builtin_id=None;custom.source_id=1;
+        custom.style.font_name=Some("Verdana".into());
+        workbook.named_styles.push(custom.clone());
+        workbook.default_style.bg_color=Some("123456".into());
+        let cell=&mut workbook.sheets[0].rows[0].cells[0];
+        cell.value=CellValue::String("edited".into());cell.style.font_name=Some("Arial".into());cell.style.font_size=Some(17.0);
+        workbook.sheets[0].rows[0].height=Some(28.0);workbook.sheets[0].rows[0].custom_height=true;
+        workbook.sheets[0].default_row_height=22.5;workbook.sheets[0].default_row_custom=true;
+        workbook.sheets[0].column_width_font=Some("Arial".into());
+        let rows=serde_json::to_value(&workbook.sheets[0].rows).unwrap();
+        assert!(initialize_initial_caller_styles(&mut workbook,package,&default_application_font()).unwrap());
+        assert_eq!(serde_json::to_value(&workbook.sheets[0].rows).unwrap(),rows);
+        assert_eq!(workbook.default_style.bg_color.as_deref(),Some("123456"));
+        assert!(workbook.named_styles.iter().any(|style|serde_json::to_value(style).unwrap()==serde_json::to_value(&custom).unwrap()));
+        assert_eq!(workbook.sheets[0].default_row_height,22.5);
+        assert_eq!(workbook.sheets[0].column_width_font.as_deref(),Some("Arial"));
+        let before=serde_json::to_value(&workbook).unwrap();
+        initialize_initial_caller_styles(&mut workbook,package,&default_application_font()).unwrap();
+        assert_eq!(serde_json::to_value(&workbook).unwrap(),before);
+        let mut edited=oxicells_core::parse_xlsx_preserving_values(package).unwrap();
+        edited.default_style.font_name=Some("Arial".into());edited.default_style.font_size=Some(17.0);
+        initialize_initial_caller_styles(&mut edited,package,&default_application_font()).unwrap();
+        assert_eq!(edited.default_style.font_name.as_deref(),Some("Arial"));assert_eq!(edited.default_style.font_size,Some(17.0));
+        let package=include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
+        let mut explicit=oxicells_core::parse_xlsx_preserving_values(package).unwrap();
+        let before=serde_json::to_value(&explicit).unwrap();
+        assert!(!initialize_initial_caller_styles(&mut explicit,package,&default_application_font()).unwrap());
+        assert_eq!(serde_json::to_value(&explicit).unwrap(),before);
     }
 
     #[test]

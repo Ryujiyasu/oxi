@@ -56,6 +56,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Initial Normal font in a new style part
         run: cargo test -p oxicells-core --lib --locked new_style_part_keeps_requested_normal_font_on_first_save
+      - name: Initial caller defaults and editor formatting
+        run: >-
+          cargo test -p oxidocs-wasm --lib --features suite --locked
+          --config profile.test.package.oxivba-core.opt-level=1 initial_styleless_
       - name: Native defaults and saved drawing anchors
         run: >-
           cargo test -p oxidocs-wasm --lib --features suite --locked
