@@ -3593,6 +3593,13 @@ fn drawing_addition_package(
         let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving shape {shape_name:?}")))?;
         drawings_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), drawing.clone());
     }
+    for (sheet, drawings) in additions {
+        if !group_states.contains_key(sheet) { continue; }
+        let Some(part) = existing_parts.get(sheet) else { continue };
+        for drawing in drawings {
+            if let Some(name) = &drawing.name { drawings_by_part.entry(part.clone()).or_default().insert(name.clone(),drawing.clone()); }
+        }
+    }
     let mut structural_by_part = HashMap::new();
     for (sheet, groups) in group_states {
         let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData("retained groups have no source drawing part".into()))?;
@@ -3621,6 +3628,13 @@ fn drawing_addition_package(
             xml = patch_drawing_picture_xml(&xml, edits)?;
             xml = patch_drawing_picture_background_xml(&xml, edits)?;
         }
+        // Structural deletion may also retain a newly created group or leaf.
+        // Materialize new leaves first; the structural writer owns the complete
+        // final tree and must not run the later legacy grouping pass again.
+        let structural = structural_by_part.contains_key(&part) && deletions_by_part.contains_key(&part);
+        if structural {
+            if let Some(drawings) = part_additions.get(&part) { xml = append_drawing_shapes_xml(&xml, drawings)?; }
+        }
         if let Some(names) = deletions_by_part.get(&part) {
             xml = if let Some(groups) = structural_by_part.get(&part) {
                 patch_structural_drawing_deletions(&xml, names, groups, drawings_by_part.get(&part), geometry_by_part.get(&part))?
@@ -3629,9 +3643,11 @@ fn drawing_addition_package(
             };
         }
         if let Some(edits) = geometry_by_part.get(&part) { xml = patch_drawing_geometry_xml(&xml, edits)?; }
-        if let Some(drawings) = part_additions.get(&part) { xml = append_drawing_shapes_xml(&xml, drawings)?; }
-        if let Some(groups) = groups_by_part.get(&part) {
-            for group in groups { xml = patch_drawing_group_addition(&xml, group)?; }
+        if !structural {
+            if let Some(drawings) = part_additions.get(&part) { xml = append_drawing_shapes_xml(&xml, drawings)?; }
+            if let Some(groups) = groups_by_part.get(&part) {
+                for group in groups { xml = patch_drawing_group_addition(&xml, group)?; }
+            }
         }
 
         if let Some(before) = before_deletion {
@@ -4454,11 +4470,19 @@ fn append_xml_child(xml: &str, root: &str, child: &str) -> Result<String, XlsxEr
 }
 
 fn drawing_shape_ids(xml: &str) -> Result<std::collections::HashSet<u32>, XlsxError> {
-    let mut reader = Reader::from_str(xml);
+    let mut reader = quick_xml::NsReader::from_str(xml);
     let mut ids = std::collections::HashSet::new();
     loop {
-        match reader.read_event().map_err(XlsxError::Xml)? {
-            Event::Start(start) | Event::Empty(start) if local_name(start.name().as_ref()) == "cNvPr" => {
+        let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let standard = match namespace {
+            quick_xml::name::ResolveResult::Bound(namespace) => matches!(namespace.as_ref(),
+                b"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" |
+                b"http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"),
+            quick_xml::name::ResolveResult::Unbound => true,
+            _ => false,
+        };
+        match event {
+            Event::Start(start) | Event::Empty(start) if standard && local_name(start.name().as_ref()) == "cNvPr" => {
                 let id = get_attr(&start, "id").and_then(|id| id.parse::<u32>().ok())
                     .filter(|id| *id > 0).ok_or_else(|| XlsxError::InvalidData("drawing shape id must be a positive integer".into()))?;
                 if !ids.insert(id) { return Err(XlsxError::InvalidData(format!("duplicate drawing shape id {id}"))); }
@@ -5356,13 +5380,11 @@ fn append_drawing_shapes_xml(
     drawings: &[crate::ir::Drawing],
 ) -> Result<String, XlsxError> {
     let mut reader = Reader::from_str(xml);
-    let mut max_id = 1u32;
+    let mut used = drawing_shape_ids(xml)?;
+    let mut max_id = used.iter().copied().max().unwrap_or(1);
     let mut root_end: Option<(usize, String)> = None;
     loop {
         match reader.read_event().map_err(XlsxError::Xml)? {
-            Event::Start(start) | Event::Empty(start) if local_name(start.name().as_ref()) == "cNvPr" => {
-                max_id = max_id.max(get_attr(&start, "id").and_then(|id| id.parse().ok()).unwrap_or(0));
-            }
             Event::End(end) if local_name(end.name().as_ref()) == "wsDr" => {
                 let qname = std::str::from_utf8(end.name().as_ref()).map_err(|error| XlsxError::InvalidData(error.to_string()))?.to_string();
                 root_end = Some((oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position()), qname));
@@ -5375,7 +5397,6 @@ fn append_drawing_shapes_xml(
     let closing_len = qname.len() + 3;
     let close_at = end.checked_sub(closing_len).ok_or_else(|| XlsxError::InvalidData("drawing root end is malformed".into()))?;
     let mut additions = String::new();
-    let mut used = drawing_shape_ids(xml)?;
     for drawing in drawings {
         let id = match drawing.non_visual_id {
             Some(id) if id > 0 => id,
@@ -5456,7 +5477,7 @@ fn write_drawing_shape(drawing: &crate::ir::Drawing, id: u32) -> Result<String, 
     let (x, y) = shape.transform_offset.unwrap_or((drawing.from.col_off, drawing.from.row_off));
     let xfrm = format!("<a:xfrm{rotation}{flip_h}{flip_v}><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm>", point(x), point(y), width, height);
     let style = "<xdr:style><a:lnRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:lnRef><a:fillRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:fillRef><a:effectRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:effectRef><a:fontRef idx=\"minor\"><a:schemeClr val=\"dk1\"/></a:fontRef></xdr:style>";
-    let anchor = format!("<xdr:{anchor_open}>{}{}<xdr:{object} macro=\"\"><xdr:{nonvisual}><xdr:cNvPr id=\"{id}\" name=\"{name}\"{metadata}/><xdr:{properties}{text_box}/></xdr:{nonvisual}><xdr:spPr>{xfrm}<a:prstGeom prst=\"{geometry}\">{av_list}</a:prstGeom>{paint}</xdr:spPr>{style}{text}</xdr:{object}><xdr:clientData/>{anchor_close}", marker("from", drawing.from), to_xml);
+    let anchor = format!("<xdr:{anchor_open} xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">{}{}<xdr:{object} macro=\"\"><xdr:{nonvisual}><xdr:cNvPr id=\"{id}\" name=\"{name}\"{metadata}/><xdr:{properties}{text_box}/></xdr:{nonvisual}><xdr:spPr>{xfrm}<a:prstGeom prst=\"{geometry}\">{av_list}</a:prstGeom>{paint}</xdr:spPr>{style}{text}</xdr:{object}><xdr:clientData/>{anchor_close}", marker("from", drawing.from), to_xml);
     Ok(anchor)
 }
 
@@ -6909,6 +6930,20 @@ fn patch_structural_drawing_deletions(
             if !active.insert(id) {
                 return Err(invalid("drawing group hierarchy contains a cycle"));
             }
+            if !self.objects.contains_key(&id) {
+                let group = self.groups.get(&id).ok_or_else(|| invalid("retained drawing identity has no source object"))?;
+                let t = group.transform;
+                let xml = format!("<xdr:grpSp xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><xdr:nvGrpSpPr><xdr:cNvPr id=\"{}\" name=\"{}\"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr><xdr:grpSpPr><a:xfrm rot=\"{}\"><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/><a:chOff x=\"{}\" y=\"{}\"/><a:chExt cx=\"{}\" cy=\"{}\"/></a:xfrm></xdr:grpSpPr></xdr:grpSp>",
+                    id,escape(&group.name),group.rotation,t.offset.0,t.offset.1,t.extent.0,t.extent.1,t.child_offset.0,t.child_offset.1,t.child_extent.0,t.child_extent.1);
+                let mut reader = Reader::from_str(&xml);
+                let mut result = Vec::new();
+                loop { let event = reader.read_event().map_err(XlsxError::Xml)?.into_owned(); if matches!(event,Event::Eof) {break;} result.push(event); }
+                let close = result.pop().ok_or_else(|| invalid("new group container is empty"))?;
+                for child in &group.children { result.extend(self.render(*child,active)?); }
+                result.push(close);
+                active.remove(&id);
+                return Ok(result);
+            }
             let object = self
                 .objects
                 .get(&id)
@@ -7187,6 +7222,7 @@ fn patch_structural_drawing_deletions(
                 .parent_id;
         }
         for child in &group.children {
+            if !objects.contains_key(child) && group_map.contains_key(child) { continue; }
             let object = objects
                 .get(child)
                 .ok_or_else(|| invalid("retained drawing group child is missing"))?;
@@ -7214,34 +7250,31 @@ fn patch_structural_drawing_deletions(
         parents,
         deleted: deletions,
     };
+    let mut placements = HashMap::<u32,(usize,usize)>::new();
+    for (id,object) in &objects {
+        if deletions.contains(&object.name) { continue; }
+        if nodes[object.element].tag == "grpSp" && !context.groups.contains_key(id) { continue; }
+        let mut root = *id;
+        let mut seen = std::collections::HashSet::new();
+        while let Some(parent) = context.parents.get(&root) {
+            if !seen.insert(root) { return Err(invalid("retained drawing hierarchy contains a cycle")); }
+            root = *parent;
+        }
+        let position = (object.anchor,nodes[object.element].start);
+        placements.entry(root).and_modify(|held| { if position.1 < held.1 { *held=position; } }).or_insert(position);
+    }
     let mut replacements = Vec::new();
     for anchor in anchors {
-        let affected = objects
-            .values()
-            .any(|object| object.anchor == anchor && deletions.contains(&object.name));
-        if !affected {
-            continue;
-        }
-        let mut roots: Vec<_> = objects
-            .iter()
-            .filter(|(id, object)| {
-                object.anchor == anchor
-                    && !deletions.contains(&object.name)
-                    && !context.parents.contains_key(id)
-                    && (context.groups.contains_key(id) || nodes[object.element].tag != "grpSp")
-            })
-            .map(|(id, object)| (*id, nodes[object.element].start))
-            .collect();
-        roots.sort_by_key(|(_, start)| *start);
+        let affected = objects.iter().any(|(id,object)| object.anchor == anchor &&
+            (deletions.contains(&object.name) || context.parents.get(id).copied()!=object.parent
+             || (nodes[object.element].tag=="grpSp" && !context.groups.contains_key(id))));
+        let affected = affected || placements.iter().any(|(id,position)| position.0==anchor && !objects.contains_key(id));
+        if !affected { continue; }
+        let mut roots:Vec<_> = placements.iter().filter(|(_,position)|position.0==anchor).map(|(id,position)|(*id,position.1)).collect();
+        roots.sort_by_key(|(_,position)|*position);
         let mut result = Vec::new();
-        for (id, _) in roots {
-            result.extend(context.anchor(
-                anchor,
-                id,
-                context.render(id, &mut Default::default())?,
-            )?);
-        }
-        replacements.push((nodes[anchor].start, nodes[anchor].end, result));
+        for (id,_) in roots { result.extend(context.anchor(anchor,id,context.render(id,&mut Default::default())?)?); }
+        replacements.push((nodes[anchor].start,nodes[anchor].end,result));
     }
     for (start, end, replacement) in replacements.into_iter().rev() {
         events.splice(start..end, replacement);
@@ -17253,6 +17286,64 @@ mod tests {
     }
 
     #[test]
+    fn added_drawing_ids_ignore_foreign_metadata_and_keep_real_duplicates_invalid() {
+        let (xml, _, _) = structural_delete_sample();
+        for strict in [false, true] {
+            let xml = if strict { xml.replace(
+                "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
+                "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing") } else { xml.clone() };
+            let xml = xml.replace("<u:sp>", "<u:sp><u:cNvPr id=\"4294967295\"/><u:cNvPr id=\"invalid\"/>");
+            let expected = std::collections::HashSet::from([2, 3, 4, 5, 10, 20, 30]);
+            assert_eq!(drawing_shape_ids(&xml).unwrap(), expected);
+            let mut added = simple_added_shape("Added");
+            added.non_visual_id = None;
+            let saved = append_drawing_shapes_xml(&xml, &[added]).unwrap();
+            let mut expected = expected;
+            expected.insert(31);
+            assert_eq!(drawing_shape_ids(&saved).unwrap(), expected);
+            assert!(saved.contains("<u:cNvPr id=\"4294967295\"/>"));
+            let duplicate = xml.replace("id=\"3\" name=\"B\"", "id=\"2\" name=\"B\"");
+            assert!(drawing_shape_ids(&duplicate).is_err());
+        }
+    }
+
+    #[test]
+    fn structural_group_deletion_wraps_retained_groups_and_added_shapes_once() {
+        let (mut xml,mut groups,mut states)=structural_delete_sample();
+        let mut added=simple_added_shape("Added");
+        added.non_visual_id=Some(6);
+        added.grouped=true;
+        added.group_non_visual_id=Some(40);
+        added.group_child_transform=Some((200_000,0,100_000,100_000));
+        xml=append_drawing_shapes_xml(&xml,&[added.clone()]).unwrap();
+        states.insert("Added".into(),added);
+        let template=groups[0].clone();
+        groups[0].parent_id=Some(40);
+        groups.push(crate::ir::DrawingGroup {non_visual_id:40,name:"Combined".into(),parent_id:None,children:vec![10,6],..template});
+        let saved=patch_structural_drawing_deletions(&xml,&std::collections::HashSet::from(["C".into()]),&groups,Some(&states),None).unwrap();
+        assert_eq!(saved.matches("name=\"Combined\"").count(),1);
+        assert_eq!(saved.matches("name=\"Added\"").count(),1);
+        assert_eq!(saved.matches("name=\"Outer\"").count(),1);
+        assert_eq!(saved.matches("name=\"Inner\"").count(),1);
+        assert!(!saved.contains("name=\"Middle\""));
+        let mut reader=quick_xml::NsReader::from_str(&saved);
+        let mut anchors=0;let mut groups=0;
+        loop {
+            let (namespace,event)=reader.read_resolved_event().unwrap();
+            if let quick_xml::name::ResolveResult::Bound(ns)=namespace {
+                if ns.as_ref()==b"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" {
+                    if let Event::Start(element)=&event {
+                        match local_name(element.name().as_ref()).as_str(){"twoCellAnchor"=>anchors+=1,"grpSp"=>groups+=1,_=>{}}
+                    }
+                }
+            }
+            if matches!(event,Event::Eof){break;}
+        }
+        assert_eq!(anchors,1);
+        assert_eq!(groups,3);
+    }
+
+    #[test]
     fn structural_group_deletion_rejects_cycles_and_missing_members() {
         let (xml, groups, states) = structural_delete_sample();
         let deleted = std::collections::HashSet::from(["C".into()]);
@@ -19564,7 +19655,7 @@ mod tests {
 
     #[test]
     fn grouped_anchor_order_uses_the_first_ranked_child_when_parent_is_not_in_ir() {
-        let xml = r#"<xdr:wsDr xmlns:xdr="urn:test" xmlns:u="urn:future"><xdr:twoCellAnchor u:keep="group"><xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="4" name="Bundle"/></xdr:nvGrpSpPr><xdr:sp><xdr:cNvPr id="2" name="Left"/></xdr:sp><xdr:sp><xdr:cNvPr id="3" name="Right"/></xdr:sp></xdr:grpSp></xdr:twoCellAnchor><xdr:twoCellAnchor u:keep="chart"><xdr:graphicFrame><xdr:cNvPr id="5" name="Chart"/></xdr:graphicFrame></xdr:twoCellAnchor><xdr:extLst u:keep="extension"/></xdr:wsDr>"#;
+        let xml = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:u="urn:future"><xdr:twoCellAnchor u:keep="group"><xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="4" name="Bundle"/></xdr:nvGrpSpPr><xdr:sp><xdr:cNvPr id="2" name="Left"/></xdr:sp><xdr:sp><xdr:cNvPr id="3" name="Right"/></xdr:sp></xdr:grpSp></xdr:twoCellAnchor><xdr:twoCellAnchor u:keep="chart"><xdr:graphicFrame><xdr:cNvPr id="5" name="Chart"/></xdr:graphicFrame></xdr:twoCellAnchor><xdr:extLst u:keep="extension"/></xdr:wsDr>"#;
         for (order, group_first) in [
             (vec!["Left", "Right", "Chart"], true),
             (vec!["Chart", "Left", "Right"], false),

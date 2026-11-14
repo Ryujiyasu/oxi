@@ -19,7 +19,7 @@ const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const corpus=JSON.parse(fs.readFileSync(corpusPath,'utf8'));
 assert.equal(corpus.license,'CC-BY-SA-4.0');
 const conditions=process.argv[6]===undefined?69:Number(process.argv[6]);
-assert([69,18,33,27,39].includes(conditions));assert.equal(corpus.conditions,conditions);
+assert([69,18,33,27,39,58,70].includes(conditions));assert.equal(corpus.conditions,conditions);
 const inputPath=path.join(root,corpus.input_fixture),callerPath=path.join(root,corpus.caller_fixture);
 const input=new Uint8Array(fs.readFileSync(inputPath)),caller=new Uint8Array(fs.readFileSync(callerPath));
 assert.equal(hash(input),corpus.input_sha256);assert.equal(hash(caller),corpus.caller_sha256);
@@ -63,15 +63,20 @@ for(const group of corpus.groups){
     }
     for(const test of group.cases){
         assert(!seen.has(group.id+'/'+test.mode));seen.add(group.id+'/'+test.mode);
+        let caseInput=groupInput;
+        if(test.input_base64){
+            const bytes=Buffer.from(test.input_base64,'base64');assert.equal(hash(bytes),test.input_sha256);
+            caseInput=new Uint8Array(bytes);
+        }
         for(const route of ['direct','session']){
             const row={group:group.id,mode:test.mode,route,expected:test.expected,passed:false};
             let session;
             try{
-                const bytes=group.separate_caller?caller:groupInput;
+                const bytes=group.separate_caller?caller:caseInput;
                 const options={errorLanguage:'ja-JP',hostAnsiCodePage:932,
                     fileContext:{packageBytes:bytes,fullName:'C:\\work\\original.xlsx',readOnly:true,
                         editRevision:0,folders:['C:\\work'],
-                        files:group.separate_caller?[{path:'C:\\work\\provider.xlsx',bytes:groupInput},...(group.sample_text!==undefined?[{path:'C:\\work\\sample.txt',bytes:new TextEncoder().encode(group.sample_text)}]:[])]:[]}};
+                        files:group.separate_caller?[{path:'C:\\work\\provider.xlsx',bytes:caseInput},...(group.sample_text!==undefined?[{path:'C:\\work\\sample.txt',bytes:new TextEncoder().encode(group.sample_text)}]:[])]:[]}};
                 let result;
                 if(route==='session'){
                     session=new wasm.SpreadsheetVbaSession();

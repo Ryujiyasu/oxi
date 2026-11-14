@@ -909,13 +909,29 @@ impl<'a> WorkbookHost<'a> {
         let mut bounds = None::<(f64, f64, f64, f64)>;
         for id in &children {
             let shape = self.shape(*id)?;
+            // Excel encloses each selected root's quarter-turn anchor frame.
+            // At 45/135/225/315 degrees its width and height exchange axes;
+            // the continuously rotated visual bounding box is not used here.
+            let (mut child_left, mut child_top, mut child_width, mut child_height) =
+                (shape.left, shape.top, shape.width, shape.height);
+            let quarter = ((shape.rotation.rem_euclid(360.0) + 45.0) / 90.0).floor() as i64 % 4;
+            if quarter % 2 != 0 {
+                // Drawing positions use integral EMUs. Excel truncates the
+                // half-difference before translating either axis.
+                let width_emu = (child_width * 12_700.0).round() as i64;
+                let height_emu = (child_height * 12_700.0).round() as i64;
+                let shift = ((width_emu - height_emu) / 2) as f64 / 12_700.0;
+                child_left += shift;
+                child_top -= shift;
+                std::mem::swap(&mut child_width, &mut child_height);
+            }
             bounds = Some(match bounds {
-                None => (shape.left, shape.top, shape.width, shape.height),
+                None => (child_left, child_top, child_width, child_height),
                 Some((left, top, width, height)) => {
-                    let right = (left + width).max(shape.left + shape.width);
-                    let bottom = (top + height).max(shape.top + shape.height);
-                    let left = left.min(shape.left);
-                    let top = top.min(shape.top);
+                    let right = (left + width).max(child_left + child_width);
+                    let bottom = (top + height).max(child_top + child_height);
+                    let left = left.min(child_left);
+                    let top = top.min(child_top);
                     (left, top, right - left, bottom - top)
                 }
             });
@@ -944,6 +960,15 @@ impl<'a> WorkbookHost<'a> {
             child_offset: offset,
             child_extent: extent,
         });
+        // A former root group's angle was supplied separately to its leaves.
+        // Once nested, those leaves retain that contribution in their relative
+        // angle while the new outer group starts at zero rotation.
+        for child in &children {
+            let root=self.shape(*child)?.clone();
+            if !root.group_children.is_empty() && root.group_parent_id.is_none() {
+                for leaf in self.group_items(*child)? { self.shape_mut(leaf)?.rotation+=root.rotation; }
+            }
+        }
         for child in &children {
             let child_shape = self.shape_mut(*child)?;
             child_shape.group_parent_id = Some(id);
@@ -3423,7 +3448,7 @@ impl<'a> WorkbookHost<'a> {
                 "top" => Some(Value::Single(shape.top as f32)),
                 "width" => Some(Value::Single(shape.width as f32)),
                 "height" => Some(Value::Single(shape.height as f32)),
-                "rotation" => Some(Value::Single(shape.rotation as f32)),
+                "rotation" => Some(Value::Single(shape.rotation.rem_euclid(360.0) as f32)),
                 "placement" => Some(Value::Integer(shape.placement)),
                 "child" => Some(mso(shape.group_parent_id.is_some())),
                 "visible" => Some(mso(shape.visible)),
@@ -3480,7 +3505,7 @@ impl<'a> WorkbookHost<'a> {
                 let group_rotation = self.outer_shape_group(id)
                     .and_then(|parent| self.shape(parent).ok())
                     .map_or(0.0, |parent| parent.rotation);
-                Some(Value::Single((shape.rotation + group_rotation) as f32))
+                Some(Value::Single((shape.rotation + group_rotation).rem_euclid(360.0) as f32))
             }
             // The plain answers of a shape on its own: measured on an oval,
             // BackgroundStyle 0, BlackWhiteMode 1 (automatic), Child and

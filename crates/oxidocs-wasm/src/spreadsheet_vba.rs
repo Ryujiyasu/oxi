@@ -59592,7 +59592,7 @@ End Function"####;
     }
 
     fn assert_complete_ole_native_group(group_id: &str, expected_cases: usize) {
-        let corpus_bytes: &[u8] = if matches!(group_id, "group_relative24" | "group_views3" | "group_delete_plain4" | "group_delete_outer_rotated4" | "group_delete_inner_rotated4") {
+        let corpus_bytes: &[u8] = if matches!(group_id, "group_relative24" | "group_views3" | "group_delete_plain4" | "group_delete_outer_rotated4" | "group_delete_inner_rotated4" | "group_promotion_rounding7" | "group_promotion_profiles6" | "group_promotion_grid6" | "group_delete_regroup_plain4" | "group_delete_regroup_outer_rotated4" | "group_delete_regroup_inner_rotated4") {
             include_bytes!("../../../tests/fixtures/vba/group_layer_operations_native.json")
         } else if matches!(group_id, "relative_layers24" | "repeat_save9") {
             include_bytes!("../../../tests/fixtures/vba/ole_layer_operations_native.json")
@@ -59613,9 +59613,11 @@ End Function"####;
         let mut failures = Vec::new();
         for case in cases {
             let mode = case["mode"].as_i64().unwrap();
+            let case_input = case["input_base64"].as_str().map(|encoded| super::sheet_base64(encoded).expect("invalid Native case input"));
+            let provider = case_input.as_deref().unwrap_or(bytes);
             let mut context = failure_context();
             context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
-            let mut files = vec![file_io::ProducedFile {path:r"C:\work\provider.xlsx".into(),bytes:bytes.to_vec()}];
+            let mut files = vec![file_io::ProducedFile {path:r"C:\work\provider.xlsx".into(),bytes:provider.to_vec()}];
             if let Some(text) = group["sample_text"].as_str() {
                 files.push(file_io::ProducedFile {path:r"C:\work\sample.txt".into(),bytes:text.as_bytes().to_vec()});
             }
@@ -59647,6 +59649,24 @@ End Function"####;
             }
         }
         assert!(failures.is_empty(),"Complete Native OLE insertion vectors differ:\n{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn group_layers_native_delete_regroup12() {
+        let mut failed = Vec::new();
+        for group in ["group_delete_regroup_plain4","group_delete_regroup_outer_rotated4","group_delete_regroup_inner_rotated4"] {
+            if std::panic::catch_unwind(|| assert_complete_ole_native_group(group,4)).is_err() { failed.push(group); }
+        }
+        assert!(failed.is_empty(), "Complete Native delete/regroup groups differ: {failed:?}");
+    }
+
+    #[test]
+    fn group_layers_native_promotion19() {
+        let mut failed = Vec::new();
+        for (group,count) in [("group_promotion_rounding7",7),("group_promotion_profiles6",6),("group_promotion_grid6",6)] {
+            if std::panic::catch_unwind(|| assert_complete_ole_native_group(group,count)).is_err() { failed.push(group); }
+        }
+        assert!(failed.is_empty(), "Complete Native promotion groups differ: {failed:?}");
     }
 
     #[test]
@@ -143567,6 +143587,115 @@ End Function"#;
         assert_ne!(moved.from, original_drawing.from);
         assert_ne!(moved.to, original_drawing.to);
         assert_eq!(saved.sheets[0].drawings.len(), 1);
+    }
+
+    #[test]
+    fn grouping_fractional_rotated_shapes_matches_native_frames() {
+        let base = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut failures = Vec::new();
+        // Native Excel observations, including odd positive/negative EMU spans.
+        for (angle, width, height, added_top, expected) in [
+            (0, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (44, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (45, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (46, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (89, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (90, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (134, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (135, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (136, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (179, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (224, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (225, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (269, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (314, 40.34567, 10.45678, 40, [0x420c4581, 0x4174a47c, 0x42c7dd40, 0x422161f7, 0x00000000]),
+            (315, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (316, 40.34567, 10.45678, 40, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x419e1f9b, 0x00000000]),
+            (0, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (44, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (45, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (46, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (89, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (90, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (134, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (135, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (136, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (179, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (224, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (225, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (269, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (314, 10.45678, 40.34567, 140, [0x40a5bad2, 0x4234b746, 0x4301d229, 0x42d1a45d, 0x00000000]),
+            (315, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+            (316, 10.45678, 40.34567, 140, [0x41a0fcdb, 0x41f1e065, 0x42e5c0c9, 0x42ef87e7, 0x00000000]),
+        ] {
+            let book = oxicells_core::parse_xlsx(base).unwrap();
+            let source = format!(r#"Public Function GroupRotated() As Variant
+                Set a = ActiveSheet.Shapes.AddShape(1, 20.12345, 30.23456, {width}, {height})
+                a.Name = "Rotated"
+                a.Rotation = {angle}
+                Set b = ActiveSheet.Shapes.AddShape(1, 120, {added_top}, 15, 10)
+                b.Name = "Added"
+                Set g = ActiveSheet.Shapes.Range(Array("Rotated", "Added")).Group
+                GroupRotated = Array(g.Left, g.Top, g.Width, g.Height, g.Rotation)
+            End Function"#);
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(
+                book, &source, Some("GroupRotated"), vec![], 0, failure_context(), &mut session,
+            ).unwrap();
+            assert!(outcome.error.is_none(), "angle={angle}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+            let raw = serde_json::to_value(&outcome.result).unwrap();
+            let actual = raw["value"]["values"].as_array().unwrap().iter()
+                .map(|value| (value["value"].as_f64().unwrap() as f32).to_bits()).collect::<Vec<_>>();
+            if actual != expected {
+                failures.push(format!("angle={angle}, width={width}, height={height}: actual={actual:x?}, expected={expected:x?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn grouping_rotated_shapes_matches_native_quarter_turn_frames() {
+        let base = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        // Fixed observations from grouping two rectangles in native Excel.
+        for (angle, expected) in [
+            (0, ["20", "30", "115", "20", "0"]),
+            (44, ["20", "30", "115", "20", "0"]),
+            (45, ["35", "15", "100", "40", "0"]),
+            (46, ["35", "15", "100", "40", "0"]),
+            (89, ["35", "15", "100", "40", "0"]),
+            (90, ["35", "15", "100", "40", "0"]),
+            (134, ["35", "15", "100", "40", "0"]),
+            (135, ["20", "30", "115", "20", "0"]),
+            (136, ["20", "30", "115", "20", "0"]),
+            (179, ["20", "30", "115", "20", "0"]),
+            (224, ["20", "30", "115", "20", "0"]),
+            (225, ["35", "15", "100", "40", "0"]),
+            (269, ["35", "15", "100", "40", "0"]),
+            (314, ["35", "15", "100", "40", "0"]),
+            (315, ["20", "30", "115", "20", "0"]),
+            (316, ["20", "30", "115", "20", "0"]),
+        ] {
+            let book = oxicells_core::parse_xlsx(base).unwrap();
+            let source = format!(r#"Public Sub GroupRotated()
+                Set a = ActiveSheet.Shapes.AddShape(1, 20, 30, 40, 10)
+                a.Name = "Rotated"
+                a.Rotation = {angle}
+                Set b = ActiveSheet.Shapes.AddShape(1, 120, 40, 15, 10)
+                b.Name = "Added"
+                Set g = ActiveSheet.Shapes.Range(Array("Rotated", "Added")).Group
+                Debug.Print g.Left
+                Debug.Print g.Top
+                Debug.Print g.Width
+                Debug.Print g.Height
+                Debug.Print g.Rotation
+            End Sub"#);
+            let mut session = None;
+            let outcome = execute_workbook_action_in_session(
+                book, &source, Some("GroupRotated"), vec![], 0, failure_context(), &mut session,
+            ).unwrap();
+            assert!(outcome.error.is_none(), "angle={angle}: {:?}", outcome.error.as_ref().map(|error| &error.message));
+            assert_eq!(outcome.debug_output, expected, "angle={angle}");
+        }
     }
 
     #[test]

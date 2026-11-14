@@ -293,7 +293,7 @@ jobs:
               node "$suite" pkg "$RUNNER_TEMP/vba-ole-copy-state.json"
               node "$suite" pkg "$RUNNER_TEMP/vba-ole-legacy-layers-state.json" tests/fixtures/vba/ole_legacy_layers_native.json . 18
               node "$suite" pkg "$RUNNER_TEMP/vba-ole-layer-operations-state.json" tests/fixtures/vba/ole_layer_operations_native.json . 33
-              node "$suite" pkg "$RUNNER_TEMP/vba-group-layer-operations-state.json" tests/fixtures/vba/group_layer_operations_native.json . 39
+              node "$suite" pkg "$RUNNER_TEMP/vba-group-layer-operations-state.json" tests/fixtures/vba/group_layer_operations_native.json . 70
             else
               node "$suite" pkg
             fi
