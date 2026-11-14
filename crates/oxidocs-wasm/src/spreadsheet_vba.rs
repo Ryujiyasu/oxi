@@ -47244,7 +47244,15 @@ fn initialize_initial_caller_styles(
     } else {
         let mut normal=loaded.named_styles.iter().find(|style|style.builtin_id==Some(0))
             .ok_or_else(||"the implicit package has no Normal style".to_string())?.clone();
+        let normal_reference=normal.style.format_reference.clone();
+        let normal_font_link=normal.style.normal_font_link;
+        let named_font_link=normal.style.named_font_link;
         normal.style=workbook.default_style.clone();
+        // A Normal style owns a style-format record, not the default cell's
+        // cell-format record or its inheritance link back to Normal.
+        normal.style.format_reference=normal_reference;
+        normal.style.normal_font_link=normal_font_link;
+        normal.style.named_font_link=named_font_link;
         workbook.named_styles.push(normal);
     }
     let face=workbook.default_style.font_name.clone()
@@ -143829,6 +143837,9 @@ End Function"#;
         assert!(initialize_initial_caller_styles(&mut workbook,package,&default_application_font()).unwrap());
         assert_eq!(serde_json::to_value(&workbook.sheets[0].rows).unwrap(),rows);
         assert_eq!(workbook.default_style.bg_color.as_deref(),Some("123456"));
+        let normal=workbook.named_styles.iter().find(|style|style.builtin_id==Some(0)).unwrap();
+        assert_eq!(normal.style.normal_font_link,None);
+        assert!(normal.style.format_reference.as_ref().and_then(|reference|reference.style_id).is_none());
         assert!(workbook.named_styles.iter().any(|style|serde_json::to_value(style).unwrap()==serde_json::to_value(&custom).unwrap()));
         assert_eq!(workbook.sheets[0].default_row_height,22.5);
         assert_eq!(workbook.sheets[0].column_width_font.as_deref(),Some("Arial"));
