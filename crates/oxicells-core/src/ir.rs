@@ -406,6 +406,10 @@ pub struct Sheet {
     /// This layer is independent of the ordinary DrawingML anchor order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub legacy_drawing_order: Vec<u32>,
+    /// Group containers and their direct children, including containers hidden
+    /// by the flat public GroupItems view. IDs share the drawing identity space.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drawing_groups: Vec<DrawingGroup>,
     #[serde(default, skip_serializing_if = "SheetKind::is_worksheet")]
     pub kind: SheetKind,
     /// Whether the sheet is shown, and how firmly it is hidden when it is not.
@@ -1219,6 +1223,23 @@ pub struct Drawing {
     /// True when a leaf came through at least one nested DrawingML group.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub group_nested: bool,
+}
+
+/// The structural drawing hierarchy, kept separately from flattened leaf
+/// geometry so grouping does not discard identities or child-coordinate spaces.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DrawingGroup {
+    pub non_visual_id: u32,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<u32>,
+    pub children: Vec<u32>,
+    pub transform: GroupTransform,
+    pub from: Anchor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<Anchor>,
+    #[serde(default)]
+    pub rotation: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

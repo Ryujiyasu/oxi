@@ -1018,6 +1018,7 @@ impl<'a> WorkbookHost<'a> {
                 self.shapes.push(record);
             }
             self.adopt_shape_groups(sheet);
+            self.adopt_structural_groups(sheet);
         }
         self.adopt_comment_shapes();
         for sheet in 0..self.workbook.sheets.len() { self.sync_legacy_drawing_order(sheet); }
@@ -1051,6 +1052,8 @@ impl<'a> WorkbookHost<'a> {
             group.non_visual_id = first_child.original.as_ref().and_then(|drawing| drawing.group_non_visual_id)
                 .unwrap_or_else(|| self.shapes.iter().filter(|shape| shape.sheet == sheet)
                     .map(|shape| shape.non_visual_id).max().unwrap_or(1).saturating_add(1));
+            group.source_drawing_id = first_child.original.as_ref().and_then(|drawing| drawing.group_non_visual_id);
+            group.source_sheet_origin = self.workbook.sheets[sheet].origin_id;
             group.name_is_automatic = group.name == generated_group_name(group.non_visual_id.saturating_sub(1), true);
             if group.name_is_automatic {
                 group.name = generated_group_name(group.non_visual_id.saturating_sub(1), false);
@@ -1077,6 +1080,78 @@ impl<'a> WorkbookHost<'a> {
                 .unwrap_or(self.shapes.len());
             self.shapes.insert(position, group);
         }
+    }
+
+    fn adopt_structural_groups(&mut self, sheet: usize) {
+        let groups = self.workbook.sheets[sheet].drawing_groups.clone();
+        if groups.is_empty() { return; }
+        let mut ids: std::collections::HashMap<_, _> = self.shapes.iter()
+            .filter(|shape| shape.sheet == sheet).map(|shape| (shape.non_visual_id, shape.id)).collect();
+        for group in &groups {
+            if ids.contains_key(&group.non_visual_id) { continue; }
+            let id = self.next_shape_id;
+            self.next_shape_id += 1;
+            let mut record = ShapeRecord::blank(id, sheet, group.name.clone(), ShapeKind::Other);
+            record.non_visual_id = group.non_visual_id;
+            record.source_drawing_id = Some(group.non_visual_id);
+            record.source_sheet_origin = self.workbook.sheets[sheet].origin_id;
+            record.group_transform = Some(group.transform);
+            record.rotation = f64::from(group.rotation) / 60_000.0;
+            self.shapes.push(record);
+            ids.insert(group.non_visual_id, id);
+        }
+        for group in &groups {
+            let id = ids[&group.non_visual_id];
+            let children: Vec<_> = group.children.iter().filter_map(|child| ids.get(child).copied()).collect();
+            let parent = group.parent_id.and_then(|parent| ids.get(&parent).copied());
+            if let Ok(record) = self.shape_mut(id) {
+                record.group_children = children.clone();
+                record.group_parent_id = parent;
+                record.group_transform = Some(group.transform);
+                record.group_nested = parent.is_some();
+            }
+            for child in children {
+                if let Ok(record) = self.shape_mut(child) { record.group_parent_id = Some(id); }
+            }
+        }
+        // The public leaf geometry is already expressed through the outer
+        // group. Retain each hidden container's exact coordinate transform too.
+        let by_id: std::collections::HashMap<_, _> = groups.iter().map(|group| (group.non_visual_id, group)).collect();
+        let mut ordered = groups.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|group| {
+            let mut depth = 0;let mut parent = group.parent_id;let mut seen = std::collections::HashSet::new();
+            while let Some(id) = parent {
+                if !seen.insert(id) { break; }
+                depth += 1;parent = by_id.get(&id).and_then(|group| group.parent_id);
+            }
+            depth
+        });
+        for group in ordered {
+            let Some(parent) = group.parent_id.and_then(|parent| ids.get(&parent)).and_then(|id| self.shape(*id).ok()).cloned() else { continue };
+            let Some(frame) = parent.group_transform else { continue };
+            let scale = |position: i64, size: i64, offset: i64, extent: i64, left: f64, width: f64| {
+                if extent == 0 { (left, 0.0) } else { (left + (position - offset) as f64 / extent as f64 * width, size as f64 / extent as f64 * width) }
+            };
+            let (left,width) = scale(group.transform.offset.0,group.transform.extent.0,frame.child_offset.0,frame.child_extent.0,parent.left,parent.width);
+            let (top,height) = scale(group.transform.offset.1,group.transform.extent.1,frame.child_offset.1,frame.child_extent.1,parent.top,parent.height);
+            if let Ok(record) = self.shape_mut(ids[&group.non_visual_id]) {
+                record.left=left;record.top=top;record.width=width;record.height=height;
+                record.group_bounds=Some((left,top,width,height));
+            }
+        }
+    }
+
+    pub(super) fn outer_shape_group(&self, id: u64) -> Option<u64> {
+        let mut parent = self.shape(id).ok()?.group_parent_id;
+        let mut seen = std::collections::HashSet::new();
+        while let Some(id) = parent {
+            if !seen.insert(id) { return None; }
+            match self.shape(id).ok()?.group_parent_id {
+                Some(outer) => parent = Some(outer),
+                None => return Some(id),
+            }
+        }
+        None
     }
 
     fn adopt_drawing_identities(&mut self) {
@@ -1412,8 +1487,31 @@ impl<'a> WorkbookHost<'a> {
             .filter(|record| record.comment_at.is_none() && record.group_children.is_empty() && (record.visible || record.original.is_some()))
             .map(|record| self.drawing_of(record))
             .collect();
+        let slots: std::collections::HashMap<_, _> = self.shapes.iter().enumerate()
+            .map(|(at, record)| (record.id, at)).collect();
+        let groups: Vec<_> = records.iter().filter(|record| !record.group_children.is_empty()).filter_map(|record| {
+            let transform = record.group_transform?;
+            let mut children = record.group_children.clone();
+            children.sort_by_key(|id| self.drawing_subtree_slot(*id, &slots));
+            let existing = self.workbook.sheets[sheet].drawing_groups.iter().find(|group| group.non_visual_id == record.non_visual_id);
+            Some(oxicells_core::ir::DrawingGroup {
+                non_visual_id: record.non_visual_id,
+                name: if record.name_is_automatic && !record.group_legacy {
+                    generated_group_name(record.non_visual_id.saturating_sub(1), true)
+                } else { record.name.clone() },
+                parent_id: record.group_parent_id.and_then(|id| self.shape(id).ok()).map(|group| group.non_visual_id),
+                children: children.iter().filter_map(|id| self.shape(*id).ok().map(|shape| shape.non_visual_id)).collect(),
+                transform,
+                from: if record.group_parent_id.is_some() { existing.map(|group| group.from) } else { None }
+                    .unwrap_or_else(|| self.anchor_at(sheet,record.left,record.top)),
+                to: if record.group_parent_id.is_some() { existing.and_then(|group| group.to) } else { None }
+                    .or_else(|| Some(self.anchor_at(sheet,record.left+record.width,record.top+record.height))),
+                rotation: (record.rotation * 60_000.0).round() as i32,
+            })
+        }).collect();
         if let Some(held) = self.workbook.sheets.get_mut(sheet) {
             held.drawings = drawings;
+            held.drawing_groups = groups;
         }
         let comment_shapes: Vec<ShapeRecord> = records.into_iter().filter(|record| record.comment_at.is_some()).collect();
         for record in comment_shapes {
@@ -1565,6 +1663,13 @@ impl<'a> WorkbookHost<'a> {
             if record.comment_at.is_some() { continue; }
             let Some(sheet)=self.workbook.sheets.get(record.sheet)
                 .and_then(|live|saved.sheets.iter().find(|sheet|sheet.name==live.name)) else { continue };
+            if !record.group_children.is_empty() {
+                if let Some(group) = sheet.drawing_groups.iter().find(|group| group.non_visual_id == record.non_visual_id) {
+                    record.source_drawing_id = Some(group.non_visual_id);
+                    record.source_sheet_origin = sheet.origin_id;
+                }
+                continue;
+            }
             let Some(drawing)=sheet.drawings.iter().find(|drawing|drawing.non_visual_id==Some(record.non_visual_id)) else { continue };
             record.source_drawing_id=drawing.non_visual_id;
             record.source_sheet_origin=sheet.origin_id;
@@ -1580,7 +1685,7 @@ impl<'a> WorkbookHost<'a> {
     pub(super) fn drawing_of(&self, record: &ShapeRecord) -> Drawing {
         let grouped = record.group_parent_id.is_some();
         let original = grouped.then_some(record.original.as_ref()).flatten();
-        let parent = record.group_parent_id.and_then(|id| self.shape(id).ok());
+        let parent = self.outer_shape_group(record.id).and_then(|id| self.shape(id).ok());
         let from = parent.map_or_else(
             || original.map_or_else(|| self.anchor_at(record.sheet, record.left, record.top), |drawing| drawing.from),
             |group| self.anchor_at(record.sheet, group.left, group.top),
@@ -1687,7 +1792,7 @@ impl<'a> WorkbookHost<'a> {
                 (record.width / 0.75 * EMU_PER_PX).round() as i64,
                 (record.height / 0.75 * EMU_PER_PX).round() as i64,
             )),
-            group_nested: parent.is_some_and(|group| group.group_nested),
+            group_nested: record.group_parent_id != self.outer_shape_group(record.id),
         }
     }
 

@@ -16035,6 +16035,7 @@ impl<'a> WorkbookHost<'a> {
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         };
@@ -59556,7 +59557,9 @@ End Function"####;
     }
 
     fn assert_complete_ole_native_group(group_id: &str, expected_cases: usize) {
-        let corpus_bytes: &[u8] = if matches!(group_id, "relative_layers24" | "repeat_save9") {
+        let corpus_bytes: &[u8] = if matches!(group_id, "group_relative24" | "group_views3") {
+            include_bytes!("../../../tests/fixtures/vba/group_layer_operations_native.json")
+        } else if matches!(group_id, "relative_layers24" | "repeat_save9") {
             include_bytes!("../../../tests/fixtures/vba/ole_layer_operations_native.json")
         } else if matches!(group_id, "mixed_drawing_layers9" | "explicit_font9") {
             include_bytes!("../../../tests/fixtures/vba/ole_legacy_layers_native.json")
@@ -59600,6 +59603,16 @@ End Function"####;
             }
         }
         assert!(failures.is_empty(),"Complete Native OLE insertion vectors differ:\n{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn group_layers_native_views3() {
+        assert_complete_ole_native_group("group_views3", 3);
+    }
+
+    #[test]
+    fn group_layers_native_relative24() {
+        assert_complete_ole_native_group("group_relative24", 24);
     }
 
     #[test]
@@ -108611,6 +108624,7 @@ End Function
                 tab_color: None,
                 drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
                 header_footer: None,
                 origin_id: None,
             }],
@@ -138131,6 +138145,7 @@ End Function
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -138211,6 +138226,7 @@ End Function
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146165,6 +146181,7 @@ End Function"#;
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146436,6 +146453,7 @@ End Function"#;
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146508,6 +146526,7 @@ End Function"#;
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146652,6 +146671,7 @@ End Function"#;
             tab_color: None,
             drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
             header_footer: None,
             origin_id: None,
         });

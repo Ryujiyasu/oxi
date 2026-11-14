@@ -768,7 +768,14 @@ impl<'a> WorkbookHost<'a> {
             if !shape.group_children.is_empty() {
                 continue;
             }
-            if let Some(parent) = shape.group_parent_id {
+            if let Some(mut parent) = shape.group_parent_id {
+                let mut ancestors = std::collections::HashSet::new();
+                while ancestors.insert(parent) {
+                    match self.shape(parent).ok().and_then(|group| group.group_parent_id) {
+                        Some(outer) => parent = outer,
+                        None => break,
+                    }
+                }
                 if seen_groups.insert(parent) {
                     listed.push(parent);
                 }
@@ -791,7 +798,7 @@ impl<'a> WorkbookHost<'a> {
         let items: Vec<DrawingPart> = match part {
             DrawingPart::Shapes(sheet) => self.shapes_on(sheet).into_iter().map(DrawingPart::Shape).collect(),
             DrawingPart::ShapeRange(index) => self.shape_range_ids(index).into_iter().map(DrawingPart::Shape).collect(),
-            DrawingPart::GroupItems(id) => self.shape(id)?.group_children.iter().copied().map(DrawingPart::Shape).collect(),
+            DrawingPart::GroupItems(id) => self.group_items(id)?.into_iter().map(DrawingPart::Shape).collect(),
             DrawingPart::ChartObjects(sheet) => self.charts_on(sheet).into_iter().map(DrawingPart::ChartObject).collect(),
             _ => return Ok(None),
         };
@@ -840,6 +847,59 @@ impl<'a> WorkbookHost<'a> {
                 .ok_or_else(missing),
         }?;
         if self.shape(id).is_ok_and(|shape| !shape.group_children.is_empty()) { Err(missing()) } else { Ok(id) }
+    }
+
+    /// Excel exposes the leaves of nested groups through GroupItems. Its hot
+    /// collection retains its own enumeration order when a leaf changes layer.
+    fn group_items(&self, id: u64) -> Result<Vec<u64>, String> {
+        let mut pending = self.shape(id)?.group_children.clone();
+        pending.reverse();
+        let mut listed = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        while let Some(child) = pending.pop() {
+            if !seen.insert(child) { continue; }
+            let shape = self.shape(child)?;
+            if shape.group_children.is_empty() {
+                listed.push(child);
+            } else {
+                pending.extend(shape.group_children.iter().rev().copied());
+            }
+        }
+        Ok(listed)
+    }
+
+    pub(super) fn drawing_subtree_slot(&self, id: u64, slots: &std::collections::HashMap<u64, usize>) -> usize {
+        let mut pending = vec![id];
+        let mut seen = std::collections::HashSet::new();
+        let mut first = usize::MAX;
+        while let Some(held) = pending.pop() {
+            if !seen.insert(held) { continue; }
+            first = first.min(slots.get(&held).copied().unwrap_or(usize::MAX));
+            if let Ok(shape) = self.shape(held) { pending.extend(shape.group_children.iter().copied()); }
+        }
+        first
+    }
+
+    /// Group containers occupy drawing-layer slots even though Shapes and
+    /// GroupItems expose different views of their descendants.
+    fn ordinary_shape_position(&self, id: u64) -> Result<i64, String> {
+        let sheet = self.shape(id)?.sheet;
+        let slots: std::collections::HashMap<_, _> = self.shapes.iter().enumerate()
+            .map(|(at, shape)| (shape.id, at)).collect();
+        let mut pending: Vec<_> = self.shapes_on(sheet).into_iter()
+            .filter(|held| self.shape(*held).is_ok_and(|shape| shape.comment_at.is_none())).collect();
+        pending.reverse();
+        let mut seen = std::collections::HashSet::new();
+        let mut position = 0;
+        while let Some(held) = pending.pop() {
+            if !seen.insert(held) { continue; }
+            position += 1;
+            if held == id { return Ok(position); }
+            let mut children = self.shape(held)?.group_children.clone();
+            children.sort_by_key(|child| self.drawing_subtree_slot(*child, &slots));
+            pending.extend(children.into_iter().rev());
+        }
+        Err(host_error(1004, "the shape is no longer on its worksheet"))
     }
 
     fn group_shapes(&mut self, sheet: usize, children: Vec<u64>) -> Result<u64, String> {
@@ -947,6 +1007,11 @@ impl<'a> WorkbookHost<'a> {
             } else {
                 self.shapes_on(sheet).into_iter().filter(|held| self.shape(*held).is_ok_and(|shape| shape.comment_at.is_none())).collect()
             };
+            if shape.group_parent_id.is_some() {
+                let slots: std::collections::HashMap<_, _> = self.shapes.iter().enumerate()
+                    .map(|(at, shape)| (shape.id, at)).collect();
+                order.sort_by_key(|child| self.drawing_subtree_slot(*child, &slots));
+            }
             if let Some(at) = order.iter().position(|held| *held == id) {
                 let to = destination(at, order.len());
                 if at != to {
@@ -963,22 +1028,20 @@ impl<'a> WorkbookHost<'a> {
                     };
                     let moving = descendants(id);
                     let target_ids = descendants(target);
+                    let target_leaves: std::collections::HashSet<_> = target_ids.iter().copied()
+                        .filter(|id| self.shape(*id).is_ok_and(|shape| shape.group_children.is_empty())).collect();
+                    let target_slots = if target_leaves.is_empty() { &target_ids } else { &target_leaves };
                     if !moving.is_disjoint(&target_ids) || !self.shapes.iter().any(|shape| target_ids.contains(&shape.id)) {
                         return Err(host_error(1004, "the target shape is no longer on its worksheet"));
                     }
                     let (moved, mut held): (Vec<_>, Vec<_>) = std::mem::take(&mut self.shapes).into_iter()
                         .partition(|shape| moving.contains(&shape.id));
                     let insert = if to > at {
-                        held.iter().rposition(|shape| target_ids.contains(&shape.id)).map(|at| at + 1)
-                    } else { held.iter().position(|shape| target_ids.contains(&shape.id)) }
+                        held.iter().rposition(|shape| target_slots.contains(&shape.id)).map(|at| at + 1)
+                    } else { held.iter().position(|shape| target_slots.contains(&shape.id)) }
                     .ok_or_else(|| host_error(1004, "the target shape is no longer on its worksheet"))?;
                     held.splice(insert..insert, moved);
                     self.shapes = held;
-                    if let Some(parent) = shape.group_parent_id {
-                        let id = order.remove(at);
-                        order.insert(to, id);
-                        self.shape_mut(parent)?.group_children = order;
-                    }
                 }
             }
         }
@@ -1016,6 +1079,14 @@ impl<'a> WorkbookHost<'a> {
             .collect()
     }
 
+    fn shape_parent_group_failure(&self) -> String {
+        let description = match self.error_language {
+            ErrorLanguage::Japanese => "指定された値は境界を超えています。",
+            _ => "The specified value is out of range.",
+        };
+        host_error_described(1004, description)
+    }
+
     fn shape_item_failure(&self, number: i64, failure: ShapeItemFailure) -> String {
         let description = match (self.error_language, failure) {
             (ErrorLanguage::Japanese, ShapeItemFailure::Name) => "指定した名前のアイテムが見つかりませんでした。",
@@ -1036,7 +1107,8 @@ impl<'a> WorkbookHost<'a> {
                 let alias = localized_alias(name);
                 let candidates: Vec<_> = self.shapes.iter().filter(|shape| shape.comment_at.is_none())
                     .chain(self.shapes.iter().filter(|shape| shape.comment_at.is_some()))
-                    .filter(|shape| shape.sheet == sheet && (!charts_only || shape.comment_at.is_none())).collect();
+                    .filter(|shape| shape.sheet == sheet && (!charts_only || shape.comment_at.is_none())
+                        && (shape.group_parent_id.is_none() || shape.group_children.is_empty())).collect();
                 let found = candidates.iter().copied().find(|shape| shape.name.eq_ignore_ascii_case(name))
                     .or_else(|| alias.as_deref().and_then(|alias| candidates.iter().copied()
                         .find(|shape| shape.name.eq_ignore_ascii_case(alias))));
@@ -1075,10 +1147,7 @@ impl<'a> WorkbookHost<'a> {
                         shape.name.eq_ignore_ascii_case(name)
                             || alias.as_deref().is_some_and(|alias| shape.name.eq_ignore_ascii_case(alias))
                     }))
-                    .ok_or_else(|| oxivba_core::host_error_described(
-                        NO_SUCH_SHAPE,
-                        "The item with the specified name wasn't found.",
-                    ))
+                    .ok_or_else(|| self.shape_item_failure(1004, ShapeItemFailure::Name))
             }
             value => match any_whole_number(value) {
                 Some(number) if number >= 1 && (number as usize) <= children.len() => {
@@ -1553,46 +1622,62 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn delete_shape(&mut self, id: u64) -> Result<(), String> {
-        let record = self.shape(id)?;
-        let sheet = record.sheet;
-        let removed: std::collections::HashSet<_> = self.shapes.iter()
-            .filter(|shape| shape.id == id || record.group_children.contains(&shape.id))
-            .map(|shape| shape.non_visual_id).collect();
-        self.workbook.sheets[sheet].legacy_drawing_order.retain(|held| !removed.contains(held));
         let deleted = self.shape(id)?.clone();
         let sheet = deleted.sheet;
+        let mut removed = std::collections::HashSet::new();
+        let mut pending = vec![id];
+        while let Some(child) = pending.pop() {
+            if removed.insert(child) {
+                pending.extend(self.shape(child)?.group_children.iter().copied());
+            }
+        }
+        let physical_ids: std::collections::HashSet<_> = self.shapes.iter()
+            .filter(|shape| removed.contains(&shape.id))
+            .map(|shape| shape.non_visual_id).collect();
+        self.workbook.sheets[sheet].legacy_drawing_order.retain(|held| !physical_ids.contains(held));
         if let Some(at) = deleted.comment_at {
             self.notes.retain(|note| note.at != at);
             self.saved = false;
         }
-        if !deleted.group_children.is_empty() {
-            let members: std::collections::HashSet<u64> = deleted.group_children.iter().copied().collect();
-            self.shapes.retain(|shape| shape.id != id && !members.contains(&shape.id));
-        } else {
-            self.shapes.retain(|shape| shape.id != id);
-            if let Some(parent) = deleted.group_parent_id {
-                let remaining = if let Ok(group) = self.shape_mut(parent) {
-                    group.group_children.retain(|child| *child != id);
-                    group.group_children.clone()
-                } else {
-                    Vec::new()
-                };
-                if remaining.len() <= 1 {
-                    let group_rotation = self.shape(parent).map_or(0.0, |group| group.rotation);
-                    self.shapes.retain(|shape| shape.id != parent);
-                    if let Some(child) = remaining.first().copied() {
-                        if let Ok(shape) = self.shape_mut(child) {
-                            shape.rotation += group_rotation;
-                            shape.group_parent_id = None;
-                            shape.group_name = None;
+        self.shapes.retain(|shape| !removed.contains(&shape.id));
+        let mut parent = deleted.group_parent_id;
+        if let Some(parent) = parent {
+            self.shape_mut(parent)?.group_children.retain(|child| *child != id);
+        }
+        let mut collapsed_inner = false;
+        while let Some(parent_id) = parent {
+            let group = self.shape(parent_id)?.clone();
+            let ancestor = group.group_parent_id;
+            if group.group_children.len() <= 1 {
+                let survivor = group.group_children.first().copied();
+                if let Some(ancestor) = ancestor {
+                    let children = &mut self.shape_mut(ancestor)?.group_children;
+                    if let Some(slot) = children.iter().position(|child| *child == parent_id) {
+                        match survivor {
+                            Some(child) => children[slot] = child,
+                            None => { children.remove(slot); }
                         }
                     }
-                } else if deleted.original.as_ref().is_some_and(|drawing| drawing.group_nested)
-                    && self.shape(parent).is_ok_and(|group| group.group_nested)
-                {
-                    self.refit_group_after_child_delete(parent, &remaining)?;
+                    collapsed_inner = true;
                 }
+                self.shapes.retain(|shape| shape.id != parent_id);
+                if let Some(child) = survivor {
+                    let shape = self.shape_mut(child)?;
+                    shape.group_parent_id = ancestor;
+                    if ancestor.is_none() {
+                        // Imported leaf angles already include hidden inner
+                        // rotations; only the exposed outer angle is missing.
+                        shape.rotation += group.rotation;
+                        shape.group_name = None;
+                    }
+                }
+            } else if collapsed_inner {
+                // A dissolved inner group leaves its survivors in the outer
+                // coordinate system. Refit that container without detaching
+                // its surviving children from their actual ancestor.
+                self.refit_group_after_child_delete(parent_id, &group.group_children)?;
             }
+            parent = ancestor;
         }
         self.refresh_shape_range_slots();
         self.mirror_drawings(sheet);
@@ -2427,7 +2512,7 @@ impl<'a> WorkbookHost<'a> {
                     return Err(host_error(1004, "the shape is in no group"));
                 }
                 Ok(match lower.as_str() {
-                    "count" => Some(Value::Integer(group.group_children.len() as i64)),
+                    "count" => Some(Value::Integer(self.group_items(id)?.len() as i64)),
                     "parent" => Some(self.part(DrawingPart::Shape(id))),
                     _ => None,
                 })
@@ -3277,21 +3362,25 @@ impl<'a> WorkbookHost<'a> {
                 "width" => Some(Value::Single(shape.width as f32)),
                 "height" => Some(Value::Single(shape.height as f32)),
                 "rotation" => Some(Value::Single(shape.rotation as f32)),
-                "child" => Some(mso(true)),
+                "child" => Some(mso(shape.group_parent_id.is_some())),
                 "visible" => Some(mso(shape.visible)),
                 "parent" => Some(self.object(HostObject::Worksheet(shape.sheet))),
                 "shaperange" => Some(self.shape_range_object(vec![id])),
                 "application" => Some(self.object(HostObject::Application)),
                 "creator" => Some(Value::Integer(1_480_803_660)),
                 "index" => Some(Value::Integer(self.shapes_on(shape.sheet).iter().position(|held| *held == id).map_or(1, |at| at as i64 + 1))),
-                "parentgroup" => return Err(host_error(1004, "the shape is in no group")),
+                "parentgroup" => match self.outer_shape_group(id) {
+                    Some(parent) => Some(self.part(DrawingPart::Shape(parent))),
+                    None => return Err(self.shape_parent_group_failure()),
+                },
                 "id" => Some(Value::Integer(i64::from(shape.non_visual_id))),
+                "zorderposition" => Some(Value::Integer(self.ordinary_shape_position(id)?)),
                 _ => None,
             });
         }
         if shape.group_parent_id.is_some() {
             match lower {
-                "parentgroup" => return Ok(shape.group_parent_id.map(|id| self.part(DrawingPart::Shape(id)))),
+                "parentgroup" => return Ok(self.outer_shape_group(id).map(|id| self.part(DrawingPart::Shape(id)))),
                 "child" => return Ok(Some(mso(true))),
                 _ => {}
             }
@@ -3325,7 +3414,7 @@ impl<'a> WorkbookHost<'a> {
             "width" => Some(Value::Single(shape.width as f32)),
             "height" => Some(Value::Single(shape.height as f32)),
             "rotation" => {
-                let group_rotation = shape.group_parent_id
+                let group_rotation = self.outer_shape_group(id)
                     .and_then(|parent| self.shape(parent).ok())
                     .map_or(0.0, |parent| parent.rotation);
                 Some(Value::Single((shape.rotation + group_rotation) as f32))
@@ -3339,7 +3428,8 @@ impl<'a> WorkbookHost<'a> {
             "child" | "hassmartart" => Some(mso(false)),
             "locked" => Some(Value::Boolean(true)),
             "title" => Some(Value::String(String::new())),
-            "groupitems" | "parentgroup" => return Err(host_error(1004, "the shape is in no group")),
+            "groupitems" => return Err(host_error(1004, "the shape is in no group")),
+            "parentgroup" => return Err(self.shape_parent_group_failure()),
             "pictureformat" => Some(self.part(DrawingPart::PictureFormat(id))),
             "application" => Some(Value::String("Microsoft Excel".to_string())),
             "visible" => Some(mso(shape.visible)),
@@ -3353,7 +3443,7 @@ impl<'a> WorkbookHost<'a> {
             "zorderposition" => Some(Value::Integer(if shape.comment_at.is_some() {
                 self.shapes_on(shape.sheet).iter().filter(|id| self.shape(**id).is_ok_and(|shape| shape.comment_at.is_none())).count() as i64
                     + self.legacy_shape_position(id)?
-            } else { self.shapes_on(shape.sheet).iter().position(|held| *held == id).map_or(1, |at| at as i64 + 1) })),
+            } else { self.ordinary_shape_position(id)? })),
             // msoAutoShape 1, msoChart 3, msoLine 9, msoPicture 13, msoTextBox 17.
             "connector" => Some(mso(matches!(shape.kind, ShapeKind::Line) || shape.connector != 0)),
             "type" if shape.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some()) => Some(Value::Integer(7)),
@@ -4877,7 +4967,7 @@ impl<'a> WorkbookHost<'a> {
             },
             DrawingPart::Shape(id) | DrawingPart::ChartObject(id) | DrawingPart::GroupObject(id) => match lower.as_str() {
                 "groupitems" => {
-                    let children = self.shape(id)?.group_children.clone();
+                    let children = self.group_items(id)?;
                     if children.is_empty() {
                         Err(host_error(1004, "the shape is in no group"))
                     } else if let Some(index) = args.first() {
@@ -4887,9 +4977,9 @@ impl<'a> WorkbookHost<'a> {
                         Ok(Some(self.part(DrawingPart::GroupItems(id))))
                     }
                 }
-                "parentgroup" => match self.shape(id)?.group_parent_id {
+                "parentgroup" => match self.outer_shape_group(id) {
                     Some(parent) => Ok(Some(self.part(DrawingPart::Shape(parent)))),
-                    None => Err(host_error(1004, "the shape is in no group")),
+                    None => Err(self.shape_parent_group_failure()),
                 },
                 "delete" => {
                     self.delete_shape(id)?;
@@ -5304,14 +5394,14 @@ impl<'a> WorkbookHost<'a> {
             }
             DrawingPart::GroupItems(id) => match lower.as_str() {
                 "item" | "_default" => {
-                    let children = self.shape(id)?.group_children.clone();
+                    let children = self.group_items(id)?;
                     let child = args.first().ok_or_else(|| "GroupItems.Item takes an index or a name".to_string())?;
                     let child_id = self.pick_group_item(&children, child)?;
                     Ok(Some(self.part(DrawingPart::Shape(child_id))))
                 }
-                "count" => Ok(Some(Value::Integer(self.shape(id)?.group_children.len() as i64))),
+                "count" => Ok(Some(Value::Integer(self.group_items(id)?.len() as i64))),
                 "range" => {
-                    let children = self.shape(id)?.group_children.clone();
+                    let children = self.group_items(id)?;
                     let args = args.first().cloned().into_iter().collect::<Vec<_>>();
                     let ids = if let Some(Value::Array(array)) = args.first() {
                         array.values.iter().map(|value| self.pick_group_item(&children, value)).collect::<Result<Vec<_>, _>>()?

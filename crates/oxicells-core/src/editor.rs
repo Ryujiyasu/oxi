@@ -157,6 +157,7 @@ pub struct XlsxEditor {
     // Internal names distinguish equal user-visible names during the XML
     // edit pipeline. They are restored by physical ID before serialization.
     drawing_source_aliases: HashMap<(usize, u32), String>,
+    drawing_group_identities: HashMap<(usize, u32), u32>,
     drawing_restore_names: HashMap<(usize, u32), String>,
     /// Existing preset shapes removed by a VBA Shapes.Delete call.
     drawing_deletions: HashMap<usize, std::collections::HashSet<String>>,
@@ -264,6 +265,7 @@ impl XlsxEditor {
             drawing_order_edits: HashMap::new(),
             drawing_states: HashMap::new(),
             drawing_source_aliases: HashMap::new(),
+            drawing_group_identities: HashMap::new(),
             drawing_restore_names: HashMap::new(),
             drawing_deletions: HashMap::new(),
             drawing_additions: HashMap::new(),
@@ -370,6 +372,7 @@ impl XlsxEditor {
         self.legacy_drawing_orders.clear();
         self.drawing_states.clear();
         self.drawing_source_aliases.clear();
+        self.drawing_group_identities.clear();
         self.drawing_restore_names.clear();
         self.drawing_deletions.clear();
         self.drawing_additions.clear();
@@ -398,7 +401,7 @@ impl XlsxEditor {
             let Some(original_sheet) = self.workbook.sheets.get(original_index) else { continue };
             // An unchanged drawing part remains byte-identical, including
             // valid equal names and unsupported XML. No aliases are needed.
-            if original_sheet.drawings == edited_sheet.drawings { continue; }
+            if original_sheet.drawings == edited_sheet.drawings && original_sheet.drawing_groups == edited_sheet.drawing_groups { continue; }
             let mut original_drawings = std::borrow::Cow::Borrowed(original_sheet.drawings.as_slice());
             let mut edited_drawings = std::borrow::Cow::Borrowed(edited_sheet.drawings.as_slice());
             let count_names = |drawings: &[crate::ir::Drawing]| {
@@ -487,6 +490,54 @@ impl XlsxEditor {
                 self.drawing_order_edits.insert(original_index, after_order);
             }
             let mut new_groups = Vec::new();
+            if !edited_sheet.drawing_groups.is_empty() {
+                let groups: HashMap<_, _> = edited_sheet.drawing_groups.iter().map(|group| (group.non_visual_id,group)).collect();
+                let mut ordered = edited_sheet.drawing_groups.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|group| {
+                    let mut depth=0;let mut parent=group.parent_id;let mut seen=std::collections::HashSet::new();
+                    while let Some(id)=parent {
+                        if !seen.insert(id) { break; }
+                        depth+=1;parent=groups.get(&id).and_then(|group|group.parent_id);
+                    }
+                    std::cmp::Reverse(depth)
+                });
+                for group in ordered {
+                    let source = source_ids.get(&(edited_index, group.non_visual_id)).copied()
+                        .unwrap_or(Some(group.non_visual_id));
+                    let original_group = source.and_then(|source| original_sheet.drawing_groups.iter()
+                        .find(|old| old.non_visual_id == source));
+                    let existed = original_group.is_some() || source.is_some_and(|source|
+                        original_drawings.iter().any(|old| old.group_non_visual_id == Some(source)));
+                    if existed {
+                        // Older IR callers edit only the flattened drawings.
+                        // Their unchanged structural metadata must not override
+                        // the explicit parent IDs carried by those drawings.
+                        if source_ids.contains_key(&(edited_index, group.non_visual_id)) {
+                            self.drawing_group_identities.insert((original_index, source.unwrap()), group.non_visual_id);
+                            if original_group.is_some_and(|old| old.name != group.name) {
+                                self.drawing_restore_names.insert((original_index, group.non_visual_id), group.name.clone());
+                            }
+                        }
+                        continue;
+                    }
+                    let Some(to) = group.to else { continue };
+                    let mut members = Vec::new();
+                    for id in &group.children {
+                        if let Some(child) = groups.get(id) {
+                            let transform = child.transform;
+                            members.push((child.name.clone(),(transform.offset.0,transform.offset.1,transform.extent.0,transform.extent.1)));
+                        } else if let Some(child) = edited_drawings.iter().find(|drawing| drawing.non_visual_id == Some(*id)) {
+                            let Some(name) = source_name(child) else { continue };
+                            let Some(transform) = child.group_child_transform else { continue };
+                            members.push((name,transform));
+                        }
+                    }
+                    if members.len() > 1 {
+                        new_groups.push(DrawingGroupAddition { name: group.name.clone(), non_visual_id: Some(group.non_visual_id),
+                            from:group.from,to,transform:group.transform,rotation:group.rotation,members });
+                    }
+                }
+            } else {
             for drawing in edited_drawings.iter().filter(|drawing| drawing.grouped) {
                 let Some(group_name) = drawing.group_name.as_ref() else { continue };
                 if new_groups.iter().any(|group: &DrawingGroupAddition| &group.name == group_name) { continue; }
@@ -503,8 +554,9 @@ impl XlsxEditor {
                     was_ungrouped.then_some((name.clone(), member.group_child_transform?))
                 }).collect::<Vec<_>>();
                 if members.len() > 1 {
-                    new_groups.push(DrawingGroupAddition { name: group_name.clone(), non_visual_id: drawing.group_non_visual_id, from, to, transform, members });
+                    new_groups.push(DrawingGroupAddition { name: group_name.clone(), non_visual_id: drawing.group_non_visual_id, from, to, transform, rotation:drawing.group_rotation, members });
                 }
+            }
             }
             if !new_groups.is_empty() {
                 self.drawing_group_additions.insert(original_index, new_groups);
@@ -1554,6 +1606,7 @@ impl XlsxEditor {
             &self.drawing_states,
             &self.drawing_deletions,
             &self.drawing_source_aliases,
+            &self.drawing_group_identities,
             &self.drawing_restore_names,
             &self.workbook.sheets.iter().flat_map(|sheet| &sheet.drawings).filter_map(|drawing| {
                 if let crate::ir::DrawingKind::Chart(chart) = &drawing.kind {
@@ -3268,6 +3321,7 @@ struct DrawingGroupAddition {
     from: crate::ir::Anchor,
     to: crate::ir::Anchor,
     transform: crate::ir::GroupTransform,
+    rotation: i32,
     members: Vec<(String, (i64, i64, i64, i64))>,
 }
 
@@ -3286,6 +3340,7 @@ fn drawing_addition_package(
     drawing_states: &HashMap<(usize, String), crate::ir::Drawing>,
     deletions: &HashMap<usize, std::collections::HashSet<String>>,
     source_aliases: &HashMap<(usize,u32),String>,
+    group_identities: &HashMap<(usize,u32),u32>,
     restore_names: &HashMap<(usize,u32),String>,
     source_charts: &HashMap<u32, &crate::ir::Chart>,
 ) -> Result<DrawingAdditionPackage, XlsxError> {
@@ -3339,9 +3394,16 @@ fn drawing_addition_package(
             plan.parts.insert(path,patch_legacy_ole_ids(&xml,ids)?);
         }
     }
+    let mut group_edits = HashMap::<String, HashMap<u32, u32>>::new();
+    for ((sheet, source), target) in group_identities {
+        let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData("group identity has no source drawing part".into()))?;
+        group_edits.entry(part.clone()).or_default().insert(*source, *target);
+        identity_edits.entry(part.clone()).or_default();
+    }
     for (part, edits) in &identity_edits {
         let xml = plan.parts.remove(part).map_or_else(||archive.read_part(part),Ok)?;
-        plan.parts.insert(part.clone(), patch_drawing_nonvisual_ids(&xml, edits)?);
+        let physical = group_edits.get(part).cloned().unwrap_or_default();
+        plan.parts.insert(part.clone(), patch_drawing_nonvisual_ids(&xml, edits, &physical)?);
     }
     let mut names: std::collections::HashSet<String> = archive.file_names().into_iter().collect();
     let mut part_additions: HashMap<String, Vec<crate::ir::Drawing>> = HashMap::new();
@@ -3873,6 +3935,61 @@ fn drawing_addition_package(
 }
 
 fn patch_drawing_order(xml: &str, order: &[String]) -> Result<String, XlsxError> {
+    // DrawingML orders both worksheet anchors and each group's direct
+    // children. Retain all other XML events in their original slots.
+    fn reorder_groups(events: &mut [Event<'static>], positions: &HashMap<&str, usize>) {
+        fn end_of(events: &[Event<'static>], start: usize) -> usize {
+            if !matches!(events[start], Event::Start(_)) { return start + 1; }
+            let mut depth = 0usize;
+            for (at, event) in events.iter().enumerate().skip(start) {
+                match event { Event::Start(_) => depth += 1, Event::End(_) => depth -= 1, _ => {} }
+                if depth == 0 { return at + 1; }
+            }
+            events.len()
+        }
+        let mut cursor = 0usize;
+        while cursor < events.len() {
+            let is_group = matches!(&events[cursor], Event::Start(element) if local_name(element.name().as_ref()) == "grpSp");
+            if !is_group { cursor += 1; continue; }
+            let end = end_of(events, cursor);
+            reorder_groups(&mut events[cursor + 1..end - 1], positions);
+            let mut children = Vec::new();
+            let mut at = cursor + 1;
+            while at < end - 1 {
+                let next = end_of(events, at);
+                let is_shape = matches!(&events[at], Event::Start(element) | Event::Empty(element)
+                    if matches!(local_name(element.name().as_ref()).as_str(), "sp" | "pic" | "graphicFrame" | "cxnSp" | "grpSp"));
+                if is_shape { children.push((at, next)); }
+                at = next;
+            }
+            if children.len() > 1 {
+                let mut sorted: Vec<_> = children.iter().enumerate().map(|(sequence, &(start, end))| {
+                    let priority = events[start..end].iter().filter_map(|event| match event {
+                        Event::Start(element) | Event::Empty(element) if local_name(element.name().as_ref()) == "cNvPr" =>
+                            get_attr(element, "name").and_then(|name| positions.get(name.as_str()).copied()),
+                        _ => None,
+                    }).min().unwrap_or(usize::MAX);
+                    (priority, sequence, events[start..end].to_vec())
+                }).collect();
+                sorted.sort_by_key(|(priority, sequence, _)| (*priority, *sequence));
+                let first = children[0].0;
+                let last = children.last().unwrap().1;
+                let mut replacement = Vec::with_capacity(last - first);
+                let mut copied = first;
+                for ((start, end), (_, _, child)) in children.iter().zip(sorted) {
+                    replacement.extend_from_slice(&events[copied..*start]);
+                    replacement.extend(child);
+                    copied = *end;
+                }
+                replacement.extend_from_slice(&events[copied..last]);
+                assert_eq!(replacement.len(), last - first);
+                events[first..last].clone_from_slice(&replacement);
+            }
+            cursor = end;
+        }
+    }
+    let mut positions = HashMap::new();
+    for (at, name) in order.iter().enumerate() { positions.entry(name.as_str()).or_insert(at); }
     let mut rank = HashMap::<&str, std::collections::VecDeque<usize>>::new();
     for (index, name) in order.iter().enumerate() {
         rank.entry(name.as_str()).or_default().push_back(index);
@@ -3902,6 +4019,7 @@ fn patch_drawing_order(xml: &str, order: &[String]) -> Result<String, XlsxError>
                     }
                     node.push(next);
                 }
+                reorder_groups(&mut node, &positions);
                 let name = node.iter().find_map(|event| match event {
                     Event::Start(element) | Event::Empty(element) if local_name(element.name().as_ref()) == "cNvPr" =>
                         get_attr(element, "name").filter(|name| rank.contains_key(name.as_str())),
@@ -4017,12 +4135,42 @@ fn patch_drawing_group_addition(xml: &str, group: &DrawingGroupAddition) -> Resu
             if drawing_shape_id(wrapper, name)?.is_some() { found = Some((start, end, wrapper.to_string())); break; }
         }
         let (start, end, wrapper) = found.ok_or_else(|| XlsxError::InvalidData(format!("group member drawing {name:?} is missing")))?;
-        let (shape_start, shape_end) = first_xml_element(&wrapper, "sp")?.ok_or_else(|| XlsxError::InvalidData(format!("group member drawing {name:?} is not a shape")))?;
+        let mut selected_shape = None;
+        for tag in ["grpSp", "sp", "pic", "graphicFrame", "cxnSp"] {
+            if let Some(range) = first_xml_element(&wrapper, tag)? {
+                if selected_shape.is_none_or(|old: (usize,usize)| range.0 < old.0) { selected_shape = Some(range); }
+            }
+        }
+        let (shape_start,shape_end) = selected_shape.ok_or_else(|| XlsxError::InvalidData(format!("group member drawing {name:?} is not a shape")))?;
         let mut shape = wrapper[shape_start..shape_end].to_string();
-        let (transform_start, transform_end) = first_xml_element(&shape, "xfrm")?.ok_or_else(|| XlsxError::InvalidData(format!("group member drawing {name:?} has no transform")))?;
-        let transform = format!("<a:xfrm><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>");
-        shape.replace_range(transform_start..transform_end, &transform);
+        let (transform_start,transform_end) = first_xml_element(&shape,"xfrm")?.ok_or_else(|| XlsxError::InvalidData(format!("group member drawing {name:?} has no transform")))?;
+        let mut reader = Reader::from_str(&shape[transform_start..transform_end]);
+        let mut writer = Writer::new(Vec::new());
+        loop {
+            let event = reader.read_event().map_err(XlsxError::Xml)?;
+            let empty = matches!(&event,Event::Empty(_));
+            match &event {
+                Event::Start(element) | Event::Empty(element) if matches!(local_name(element.name().as_ref()).as_str(),"off"|"ext") => {
+                    let offset = local_name(element.name().as_ref()) == "off";
+                    let values = if offset { [("x",*x),("y",*y)] } else { [("cx",*cx),("cy",*cy)] };
+                    let mut changed = element.to_owned();changed.clear_attributes();
+                    for attribute in element.attributes() {
+                        let attribute = attribute.map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+                        if !values.iter().any(|(key,_)| attribute.key.as_ref()==key.as_bytes()) { changed.push_attribute(attribute); }
+                    }
+                    for (key,value) in values { changed.push_attribute((key,value.to_string().as_str())); }
+                    writer.write_event(if empty { Event::Empty(changed) } else { Event::Start(changed) }).map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+                }
+                Event::Eof => break,
+                _ => writer.write_event(event.into_owned()).map_err(|e|XlsxError::InvalidData(e.to_string()))?,
+            }
+        }
+        let transform = String::from_utf8(writer.into_inner()).map_err(|e|XlsxError::InvalidData(e.to_string()))?;
+        shape.replace_range(transform_start..transform_end,&transform);
         child_shapes.push(shape);
+        if selected.iter().any(|(held, _)| *held == start) {
+            return Err(XlsxError::InvalidData("group members share an existing drawing anchor".into()));
+        }
         selected.push((start, end));
     }
     let id = if let Some(id) = group.non_visual_id { id } else {
@@ -4032,7 +4180,8 @@ fn patch_drawing_group_addition(xml: &str, group: &DrawingGroupAddition) -> Resu
     let from = group_anchor(group.from);
     let to = format!("<xdr:to><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:to>", group.to.col, group.to.col_off, group.to.row, group.to.row_off);
     let name = escape(&group.name);
-    let group_xml = format!("<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\" Requires=\"a14\"><xdr:twoCellAnchor><xdr:from>{}</xdr:from>{}<xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id=\"{}\" name=\"{}\"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr><xdr:grpSpPr><a:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/><a:chOff x=\"{}\" y=\"{}\"/><a:chExt cx=\"{}\" cy=\"{}\"/></a:xfrm></xdr:grpSpPr>{}</xdr:grpSp><xdr:clientData/></xdr:twoCellAnchor></mc:Choice><mc:Fallback/></mc:AlternateContent>",
+    let rotation = if group.rotation == 0 { String::new() } else { format!(" rot=\"{}\"",group.rotation) };
+    let group_xml = format!("<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\" Requires=\"a14\"><xdr:twoCellAnchor><xdr:from>{}</xdr:from>{}<xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id=\"{}\" name=\"{}\"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr><xdr:grpSpPr><a:xfrm{rotation}><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/><a:chOff x=\"{}\" y=\"{}\"/><a:chExt cx=\"{}\" cy=\"{}\"/></a:xfrm></xdr:grpSpPr>{}</xdr:grpSp><xdr:clientData/></xdr:twoCellAnchor></mc:Choice><mc:Fallback/></mc:AlternateContent>",
         from, to, id, name,
         transform.offset.0, transform.offset.1, transform.extent.0, transform.extent.1,
         transform.child_offset.0, transform.child_offset.1, transform.child_extent.0, transform.child_extent.1,
@@ -4379,9 +4528,12 @@ fn patch_drawing_names_xml(xml: &str, edits: &HashMap<String, String>) -> Result
     String::from_utf8(writer.into_inner()).map_err(|error|XlsxError::InvalidData(error.to_string()))
 }
 
-fn patch_drawing_nonvisual_ids(xml: &str, edits: &HashMap<String, u32>) -> Result<String, XlsxError> {
+fn patch_drawing_nonvisual_ids(xml: &str, edits: &HashMap<String, u32>, physical: &HashMap<u32, u32>) -> Result<String, XlsxError> {
     let mut reader = Reader::from_str(xml);
-    let mut ids = HashMap::new();
+    let mut ids = physical.clone();
+    if ids.values().any(|id| *id == 0) {
+        return Err(XlsxError::InvalidData("drawing shape id must be positive".into()));
+    }
     loop {
         match reader.read_event().map_err(XlsxError::Xml)? {
             Event::Start(start) | Event::Empty(start) if local_name(start.name().as_ref()) == "cNvPr" => {
@@ -4389,7 +4541,9 @@ fn patch_drawing_nonvisual_ids(xml: &str, edits: &HashMap<String, u32>) -> Resul
                     if new == 0 { return Err(XlsxError::InvalidData("drawing shape id must be positive".into())); }
                     let old = get_attr(&start, "id").and_then(|id| id.parse::<u32>().ok())
                         .ok_or_else(|| XlsxError::InvalidData("drawing source id is missing".into()))?;
-                    if old != new { ids.insert(old, new); }
+                    if ids.insert(old, new).is_some_and(|prior| prior != new) {
+                        return Err(XlsxError::InvalidData("drawing source identity has conflicting destinations".into()));
+                    }
                 }
             }
             Event::Eof => break,
@@ -17901,6 +18055,54 @@ mod tests {
     }
 
     #[test]
+    fn group_and_child_source_ids_rebase_in_one_pass_with_connector_endpoints() {
+        let xml = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="4" name="Bundle"/></xdr:nvGrpSpPr><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="2" name="Left"/></xdr:nvSpPr></xdr:sp><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="Right"/></xdr:nvSpPr></xdr:sp></xdr:grpSp><xdr:cxnSp><xdr:nvCxnSpPr><xdr:cNvPr id="5" name="Connector"/><xdr:cNvCxnSpPr><a:stCxn id="4" idx="0"/><a:endCxn id="2" idx="1"/></xdr:cNvCxnSpPr></xdr:nvCxnSpPr></xdr:cxnSp></xdr:twoCellAnchor></xdr:wsDr>"#;
+        let result = patch_drawing_nonvisual_ids(xml,
+            &HashMap::from([("Left".into(), 3), ("Right".into(), 4)]),
+            &HashMap::from([(4, 2)])).unwrap();
+        assert_eq!(drawing_shape_id(&result, "Bundle").unwrap(), Some(2));
+        assert_eq!(drawing_shape_id(&result, "Left").unwrap(), Some(3));
+        assert_eq!(drawing_shape_id(&result, "Right").unwrap(), Some(4));
+        assert_eq!(drawing_shape_id(&result, "Connector").unwrap(), Some(5));
+        assert!(result.contains("<a:stCxn idx=\"0\" id=\"2\"/>"), "{result}");
+        assert!(result.contains("<a:endCxn idx=\"1\" id=\"3\"/>"), "{result}");
+    }
+
+    #[test]
+    fn nested_group_addition_preserves_container_transform() {
+        let xml = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="7" name="Inner"/></xdr:nvGrpSpPr><xdr:grpSpPr><a:xfrm rot="60000"><a:off x="1" y="2"/><a:ext cx="3" cy="4"/><a:chOff x="9" y="10"/><a:chExt cx="30" cy="40"/></a:xfrm></xdr:grpSpPr><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="A"/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="9" y="10"/><a:ext cx="10" cy="10"/></a:xfrm></xdr:spPr></xdr:sp><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="4" name="B"/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="19" y="10"/><a:ext cx="10" cy="10"/></a:xfrm></xdr:spPr></xdr:sp></xdr:grpSp></xdr:twoCellAnchor><xdr:twoCellAnchor><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="5" name="C"/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="1" y="2"/><a:ext cx="10" cy="10"/></a:xfrm></xdr:spPr></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>"#;
+        let from = crate::ir::Anchor {col:0,col_off:0,row:0,row_off:0};
+        let group = DrawingGroupAddition { name:"Outer".into(), non_visual_id:Some(8), from, to:from,
+            transform:crate::ir::GroupTransform {offset:(100,200),extent:(300,400),child_offset:(0,0),child_extent:(300,400)},
+            rotation:120000,members:vec![("Inner".into(),(100,200,300,400)),("C".into(),(10,20,30,40))] };
+        let patched = patch_drawing_group_addition(xml,&group).unwrap();
+        assert_eq!(patched.matches("<xdr:grpSp>").count(),2);
+        for name in ["Outer","Inner","A","B","C"] { assert_eq!(patched.matches(&format!("name=\"{name}\"")).count(),1); }
+        assert!(patched.contains(r#"<a:xfrm rot="60000"><a:off x="100" y="200"/><a:ext cx="300" cy="400"/><a:chOff x="9" y="10"/><a:chExt cx="30" cy="40"/></a:xfrm>"#));
+        assert!(patched.contains(r#"<a:xfrm rot="120000">"#));
+    }
+
+    #[test]
+    fn drawing_order_recurses_into_groups_and_retains_foreign_nodes() {
+        let foreign = r#"<v:keep xmlns:v="urn:oxi-test" marker="unchanged"/>"#;
+        let xml = format!(r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"><xdr:twoCellAnchor><xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="1" name="Root"/></xdr:nvGrpSpPr><xdr:grpSpPr/><xdr:sp><xdr:cNvPr id="2" name="A"/></xdr:sp>{foreign}<xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="3" name="Pair"/></xdr:nvGrpSpPr><xdr:grpSpPr/><xdr:sp><xdr:cNvPr id="4" name="B"/></xdr:sp><xdr:sp><xdr:cNvPr id="5" name="C"/></xdr:sp></xdr:grpSp><xdr:sp><xdr:cNvPr id="6" name="D"/></xdr:sp></xdr:grpSp></xdr:twoCellAnchor></xdr:wsDr>"#);
+        let order = ["D", "C", "B", "A"].map(String::from);
+        let patched = patch_drawing_order(&xml, &order).unwrap();
+        let mut reader = Reader::from_str(&patched);
+        let mut names = Vec::new();
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(element) | Event::Empty(element) if local_name(element.name().as_ref()) == "cNvPr" => names.push(get_attr(&element, "name").unwrap()),
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        assert_eq!(names, ["Root", "D", "Pair", "C", "B", "A"]);
+        assert_eq!(patched.matches(foreign).count(), 1);
+        assert_eq!(patch_drawing_order(&patched, &order).unwrap(), patched);
+    }
+
+    #[test]
     fn drawing_order_edit_reorders_existing_worksheet_anchors() {
         let bytes = include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
         let original = crate::parse_xlsx(bytes).unwrap();
@@ -18004,14 +18206,14 @@ mod tests {
     #[test]
     fn drawing_identity_rebase_keeps_connector_endpoints_and_unknown_content() {
         let xml = r#"<x:wsDr xmlns:x="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:custom="urn:preserve"><x:sp><x:cNvPr id="2" name="Left"/></x:sp><x:sp><x:cNvPr id="3" name="Right"/></x:sp><x:cxnSp><x:cNvPr id="4" name="Link"/><a:stCxn id="2" idx="1"/><a:endCxn id="3" idx="2"/></x:cxnSp><custom:data id="2"><![CDATA[untouched < & >]]></custom:data></x:wsDr>"#;
-        let swapped = patch_drawing_nonvisual_ids(xml, &HashMap::from([("Left".into(), 3), ("Right".into(), 2)])).unwrap();
+        let swapped = patch_drawing_nonvisual_ids(xml, &HashMap::from([("Left".into(), 3), ("Right".into(), 2)]), &HashMap::new()).unwrap();
         assert_eq!(drawing_shape_id(&swapped, "Left").unwrap(), Some(3));
         assert_eq!(drawing_shape_id(&swapped, "Right").unwrap(), Some(2));
         assert!(swapped.contains(r#"<a:stCxn idx="1" id="3"/>"#));
         assert!(swapped.contains(r#"<a:endCxn idx="2" id="2"/>"#));
         assert!(swapped.contains(r#"<custom:data id="2"><![CDATA[untouched < & >]]></custom:data>"#));
         assert_eq!(drawing_shape_ids(&swapped).unwrap().len(), 3);
-        let collision = patch_drawing_nonvisual_ids(xml, &HashMap::from([("Left".into(), 3)])).unwrap();
+        let collision = patch_drawing_nonvisual_ids(xml, &HashMap::from([("Left".into(), 3)]), &HashMap::new()).unwrap();
         assert!(drawing_shape_ids(&collision).is_err());
     }
 

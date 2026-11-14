@@ -2835,6 +2835,112 @@ fn drawing_metadata_attribute(element: &quick_xml::events::BytesStart<'_>, key: 
     quick_xml::escape::unescape(&normalized).ok().map(|text| text.into_owned())
 }
 
+/// Retain every DrawingML group, including containers that Excel omits from
+/// GroupItems enumeration. Flattened leaf geometry remains available unchanged.
+fn parse_drawing_groups(xml: &str) -> Vec<crate::ir::DrawingGroup> {
+    use crate::ir::{Anchor, DrawingGroup, GroupTransform};
+    let mut reader = quick_xml::reader::NsReader::from_str(xml);
+    let blank = Anchor { col: 0, col_off: 0, row: 0, row_off: 0 };
+    let mut from = blank;
+    let mut to = None;
+    let mut tags = Vec::<String>::new();
+    let mut groups = Vec::<DrawingGroup>::new();
+    let mut identified = Vec::<bool>::new();
+    let mut parents = Vec::<Option<usize>>::new();
+    let mut active = Vec::<usize>::new();
+    let mut entities = Vec::<Option<usize>>::new();
+    loop {
+        let event = match reader.read_event() { Ok(event) => event, Err(_) => break };
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let empty = matches!(event, Event::Empty(_));
+                let name = local_name(element.name().as_ref());
+                let drawing = matches!(reader.resolve_element(element.name()).0,
+                    quick_xml::name::ResolveResult::Bound(ns) if matches!(ns.as_ref(),
+                    b"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" |
+                    b"http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"));
+                let geometry = matches!(reader.resolve_element(element.name()).0,
+                    quick_xml::name::ResolveResult::Bound(ns) if matches!(ns.as_ref(),
+                    b"http://schemas.openxmlformats.org/drawingml/2006/main" |
+                    b"http://purl.oclc.org/ooxml/drawingml/main"));
+                if drawing && matches!(name.as_str(), "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor") {
+                    from = blank;to = None;
+                }
+                if drawing && name == "to" { to = Some(blank); }
+                if drawing && name == "grpSp" && !empty {
+                    let index = groups.len();
+                    let parent = active.last().copied();
+                    groups.push(DrawingGroup { non_visual_id: 0, name: String::new(),
+                        parent_id: parent.map(|p| groups[p].non_visual_id), children: Vec::new(),
+                        transform: GroupTransform { offset: (0,0), extent: (0,0), child_offset: (0,0), child_extent: (0,0) },
+                        from, to, rotation: 0 });
+                    parents.push(parent);identified.push(false);active.push(index);entities.push(Some(index));
+                } else if drawing && matches!(name.as_str(), "sp" | "pic" | "graphicFrame" | "cxnSp") && !empty {
+                    entities.push(None);
+                } else if drawing && name == "cNvPr" {
+                    if let Some(id) = get_attr(element, "id").and_then(|s| s.parse::<u32>().ok()) {
+                        if let Some(Some(index)) = entities.last().copied() {
+                            groups[index].non_visual_id = id;
+                            groups[index].name = get_attr(element, "name").unwrap_or_default();
+                            identified[index] = true;
+                            if let Some(parent) = parents[index] {
+                                if !groups[parent].children.contains(&id) { groups[parent].children.push(id); }
+                            }
+                        } else if entities.last().is_some() {
+                            if let Some(index) = active.last().copied() {
+                                if !groups[index].children.contains(&id) { groups[index].children.push(id); }
+                            }
+                        }
+                    }
+                } else if geometry && entities.last().copied().flatten().is_some() && tags.iter().any(|s| s == "grpSpPr") {
+                    let index = entities.last().copied().flatten().unwrap();
+                    let n = |key: &str| get_attr(element,key).and_then(|s|s.parse::<i64>().ok()).unwrap_or(0);
+                    match name.as_str() {
+                        "xfrm" => groups[index].rotation = get_attr(element,"rot").and_then(|s|s.parse().ok()).unwrap_or(0),
+                        "off" => groups[index].transform.offset = (n("x"),n("y")),
+                        "ext" => groups[index].transform.extent = (n("cx"),n("cy")),
+                        "chOff" => groups[index].transform.child_offset = (n("x"),n("y")),
+                        "chExt" => groups[index].transform.child_extent = (n("cx"),n("cy")),
+                        _ => {}
+                    }
+                }
+                if !empty { tags.push(if drawing || geometry { name } else { String::new() }); }
+            }
+            Event::Text(ref text) => {
+                let value = text.unescape().ok().and_then(|s|s.parse::<i64>().ok());
+                if let Some(value) = value {
+                    let anchor = match tags.get(tags.len().saturating_sub(2)).map(String::as_str) {
+                        Some("from") => Some(&mut from),
+                        Some("to") => to.as_mut(),
+                        _ => None,
+                    };
+                    if let Some(anchor) = anchor {
+                        match tags.last().map(String::as_str) {
+                            Some("col") => anchor.col = value.max(0) as u32,
+                            Some("row") => anchor.row = value.max(0) as u32,
+                            Some("colOff") => anchor.col_off = value,
+                            Some("rowOff") => anchor.row_off = value,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Event::End(_) => {
+                match tags.pop().as_deref() {
+                    Some("grpSp") => { active.pop();entities.pop(); }
+                    Some("sp" | "pic" | "graphicFrame" | "cxnSp") => { entities.pop(); }
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    groups.into_iter().enumerate().filter_map(|(index, group)|
+        (identified[index] && seen.insert(group.non_visual_id)).then_some(group)).collect()
+}
+
 fn parse_drawing_xml(xml: &str, theme: &Theme) -> Vec<(crate::ir::Drawing, DrawingImageRelationships)> {
     use crate::ir::{
         Anchor, Drawing, DrawingKind, Frame, PathStep, Shape, ShapeLine, ShapeParagraph,
@@ -5904,6 +6010,7 @@ fn parse_worksheet(
         unsupported_elements: unsupported,
         drawing_id_blocks: Vec::new(),
         legacy_drawing_order: Vec::new(),
+        drawing_groups: Vec::new(),
         header_footer: parse_header_footer(xml)?,
         protected,
         protection,
@@ -6552,6 +6659,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
                                 Some(xml) => parse_relationships(&xml)?,
                                 None => Default::default(),
                             };
+                            sheet.drawing_groups.extend(parse_drawing_groups(&drawing_xml));
                             for (mut drawn, image_relationships) in parse_drawing_xml(&drawing_xml, &theme) {
                                 if let Some(metadata) = image_relationships.shape_id.and_then(|shape_id| ole_prog_ids.get(&shape_id)) {
                                     drawn.ole_prog_id = Some(metadata.prog_id.clone());
@@ -9807,6 +9915,36 @@ pub(crate) fn native_external_link_corpus() -> Vec<(Vec<u8>,serde_json::Value)> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn drawing_groups_are_retained_in_parsed_nested_workbooks() {
+        let bytes = include_bytes!("../../../tests/fixtures/vba/grouped_shapes_nested.xlsx");
+        let book = crate::parse_xlsx_preserving_values(bytes).unwrap();
+        let groups = &book.sheets[0].drawing_groups;
+        assert_eq!(groups.len(), 2);
+        assert_eq!((groups[0].non_visual_id,groups[0].name.as_str(),groups[0].parent_id), (6,"OuterGroup",None));
+        assert_eq!(groups[0].children, [5,4]);
+        assert_eq!((groups[1].non_visual_id,groups[1].name.as_str(),groups[1].parent_id), (5,"InnerGroup",Some(6)));
+        assert_eq!(groups[1].children, [2,3]);
+    }
+
+    #[test]
+    fn drawing_groups_retain_nested_identity_order_and_transforms() {
+        let xml = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:v="urn:oxi-foreign"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>10</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>20</xdr:rowOff></xdr:from><xdr:to><xdr:col>5</xdr:col><xdr:row>7</xdr:row></xdr:to><xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="8" name="Bundle"/></xdr:nvGrpSpPr><xdr:grpSpPr><a:xfrm rot="60000"><a:off x="10" y="20"/><a:ext cx="300" cy="400"/><a:chOff x="1" y="2"/><a:chExt cx="30" cy="40"/></a:xfrm></xdr:grpSpPr><v:cNvPr id="99" name="foreign"/><xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="7" name="Pair"/></xdr:nvGrpSpPr><xdr:grpSpPr><a:xfrm><a:off x="3" y="4"/><a:ext cx="5" cy="6"/><a:chOff x="0" y="0"/><a:chExt cx="5" cy="6"/></a:xfrm></xdr:grpSpPr><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="Left"/></xdr:nvSpPr></xdr:sp><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="4" name="Middle"/></xdr:nvSpPr></xdr:sp></xdr:grpSp><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="5" name="Right"/></xdr:nvSpPr></xdr:sp></xdr:grpSp></xdr:twoCellAnchor></xdr:wsDr>"#;
+        let groups = parse_drawing_groups(xml);
+        assert_eq!(groups.len(), 2);
+        assert_eq!((groups[0].non_visual_id,groups[0].name.as_str(),groups[0].parent_id), (8,"Bundle",None));
+        assert_eq!(groups[0].children, [7,5]);
+        assert_eq!(groups[0].transform.child_offset, (1,2));
+        assert_eq!(groups[0].transform.child_extent, (30,40));
+        assert_eq!(groups[0].rotation, 60000);
+        assert_eq!((groups[0].from.col,groups[0].from.row), (1,2));
+        assert_eq!(groups[0].to.unwrap().row, 7);
+        assert_eq!((groups[1].non_visual_id,groups[1].name.as_str(),groups[1].parent_id), (7,"Pair",Some(8)));
+        assert_eq!(groups[1].children, [3,4]);
+        assert_eq!(groups[1].transform.offset, (3,4));
+        assert_eq!(groups[1].transform.extent, (5,6));
+    }
+
     #[test]
     fn table_reference_order_distinguishes_absent_and_explicit_empty_sections() {
         let xml=format!(r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row><c t="inlineStr"><is><t>{}</t></is></c></row></sheetData><tableParts count="2"><tablePart r:id="z"/><tablePart r:id="a"/></tableParts></worksheet>"#,"\u{65e5}\u{672c}");
