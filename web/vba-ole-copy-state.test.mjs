@@ -19,7 +19,7 @@ const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const corpus=JSON.parse(fs.readFileSync(corpusPath,'utf8'));
 assert.equal(corpus.license,'CC-BY-SA-4.0');
 const conditions=process.argv[6]===undefined?69:Number(process.argv[6]);
-assert([69,18,33,27,39,58,70].includes(conditions));assert.equal(corpus.conditions,conditions);
+assert([69,18,33,27,39,58,70,118].includes(conditions));assert.equal(corpus.conditions,conditions);
 const inputPath=path.join(root,corpus.input_fixture),callerPath=path.join(root,corpus.caller_fixture);
 const input=new Uint8Array(fs.readFileSync(inputPath)),caller=new Uint8Array(fs.readFileSync(callerPath));
 assert.equal(hash(input),corpus.input_sha256);assert.equal(hash(caller),corpus.caller_sha256);

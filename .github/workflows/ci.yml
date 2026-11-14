@@ -58,6 +58,13 @@ jobs:
       # The browser VBA host's tests are behind a feature. Without it the
       # crate compiles with no tests at all and reports a green `0 passed`,
       # so the whole host suite would go unrun while the job stayed green.
+      - name: Native defaults and saved drawing anchors
+        run: >-
+          cargo test -p oxidocs-wasm --lib --features suite --locked
+          --config profile.test.package.oxivba-core.opt-level=1 -- --exact
+          spreadsheet_vba::tests::opened_styleless_workbook_uses_native_normal_grid_in_saved_shapes
+          spreadsheet_vba::tests::missing_style_normal_preserves_pinned_geometry_and_existing_styles
+          spreadsheet_vba::tests::group_layers_native_rotation_save48
       - name: The spreadsheet VBA host's own suite
         run: cargo test -p oxidocs-wasm --features suite --locked --config profile.test.package.oxivba-core.opt-level=1
 
@@ -293,7 +300,7 @@ jobs:
               node "$suite" pkg "$RUNNER_TEMP/vba-ole-copy-state.json"
               node "$suite" pkg "$RUNNER_TEMP/vba-ole-legacy-layers-state.json" tests/fixtures/vba/ole_legacy_layers_native.json . 18
               node "$suite" pkg "$RUNNER_TEMP/vba-ole-layer-operations-state.json" tests/fixtures/vba/ole_layer_operations_native.json . 33
-              node "$suite" pkg "$RUNNER_TEMP/vba-group-layer-operations-state.json" tests/fixtures/vba/group_layer_operations_native.json . 70
+              node "$suite" pkg "$RUNNER_TEMP/vba-group-layer-operations-state.json" tests/fixtures/vba/group_layer_operations_native.json . 118
             else
               node "$suite" pkg
             fi
