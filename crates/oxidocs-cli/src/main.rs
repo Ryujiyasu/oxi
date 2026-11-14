@@ -21,8 +21,29 @@ mod raster;
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+/// Set by `--quiet`: progress notes and the closing "Converted" line are
+/// left out. Warnings and errors are still written.
+static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn quiet() -> bool {
+    QUIET.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A progress note on stderr: what was parsed, which fonts were embedded.
+macro_rules! note {
+    ($($arg:tt)*) => {
+        if !quiet() {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    if let Some(at) = args.iter().skip(2).position(|a| a == "--quiet" || a == "-q") {
+        args.remove(at + 2);
+        QUIET.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 
     match args.get(1).map(|s| s.as_str()) {
         Some("--version") | Some("-V") | Some("version") => {
@@ -170,8 +191,8 @@ fn main() {
             eprintln!("Oxi CLI - Document processing toolkit");
             eprintln!();
             eprintln!("Usage:");
-            eprintln!("  oxi docx-to-pdf [--strict] <input.docx> <output.pdf>");
-            eprintln!("  oxi docx-to-png [--strict] [--page N] [--width PX] [--height PX] <input.docx> <output.png>");
+            eprintln!("  oxi docx-to-pdf [--strict] [--quiet] <input.docx> <output.pdf>");
+            eprintln!("  oxi docx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.docx> <output.png>");
             eprintln!("      page N (default 1), fitted inside the given width and/or height (default 96 dpi)");
             eprintln!("  oxi serve [--threads N]");
             eprintln!("      one JSON request per stdin line, {{\"input\", \"output\", \"strict\", \"id\"}};");
@@ -179,6 +200,8 @@ fn main() {
             eprintln!("      one JSON answer per stdout line, in completion order");
             eprintln!("      --strict: write nothing and exit {EXIT_UNSUPPORTED} when the document holds");
             eprintln!("                content Oxi does not draw (listed as JSON on stderr)");
+            eprintln!("      --quiet:  print nothing on success: no progress notes, no closing line");
+            eprintln!("                (also for serve); warnings and errors are still written");
             eprintln!("  oxi --version");
             eprintln!("  oxi vba-analyze <input.xlsm>");
             eprintln!("  oxi vba-safety <input.xlsm>");
@@ -254,7 +277,7 @@ fn lay_out(input: &str, strict: bool) -> Result<PdfDocument, ConvertError> {
     let data = fs::read(input).map_err(|e| ConvertError::Failed(format!("read {input}: {e}")))?;
     let doc = oxidocs_core::parse_docx(&data).map_err(|e| ConvertError::Failed(format!("parse {input}: {e}")))?;
 
-    eprintln!("Parsed: {} section(s), {} blocks total",
+    note!("Parsed: {} section(s), {} blocks total",
         doc.pages.len(),
         doc.pages.iter().map(|p| p.blocks.len()).sum::<usize>());
 
@@ -271,7 +294,7 @@ fn lay_out(input: &str, strict: bool) -> Result<PdfDocument, ConvertError> {
     let (pdf_doc, hf_parts_shown) = doc_to_pdf(&doc);
 
     if let Some((coverage, chars)) = drawn_coverage(&data, &pdf_doc, &hf_parts_shown) {
-        eprintln!("Drawn text coverage: {coverage:.4} of {chars} characters");
+        note!("Drawn text coverage: {coverage:.4} of {chars} characters");
         if strict && coverage < MIN_DRAWN_COVERAGE {
             // Nothing in the census named it, but text was lost all the same,
             // by the parser or the layout: a table's cells, a text box, half
@@ -540,6 +563,7 @@ fn docx_to_pdf(input: &str, output: &str, strict: bool) {
 /// Report a one-shot conversion and exit with its status.
 fn finish(input: &str, output: &str, result: Result<Converted, ConvertError>) {
     match result {
+        Ok(_) if quiet() => {}
         Ok(c) => println!("Converted {} -> {} ({} bytes, {} pages)", input, output, c.bytes, c.pages),
         Err(ConvertError::Unsupported(u)) => {
             eprintln!("{}", serde_json::json!({ "unsupported": u }));
@@ -3628,7 +3652,7 @@ fn embed_fallback_faces(layout: &oxidocs_core::layout::LayoutResult, fonts: &mut
         if covered.is_empty() {
             continue;
         }
-        eprintln!("Embedding fallback face {} for {} character(s) no document face has", path, covered.len());
+        note!("Embedding fallback face {} for {} character(s) no document face has", path, covered.len());
         for c in covered {
             missing.remove(&c);
         }
@@ -3801,7 +3825,7 @@ fn embed_document_faces(
         match embedded {
             Some(embedded) => {
                 if let Some(sub) = substituted {
-                    eprintln!(
+                    note!(
                         "Substituting {sub} for {family} (not installed; advance widths match on ASCII)"
                     );
                 }
@@ -3987,7 +4011,7 @@ fn build_embedded_fonts(
             }
             if let Some((path, face)) = face_file_cached(name, true, false) {
                 if let Ok(result) = subset_font_native_face(&path.to_string_lossy(), face, &used_chars) {
-                    eprintln!("Embedding CJK bold font '{}' ({}) from {} face {} ({} bytes)", key, name, path.display(), face, result.data.len());
+                    note!("Embedding CJK bold font '{}' ({}) from {} face {} ({} bytes)", key, name, path.display(), face, result.data.len());
                     fonts.insert(key, result);
                 }
             }
@@ -4024,7 +4048,7 @@ fn build_embedded_fonts(
             if let Some((path, face)) = face_file_cached(name, false, false) {
                 let label = resolved.replace(['-', ' '], "_");
                 if let Ok(result) = subset_font_native_face(&path.to_string_lossy(), face, &used_chars) {
-                    eprintln!("Embedding CJK font '{}' ({}) from {} face {} ({} bytes)", resolved, name, path.display(), face, result.data.len());
+                    note!("Embedding CJK font '{}' ({}) from {} face {} ({} bytes)", resolved, name, path.display(), face, result.data.len());
                     fonts.insert(resolved, result);
                     continue;
                 }
@@ -4039,7 +4063,7 @@ fn build_embedded_fonts(
         let label = resolved.replace(['-', ' '], "_");
         if let Some(path) = found_path {
             if let Some(result) = subset_font_file(&path.to_string_lossy(), &used_chars, &label) {
-                eprintln!("Embedding CJK font '{}' ({}) from {} ({} bytes)", resolved, name, path.display(), result.data.len());
+                note!("Embedding CJK font '{}' ({}) from {} ({} bytes)", resolved, name, path.display(), result.data.len());
                 fonts.insert(resolved, result);
             }
         }
@@ -4054,7 +4078,7 @@ fn build_embedded_fonts(
         }
     };
 
-    eprintln!("Embedding CJK font ({} bytes, {} glyph mappings)",
+    note!("Embedding CJK font ({} bytes, {} glyph mappings)",
         font_result.data.len(), font_result.unicode_to_gid.len());
 
     // Map remaining CJK font names (not already per-family embedded) to default CJK font
@@ -4074,7 +4098,7 @@ fn build_embedded_fonts(
 
     // Try to embed a Bold CJK font separately
     if let Some(bold_result) = find_and_subset_cjk_font_bold(&used_chars) {
-        eprintln!("Embedding CJK Bold font ({} bytes, {} glyph mappings)",
+        note!("Embedding CJK Bold font ({} bytes, {} glyph mappings)",
             bold_result.data.len(), bold_result.unicode_to_gid.len());
         fonts.insert("OxiCJK-Bold".to_string(), bold_result);
     } else {
@@ -4103,11 +4127,11 @@ fn embed_cambria_fonts(used_chars: &std::collections::BTreeSet<char>, fonts: &mu
         .copied()
         .collect();
     if let Some(result) = subset_font_file(regular_path, &latin_chars, "cambria") {
-        eprintln!("Embedding Cambria font ({} bytes, {} glyphs)", result.data.len(), result.unicode_to_gid.len());
+        note!("Embedding Cambria font ({} bytes, {} glyphs)", result.data.len(), result.unicode_to_gid.len());
         fonts.insert("OxiCambria-Regular".to_string(), result);
     }
     if let Some(result) = subset_font_file(bold_path, &latin_chars, "cambria-bold") {
-        eprintln!("Embedding Cambria Bold font ({} bytes, {} glyphs)", result.data.len(), result.unicode_to_gid.len());
+        note!("Embedding Cambria Bold font ({} bytes, {} glyphs)", result.data.len(), result.unicode_to_gid.len());
         fonts.insert("OxiCambria-Bold".to_string(), result);
     }
 }
@@ -4135,11 +4159,11 @@ fn embed_latin_fonts(used_chars: &std::collections::BTreeSet<char>, fonts: &mut 
         .collect();
 
     if let Some(result) = subset_font_file(regular_path, &latin_chars, "latin") {
-        eprintln!("Embedding Latin font ({} bytes, {} glyphs)", result.data.len(), result.unicode_to_gid.len());
+        note!("Embedding Latin font ({} bytes, {} glyphs)", result.data.len(), result.unicode_to_gid.len());
         fonts.insert("OxiLatin-Regular".to_string(), result);
     }
     if let Some(result) = subset_font_file(bold_path, &latin_chars, "latin-bold") {
-        eprintln!("Embedding Latin Bold font ({} bytes, {} glyphs)", result.data.len(), result.unicode_to_gid.len());
+        note!("Embedding Latin Bold font ({} bytes, {} glyphs)", result.data.len(), result.unicode_to_gid.len());
         fonts.insert("OxiLatin-Bold".to_string(), result);
     }
 }
@@ -4170,7 +4194,7 @@ fn embed_collection_member(font_path: &str, face: u32, label: &str) -> Option<Em
     if font.unicode_to_gid.is_empty() {
         return None;
     }
-    eprintln!(
+    note!(
         "Embedding {} whole from collection member {} ({} bytes)",
         label,
         face,
@@ -4185,7 +4209,7 @@ fn embed_whole_font(font_path: &str, label: &str) -> Option<EmbeddedFont> {
     if font.unicode_to_gid.is_empty() {
         return None;
     }
-    eprintln!(
+    note!(
         "Embedding {} whole ({} bytes) — no subsetter available",
         label,
         font.data.len()
@@ -4304,12 +4328,12 @@ fn subset_font_file(font_path: &str, chars: &std::collections::BTreeSet<char>, l
     };
     match native {
         Ok(font) => {
-            eprintln!("Font subset ({}): {} mappings, {} bytes", label, font.unicode_to_gid.len(), font.data.len());
+            note!("Font subset ({}): {} mappings, {} bytes", label, font.unicode_to_gid.len(), font.data.len());
             return Some(font);
         }
         Err(NativeSubset::NoGlyph) => return None,
         Err(NativeSubset::Failed(why)) => {
-            eprintln!("Font subset ({}) in-process failed ({}); trying fontTools", label, why);
+            note!("Font subset ({}) in-process failed ({}); trying fontTools", label, why);
         }
     }
     let char_string: String = chars.iter()
@@ -4439,7 +4463,7 @@ print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
                 clear_scratch(&widths_path, &cidmap_path, &subset_path);
                 return embed_whole_font(font_path, label);
             }
-            eprintln!("Font subset ({}): {}", label, String::from_utf8_lossy(&output.stdout).trim());
+            note!("Font subset ({}): {}", label, String::from_utf8_lossy(&output.stdout).trim());
         }
         Err(e) => {
             eprintln!("Python not available for {} subsetting: {}", label, e);
@@ -4475,7 +4499,7 @@ print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
         // it would put a font in the file that draws nothing — a PDF that
         // passes every structural check and shows blank where the bullets
         // were. The whole font has the mapping the subset lost.
-        eprintln!(
+        note!(
             "Font subset ({}) mapped no glyph; embedding the whole font instead",
             label
         );
@@ -4493,7 +4517,7 @@ print(f"OK {{len(unicode_to_cid)}} mappings, {{len(cid_widths)}} widths")
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     if let Some(ref psn) = ps_name {
-        eprintln!("PostScript name: {}", psn);
+        note!("PostScript name: {}", psn);
     }
 
     clear_scratch(&widths_path, &cidmap_path, &subset_path);
@@ -4593,13 +4617,13 @@ fn find_and_subset_cjk_font(used_chars: &std::collections::BTreeSet<char>) -> Op
         .map(std::path::PathBuf::from)
         .find(|p| p.exists())
         .or_else(|| bundled_face_file("OxiGothic.ttf"))?;
-    eprintln!("Found CJK font: {}", font_path.display());
+    note!("Found CJK font: {}", font_path.display());
     subset_font_file(&font_path.to_string_lossy(), used_chars, "cjk")
 }
 
 fn find_and_subset_cjk_font_bold(used_chars: &std::collections::BTreeSet<char>) -> Option<EmbeddedFont> {
     let font_path = CJK_FONT_PATHS_BOLD.iter().find(|p| std::path::Path::new(p).exists())?;
-    eprintln!("Found CJK Bold font: {}", font_path);
+    note!("Found CJK Bold font: {}", font_path);
     // Was a 144-line copy of the subsetter with its own hardcoded scratch
     // paths and no way out when the subsetter was missing, so bold CJK text
     // simply vanished on a machine without fontTools -- and on Windows the
@@ -4616,7 +4640,7 @@ fn find_system_cjk_font_full() -> Option<EmbeddedFont> {
 fn find_system_cjk_font() -> Option<EmbeddedFont> {
     for path in CJK_FONT_PATHS {
         if let Ok(data) = fs::read(path) {
-            eprintln!("Found CJK font: {}", path);
+            note!("Found CJK font: {}", path);
 
             // Get the standalone font data (extract from TTC if needed)
             let otf_data = if data.len() > 12 && &data[0..4] == b"ttcf" {
@@ -4627,7 +4651,7 @@ fn find_system_cjk_font() -> Option<EmbeddedFont> {
 
             // Parse cmap table to get Unicode → GlyphID mapping
             let unicode_to_gid = parse_cmap_table(&otf_data);
-            eprintln!("Parsed cmap: {} Unicode→GID entries", unicode_to_gid.len());
+            note!("Parsed cmap: {} Unicode→GID entries", unicode_to_gid.len());
 
             // Determine format and extract appropriate data for embedding
             let is_cff = otf_data.starts_with(b"OTTO") || has_cff_table(&otf_data);
