@@ -4470,11 +4470,19 @@ fn append_xml_child(xml: &str, root: &str, child: &str) -> Result<String, XlsxEr
 }
 
 fn drawing_shape_ids(xml: &str) -> Result<std::collections::HashSet<u32>, XlsxError> {
-    let mut reader = Reader::from_str(xml);
+    let mut reader = quick_xml::NsReader::from_str(xml);
     let mut ids = std::collections::HashSet::new();
     loop {
-        match reader.read_event().map_err(XlsxError::Xml)? {
-            Event::Start(start) | Event::Empty(start) if local_name(start.name().as_ref()) == "cNvPr" => {
+        let (namespace, event) = reader.read_resolved_event().map_err(XlsxError::Xml)?;
+        let standard = match namespace {
+            quick_xml::name::ResolveResult::Bound(namespace) => matches!(namespace.as_ref(),
+                b"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" |
+                b"http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"),
+            quick_xml::name::ResolveResult::Unbound => true,
+            _ => false,
+        };
+        match event {
+            Event::Start(start) | Event::Empty(start) if standard && local_name(start.name().as_ref()) == "cNvPr" => {
                 let id = get_attr(&start, "id").and_then(|id| id.parse::<u32>().ok())
                     .filter(|id| *id > 0).ok_or_else(|| XlsxError::InvalidData("drawing shape id must be a positive integer".into()))?;
                 if !ids.insert(id) { return Err(XlsxError::InvalidData(format!("duplicate drawing shape id {id}"))); }
@@ -5372,13 +5380,11 @@ fn append_drawing_shapes_xml(
     drawings: &[crate::ir::Drawing],
 ) -> Result<String, XlsxError> {
     let mut reader = Reader::from_str(xml);
-    let mut max_id = 1u32;
+    let mut used = drawing_shape_ids(xml)?;
+    let mut max_id = used.iter().copied().max().unwrap_or(1);
     let mut root_end: Option<(usize, String)> = None;
     loop {
         match reader.read_event().map_err(XlsxError::Xml)? {
-            Event::Start(start) | Event::Empty(start) if local_name(start.name().as_ref()) == "cNvPr" => {
-                max_id = max_id.max(get_attr(&start, "id").and_then(|id| id.parse().ok()).unwrap_or(0));
-            }
             Event::End(end) if local_name(end.name().as_ref()) == "wsDr" => {
                 let qname = std::str::from_utf8(end.name().as_ref()).map_err(|error| XlsxError::InvalidData(error.to_string()))?.to_string();
                 root_end = Some((oxidocs_common::xml_utils::xml_byte_position(xml, reader.buffer_position()), qname));
@@ -5391,7 +5397,6 @@ fn append_drawing_shapes_xml(
     let closing_len = qname.len() + 3;
     let close_at = end.checked_sub(closing_len).ok_or_else(|| XlsxError::InvalidData("drawing root end is malformed".into()))?;
     let mut additions = String::new();
-    let mut used = drawing_shape_ids(xml)?;
     for drawing in drawings {
         let id = match drawing.non_visual_id {
             Some(id) if id > 0 => id,
@@ -5472,7 +5477,7 @@ fn write_drawing_shape(drawing: &crate::ir::Drawing, id: u32) -> Result<String, 
     let (x, y) = shape.transform_offset.unwrap_or((drawing.from.col_off, drawing.from.row_off));
     let xfrm = format!("<a:xfrm{rotation}{flip_h}{flip_v}><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm>", point(x), point(y), width, height);
     let style = "<xdr:style><a:lnRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:lnRef><a:fillRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:fillRef><a:effectRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:effectRef><a:fontRef idx=\"minor\"><a:schemeClr val=\"dk1\"/></a:fontRef></xdr:style>";
-    let anchor = format!("<xdr:{anchor_open}>{}{}<xdr:{object} macro=\"\"><xdr:{nonvisual}><xdr:cNvPr id=\"{id}\" name=\"{name}\"{metadata}/><xdr:{properties}{text_box}/></xdr:{nonvisual}><xdr:spPr>{xfrm}<a:prstGeom prst=\"{geometry}\">{av_list}</a:prstGeom>{paint}</xdr:spPr>{style}{text}</xdr:{object}><xdr:clientData/>{anchor_close}", marker("from", drawing.from), to_xml);
+    let anchor = format!("<xdr:{anchor_open} xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">{}{}<xdr:{object} macro=\"\"><xdr:{nonvisual}><xdr:cNvPr id=\"{id}\" name=\"{name}\"{metadata}/><xdr:{properties}{text_box}/></xdr:{nonvisual}><xdr:spPr>{xfrm}<a:prstGeom prst=\"{geometry}\">{av_list}</a:prstGeom>{paint}</xdr:spPr>{style}{text}</xdr:{object}><xdr:clientData/>{anchor_close}", marker("from", drawing.from), to_xml);
     Ok(anchor)
 }
 
@@ -17278,6 +17283,28 @@ mod tests {
             }
         }
         assert_eq!(payloads, 1);
+    }
+
+    #[test]
+    fn added_drawing_ids_ignore_foreign_metadata_and_keep_real_duplicates_invalid() {
+        let (xml, _, _) = structural_delete_sample();
+        for strict in [false, true] {
+            let xml = if strict { xml.replace(
+                "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
+                "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing") } else { xml.clone() };
+            let xml = xml.replace("<u:sp>", "<u:sp><u:cNvPr id=\"4294967295\"/><u:cNvPr id=\"invalid\"/>");
+            let expected = std::collections::HashSet::from([2, 3, 4, 5, 10, 20, 30]);
+            assert_eq!(drawing_shape_ids(&xml).unwrap(), expected);
+            let mut added = simple_added_shape("Added");
+            added.non_visual_id = None;
+            let saved = append_drawing_shapes_xml(&xml, &[added]).unwrap();
+            let mut expected = expected;
+            expected.insert(31);
+            assert_eq!(drawing_shape_ids(&saved).unwrap(), expected);
+            assert!(saved.contains("<u:cNvPr id=\"4294967295\"/>"));
+            let duplicate = xml.replace("id=\"3\" name=\"B\"", "id=\"2\" name=\"B\"");
+            assert!(drawing_shape_ids(&duplicate).is_err());
+        }
     }
 
     #[test]
