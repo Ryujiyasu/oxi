@@ -11165,6 +11165,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             color: wm.color.clone(),
                             rotation: wm.rotation,
                             font_family: wm.font_family.clone(),
+                            opacity: wm.opacity,
                         },
                     ),
                 );

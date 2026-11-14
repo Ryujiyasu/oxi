@@ -8509,6 +8509,32 @@ fn vml_relative_height(z_index: u32) -> u32 {
     if std::env::var_os("OXI_VML_ZINDEX_DISABLE").is_some() { 0 } else { z_index }
 }
 
+/// OXI_TXBX_SCENE3D_BLACK: runs without their own props3d in a scene3d text body
+/// are drawn near-black, without their gradient / outline / glow.
+fn scene3d_blacken(blocks: &mut [Block]) {
+    for b in blocks.iter_mut() {
+        match b {
+            Block::Paragraph(p) => {
+                for r in p.runs.iter_mut() {
+                    if !r.style.props3d && !r.style.no_fill {
+                        r.style.color = Some("000000".to_string());
+                        r.style.text_line = None;
+                        r.style.text_glow = None;
+                    }
+                }
+            }
+            Block::Table(t) => {
+                for row in t.rows.iter_mut() {
+                    for c in row.cells.iter_mut() {
+                        scene3d_blacken(&mut c.blocks);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn parse_drawing(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
@@ -8590,6 +8616,9 @@ fn parse_drawing(
     let mut text_vertical = false;
     // S662: bodyPr@compatLnSpc="1" (legacy "compatible line spacing").
     let mut text_compat_ln_spc = false;
+    // OXI_TXBX_SCENE3D_BLACK: the text body (bodyPr) carries <a:scene3d>.
+    let mut in_body_pr = false;
+    let mut text_scene3d = false;
     // S1498: bodyPr <a:spAutoFit/>
     let mut text_auto_fit = false;
     // OXI_WRAPNONE_WIDTH: bodyPr wrap="none"
@@ -9448,8 +9477,19 @@ fn parse_drawing(
                     "align" => {
                         in_align = true;
                     }
+                    // OXI_TXBX_SCENE3D_BLACK (2026-11-14, default ON, opt-out _DISABLE): a text
+                    // body with <a:scene3d> (camera + light rig) makes Word draw every run that
+                    // has no w14:props3d of its own near-black (~15,15,15) in its PDF, whatever
+                    // its w:color / textFill gradient / outline; a run with props3d keeps its
+                    // colour (lit). sp3d alone changes nothing. blind-J ja/creative__9540b8a7
+                    // (title + second line black, bevelled subtitle blue), ja/reference__5593c6a7
+                    // (props3d heading stays 1F4E79-blue), self-authored _pb_gradtext3d (13 arms).
+                    "scene3d" if in_body_pr => {
+                        text_scene3d = true;
+                    }
                     // Text body properties — text insets (bodyPr as start element with children)
                     "bodyPr" => {
+                        in_body_pr = true;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             let val = String::from_utf8_lossy(&attr.value);
@@ -10387,6 +10427,7 @@ fn parse_drawing(
             Event::End(e) => {
                 let local = local_name(e.name().as_ref());
                 match local.as_str() {
+                    "bodyPr" => { in_body_pr = false; }
                     "wrapPolygon" => { in_wrapping_polygon = false; }
                     "positionH" => {
                         in_pos_h = false;
@@ -11263,6 +11304,9 @@ fn parse_drawing(
     }
     // OXI_TXBX_LINK: a continuation box has no text of its own (its shape is drawn
     // as an outline shape) but receives the chain's overflow, so it is a box too.
+    if text_scene3d && !crate::env_flag!("OXI_TXBX_SCENE3D_BLACK_DISABLE") {
+        scene3d_blacken(&mut shape_text_blocks);
+    }
     let text_box = if (!is_outline_shape
         && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty() || group_drawn))
         || (txbx_chain.is_some_and(|c| c.1 > 0) && !crate::env_flag!("OXI_TXBX_LINK_DISABLE"))
@@ -13668,6 +13712,9 @@ fn parse_run_properties(
         match reader.read_event()? {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "props3d" && e.name().as_ref().starts_with(b"w14:") {
+                    style.props3d = true;
+                }
                 if local == "textFill" {
                     in_text_fill = true;
                     text_fill_stops.clear();
@@ -13900,6 +13947,27 @@ fn parse_run_properties(
             }
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
+                if local == "props3d" && e.name().as_ref().starts_with(b"w14:") {
+                    style.props3d = true;
+                }
+                // OXI_TEXT_FILL_EMPTY_CLR (2026-11-14, default ON, opt-out _DISABLE): a stop
+                // colour without modifiers is an EMPTY element (<w14:srgbClr w14:val="FF0000"/>);
+                // only the Start form was read, so a plain srgb gradient / solid textFill lost
+                // every stop and the text fell back to black (_pb_gradtext srgb2 / solid: Word
+                // red->blue / red, Oxi black).
+                if in_text_fill && text_fill_on && (local == "srgbClr" || local == "schemeClr")
+                    && !crate::env_flag!("OXI_TEXT_FILL_EMPTY_CLR_DISABLE")
+                {
+                    let mut base = String::from("000000");
+                    for attr in e.attributes().flatten() {
+                        if local_name(attr.key.as_ref()) == "val" {
+                            let v = String::from_utf8_lossy(&attr.value).to_string();
+                            base = if local == "srgbClr" { v } else { ctx.theme.resolve(&v).cloned().unwrap_or(base) };
+                        }
+                    }
+                    text_fill_stops.push((text_fill_pos, base));
+                    continue;
+                }
                 match local.as_str() {
                     "b" => {
                         // S976: CT_OnOff — an explicit `<w:b w:val="0"/>` turns
@@ -16934,6 +17002,28 @@ fn extract_vml_watermark(xml: &str) -> Option<crate::ir::Watermark> {
         }
         None
     });
+    // OXI_WATERMARK_OPACITY (2026-11-14): <v:fill opacity=".5"/> inside the shape --
+    // Word's PDF fills the glyph paths silver at /ca 0.502 (blind-J en/educational__0079c94e
+    // «PILOT»: (224,224,224) on white). Values: ".5" / "0.5" / "32768f" (1/65536).
+    let shape_close = xml[shape_start..].find("</v:shape>").map(|e| e + shape_start).unwrap_or(xml.len());
+    let opacity = xml[shape_start..shape_close]
+        .find("<v:fill ")
+        .and_then(|i| {
+            let i = i + shape_start;
+            let e = xml[i..].find('>')? + i;
+            attr(&xml[i..=e], "opacity")
+        })
+        .and_then(|v| {
+            let v = v.trim();
+            if let Some(f) = v.strip_suffix('f') {
+                f.parse::<f32>().ok().map(|n| n / 65536.0)
+            } else {
+                v.parse::<f32>().ok()
+            }
+        })
+        .filter(|_| !crate::env_flag!("OXI_WATERMARK_OPACITY_DISABLE"))
+        .map(|o| o.clamp(0.0, 1.0))
+        .unwrap_or(1.0);
     Some(crate::ir::Watermark {
         text,
         width,
@@ -16941,6 +17031,7 @@ fn extract_vml_watermark(xml: &str) -> Option<crate::ir::Watermark> {
         rotation,
         color,
         font_family,
+        opacity,
     })
 }
 

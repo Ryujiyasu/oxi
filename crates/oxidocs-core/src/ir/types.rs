@@ -747,6 +747,9 @@ pub struct RunStyle {
     /// OXI_TEXT_GLOW: `w14:textOutline` with a solid fill -- (width pt, 0xRRGGBB).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_line: Option<(f32, u32)>,
+    /// OXI_TXBX_SCENE3D_BLACK: the run carries its own `w14:props3d`.
+    #[serde(default)]
+    pub props3d: bool,
     /// Complex script font size in points (w:szCs, half-points / 2)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_cs: Option<f32>,
@@ -908,6 +911,7 @@ impl Default for RunStyle {
             no_fill: false,
             text_glow: None,
             text_line: None,
+            props3d: false,
             font_size_cs: None,
             bold_cs: false,
             italic_cs: false,
@@ -2548,6 +2552,13 @@ pub struct Watermark {
     /// v:textpath style font-family, if declared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_family: Option<String>,
+    /// OXI_WATERMARK_OPACITY: `<v:fill opacity>` of the shape, 1.0 when absent.
+    #[serde(default = "watermark_opacity_default")]
+    pub opacity: f32,
+}
+
+fn watermark_opacity_default() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

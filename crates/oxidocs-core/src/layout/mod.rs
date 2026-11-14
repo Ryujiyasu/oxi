@@ -3018,6 +3018,8 @@ pub enum LayoutContent {
         color: Option<String>,
         rotation: f32,
         font_family: Option<String>,
+        /// fill opacity 0..1 (`<v:fill opacity>`)
+        opacity: f32,
     },
     /// Begin a clipping region. All subsequent elements until ClipEnd are clipped to this rect.
     ClipStart,

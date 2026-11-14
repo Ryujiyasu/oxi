@@ -560,10 +560,10 @@ unsafe fn render_page_elements(
                         shape_type, stroke_color.as_deref(), *stroke_width, *flip_h, *flip_v, *arrow_head, *arrow_tail)?;
                 }
             }
-            LayoutContent::WatermarkText { text, color, rotation, font_family } => {
+            LayoutContent::WatermarkText { text, color, rotation, font_family, opacity } => {
                 if exclude.iter().any(|e| e == "watermark") { continue; }
                 render_watermark(rt, dwrite_factory, el.x, el.y, el.width, el.height,
-                    text, color.as_deref(), *rotation, font_family.as_deref())?;
+                    text, color.as_deref(), *rotation, font_family.as_deref(), *opacity)?;
             }
             // TODO Step 7: Balloon, BalloonConnector (low priority for SSIM)
             _ => {}
@@ -582,7 +582,7 @@ unsafe fn render_watermark(
     rt: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget,
     dwrite_factory: &windows::Win32::Graphics::DirectWrite::IDWriteFactory,
     x_pt: f32, y_pt: f32, w_pt: f32, h_pt: f32,
-    text: &str, color: Option<&str>, rotation: f32, font_family: Option<&str>,
+    text: &str, color: Option<&str>, rotation: f32, font_family: Option<&str>, opacity: f32,
 ) -> windows::core::Result<()> {
     use windows::Win32::Graphics::Direct2D::Common::*;
     use windows::Win32::Graphics::DirectWrite::*;
@@ -661,7 +661,7 @@ unsafe fn render_watermark(
         u8::from_str_radix(&hex[4..6], 16).unwrap_or(0xC0),
     );
     let brush = rt.CreateSolidColorBrush(&D2D1_COLOR_F {
-        r: r as f32 / 255.0, g: g as f32 / 255.0, b: b as f32 / 255.0, a: 1.0,
+        r: r as f32 / 255.0, g: g as f32 / 255.0, b: b as f32 / 255.0, a: opacity,
     }, None)?;
     rt.DrawTextLayout(origin, &layout, &brush,
         windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE);

@@ -1683,6 +1683,101 @@ fn stand_in_face(family: &str, bold: bool) -> String {
     .to_string()
 }
 
+/// OXI_PDF_WATERMARK (2026-11-14, default ON, opt-out _DISABLE): the VML WordArt
+/// watermark as filled glyph outlines, the way the DirectWrite renderer draws it --
+/// the text's em height fitted to the box height, its advance to the box width,
+/// the ink centred on the box and turned `rotation` degrees clockwise about it.
+/// The PDF writer has no text matrix, and Word's own PDF draws these as paths too.
+/// Opacity is composited over white (the writer has no fill alpha). The CLI PDF
+/// dropped the element: blind-J en/educational__0079c94e's diagonal «PILOT».
+#[allow(clippy::too_many_arguments)]
+fn watermark_path(x: f32, y: f32, w: f32, h: f32, text: &str, color: Option<&str>, rotation: f32,
+    family: Option<&str>, opacity: f32) -> Option<ContentElement>
+{
+    use rustybuzz::ttf_parser;
+    let fam = match family {
+        Some(f) if !f.trim().is_empty() && !f.eq_ignore_ascii_case("CG Times") => f,
+        _ => "Times New Roman",
+    };
+    let path = resolve_face_path(fam, false, false).or_else(|| resolve_face_path("Times New Roman", false, false))?;
+    let bytes = std::fs::read(path).ok()?;
+    let face = ttf_parser::Face::parse(&bytes, 0).ok()?;
+    let upem = face.units_per_em().max(1) as f64;
+    // glyph outlines in em units, y down, pen advancing along x
+    struct Sink { ops: Vec<(u8, [f64; 6])>, pen: f64, k: f64 }
+    impl ttf_parser::OutlineBuilder for Sink {
+        fn move_to(&mut self, x: f32, y: f32) {
+            self.ops.push((0, [self.pen + x as f64 * self.k, -(y as f64) * self.k, 0.0, 0.0, 0.0, 0.0]));
+        }
+        fn line_to(&mut self, x: f32, y: f32) {
+            self.ops.push((1, [self.pen + x as f64 * self.k, -(y as f64) * self.k, 0.0, 0.0, 0.0, 0.0]));
+        }
+        fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+            // elevate to a cubic from the current point
+            let (px, py) = self.ops.last().map(|(t, p)| if *t == 2 { (p[4], p[5]) } else { (p[0], p[1]) }).unwrap_or((0.0, 0.0));
+            let (qx, qy) = (self.pen + x1 as f64 * self.k, -(y1 as f64) * self.k);
+            let (ex, ey) = (self.pen + x as f64 * self.k, -(y as f64) * self.k);
+            self.ops.push((2, [px + 2.0 / 3.0 * (qx - px), py + 2.0 / 3.0 * (qy - py),
+                ex + 2.0 / 3.0 * (qx - ex), ey + 2.0 / 3.0 * (qy - ey), ex, ey]));
+        }
+        fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+            let k = self.k;
+            self.ops.push((2, [self.pen + x1 as f64 * k, -(y1 as f64) * k, self.pen + x2 as f64 * k, -(y2 as f64) * k,
+                self.pen + x as f64 * k, -(y as f64) * k]));
+        }
+        fn close(&mut self) {
+            self.ops.push((3, [0.0; 6]));
+        }
+    }
+    let mut sink = Sink { ops: Vec::new(), pen: 0.0, k: 1.0 / upem };
+    for ch in text.chars() {
+        let Some(g) = face.glyph_index(ch) else { continue };
+        let _ = face.outline_glyph(g, &mut sink);
+        sink.pen += face.glyph_hor_advance(g).unwrap_or(0) as f64 / upem;
+    }
+    let adv = sink.pen;
+    if adv <= 0.0 || sink.ops.is_empty() {
+        return None;
+    }
+    let (sx, sy) = (w as f64 / adv, h as f64);
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for (t, p) in &sink.ops {
+        let n = match t { 0 | 1 => 1, 2 => 3, _ => 0 };
+        for i in 0..n {
+            x0 = x0.min(p[2 * i] * sx); x1 = x1.max(p[2 * i] * sx);
+            y0 = y0.min(p[2 * i + 1] * sy); y1 = y1.max(p[2 * i + 1] * sy);
+        }
+    }
+    let (icx, icy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let (cx, cy) = (x as f64 + w as f64 / 2.0, y as f64 + h as f64 / 2.0);
+    let (s, c) = (rotation as f64).to_radians().sin_cos();
+    let tf = |px: f64, py: f64| {
+        let (dx, dy) = (px * sx - icx, py * sy - icy);
+        (cx + dx * c - dy * s, cy + dx * s + dy * c)
+    };
+    let mut ops = Vec::with_capacity(sink.ops.len());
+    for (t, p) in &sink.ops {
+        match t {
+            0 => { let (a, b) = tf(p[0], p[1]); ops.push(PathOp::MoveTo(a, b)); }
+            1 => { let (a, b) = tf(p[0], p[1]); ops.push(PathOp::LineTo(a, b)); }
+            2 => {
+                let (a, b) = tf(p[0], p[1]);
+                let (c2, d) = tf(p[2], p[3]);
+                let (e, f) = tf(p[4], p[5]);
+                ops.push(PathOp::CurveTo(a, b, c2, d, e, f));
+            }
+            _ => ops.push(PathOp::ClosePath),
+        }
+    }
+    let base = color.and_then(parse_hex_color).unwrap_or(Color::Rgb(0.75, 0.75, 0.75));
+    let a = opacity.clamp(0.0, 1.0) as f64;
+    let fill = match base {
+        Color::Rgb(r, g, b) => Color::Rgb(1.0 - a * (1.0 - r), 1.0 - a * (1.0 - g), 1.0 - a * (1.0 - b)),
+        other => other,
+    };
+    Some(ContentElement::Path(PathData { operations: ops, stroke: None, fill: Some(fill) }))
+}
+
 fn parse_hex_color(hex: &str) -> Option<Color> {
     let hex = hex.strip_prefix('#').unwrap_or(hex);
     if hex.len() != 6 { return None; }
@@ -2342,6 +2437,15 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                 }
                 oxidocs_core::layout::LayoutContent::ClipEnd => {
                     contents.push(ContentElement::RestoreState);
+                }
+                oxidocs_core::layout::LayoutContent::WatermarkText { ref text, ref color, rotation, ref font_family, opacity }
+                    if std::env::var_os("OXI_PDF_WATERMARK_DISABLE").is_none() =>
+                {
+                    if let Some(el) = watermark_path(elem.x, elem.y, elem.width, elem.height, text,
+                        color.as_deref(), *rotation, font_family.as_deref(), *opacity)
+                    {
+                        contents.push(el);
+                    }
                 }
                 oxidocs_core::layout::LayoutContent::WatermarkText { .. } => {}
                 oxidocs_core::layout::LayoutContent::PresetShape { ref shape_type, ref stroke_color, stroke_width, flip_h, flip_v, arrow_head, arrow_tail, .. }
