@@ -469,6 +469,7 @@ mod wrap_tests {
             highlight: None,
             font_family: None,
             spacing: None,
+            kern: None,
         }
     }
 
@@ -878,6 +879,7 @@ mod paragraph_tests {
             highlight: None,
             font_family: None,
             spacing: None,
+            kern: None,
         }
     }
 
@@ -1408,6 +1410,7 @@ mod size_tests {
             highlight: None,
             font_family: None,
             spacing: None,
+            kern: None,
         }
     }
 
@@ -1517,6 +1520,9 @@ pub fn resolve_level(
         }
         if l.bold.is_some() {
             m.bold = l.bold;
+        }
+        if l.kern.is_some() {
+            m.kern = l.kern;
         }
         if let Some(v) = l.own_mar_l {
             m.mar_l = v;
@@ -2231,6 +2237,7 @@ mod shape_tests {
             highlight: None,
             font_family: Some("Arial".to_string()),
             spacing: None,
+            kern: None,
         }
     }
 

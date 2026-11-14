@@ -15144,6 +15144,56 @@ struct KernSource {
 /// what it would move before anything moves.
 #[cfg(windows)]
 fn kern_pair_em(family: &str, bold: bool, italic: bool, first: char, second: char) -> f32 {
+    kern_pair_em_from(family, bold, italic, first, second, false)
+}
+
+/// The pair kern from the face's LEGACY `kern` table only (what
+/// `GetKerningPairsW` reports), in EM units -- the kerning PowerPoint applies.
+///
+/// DERIVED 2026-11-15 (`ppt_defaults` probe, Aptos, PowerPoint's PDF): the
+/// table's sum over a line is the gap between the engine's unkerned ink and
+/// PowerPoint's -- 'Text 1, lighter 50%' 20pt -2.00pt vs 1.92pt, 'Background
+/// 1, darker 50%' -1.01 vs 0.96, 'Accent 1, darker 50%' -0.48 vs 0.48 -- and
+/// the PDF's own character origins show the pairs ('Te' -1.55, 'ke' -0.50,
+/// 'fa' -0.38). The GPOS-only embedded faces of the dev corpus are NOT kerned
+/// (S-KERNWIDTH, refused by the width gate), so GPOS is not consulted here.
+#[cfg(windows)]
+fn kern_legacy_em(family: &str, bold: bool, italic: bool, first: char, second: char) -> f32 {
+    kern_pair_em_from(family, bold, italic, first, second, true)
+}
+
+thread_local! {
+    /// The paragraph's `kern` threshold in points (run `a:rPr/@kern`, else its
+    /// level's `defRPr/@kern`); None = no attribute anywhere = kern. Set by
+    /// `layout_paragraph_baselines`, which runs just before that paragraph is
+    /// measured and drawn.
+    static KERN_MIN: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether text at `fs` points is kerned under the current paragraph's `kern`
+/// (`gen_pptx_kern.py`: kern="1200" kerns 40pt, kern="9600" and kern="0" do not).
+fn kern_size_on(fs: f32) -> bool {
+    match KERN_MIN.with(|k| k.get()) {
+        None => true,
+        Some(min) => min > 0.0 && fs + 1e-3 >= min,
+    }
+}
+
+/// Legacy-table kerning goes into the drawn advances unless this is set.
+fn kernlegacy_on() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("OXI_KERNLEGACY_DISABLE").is_err())
+}
+
+#[cfg(windows)]
+fn kern_pair_em_from(
+    family: &str,
+    bold: bool,
+    italic: bool,
+    first: char,
+    second: char,
+    legacy_only: bool,
+) -> f32 {
     use windows::Win32::Graphics::Gdi::*;
 
     thread_local! {
@@ -15251,6 +15301,9 @@ fn kern_pair_em(family: &str, bold: bool, italic: bool, first: char, second: cha
         }
         if let Some(v) = table.gdi.get(&(a as u16, b as u16)) {
             return *v as f32 / KERN_PROBE_EM as f32;
+        }
+        if legacy_only {
+            return 0.0;
         }
         // GPOS is indexed by glyph, so the pair is asked for after the cmap has
         // turned the characters into the glyphs this face actually uses.
@@ -16422,11 +16475,21 @@ fn runtime_dx_px(
     if plan.is_none() && !font_has_all_glyphs(family, bold, italic, text) {
         return None;
     }
-    for (i, ch) in text.chars().enumerate() {
+    let chars: Vec<char> = text.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
         let em = match plan.as_ref().map(|p| p[i]) {
             Some(CharPlan::Base(em) | CharPlan::Color(_, em) | CharPlan::Symbol(_, em)) => em,
             Some(CharPlan::Skip) => 0.0,
             None => runtime_advance_em(family, bold, italic, ch)?,
+        };
+        // The pair kern with the NEXT character rides on this one's advance
+        // (`kern_legacy_em`), so the next glyph starts where PowerPoint puts it
+        // and the line's width is the kerned one.
+        let em = match chars.get(i + 1) {
+            Some(&next) if kernlegacy_on() && kern_size_on(fs) => {
+                em + kern_legacy_em(family, bold, italic, ch, next)
+            }
+            _ => em,
         };
         // The advance goes on the MASTER UNIT before it goes on a pixel: that
         // is the unit PowerPoint measures in (`font_adv::mu_advance_pt`), and
@@ -17465,6 +17528,7 @@ fn layout_paragraph_baselines(
     use windows::Win32::Graphics::Gdi::*;
     // Master txStyles level for this paragraph's outline level (Spec #8).
     let m = oxislides_core::layout::resolve_level(master, ph_levels, para.lvl);
+    KERN_MIN.with(|k| k.set(para.runs.iter().find_map(|r| r.kern).or(m.kern)));
     // Effective font size: a run's explicit sz wins (the max over runs);
     // otherwise the master txStyles level default (Spec #5, phfs probe: V3
     // run 14pt overrides master 32pt); else the engine default. An EMPTY

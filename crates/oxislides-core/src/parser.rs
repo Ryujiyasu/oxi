@@ -239,6 +239,10 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                                 cur_level.font_size = Some(v / 100.0);
                             }
                         }
+                        // `kern` is the smallest kerned size (see `SlideRun::kern`).
+                        if let Some(k) = get_attr(&e, "kern").and_then(|v| v.parse::<f32>().ok()) {
+                            cur_level.kern = Some(k / 100.0);
+                        }
                     }
                     _ => {}
                 }
@@ -269,6 +273,14 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                             other.push(lvl);
                         } else if in_title_style {
                             title.push(lvl);
+                        }
+                    }
+                    "defRPr" if in_level => {
+                        if let Some(sz) = get_attr(&e, "sz").and_then(|v| v.parse::<f32>().ok()) {
+                            cur_level.font_size = Some(sz / 100.0);
+                        }
+                        if let Some(k) = get_attr(&e, "kern").and_then(|v| v.parse::<f32>().ok()) {
+                            cur_level.kern = Some(k / 100.0);
                         }
                     }
                     // Children of a non-self-closing level (Start form).
@@ -637,6 +649,11 @@ fn parse_layout_ph_lststyles(
                             if let Ok(v) = sz.parse::<f32>() {
                                 levels[idx].font_size = Some(v / 100.0);
                             }
+                        }
+                        if let (Some(idx), Some(k)) =
+                            (cur_lvl, get_attr(&e, "kern").and_then(|v| v.parse::<f32>().ok()))
+                        {
+                            levels[idx].kern = Some(k / 100.0);
                         }
                         if let (Some(idx), Some(i)) = (cur_lvl, get_attr(&e, "i")) {
                             if s_lvlitalic {
@@ -1268,6 +1285,8 @@ fn parse_slide(
     let mut run_underline = false;
     let mut run_font_size: Option<f32> = None;
     let mut run_spacing: Option<f32> = None;
+    // `a:rPr/@kern` in points (see `SlideRun::kern`).
+    let mut run_kern: Option<f32> = None;
     let mut run_color: Option<String> = None;
     let mut run_color_alpha: Option<f32> = None;
     // `a:rPr/a:highlight` -- the run's text highlight. It holds a colour
@@ -2028,6 +2047,7 @@ fn parse_slide(
                         run_underline = false;
                         run_font_size = None;
                         run_spacing = None;
+                        run_kern = None;
                         run_color = None;
                         run_color_alpha = None;
                         run_highlight = None;
@@ -2053,6 +2073,9 @@ fn parse_slide(
                             if let Ok(v) = sz.parse::<f32>() {
                                 run_font_size = Some(v / 100.0);
                             }
+                        }
+                        if let Some(k) = get_attr(&e, "kern").and_then(|v| v.parse::<f32>().ok()) {
+                            run_kern = Some(k / 100.0);
                         }
                         if s_letterspc {
                             if let Some(spc) = get_attr(&e, "spc") {
@@ -2129,6 +2152,7 @@ fn parse_slide(
                             highlight: None,
                             font_family: run_font_family.clone(),
                             spacing: run_spacing,
+                            kern: run_kern,
                         });
                     }
                     "t" if in_run => {
@@ -2226,6 +2250,7 @@ fn parse_slide(
                                 highlight: None,
                                 font_family: run_font_family.clone(),
                                 spacing: run_spacing,
+                                kern: run_kern,
                             });
                         }
                     }
@@ -2251,6 +2276,7 @@ fn parse_slide(
                             highlight: None,
                             font_family: run_font_family.clone(),
                             spacing: run_spacing,
+                            kern: run_kern,
                         });
                     }
                     // `<a:endParaRPr sz="1400"/>` normally has no children, so it
@@ -2605,6 +2631,9 @@ fn parse_slide(
                             if let Ok(v) = sz.parse::<f32>() {
                                 run_font_size = Some(v / 100.0);
                             }
+                        }
+                        if let Some(k) = get_attr(&e, "kern").and_then(|v| v.parse::<f32>().ok()) {
+                            run_kern = Some(k / 100.0);
                         }
                         if s_letterspc {
                             if let Some(spc) = get_attr(&e, "spc") {
@@ -3367,6 +3396,7 @@ fn parse_slide(
                                 highlight: run_highlight.take(),
                                 font_family: run_font_family.take(),
                                 spacing: run_spacing,
+                                kern: run_kern,
                             });
                         }
                     }
@@ -5075,6 +5105,7 @@ fn merge_ph_levels(
                 spc_bef_pts: l.spc_bef_pts.or(m.spc_bef_pts),
                 own_mar_l: l.own_mar_l.or(m.own_mar_l),
                 own_indent: l.own_indent.or(m.own_indent),
+                kern: l.kern.or(m.kern),
                 bullet: if matches!(l.bullet, SlideBullet::Inherit) {
                     m.bullet.clone()
                 } else {
