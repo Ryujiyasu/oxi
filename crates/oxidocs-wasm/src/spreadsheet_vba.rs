@@ -47206,6 +47206,27 @@ fn initialize_missing_package_styles(
     Ok(true)
 }
 
+/// A sparse editor font inherits an omitted color independently of its
+/// explicitly edited face or size. A resolved font's absent color is its
+/// own automatic color, so only views without resource provenance qualify.
+fn inherit_implicit_font_color(style: &mut CellStyle, normal: &CellStyle) {
+    if style.normal_font_link.is_some() || style.named_font_link.is_some()
+        || style.format_reference.is_some() || style.font_color.is_some()
+        || style.font_reference.as_ref().and_then(|reference| reference.color_reference()).is_some() {
+        return;
+    }
+    style.font_color = normal.font_color.clone();
+    if let Some(source) = normal.font_reference.as_ref().filter(|reference| reference.color_reference().is_some()) {
+        let reference = style.font_reference.get_or_insert_with(Default::default);
+        reference.rgb = source.rgb.clone();
+        reference.theme = source.theme;
+        reference.indexed = source.indexed;
+        reference.automatic = source.automatic;
+        reference.implicit_automatic = source.implicit_automatic;
+        reference.tint = reference.tint.or(source.tint);
+    }
+}
+
 /// Older editing views omit a wholly inherited cell font. Resolve that
 /// omission on the export copy; explicit font resources and edited groups
 /// retain their own values and provenance.
@@ -47229,6 +47250,8 @@ fn resolve_implicit_cell_styles(workbook: &mut Workbook) {
                     cell.style.format_reference.get_or_insert_with(Default::default).mark(part);
                 }
             }
+        } else {
+            inherit_implicit_font_color(&mut cell.style, &normal);
         }
     }
 }
@@ -47280,9 +47303,12 @@ fn initialize_initial_caller_styles(
     } else if Dress::of_style(&workbook.default_style)==Dress::of_style(&original.default_style) {
         Dress::of_style(&wanted).write_font(&mut workbook.default_style);
     }
+    inherit_implicit_font_color(&mut workbook.default_style, &loaded.default_style);
     if let Some(normal)=workbook.named_styles.iter_mut().find(|style|style.builtin_id==Some(0)) {
         if Dress::of_style(&normal.style)==Dress::of_style(old_normal) {
             Dress::of_style(&workbook.default_style).write_font(&mut normal.style);
+        } else {
+            inherit_implicit_font_color(&mut normal.style, &loaded.default_style);
         }
     } else {
         let mut normal=loaded.named_styles.iter().find(|style|style.builtin_id==Some(0))
@@ -143904,6 +143930,39 @@ End Function"#;
     }
 
     #[test]
+    fn sparse_editor_fonts_inherit_only_omitted_color_and_keep_explicit_identity() {
+        use oxicells_core::ir::{CellFormatReference, FontReference};
+        let normal=CellStyle {font_name:Some("Calibri".into()),font_size:Some(11.0),
+            font_color:Some("000000".into()),font_reference:Some(Box::new(FontReference {
+                latin_name:Some("Calibri".into()),theme:Some(1),..Default::default()
+            })),..Default::default()};
+        let mut edited=CellStyle {font_name:Some("Arial".into()),font_size:Some(17.0),
+            font_reference:Some(Box::new(FontReference {tint:Some(0.25),..Default::default()})),..Default::default()};
+        inherit_implicit_font_color(&mut edited,&normal);
+        assert_eq!(edited.font_name.as_deref(),Some("Arial"));assert_eq!(edited.font_size,Some(17.0));
+        assert_eq!(edited.font_color.as_deref(),Some("000000"));
+        let reference=edited.font_reference.as_ref().unwrap();
+        assert_eq!(reference.theme,Some(1));assert_eq!(reference.latin_name,None);assert_eq!(reference.tint,Some(0.25));
+        let once=edited.clone();inherit_implicit_font_color(&mut edited,&normal);assert_eq!(edited,once);
+        for kind in 0..9 {
+            let mut explicit=CellStyle {font_size:Some(17.0),..Default::default()};
+            match kind {
+                0=>explicit.font_color=Some("000000".into()),
+                1=>explicit.font_reference=Some(Box::new(FontReference {rgb:Some("FF000000".into()),..Default::default()})),
+                2=>explicit.font_reference=Some(Box::new(FontReference {theme:Some(5),tint:Some(0.4),..Default::default()})),
+                3=>explicit.font_reference=Some(Box::new(FontReference {indexed:Some(8),..Default::default()})),
+                4=>explicit.font_reference=Some(Box::new(FontReference {automatic:true,..Default::default()})),
+                5=>explicit.font_reference=Some(Box::new(FontReference {implicit_automatic:true,..Default::default()})),
+                6=>explicit.normal_font_link=Some(false),
+                7=>explicit.named_font_link=Some(false),
+                _=>explicit.format_reference=Some(Box::new(CellFormatReference::for_style(0))),
+            }
+            let before=explicit.clone();inherit_implicit_font_color(&mut explicit,&normal);
+            assert_eq!(explicit,before,"kind {kind}");
+        }
+    }
+
+    #[test]
     fn implicit_cell_export_defaults_preserve_explicit_edits_and_inheritance() {
         let package=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
         let mut workbook=oxicells_core::parse_xlsx_preserving_values(package).unwrap();
@@ -143962,9 +144021,17 @@ End Function"#;
             let row=&saved.sheets[0].rows[0];let cell=&row.cells[0];
             match kind {
                 0=>assert_eq!(cell.value,CellValue::String("editor edit".into())),
-                1=>assert_eq!(cell.style.font_size,Some(17.0)),
+                1=>{
+                    assert_eq!(cell.style.font_size,Some(17.0));
+                    assert_eq!(cell.style.font_reference.as_ref().and_then(|reference|reference.theme),Some(1));
+                },
                 2=>{assert_eq!(row.height,Some(28.0));assert!(row.custom_height);},
-                3=>{assert_eq!(saved.default_style.font_name.as_deref(),Some("Arial"));assert_eq!(saved.default_style.font_size,Some(17.0));},
+                3=>{
+                    assert_eq!(saved.default_style.font_name.as_deref(),Some("Arial"));assert_eq!(saved.default_style.font_size,Some(17.0));
+                    assert_eq!(saved.default_style.font_reference.as_ref().and_then(|reference|reference.theme),Some(1));
+                    let normal=&saved.named_styles.iter().find(|style|style.builtin_id==Some(0)).unwrap().style;
+                    assert_eq!(normal.font_reference.as_ref().and_then(|reference|reference.theme),Some(1));
+                },
                 _=>{
                     assert_eq!(cell.style.bg_color.as_deref(),Some("123456"));
                     assert_eq!(cell.style.number_format.as_deref(),Some("0.00"));
