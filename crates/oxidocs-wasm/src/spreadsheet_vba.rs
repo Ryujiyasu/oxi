@@ -144111,9 +144111,12 @@ End Function"#;
     fn sheet_structure_saved_state_matches_native_history() {
         let cases:serde_json::Value=serde_json::from_str(include_str!("../../../tests/fixtures/vba/sheet_package_native.json")).unwrap();
         let caller=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
-        let source=cases["program"].as_str().unwrap();
         let startup:Vec<u16>=cases["startup_profile_utf16"].as_array().unwrap().iter().map(|x|u16::try_from(x.as_u64().unwrap()).unwrap()).collect();
-        for case in cases["cases"].as_array().unwrap() {
+        for (source,conditions) in [
+            (cases["program"].as_str().unwrap(),cases["cases"].as_array().unwrap()),
+            (cases["row_order_program"].as_str().unwrap(),cases["row_order_cases"].as_array().unwrap()),
+        ] {
+          for case in conditions {
             let label=case["label"].as_str().unwrap();let mode=case["mode"].as_i64().unwrap();
             let hex=cases["inputs"][label]["bytes_hex"].as_str().unwrap();
             let input:Vec<u8>=(0..hex.len()).step_by(2).map(|at|u8::from_str_radix(&hex[at..at+2],16).unwrap()).collect();
@@ -144132,6 +144135,7 @@ End Function"#;
             ).collect();
             assert_eq!(serde_json::to_value(states).unwrap(),case["expected"],"{label} mode {mode}");
             assert!(result.files.iter().any(|file|file.path==r"C:\work\copy.xlsx"),"{label} mode {mode}: no exported copy");
+          }
         }
     }
 

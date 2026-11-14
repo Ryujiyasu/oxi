@@ -819,5 +819,200 @@
         ]
       ]
     }
+  ],
+  "row_order_program": "Attribute VB_Name = \"RowOrderOracle\"\nPublic Function Probe(ByVal mode As Long, ByVal inputPath As String, ByVal outputPath As String) As Variant\n    Set target = Workbooks.Open(inputPath, 0, True)\n    Set s = target.Worksheets(1)\n    s.Name = \"Original\"\n    If mode = 3 Then\n        Set other = target.Worksheets.Add(Before:=s)\n    Else\n        Set other = target.Worksheets.Add(After:=s)\n    End If\n    other.Name = \"Other\"\n    If mode = 2 Then s.Move After:=other\n    s.Cells.Font.Size = target.Styles(\"Normal\").Font.Size\n    If mode = 1 Then s.Move After:=other\n    before = Array(s.StandardHeight, s.Rows(100).RowHeight, s.Index)\n    target.SaveCopyAs outputPath\n    Set b = Workbooks.Open(outputPath, 0, True)\n    Set cold = b.Worksheets(\"Original\")\n    Probe = Array(before, Array(cold.StandardHeight, cold.Rows(100).RowHeight, cold.Index))\n    b.Close False\n    target.Close False\nEnd Function",
+  "row_order_cases": [
+    {
+      "label": "explicit_calibri11",
+      "mode": 0,
+      "expected": [
+        [
+          15.0,
+          15.0,
+          1
+        ],
+        [
+          15.0,
+          15.0,
+          1
+        ]
+      ]
+    },
+    {
+      "label": "explicit_calibri11",
+      "mode": 1,
+      "expected": [
+        [
+          15.0,
+          15.0,
+          2
+        ],
+        [
+          15.0,
+          15.0,
+          2
+        ]
+      ]
+    },
+    {
+      "label": "explicit_calibri11",
+      "mode": 2,
+      "expected": [
+        [
+          15.0,
+          15.0,
+          2
+        ],
+        [
+          15.0,
+          15.0,
+          2
+        ]
+      ]
+    },
+    {
+      "label": "explicit_calibri11",
+      "mode": 3,
+      "expected": [
+        [
+          15.0,
+          15.0,
+          2
+        ],
+        [
+          15.0,
+          15.0,
+          2
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 0,
+      "expected": [
+        [
+          12.75,
+          12.75,
+          1
+        ],
+        [
+          12.75,
+          12.75,
+          1
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 1,
+      "expected": [
+        [
+          12.75,
+          12.75,
+          2
+        ],
+        [
+          12.75,
+          12.75,
+          2
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 2,
+      "expected": [
+        [
+          12.75,
+          12.75,
+          2
+        ],
+        [
+          12.75,
+          12.75,
+          2
+        ]
+      ]
+    },
+    {
+      "label": "explicit_arial10",
+      "mode": 3,
+      "expected": [
+        [
+          12.75,
+          12.75,
+          2
+        ],
+        [
+          12.75,
+          12.75,
+          2
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 0,
+      "expected": [
+        [
+          18.75,
+          18.75,
+          1
+        ],
+        [
+          18.75,
+          18.75,
+          1
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 1,
+      "expected": [
+        [
+          18.75,
+          18.75,
+          2
+        ],
+        [
+          18.75,
+          18.75,
+          2
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 2,
+      "expected": [
+        [
+          18.75,
+          18.75,
+          2
+        ],
+        [
+          18.75,
+          18.75,
+          2
+        ]
+      ]
+    },
+    {
+      "label": "missing_unstated",
+      "mode": 3,
+      "expected": [
+        [
+          18.75,
+          18.75,
+          2
+        ],
+        [
+          18.75,
+          18.75,
+          2
+        ]
+      ]
+    }
   ]
 }

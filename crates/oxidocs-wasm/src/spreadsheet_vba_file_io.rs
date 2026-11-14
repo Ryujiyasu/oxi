@@ -3066,7 +3066,8 @@ impl WorkbookHost<'_> {
             for (index, sheet) in self.workbook.sheets.iter().enumerate() {
                 if !sheet.default_row_custom {
                     let height=self.effective_default_row_height(index);
-                    if unstated_defaults.contains(&index) && !self.normal_row_defaults.contains_key(&index) {
+                    if editor.edited_sheet_original_index(index).is_some_and(|origin| unstated_defaults.contains(&origin))
+                        && !self.normal_row_defaults.contains_key(&index) {
                         editor.materialize_edited_default_row_height(index,height,false);
                     }else{editor.set_edited_default_row_height(index,height,false);}
                 }

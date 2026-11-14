@@ -1417,6 +1417,18 @@ impl XlsxEditor {
         }
     }
 
+    /// Original package position of a retained sheet in the edited workbook.
+    /// Added sheets have no original position; moves keep their source identity.
+    pub fn edited_sheet_original_index(&self, sheet_index: usize) -> Option<usize> {
+        match self.sheet_plan.as_ref() {
+            Some(plan) => match plan.get(sheet_index) {
+                Some(PlannedSheet::Held { origin, .. }) => Some(*origin),
+                Some(PlannedSheet::Added(_)) | None => None,
+            },
+            None => self.workbook.sheets.get(sheet_index).map(|_| sheet_index),
+        }
+    }
+
     /// Record an explicitly reset default even when its value equals the
     /// parser's fallback for an absent worksheet default record.
     pub fn materialize_edited_default_row_height(&mut self, sheet_index: usize, height: f32, pinned: bool) {
