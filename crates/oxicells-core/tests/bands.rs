@@ -54,6 +54,7 @@ fn a_sheet(name: &str) -> Sheet {
         conditional_rules: Vec::new(),
         tab_color: None,
         drawing_id_blocks: Vec::new(),
+        legacy_drawing_order: Vec::new(),
         header_footer: None,
         origin_id: None,
     };

@@ -175,6 +175,7 @@ pub struct XlsxEditor {
     /// Replacement legacy notes for original sheets whose comments changed.
     legacy_comments: HashMap<usize, Vec<crate::ir::Comment>>,
     legacy_comment_id_blocks: HashMap<usize, Vec<u32>>,
+    legacy_drawing_orders: HashMap<usize, Vec<u32>>,
     /// Final sheet-order table definitions, when VBA changed a table.
     table_plan: Option<Vec<Option<Vec<crate::ir::Table>>>>,
     /// Final sheet-order dynamic-array owners, including one-cell and blocked
@@ -273,6 +274,7 @@ impl XlsxEditor {
             threaded_comment_resolved: HashMap::new(),
             legacy_comments: HashMap::new(),
             legacy_comment_id_blocks: HashMap::new(),
+            legacy_drawing_orders: HashMap::new(),
             table_plan: None,
         })
     }
@@ -365,6 +367,7 @@ impl XlsxEditor {
         self.drawing_picture_edits.clear();
         self.drawing_geometry_edits.clear();
         self.drawing_order_edits.clear();
+        self.legacy_drawing_orders.clear();
         self.drawing_states.clear();
         self.drawing_source_aliases.clear();
         self.drawing_restore_names.clear();
@@ -774,6 +777,9 @@ impl XlsxEditor {
         }
 
         for (index, (before, after)) in pairs.iter().copied() {
+            if before.legacy_drawing_order != after.legacy_drawing_order {
+                self.legacy_drawing_orders.insert(index, after.legacy_drawing_order.clone());
+            }
             if before.hyperlinks != after.hyperlinks {
                 self.hyperlinks.insert(index, after.hyperlinks.clone());
             }
@@ -1459,6 +1465,7 @@ impl XlsxEditor {
             || !self.drawing_picture_edits.is_empty()
             || !self.drawing_geometry_edits.is_empty()
             || !self.drawing_order_edits.is_empty()
+            || !self.legacy_drawing_orders.is_empty()
             || !self.drawing_states.is_empty()
             || !self.drawing_restore_names.is_empty()
             || !self.drawing_deletions.is_empty()
@@ -1516,6 +1523,7 @@ impl XlsxEditor {
         let mut planned_drawing_additions = self.drawing_additions.clone();
         let mut planned_legacy_comments = self.legacy_comments.clone();
         let mut planned_legacy_id_blocks = self.legacy_comment_id_blocks.clone();
+        let mut planned_legacy_orders = self.legacy_drawing_orders.clone();
         if let Some(plan) = &self.sheet_plan {
             for (planned, (path, origin)) in plan.iter().zip(&planned_parts) {
                 if origin.is_some() { continue; }
@@ -1524,6 +1532,7 @@ impl XlsxEditor {
                 let index = drawing_sheet_paths.len();
                 drawing_sheet_paths.push(path.clone());
                 if !sheet.drawings.is_empty() { planned_drawing_additions.insert(index, sheet.drawings.clone()); }
+                if !sheet.legacy_drawing_order.is_empty() { planned_legacy_orders.insert(index, sheet.legacy_drawing_order.clone()); }
                 if !sheet.comments.is_empty() {
                     planned_legacy_comments.insert(index, sheet.comments.clone());
                     planned_legacy_id_blocks.insert(index, sheet.drawing_id_blocks.clone());
@@ -1619,7 +1628,7 @@ impl XlsxEditor {
                 refresh_threaded_compatibility_note(compatibility, root, &replies);
             }
         }
-        let legacy_edits = legacy_comment_package_edits(
+        let mut legacy_edits = legacy_comment_package_edits(
             &mut source,
             &drawing_sheet_paths,
             &legacy_comments,
@@ -1628,6 +1637,29 @@ impl XlsxEditor {
             &threaded_edits,
             &drawing_package,
         )?;
+
+        // Apply the shared legacy order after all OLE and note additions/deletions.
+        for (sheet, order) in &planned_legacy_orders {
+            let Some(sheet_path) = drawing_sheet_paths.get(*sheet) else { continue };
+            let rels_path = sheet_rels_path(sheet_path);
+            let mut rels = source.try_read_part(&rels_path)?.unwrap_or_else(|| r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>"#.to_string());
+            for xml in [drawing_package.relationship_xml.get(&rels_path), legacy_edits.relationship_xml.get(&rels_path)]
+                .into_iter().flatten().chain(drawing_package.new_parts.iter().chain(&legacy_edits.new_parts)
+                    .filter(|(path, _)| path == &rels_path).map(|(_, xml)| xml)) {
+                rels = merge_relationship_additions(&rels, xml)?;
+            }
+            let relationships = parse_relationships(&rels).map_err(|error| XlsxError::InvalidData(error.to_string()))?;
+            let Some(relation) = relationships.values().find(|relation| relation.rel_type.ends_with("/vmlDrawing")) else { continue };
+            let vml_path = resolve_part_target(sheet_path, &relation.target);
+            if let Some((_, xml)) = legacy_edits.new_parts.iter_mut().find(|(path, _)| path == &vml_path) {
+                *xml = patch_legacy_drawing_order(xml, order)?;
+            } else {
+                let xml = legacy_edits.parts.get(&vml_path).or_else(|| drawing_package.parts.get(&vml_path)).cloned()
+                    .or_else(|| drawing_package.new_parts.iter().find(|(path, _)| path == &vml_path).map(|(_, xml)| xml.clone()))
+                    .or(source.try_read_part(&vml_path)?);
+                if let Some(xml) = xml { legacy_edits.parts.insert(vml_path, patch_legacy_drawing_order(&xml, order)?); }
+            }
+        }
 
         let cursor = Cursor::new(&self.original_data);
         let mut archive = ZipArchive::new(cursor)
@@ -2513,7 +2545,7 @@ impl XlsxEditor {
                 if emitted_new_parts.contains(path) { continue; }
                 writer.start_file(path, SimpleFileOptions::default())
                     .map_err(|error| XlsxError::InvalidData(error.to_string()))?;
-                let mut patched = xml.clone();
+                let mut patched = legacy_edits.parts.get(path).unwrap_or(xml).clone();
                 if path.ends_with(".rels") {
                     if let Some(additions) = threaded_edits.relationship_xml.get(path) {
                         patched = merge_relationship_additions(&patched, additions)?;
@@ -4547,6 +4579,27 @@ fn find_vml_ole_shape_xml(xml: &str, shape_id: u32) -> Result<Option<String>, Xl
             _ => {}
         }
     }
+}
+
+fn patch_legacy_drawing_order(xml: &str, order: &[u32]) -> Result<String, XlsxError> {
+    let mut replacements = Vec::new();
+    for (start, end) in root_child_spans(xml, "shape")? {
+        let shape = &xml[start..end];
+        let Some(id) = vml_shape_numeric_id(shape) else { continue };
+        let Some(at) = order.iter().position(|held| *held == id) else { continue };
+        let mut reader = Reader::from_str(shape);
+        let Event::Start(element) = reader.read_event().map_err(XlsxError::Xml)? else { continue };
+        let style = get_attr(&element, "style").unwrap_or_default();
+        let mut items: Vec<_> = style.split(';').filter(|item| !item.split_once(':').is_some_and(|(key, _)| key.trim() == "z-index"))
+            .map(str::to_string).collect();
+        items.push(format!("z-index:{}", at + 1));
+        let changed = table_root_attributes(shape, &[("style", items.join(";"))])?;
+        replacements.push((start, end, changed));
+    }
+    replacements.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
+    let mut output = xml.to_string();
+    for (start, end, changed) in replacements { output.replace_range(start..end, &changed); }
+    Ok(output)
 }
 
 fn max_vml_z_index(xml: &str) -> Result<u32, XlsxError> {
@@ -11165,12 +11218,15 @@ fn patch_vml_notes(xml: &str, comments: &[crate::ir::Comment], blocks: &[u32], o
     let mut ids = HashMap::new();
     let mut owned: std::collections::BTreeSet<_> = blocks.iter().copied().collect();
     let mut generated = String::new();
-    for (ordinal, comment) in comments.iter().enumerate() {
+    let mut last_z_index = max_vml_z_index(&base)?;
+    for comment in comments {
         let id = comment.shape_id.unwrap_or_else(|| { max_id += 1; while used.contains(&max_id) { max_id += 1; } used.insert(max_id); max_id });
         owned.insert(id / 1024);
         ids.insert(comment.cell, id);
         if !old_notes.contains_key(&comment.cell) {
-            generated.push_str(&write_vml_note(comment, id, ordinal as u32 + 1));
+            last_z_index = last_z_index.checked_add(1)
+                .ok_or_else(|| XlsxError::InvalidData("legacy drawing order overflow".into()))?;
+            generated.push_str(&write_vml_note(comment, id, last_z_index));
         }
     }
     let mut replacements = Vec::new();
@@ -11178,7 +11234,11 @@ fn patch_vml_notes(xml: &str, comments: &[crate::ir::Comment], blocks: &[u32], o
         let changed = if let Some(comment) = comments.iter().find(|comment| comment.cell == cell) {
             if original.iter().find(|old| old.cell == cell).is_some_and(|old| vml_note_appearance_equal(old, comment)) {
                 vml_note_identity(&base[start..end], comment, ids[&cell])?
-            } else { write_vml_note(comment, ids[&cell], comments.iter().position(|note| note.cell == cell).unwrap() as u32 + 1) }
+            } else {
+                // Appearance edits must retain the note's place among OLE
+                // fallbacks and other legacy shapes, not its comment ordinal.
+                write_vml_note(comment, ids[&cell], max_vml_z_index(&base[start..end])?)
+            }
         } else { String::new() };
         replacements.push((start, end, changed));
     }
@@ -18640,6 +18700,33 @@ mod tests {
         assert_eq!(text.paragraphs[0].color.as_deref(), Some("112233"));
         assert!(text.paragraphs[0].bold);
         assert!(text.paragraphs[0].italic);
+    }
+
+    #[test]
+    fn vml_note_appearance_preserves_shared_legacy_order_and_new_note_slots() {
+        let note = crate::ir::Comment {
+            position: Some((10.0, 10.0)), shape_id: Some(1027), shape_name: None,
+            author: "Oxi".into(), utf16_text: None,
+            from: crate::ir::Anchor { col: 3, col_off: 0, row: 1, row_off: 0 },
+            size: (96.0, 59.25), to: None,
+            text: crate::ir::ShapeText { paragraphs: Vec::new(), anchor: Some("t".into()), insets: (0, 0, 0, 0), wrap: true, clip: true },
+            fill: None, fill_visible: true, fill_transparency: 0.0,
+            line_color: None, line_visible: true, line_weight: 0.75, line_transparency: 0.0,
+            cell: (1, 3), visible: false,
+        };
+        let first = r#"<v:shape id="_x0000_s1025" style="z-index:1" data-preserve="first"><x:ClientData ObjectType="Pict"/></v:shape>"#;
+        let second = r#"<v:shape id="_x0000_s1026" style="z-index:2" data-preserve="second"><x:ClientData ObjectType="Pict"/></v:shape>"#;
+        let xml = format!(r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">{first}{second}{}</xml>"#, write_vml_note(&note, 1027, 3));
+        let mut resized = note.clone(); resized.size.0 = 144.0;
+        let mut added = note.clone(); added.cell = (2, 3); added.shape_id = Some(1028);
+        let saved = patch_vml_notes(&xml, &[resized, added], &[1], &[note]).unwrap();
+        assert!(saved.contains(first) && saved.contains(second));
+        let mut positions = HashMap::new();
+        for (start, end) in root_child_spans(&saved, "shape").unwrap() {
+            let one = &saved[start..end];
+            positions.insert(vml_shape_numeric_id(one).unwrap(), max_vml_z_index(one).unwrap());
+        }
+        assert_eq!(positions, HashMap::from([(1025, 1), (1026, 2), (1027, 3), (1028, 4)]));
     }
 
     #[test]

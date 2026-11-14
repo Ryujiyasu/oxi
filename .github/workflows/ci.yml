@@ -291,6 +291,8 @@ jobs:
               node "$suite" pkg "$RUNNER_TEMP/vba-external-copy-state.json"
             elif [ "$suite" = "web/vba-ole-copy-state.test.mjs" ]; then
               node "$suite" pkg "$RUNNER_TEMP/vba-ole-copy-state.json"
+              node "$suite" pkg "$RUNNER_TEMP/vba-ole-legacy-layers-state.json" tests/fixtures/vba/ole_legacy_layers_native.json . 18
+              node "$suite" pkg "$RUNNER_TEMP/vba-ole-layer-operations-state.json" tests/fixtures/vba/ole_layer_operations_native.json . 33
             else
               node "$suite" pkg
             fi
@@ -308,7 +310,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vba-ole-copy-state-${{ matrix.shard }}
-          path: ${{ runner.temp }}/vba-ole-copy-state.json
+          path: |
+            ${{ runner.temp }}/vba-ole-copy-state.json
+            ${{ runner.temp }}/vba-ole-legacy-layers-state.json
+            ${{ runner.temp }}/vba-ole-layer-operations-state.json
           if-no-files-found: ignore
       - name: Word vertical text rendering and WASM orientation
         if: ${{ matrix.shard == 1 }}

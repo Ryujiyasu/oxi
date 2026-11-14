@@ -547,7 +547,7 @@ impl<'a> WorkbookHost<'a> {
             .filter(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_none())).collect();
         let ordinary_initialized = ordinary_slots.len() > 1;
         let index = self.shape_ranges.len();
-        self.shape_ranges.push(ShapeRangeRecord { ids, sheet, legacy_notes, ordinary_range,
+        self.shape_ranges.push(ShapeRangeRecord { ids, sheet, legacy_notes, ordinary_range, legacy_ole: false,
             ordinary_slots, ordinary_initialized });
         self.part(DrawingPart::ShapeRange(index))
     }
@@ -778,7 +778,12 @@ impl<'a> WorkbookHost<'a> {
         }
         // Notes belong to Shapes but follow the ordinary drawing layer, even
         // when the note was created before the first ordinary shape.
-        listed.sort_by_key(|id| self.shape(*id).is_ok_and(|shape| shape.comment_at.is_some()));
+        let positions: std::collections::HashMap<_, _> = self.workbook.sheets[sheet].legacy_drawing_order.iter()
+            .enumerate().map(|(at, id)| (*id, at)).collect();
+        let notes: std::collections::HashMap<_, _> = self.shapes.iter()
+            .filter(|shape| shape.sheet == sheet && shape.comment_at.is_some())
+            .map(|shape| (shape.id, positions.get(&shape.non_visual_id).copied().unwrap_or(usize::MAX))).collect();
+        listed.sort_by_key(|id| notes.get(id).map_or((false, 0), |at| (true, *at)));
         listed
     }
 
@@ -816,7 +821,7 @@ impl<'a> WorkbookHost<'a> {
 
     pub(super) fn ole_objects_snapshot(&mut self, sheet: usize, ids: Vec<u64>) -> Value {
         let index = self.shape_ranges.len();
-        self.shape_ranges.push(ShapeRangeRecord { ordinary_slots: ids.clone(), ordinary_initialized: ids.len() > 1, ids, sheet: Some(sheet), legacy_notes: false, ordinary_range: true });
+        self.shape_ranges.push(ShapeRangeRecord { ordinary_slots: ids.clone(), ordinary_initialized: ids.len() > 1, ids, sheet: Some(sheet), legacy_notes: false, ordinary_range: true, legacy_ole: false });
         self.part(DrawingPart::OleObjectsSnapshot(sheet, index))
     }
 
@@ -890,8 +895,105 @@ impl<'a> WorkbookHost<'a> {
         Ok(id)
     }
 
+    pub(super) fn sync_legacy_drawing_order(&mut self, sheet: usize) {
+        let live_notes: std::collections::HashSet<_> = self.notes.iter().map(|note| note.at).collect();
+        let retired: std::collections::HashSet<_> = self.shapes.iter().filter(|shape| shape.sheet == sheet &&
+            shape.comment_at.is_some_and(|at| !live_notes.contains(&at)))
+            .map(|shape| shape.non_visual_id).collect();
+        let ids: Vec<_> = self.shapes.iter().filter(|shape| shape.sheet == sheet &&
+            (shape.comment_at.is_some_and(|at| live_notes.contains(&at)) || shape.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some())))
+            .map(|shape| shape.non_visual_id).collect();
+        let order = &mut self.workbook.sheets[sheet].legacy_drawing_order;
+        order.retain(|id| !retired.contains(id));
+        let mut known: std::collections::HashSet<_> = order.iter().copied().collect();
+        for id in ids { if known.insert(id) { order.push(id); } }
+    }
+
+    fn legacy_shape_position(&self, id: u64) -> Result<i64, String> {
+        let shape = self.shape(id)?;
+        Ok(self.workbook.sheets[shape.sheet].legacy_drawing_order.iter()
+            .position(|held| *held == shape.non_visual_id).map_or(1, |at| at as i64 + 1))
+    }
+
+    fn legacy_ole_shape_range(&mut self, ids: Vec<u64>) -> Value {
+        let value = self.shape_range_object(ids);
+        self.shape_ranges.last_mut().unwrap().legacy_ole = true;
+        value
+    }
+
+    /// Move within the requested layer. Ordinary anchors and legacy objects
+    /// share object identities but have independent stacking orders.
+    fn move_shape_in_layer(&mut self, id: u64, command: i64, legacy: bool) -> Result<(), String> {
+        let shape = self.shape(id)?.clone();
+        let sheet = shape.sheet;
+        self.sync_legacy_drawing_order(sheet);
+        let destination = |at: usize, len: usize| match command {
+            0 => len.saturating_sub(1),
+            1 => 0,
+            2 => (at + 1).min(len.saturating_sub(1)),
+            3 => at.saturating_sub(1),
+            _ => at,
+        };
+        if legacy {
+            let order = &mut self.workbook.sheets[sheet].legacy_drawing_order;
+            if let Some(at) = order.iter().position(|held| *held == shape.non_visual_id) {
+                let to = destination(at, order.len());
+                let physical = order.remove(at);
+                order.insert(to, physical);
+            }
+        } else {
+            let mut order: Vec<_> = if let Some(parent) = shape.group_parent_id {
+                self.shape(parent)?.group_children.clone()
+            } else {
+                self.shapes_on(sheet).into_iter().filter(|held| self.shape(*held).is_ok_and(|shape| shape.comment_at.is_none())).collect()
+            };
+            if let Some(at) = order.iter().position(|held| *held == id) {
+                let to = destination(at, order.len());
+                if at != to {
+                    let target = order[to];
+                    let descendants = |root| {
+                        let mut ids = std::collections::HashSet::new();
+                        let mut pending = vec![root];
+                        while let Some(id) = pending.pop() {
+                            if ids.insert(id) {
+                                if let Ok(shape) = self.shape(id) { pending.extend(shape.group_children.iter().copied()); }
+                            }
+                        }
+                        ids
+                    };
+                    let moving = descendants(id);
+                    let target_ids = descendants(target);
+                    if !moving.is_disjoint(&target_ids) || !self.shapes.iter().any(|shape| target_ids.contains(&shape.id)) {
+                        return Err(host_error(1004, "the target shape is no longer on its worksheet"));
+                    }
+                    let (moved, mut held): (Vec<_>, Vec<_>) = std::mem::take(&mut self.shapes).into_iter()
+                        .partition(|shape| moving.contains(&shape.id));
+                    let insert = if to > at {
+                        held.iter().rposition(|shape| target_ids.contains(&shape.id)).map(|at| at + 1)
+                    } else { held.iter().position(|shape| target_ids.contains(&shape.id)) }
+                    .ok_or_else(|| host_error(1004, "the target shape is no longer on its worksheet"))?;
+                    held.splice(insert..insert, moved);
+                    self.shapes = held;
+                    if let Some(parent) = shape.group_parent_id {
+                        let id = order.remove(at);
+                        order.insert(to, id);
+                        self.shape_mut(parent)?.group_children = order;
+                    }
+                }
+            }
+        }
+        self.redraw(id)
+    }
+
     fn move_shape_in_z_order(&mut self, id: u64, to_front: bool) -> Result<(), String> {
         let sheet = self.shape(id)?.sheet;
+        self.sync_legacy_drawing_order(sheet);
+        let physical_id = self.shape(id)?.non_visual_id;
+        let order = &mut self.workbook.sheets[sheet].legacy_drawing_order;
+        if let Some(at) = order.iter().position(|held| *held == physical_id) {
+            order.remove(at);
+            if to_front { order.push(physical_id); } else { order.insert(0, physical_id); }
+        }
         let Some(at) = self.shapes.iter().position(|shape| shape.id == id) else {
             return Err(host_error(1004, "the shape is no longer on its worksheet"));
         };
@@ -1451,6 +1553,12 @@ impl<'a> WorkbookHost<'a> {
     }
 
     fn delete_shape(&mut self, id: u64) -> Result<(), String> {
+        let record = self.shape(id)?;
+        let sheet = record.sheet;
+        let removed: std::collections::HashSet<_> = self.shapes.iter()
+            .filter(|shape| shape.id == id || record.group_children.contains(&shape.id))
+            .map(|shape| shape.non_visual_id).collect();
+        self.workbook.sheets[sheet].legacy_drawing_order.retain(|held| !removed.contains(held));
         let deleted = self.shape(id)?.clone();
         let sheet = deleted.sheet;
         if let Some(at) = deleted.comment_at {
@@ -2373,7 +2481,7 @@ impl<'a> WorkbookHost<'a> {
                         Value::Nothing
                     }),
                     "althtml" | "autoupdate" | "linkedcell" | "listfillrange" | "sourcename" => Some(Value::Nothing),
-                    "shaperange" => Some(self.shape_range_object(vec![id])),
+                    "shaperange" => Some(self.legacy_ole_shape_range(vec![id])),
                     "border" => Some(self.part(DrawingPart::OleBorder(id))),
                     "interior" => Some(self.part(DrawingPart::OleInterior(id))),
                     "topleftcell" => {
@@ -3124,6 +3232,10 @@ impl<'a> WorkbookHost<'a> {
                     "count" => self.shape_range_count(index).map(|count| Some(Value::Integer(count))),
                     "name" | "left" | "top" | "width" | "height" => self.shape_range_scalar_get(index, lower.as_str()),
                     "shaperange" => Ok(Some(self.part(part))),
+                    "zorderposition" if self.shape_ranges[index].legacy_ole => match ids.first() {
+                        Some(id) => self.legacy_shape_position(*id).map(|z| Some(Value::Integer(z))),
+                        None => Ok(None),
+                    },
                     _ => match ids.first() {
                         Some(id) => self.drawing_get(DrawingPart::Shape(*id), name),
                         None => Ok(None),
@@ -3238,9 +3350,10 @@ impl<'a> WorkbookHost<'a> {
             "horizontalflip" => Some(mso(shape.flip_h)),
             "verticalflip" => Some(mso(shape.flip_v)),
             "id" => Some(Value::Integer(i64::from(shape.non_visual_id))),
-            "zorderposition" => Some(Value::Integer(
-                self.shapes_on(shape.sheet).iter().position(|held| *held == id).map_or(1, |at| at as i64 + 1),
-            )),
+            "zorderposition" => Some(Value::Integer(if shape.comment_at.is_some() {
+                self.shapes_on(shape.sheet).iter().filter(|id| self.shape(**id).is_ok_and(|shape| shape.comment_at.is_none())).count() as i64
+                    + self.legacy_shape_position(id)?
+            } else { self.shapes_on(shape.sheet).iter().position(|held| *held == id).map_or(1, |at| at as i64 + 1) })),
             // msoAutoShape 1, msoChart 3, msoLine 9, msoPicture 13, msoTextBox 17.
             "connector" => Some(mso(matches!(shape.kind, ShapeKind::Line) || shape.connector != 0)),
             "type" if shape.original.as_ref().is_some_and(|drawing| drawing.ole_prog_id.is_some()) => Some(Value::Integer(7)),
@@ -4800,7 +4913,13 @@ impl<'a> WorkbookHost<'a> {
                     self.shape_selection = vec![id];
                     Ok(Some(Value::Boolean(true)))
                 }
-                "zorder" => Ok(Some(Value::Empty)),
+                "zorder" => {
+                    if let Some(command @ 0..=3) = args.first().and_then(any_whole_number) {
+                        let legacy = self.shape(id)?.comment_at.is_some();
+                        self.move_shape_in_layer(id, command, legacy)?;
+                    }
+                    Ok(Some(Value::Empty))
+                },
                 "incrementleft" | "incrementtop" | "incrementrotation" => {
                     let by = args.first().and_then(any_number).unwrap_or(0.0);
                     let shape = self.shape_mut(id)?;
@@ -5158,6 +5277,12 @@ impl<'a> WorkbookHost<'a> {
                     "count" => self.shape_range_count(index).map(|count| Some(Value::Integer(count))),
                     "name" | "left" | "top" | "width" | "height" => self.shape_range_scalar_get(index, lower.as_str()),
                     "shaperange" => Ok(Some(self.part(part))),
+                    "zorder" if self.shape_ranges[index].legacy_ole => {
+                        if let (Some(id), Some(command @ 0..=3)) = (ids.first(), args.first().and_then(any_whole_number)) {
+                            self.move_shape_in_layer(*id, command, true)?;
+                        }
+                        Ok(Some(Value::Empty))
+                    },
                     "delete" => {
                         for id in ids {
                             self.delete_shape(id)?;
