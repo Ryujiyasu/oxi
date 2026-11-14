@@ -3593,6 +3593,13 @@ fn drawing_addition_package(
         let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData(format!("drawing part for sheet {sheet} was not found while saving shape {shape_name:?}")))?;
         drawings_by_part.entry(part.clone()).or_default().insert(shape_name.clone(), drawing.clone());
     }
+    for (sheet, drawings) in additions {
+        if !group_states.contains_key(sheet) { continue; }
+        let Some(part) = existing_parts.get(sheet) else { continue };
+        for drawing in drawings {
+            if let Some(name) = &drawing.name { drawings_by_part.entry(part.clone()).or_default().insert(name.clone(),drawing.clone()); }
+        }
+    }
     let mut structural_by_part = HashMap::new();
     for (sheet, groups) in group_states {
         let part = existing_parts.get(sheet).ok_or_else(|| XlsxError::InvalidData("retained groups have no source drawing part".into()))?;
@@ -3621,6 +3628,13 @@ fn drawing_addition_package(
             xml = patch_drawing_picture_xml(&xml, edits)?;
             xml = patch_drawing_picture_background_xml(&xml, edits)?;
         }
+        // Structural deletion may also retain a newly created group or leaf.
+        // Materialize new leaves first; the structural writer owns the complete
+        // final tree and must not run the later legacy grouping pass again.
+        let structural = structural_by_part.contains_key(&part) && deletions_by_part.contains_key(&part);
+        if structural {
+            if let Some(drawings) = part_additions.get(&part) { xml = append_drawing_shapes_xml(&xml, drawings)?; }
+        }
         if let Some(names) = deletions_by_part.get(&part) {
             xml = if let Some(groups) = structural_by_part.get(&part) {
                 patch_structural_drawing_deletions(&xml, names, groups, drawings_by_part.get(&part), geometry_by_part.get(&part))?
@@ -3629,9 +3643,11 @@ fn drawing_addition_package(
             };
         }
         if let Some(edits) = geometry_by_part.get(&part) { xml = patch_drawing_geometry_xml(&xml, edits)?; }
-        if let Some(drawings) = part_additions.get(&part) { xml = append_drawing_shapes_xml(&xml, drawings)?; }
-        if let Some(groups) = groups_by_part.get(&part) {
-            for group in groups { xml = patch_drawing_group_addition(&xml, group)?; }
+        if !structural {
+            if let Some(drawings) = part_additions.get(&part) { xml = append_drawing_shapes_xml(&xml, drawings)?; }
+            if let Some(groups) = groups_by_part.get(&part) {
+                for group in groups { xml = patch_drawing_group_addition(&xml, group)?; }
+            }
         }
 
         if let Some(before) = before_deletion {
@@ -6909,6 +6925,20 @@ fn patch_structural_drawing_deletions(
             if !active.insert(id) {
                 return Err(invalid("drawing group hierarchy contains a cycle"));
             }
+            if !self.objects.contains_key(&id) {
+                let group = self.groups.get(&id).ok_or_else(|| invalid("retained drawing identity has no source object"))?;
+                let t = group.transform;
+                let xml = format!("<xdr:grpSp xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><xdr:nvGrpSpPr><xdr:cNvPr id=\"{}\" name=\"{}\"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr><xdr:grpSpPr><a:xfrm rot=\"{}\"><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/><a:chOff x=\"{}\" y=\"{}\"/><a:chExt cx=\"{}\" cy=\"{}\"/></a:xfrm></xdr:grpSpPr></xdr:grpSp>",
+                    id,escape(&group.name),group.rotation,t.offset.0,t.offset.1,t.extent.0,t.extent.1,t.child_offset.0,t.child_offset.1,t.child_extent.0,t.child_extent.1);
+                let mut reader = Reader::from_str(&xml);
+                let mut result = Vec::new();
+                loop { let event = reader.read_event().map_err(XlsxError::Xml)?.into_owned(); if matches!(event,Event::Eof) {break;} result.push(event); }
+                let close = result.pop().ok_or_else(|| invalid("new group container is empty"))?;
+                for child in &group.children { result.extend(self.render(*child,active)?); }
+                result.push(close);
+                active.remove(&id);
+                return Ok(result);
+            }
             let object = self
                 .objects
                 .get(&id)
@@ -7187,6 +7217,7 @@ fn patch_structural_drawing_deletions(
                 .parent_id;
         }
         for child in &group.children {
+            if !objects.contains_key(child) && group_map.contains_key(child) { continue; }
             let object = objects
                 .get(child)
                 .ok_or_else(|| invalid("retained drawing group child is missing"))?;
@@ -7214,34 +7245,31 @@ fn patch_structural_drawing_deletions(
         parents,
         deleted: deletions,
     };
+    let mut placements = HashMap::<u32,(usize,usize)>::new();
+    for (id,object) in &objects {
+        if deletions.contains(&object.name) { continue; }
+        if nodes[object.element].tag == "grpSp" && !context.groups.contains_key(id) { continue; }
+        let mut root = *id;
+        let mut seen = std::collections::HashSet::new();
+        while let Some(parent) = context.parents.get(&root) {
+            if !seen.insert(root) { return Err(invalid("retained drawing hierarchy contains a cycle")); }
+            root = *parent;
+        }
+        let position = (object.anchor,nodes[object.element].start);
+        placements.entry(root).and_modify(|held| { if position.1 < held.1 { *held=position; } }).or_insert(position);
+    }
     let mut replacements = Vec::new();
     for anchor in anchors {
-        let affected = objects
-            .values()
-            .any(|object| object.anchor == anchor && deletions.contains(&object.name));
-        if !affected {
-            continue;
-        }
-        let mut roots: Vec<_> = objects
-            .iter()
-            .filter(|(id, object)| {
-                object.anchor == anchor
-                    && !deletions.contains(&object.name)
-                    && !context.parents.contains_key(id)
-                    && (context.groups.contains_key(id) || nodes[object.element].tag != "grpSp")
-            })
-            .map(|(id, object)| (*id, nodes[object.element].start))
-            .collect();
-        roots.sort_by_key(|(_, start)| *start);
+        let affected = objects.iter().any(|(id,object)| object.anchor == anchor &&
+            (deletions.contains(&object.name) || context.parents.get(id).copied()!=object.parent
+             || (nodes[object.element].tag=="grpSp" && !context.groups.contains_key(id))));
+        let affected = affected || placements.iter().any(|(id,position)| position.0==anchor && !objects.contains_key(id));
+        if !affected { continue; }
+        let mut roots:Vec<_> = placements.iter().filter(|(_,position)|position.0==anchor).map(|(id,position)|(*id,position.1)).collect();
+        roots.sort_by_key(|(_,position)|*position);
         let mut result = Vec::new();
-        for (id, _) in roots {
-            result.extend(context.anchor(
-                anchor,
-                id,
-                context.render(id, &mut Default::default())?,
-            )?);
-        }
-        replacements.push((nodes[anchor].start, nodes[anchor].end, result));
+        for (id,_) in roots { result.extend(context.anchor(anchor,id,context.render(id,&mut Default::default())?)?); }
+        replacements.push((nodes[anchor].start,nodes[anchor].end,result));
     }
     for (start, end, replacement) in replacements.into_iter().rev() {
         events.splice(start..end, replacement);
@@ -17250,6 +17278,42 @@ mod tests {
             }
         }
         assert_eq!(payloads, 1);
+    }
+
+    #[test]
+    fn structural_group_deletion_wraps_retained_groups_and_added_shapes_once() {
+        let (mut xml,mut groups,mut states)=structural_delete_sample();
+        let mut added=simple_added_shape("Added");
+        added.non_visual_id=Some(6);
+        added.grouped=true;
+        added.group_non_visual_id=Some(40);
+        added.group_child_transform=Some((200_000,0,100_000,100_000));
+        xml=append_drawing_shapes_xml(&xml,&[added.clone()]).unwrap();
+        states.insert("Added".into(),added);
+        let template=groups[0].clone();
+        groups[0].parent_id=Some(40);
+        groups.push(crate::ir::DrawingGroup {non_visual_id:40,name:"Combined".into(),parent_id:None,children:vec![10,6],..template});
+        let saved=patch_structural_drawing_deletions(&xml,&std::collections::HashSet::from(["C".into()]),&groups,Some(&states),None).unwrap();
+        assert_eq!(saved.matches("name=\"Combined\"").count(),1);
+        assert_eq!(saved.matches("name=\"Added\"").count(),1);
+        assert_eq!(saved.matches("name=\"Outer\"").count(),1);
+        assert_eq!(saved.matches("name=\"Inner\"").count(),1);
+        assert!(!saved.contains("name=\"Middle\""));
+        let mut reader=quick_xml::NsReader::from_str(&saved);
+        let mut anchors=0;let mut groups=0;
+        loop {
+            let (namespace,event)=reader.read_resolved_event().unwrap();
+            if let quick_xml::name::ResolveResult::Bound(ns)=namespace {
+                if ns.as_ref()==b"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" {
+                    if let Event::Start(element)=&event {
+                        match local_name(element.name().as_ref()).as_str(){"twoCellAnchor"=>anchors+=1,"grpSp"=>groups+=1,_=>{}}
+                    }
+                }
+            }
+            if matches!(event,Event::Eof){break;}
+        }
+        assert_eq!(anchors,1);
+        assert_eq!(groups,3);
     }
 
     #[test]

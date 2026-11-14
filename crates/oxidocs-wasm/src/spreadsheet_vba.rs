@@ -59592,7 +59592,7 @@ End Function"####;
     }
 
     fn assert_complete_ole_native_group(group_id: &str, expected_cases: usize) {
-        let corpus_bytes: &[u8] = if matches!(group_id, "group_relative24" | "group_views3" | "group_delete_plain4" | "group_delete_outer_rotated4" | "group_delete_inner_rotated4" | "group_promotion_rounding7" | "group_promotion_profiles6" | "group_promotion_grid6") {
+        let corpus_bytes: &[u8] = if matches!(group_id, "group_relative24" | "group_views3" | "group_delete_plain4" | "group_delete_outer_rotated4" | "group_delete_inner_rotated4" | "group_promotion_rounding7" | "group_promotion_profiles6" | "group_promotion_grid6" | "group_delete_regroup_plain4" | "group_delete_regroup_outer_rotated4" | "group_delete_regroup_inner_rotated4") {
             include_bytes!("../../../tests/fixtures/vba/group_layer_operations_native.json")
         } else if matches!(group_id, "relative_layers24" | "repeat_save9") {
             include_bytes!("../../../tests/fixtures/vba/ole_layer_operations_native.json")
@@ -59649,6 +59649,15 @@ End Function"####;
             }
         }
         assert!(failures.is_empty(),"Complete Native OLE insertion vectors differ:\n{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn group_layers_native_delete_regroup12() {
+        let mut failed = Vec::new();
+        for group in ["group_delete_regroup_plain4","group_delete_regroup_outer_rotated4","group_delete_regroup_inner_rotated4"] {
+            if std::panic::catch_unwind(|| assert_complete_ole_native_group(group,4)).is_err() { failed.push(group); }
+        }
+        assert!(failed.is_empty(), "Complete Native delete/regroup groups differ: {failed:?}");
     }
 
     #[test]

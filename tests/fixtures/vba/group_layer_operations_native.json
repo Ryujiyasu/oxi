@@ -4,7 +4,7 @@
   "input_sha256": "b614a18d8d0f43b70789f7dc19726fad245327e38c6dc1297d4fdc9b1617fdcf",
   "caller_fixture": "tests/fixtures/vba/cell_width.xlsm",
   "caller_sha256": "b004469cfba371e0b847b51ad540008cfbd1e1866611a3bb6e54e33d0d729877",
-  "conditions": 58,
+  "conditions": 70,
   "scope": "Complete recursive group hierarchy, shape identity/order, OLE and note vectors before absolute/relative movements, after movement, and after saved-file reopen. Three seeds include nested groups, with parent-group and child-group paths. Additional complete group parent/Child/name-lookup views are compared before save and after reopen.; twelve additional complete before/hot/cold shape deletion views with exact Single-to-Double geometry",
   "groups": [
     {
@@ -5379,6 +5379,2454 @@
                       "Width": "0x41a00000",
                       "Height": "0x41a00000",
                       "Rotation": "0x42380000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "group_delete_regroup_plain4",
+      "separate_caller": true,
+      "view_schema": "shape_geometry_single_bits",
+      "input_fixture": "tests/fixtures/vba/grouped_shapes_nested.xlsx",
+      "input_sha256": "4ef1c54706ef0904b1d871743dd392f17cca75f84eee7c09c3701f13a1c5853c",
+      "program": "Option Explicit\nPublic Function ShapeView(ByVal s As Object) As Variant\n    Dim children As Variant, parts() As Variant, i As Long\n    children = Array()\n    If s.Type = 6 Then\n        ReDim parts(0 To s.GroupItems.Count - 1)\n        For i = 1 To s.GroupItems.Count\n            parts(i - 1) = ShapeView(s.GroupItems(i))\n        Next i\n        children = parts\n    End If\n    ShapeView = Array(CLng(s.ID), CStr(s.Name), CLng(s.Type), CLng(s.ZOrderPosition), CLng(s.Child), CLng(s.Placement), CDbl(s.Left), CDbl(s.Top), CDbl(s.Width), CDbl(s.Height), CDbl(s.Rotation), children)\nEnd Function\nPublic Function SheetView(ByVal ws As Object) As Variant\n    Dim parts() As Variant, i As Long\n    If ws.Shapes.Count = 0 Then\n        SheetView = Array()\n    Else\n        ReDim parts(0 To ws.Shapes.Count - 1)\n        For i = 1 To ws.Shapes.Count\n            parts(i - 1) = ShapeView(ws.Shapes(i))\n        Next i\n        SheetView = parts\n    End If\nEnd Function\nPublic Function Probe(ByVal mode As Long) As Variant\n    Dim b As Object, ws As Object, before As Variant, hot As Variant, cold As Variant\n    Dim added As Object, group As Object, survivor As String\n    Set b = Workbooks.Open(\"C:\\work\\provider.xlsx\")\n    Set ws = b.Worksheets(1)\n    before = SheetView(ws)\n    b.SaveAs \"C:\\work\\mixed-source.xlsx\", 51\n    If mode = 3 Then\n        Set added = ws.Shapes.AddShape(1, 120, 40, 15, 10)\n        added.Name = \"Added\"\n        Set group = ws.Shapes.Range(Array(\"OuterGroup\", \"Added\")).Group\n        group.Name = \"Combined\"\n        ws.Shapes(\"ChildA\").Delete\n    Else\n        If mode = 1 Then\n            ws.Shapes(\"ChildC\").Delete\n            survivor = \"InnerGroup\"\n        Else\n            ws.Shapes(\"ChildA\").Delete\n            survivor = \"OuterGroup\"\n        End If\n        If mode = 2 Then b.Save\n        Set added = ws.Shapes.AddShape(1, 120, 40, 15, 10)\n        added.Name = \"Added\"\n        Set group = ws.Shapes.Range(Array(survivor, \"Added\")).Group\n        group.Name = \"Combined\"\n    End If\n    hot = SheetView(ws)\n    b.SaveAs \"C:\\work\\mixed-copy.xlsx\", 51\n    Set ws = Nothing\n    b.Close False\n    Set b = Workbooks.Open(\"C:\\work\\mixed-copy.xlsx\")\n    cold = SheetView(b.Worksheets(1))\n    b.Close False\n    Probe = Array(before, hot, cold)\nEnd Function\n",
+      "reference": {
+        "independent_orders": [
+          [
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            3,
+            2,
+            1,
+            0
+          ]
+        ],
+        "native_observations_sha256": "b5b1f7cf7653fa8eb6b63e0185666cf3644c78a242a3495673af1f76d204acb2",
+        "kind": "Native Excel COM deletion/addition/regrouping with and without an intermediate save; not complete API certification"
+      },
+      "cases": [
+        {
+          "mode": 0,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42a00000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42be0000",
+                  "Height": "0x42200000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42a00000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42be0000",
+                  "Height": "0x42200000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42a00000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "mode": 1,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42a00000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42fa0000",
+                  "Height": "0x42200000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42fa0000",
+                  "Height": "0x42200000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "mode": 2,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42a00000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42be0000",
+                  "Height": "0x42200000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42a00000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42be0000",
+                  "Height": "0x42200000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42a00000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "mode": 3,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42a00000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42be0000",
+                  "Height": "0x42200000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42a00000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42be0000",
+                  "Height": "0x42200000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42200000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42a00000",
+                      "Top": "0x41200000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x00000000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "group_delete_regroup_outer_rotated4",
+      "separate_caller": true,
+      "view_schema": "shape_geometry_single_bits",
+      "input_fixture": "tests/fixtures/vba/grouped_shapes_nested_rotated.xlsx",
+      "input_sha256": "e145a6c5e7c6f1240d0a4edcf8c6cf285526211469b41521df53060a9b2a2b07",
+      "program": "Option Explicit\nPublic Function ShapeView(ByVal s As Object) As Variant\n    Dim children As Variant, parts() As Variant, i As Long\n    children = Array()\n    If s.Type = 6 Then\n        ReDim parts(0 To s.GroupItems.Count - 1)\n        For i = 1 To s.GroupItems.Count\n            parts(i - 1) = ShapeView(s.GroupItems(i))\n        Next i\n        children = parts\n    End If\n    ShapeView = Array(CLng(s.ID), CStr(s.Name), CLng(s.Type), CLng(s.ZOrderPosition), CLng(s.Child), CLng(s.Placement), CDbl(s.Left), CDbl(s.Top), CDbl(s.Width), CDbl(s.Height), CDbl(s.Rotation), children)\nEnd Function\nPublic Function SheetView(ByVal ws As Object) As Variant\n    Dim parts() As Variant, i As Long\n    If ws.Shapes.Count = 0 Then\n        SheetView = Array()\n    Else\n        ReDim parts(0 To ws.Shapes.Count - 1)\n        For i = 1 To ws.Shapes.Count\n            parts(i - 1) = ShapeView(ws.Shapes(i))\n        Next i\n        SheetView = parts\n    End If\nEnd Function\nPublic Function Probe(ByVal mode As Long) As Variant\n    Dim b As Object, ws As Object, before As Variant, hot As Variant, cold As Variant\n    Dim added As Object, group As Object, survivor As String\n    Set b = Workbooks.Open(\"C:\\work\\provider.xlsx\")\n    Set ws = b.Worksheets(1)\n    before = SheetView(ws)\n    b.SaveAs \"C:\\work\\mixed-source.xlsx\", 51\n    If mode = 3 Then\n        Set added = ws.Shapes.AddShape(1, 120, 40, 15, 10)\n        added.Name = \"Added\"\n        Set group = ws.Shapes.Range(Array(\"OuterGroup\", \"Added\")).Group\n        group.Name = \"Combined\"\n        ws.Shapes(\"ChildA\").Delete\n    Else\n        If mode = 1 Then\n            ws.Shapes(\"ChildC\").Delete\n            survivor = \"InnerGroup\"\n        Else\n            ws.Shapes(\"ChildA\").Delete\n            survivor = \"OuterGroup\"\n        End If\n        If mode = 2 Then b.Save\n        Set added = ws.Shapes.AddShape(1, 120, 40, 15, 10)\n        added.Name = \"Added\"\n        Set group = ws.Shapes.Range(Array(survivor, \"Added\")).Group\n        group.Name = \"Combined\"\n    End If\n    hot = SheetView(ws)\n    b.SaveAs \"C:\\work\\mixed-copy.xlsx\", 51\n    Set ws = Nothing\n    b.Close False\n    Set b = Workbooks.Open(\"C:\\work\\mixed-copy.xlsx\")\n    cold = SheetView(b.Worksheets(1))\n    b.Close False\n    Probe = Array(before, hot, cold)\nEnd Function\n",
+      "reference": {
+        "independent_orders": [
+          [
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            3,
+            2,
+            1,
+            0
+          ]
+        ],
+        "native_observations_sha256": "b5b1f7cf7653fa8eb6b63e0185666cf3644c78a242a3495673af1f76d204acb2",
+        "kind": "Native Excel COM deletion/addition/regrouping with and without an intermediate save; not complete API certification"
+      },
+      "cases": [
+        {
+          "mode": 0,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x41f00000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x416b06b1",
+                      "Top": "0xc0f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x4217f62a",
+                  "Top": "0x418c0000",
+                  "Width": "0x42c204eb",
+                  "Height": "0x42020000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x4217f62a",
+                  "Top": "0x418c0000",
+                  "Width": "0x42c204eb",
+                  "Height": "0x42020000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "mode": 1,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x41f00000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x416b06b1",
+                      "Top": "0xc0f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x414adf58",
+                  "Top": "0x00000000",
+                  "Width": "0x42f4a415",
+                  "Height": "0x42480000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x416b06b1",
+                      "Top": "0xc0f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x414adf58",
+                  "Top": "0x00000000",
+                  "Width": "0x42f4a415",
+                  "Height": "0x42480000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x416b06b1",
+                      "Top": "0xc0f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "mode": 2,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x41f00000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x416b06b1",
+                      "Top": "0xc0f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x4217f62a",
+                  "Top": "0x418c0000",
+                  "Width": "0x42c204eb",
+                  "Height": "0x42020000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x4217f62a",
+                  "Top": "0x418c0000",
+                  "Width": "0x42c204eb",
+                  "Height": "0x42020000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "mode": 3,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x41f00000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x416b06b1",
+                      "Top": "0xc0f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x4217f62a",
+                  "Top": "0x418c0000",
+                  "Width": "0x42c204eb",
+                  "Height": "0x42020000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x4217f62a",
+                  "Top": "0x418c0000",
+                  "Width": "0x42c204eb",
+                  "Height": "0x42020000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x4222ae00",
+                      "Top": "0x40f00000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "group_delete_regroup_inner_rotated4",
+      "separate_caller": true,
+      "view_schema": "shape_geometry_single_bits",
+      "input_fixture": "tests/fixtures/vba/grouped_shapes_nested_inner_rotated.xlsx",
+      "input_sha256": "430851826ccda0bf47ec338ce7b1950c70e739288fb9f63f844faf93163ef0d4",
+      "program": "Option Explicit\nPublic Function ShapeView(ByVal s As Object) As Variant\n    Dim children As Variant, parts() As Variant, i As Long\n    children = Array()\n    If s.Type = 6 Then\n        ReDim parts(0 To s.GroupItems.Count - 1)\n        For i = 1 To s.GroupItems.Count\n            parts(i - 1) = ShapeView(s.GroupItems(i))\n        Next i\n        children = parts\n    End If\n    ShapeView = Array(CLng(s.ID), CStr(s.Name), CLng(s.Type), CLng(s.ZOrderPosition), CLng(s.Child), CLng(s.Placement), CDbl(s.Left), CDbl(s.Top), CDbl(s.Width), CDbl(s.Height), CDbl(s.Rotation), children)\nEnd Function\nPublic Function SheetView(ByVal ws As Object) As Variant\n    Dim parts() As Variant, i As Long\n    If ws.Shapes.Count = 0 Then\n        SheetView = Array()\n    Else\n        ReDim parts(0 To ws.Shapes.Count - 1)\n        For i = 1 To ws.Shapes.Count\n            parts(i - 1) = ShapeView(ws.Shapes(i))\n        Next i\n        SheetView = parts\n    End If\nEnd Function\nPublic Function Probe(ByVal mode As Long) As Variant\n    Dim b As Object, ws As Object, before As Variant, hot As Variant, cold As Variant\n    Dim added As Object, group As Object, survivor As String\n    Set b = Workbooks.Open(\"C:\\work\\provider.xlsx\")\n    Set ws = b.Worksheets(1)\n    before = SheetView(ws)\n    b.SaveAs \"C:\\work\\mixed-source.xlsx\", 51\n    If mode = 3 Then\n        Set added = ws.Shapes.AddShape(1, 120, 40, 15, 10)\n        added.Name = \"Added\"\n        Set group = ws.Shapes.Range(Array(\"OuterGroup\", \"Added\")).Group\n        group.Name = \"Combined\"\n        ws.Shapes(\"ChildA\").Delete\n    Else\n        If mode = 1 Then\n            ws.Shapes(\"ChildC\").Delete\n            survivor = \"InnerGroup\"\n        Else\n            ws.Shapes(\"ChildA\").Delete\n            survivor = \"OuterGroup\"\n        End If\n        If mode = 2 Then b.Save\n        Set added = ws.Shapes.AddShape(1, 120, 40, 15, 10)\n        added.Name = \"Added\"\n        Set group = ws.Shapes.Range(Array(survivor, \"Added\")).Group\n        group.Name = \"Combined\"\n    End If\n    hot = SheetView(ws)\n    b.SaveAs \"C:\\work\\mixed-copy.xlsx\", 51\n    Set ws = Nothing\n    b.Close False\n    Set b = Workbooks.Open(\"C:\\work\\mixed-copy.xlsx\")\n    cold = SheetView(b.Worksheets(1))\n    b.Close False\n    Probe = Array(before, hot, cold)\nEnd Function\n",
+      "reference": {
+        "independent_orders": [
+          [
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            3,
+            2,
+            1,
+            0
+          ]
+        ],
+        "native_observations_sha256": "b5b1f7cf7653fa8eb6b63e0185666cf3644c78a242a3495673af1f76d204acb2",
+        "kind": "Native Excel COM deletion/addition/regrouping with and without an intermediate save; not complete API certification"
+      },
+      "cases": [
+        {
+          "mode": 0,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x41f00000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41889554",
+                      "Top": "0xc129b4b1",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42192502",
+                      "Top": "0x4129b4b1",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42122bf1",
+                  "Top": "0x4188e5a2",
+                  "Width": "0x42c4ea07",
+                  "Height": "0x42038d2f",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x421924ee",
+                      "Top": "0x4129b45e",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42122bf1",
+                  "Top": "0x4188e5a2",
+                  "Width": "0x42c4ea07",
+                  "Height": "0x42038d2f",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x421924ee",
+                      "Top": "0x4129b45e",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "mode": 1,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x41f00000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41889554",
+                      "Top": "0xc129b4b1",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42192502",
+                      "Top": "0x4129b4b1",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41dd6fac",
+                  "Top": "0x00000000",
+                  "Width": "0x42d6a415",
+                  "Height": "0x42480000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41ba0a00",
+                      "Top": "0x3d9a535f",
+                      "Width": "0x41600000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42186aac",
+                      "Top": "0x416ecb59",
+                      "Width": "0x41600000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41dd6fac",
+                  "Top": "0x00000000",
+                  "Width": "0x42d6a415",
+                  "Height": "0x42480000",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41ba0a00",
+                      "Top": "0x3d9a535f",
+                      "Width": "0x41600000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42186aac",
+                      "Top": "0x416ecb59",
+                      "Width": "0x41600000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "mode": 2,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x41f00000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41889554",
+                      "Top": "0xc129b4b1",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42192502",
+                      "Top": "0x4129b4b1",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42122bf1",
+                  "Top": "0x4188e5a2",
+                  "Width": "0x42c4ea07",
+                  "Height": "0x42038d2f",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x421924ee",
+                      "Top": "0x4129b45e",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42122bf1",
+                  "Top": "0x4188e5a2",
+                  "Width": "0x42c4ea07",
+                  "Height": "0x42038d2f",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x421924ee",
+                      "Top": "0x4129b45e",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "mode": 3,
+          "expected": {
+            "before": [
+              {
+                "id": 6,
+                "name": "OuterGroup",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x41200000",
+                  "Top": "0x41200000",
+                  "Width": "0x42b40000",
+                  "Height": "0x41a00000",
+                  "Rotation": "0x41f00000"
+                },
+                "children": [
+                  {
+                    "id": 2,
+                    "name": "ChildA",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x41889554",
+                      "Top": "0xc129b4b1",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42192502",
+                      "Top": "0x4129b4b1",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "hot": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42122bf1",
+                  "Top": "0x4188e5a2",
+                  "Width": "0x42c4ea07",
+                  "Height": "0x42038d2f",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x421924ee",
+                      "Top": "0x4129b45e",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
+                    }
+                  }
+                ]
+              }
+            ],
+            "cold": [
+              {
+                "id": 8,
+                "name": "Combined",
+                "type": 6,
+                "z": 1,
+                "child": 0,
+                "placement": 1,
+                "geometry": {
+                  "Left": "0x42122bf1",
+                  "Top": "0x4188e5a2",
+                  "Width": "0x42c4ea07",
+                  "Height": "0x42038d2f",
+                  "Rotation": "0x00000000"
+                },
+                "children": [
+                  {
+                    "id": 3,
+                    "name": "ChildB",
+                    "type": 1,
+                    "z": 3,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x421924ee",
+                      "Top": "0x4129b45e",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x42340000"
+                    }
+                  },
+                  {
+                    "id": 4,
+                    "name": "ChildC",
+                    "type": 1,
+                    "z": 4,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42969f2a",
+                      "Top": "0x41dc0000",
+                      "Width": "0x41a00000",
+                      "Height": "0x41a00000",
+                      "Rotation": "0x41f00000"
+                    }
+                  },
+                  {
+                    "id": 7,
+                    "name": "Added",
+                    "type": 1,
+                    "z": 5,
+                    "child": -1,
+                    "placement": 1,
+                    "geometry": {
+                      "Left": "0x42f00000",
+                      "Top": "0x42200000",
+                      "Width": "0x41700000",
+                      "Height": "0x41200000",
+                      "Rotation": "0x00000000"
                     }
                   }
                 ]

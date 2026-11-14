@@ -944,6 +944,15 @@ impl<'a> WorkbookHost<'a> {
             child_offset: offset,
             child_extent: extent,
         });
+        // A former root group's angle was supplied separately to its leaves.
+        // Once nested, those leaves retain that contribution in their relative
+        // angle while the new outer group starts at zero rotation.
+        for child in &children {
+            let root=self.shape(*child)?.clone();
+            if !root.group_children.is_empty() && root.group_parent_id.is_none() {
+                for leaf in self.group_items(*child)? { self.shape_mut(leaf)?.rotation+=root.rotation; }
+            }
+        }
         for child in &children {
             let child_shape = self.shape_mut(*child)?;
             child_shape.group_parent_id = Some(id);
