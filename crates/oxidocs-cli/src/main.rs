@@ -15,6 +15,7 @@ use oxipdf_core::ir::*;
 mod fontidx;
 mod vba;
 mod emf;
+mod pptx;
 mod raster;
 
 #[cfg(target_env = "musl")]
@@ -59,6 +60,39 @@ fn main() {
         }
         Some("docx-to-png") => {
             let usage = "Usage: oxi docx-to-png [--strict] [--page N] [--width PX] [--height PX] <input.docx> <output.png>";
+            let mut strict = false;
+            let mut page = 1usize;
+            let mut size = raster::Size { width: None, height: None };
+            let mut paths = Vec::new();
+            let mut rest = args[2..].iter();
+            while let Some(arg) = rest.next() {
+                let mut number = || rest.next().and_then(|v| v.parse::<u32>().ok()).filter(|n| *n > 0).expect(usage);
+                match arg.as_str() {
+                    "--strict" => strict = true,
+                    "--page" => page = number() as usize,
+                    "--width" => size.width = Some(number()),
+                    "--height" => size.height = Some(number()),
+                    _ => paths.push(arg.as_str()),
+                }
+            }
+            let (Some(input), Some(output)) = (paths.first(), paths.get(1)) else {
+                eprintln!("{usage}");
+                std::process::exit(1);
+            };
+            finish(input, output, convert_png(input, output, strict, page, size));
+        }
+        Some("pptx-to-pdf") => {
+            let usage = "Usage: oxi pptx-to-pdf [--strict] <input.pptx> <output.pdf>";
+            let strict = args[2..].iter().any(|a| a == "--strict");
+            let paths: Vec<&String> = args[2..].iter().filter(|a| *a != "--strict").collect();
+            let (Some(input), Some(output)) = (paths.first(), paths.get(1)) else {
+                eprintln!("{usage}");
+                std::process::exit(1);
+            };
+            finish(input, output, convert(input, output, strict));
+        }
+        Some("pptx-to-png") => {
+            let usage = "Usage: oxi pptx-to-png [--strict] [--page N] [--width PX] [--height PX] <input.pptx> <output.png>";
             let mut strict = false;
             let mut page = 1usize;
             let mut size = raster::Size { width: None, height: None };
@@ -193,6 +227,8 @@ fn main() {
             eprintln!("Usage:");
             eprintln!("  oxi docx-to-pdf [--strict] [--quiet] <input.docx> <output.pdf>");
             eprintln!("  oxi docx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.docx> <output.png>");
+            eprintln!("  oxi pptx-to-pdf [--strict] [--quiet] <input.pptx> <output.pdf>");
+            eprintln!("  oxi pptx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.pptx> <output.png>");
             eprintln!("      page N (default 1), fitted inside the given width and/or height (default 96 dpi)");
             eprintln!("  oxi serve [--threads N]");
             eprintln!("      one JSON request per stdin line, {{\"input\", \"output\", \"strict\", \"id\"}};");
@@ -275,6 +311,9 @@ fn stand_in_face_bytes() -> Option<Vec<u8>> {
 /// under `strict` when it holds content Oxi does not draw.
 fn lay_out(input: &str, strict: bool) -> Result<PdfDocument, ConvertError> {
     let data = fs::read(input).map_err(|e| ConvertError::Failed(format!("read {input}: {e}")))?;
+    if is_presentation(input, &data) {
+        return lay_out_slides(input, &data, strict);
+    }
     let doc = oxidocs_core::parse_docx(&data).map_err(|e| ConvertError::Failed(format!("parse {input}: {e}")))?;
 
     note!("Parsed: {} section(s), {} blocks total",
@@ -308,6 +347,38 @@ fn lay_out(input: &str, strict: bool) -> Result<PdfDocument, ConvertError> {
         }
     }
 
+    Ok(pdf_doc)
+}
+
+/// Whether `input` is a presentation: by its name, or for a name that says
+/// nothing, by the part every .pptx package carries.
+fn is_presentation(input: &str, data: &[u8]) -> bool {
+    let name = input.to_lowercase();
+    if [".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm"].iter().any(|ext| name.ends_with(ext)) {
+        return true;
+    }
+    if [".docx", ".docm", ".dotx", ".dotm"].iter().any(|ext| name.ends_with(ext)) {
+        return false;
+    }
+    const PART: &[u8] = b"ppt/presentation.xml";
+    data.windows(PART.len()).any(|window| window == PART)
+}
+
+/// Parse a presentation and draw one page per slide, refusing it under
+/// `strict` when a slide holds something that is not drawn as PowerPoint
+/// draws it.
+fn lay_out_slides(input: &str, data: &[u8], strict: bool) -> Result<PdfDocument, ConvertError> {
+    let pres = oxislides_core::parse_pptx(data).map_err(|e| ConvertError::Failed(format!("parse {input}: {e}")))?;
+    note!("Parsed: {} slide(s)", pres.slides.len());
+    let (pdf_doc, unsupported) = pptx::pages(&pres);
+    if !unsupported.is_empty() {
+        if strict {
+            return Err(ConvertError::Unsupported(unsupported));
+        }
+        for u in &unsupported {
+            eprintln!("Warning: {} x{} in {} is not drawn as PowerPoint draws it", u.kind, u.count, u.part);
+        }
+    }
     Ok(pdf_doc)
 }
 

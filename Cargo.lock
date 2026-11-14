@@ -528,6 +528,7 @@ dependencies = [
  "oxidocs-fonts",
  "oxihanko",
  "oxipdf-core",
+ "oxislides-core",
  "oxivba-core",
  "ring",
  "rustybuzz",
