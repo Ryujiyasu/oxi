@@ -2077,5 +2077,34 @@ End Function`;
     }
 }
 
+// Actual VBA Count coercion includes fractional/numeric-text values, arrays,
+// Null and Nothing. Compare full error, return-type and worksheet/Saved state.
+{
+    const cases = JSON.parse(await readFile(path.join(root, 'tests/fixtures/vba/worksheet_add_count_native.json'), 'utf8'));
+    const packages = JSON.parse(await readFile(path.join(root, 'tests/fixtures/vba', cases.input_fixture), 'utf8'));
+    const input = Buffer.from(packages.inputs[cases.input_label].bytes_hex, 'hex');
+    assert.equal(cases.cases.length, 31);
+    for (const item of cases.cases) for (const route of ['direct', 'session']) {
+        const fullName = String.raw`C:\work\caller.xlsm`, inputPath = String.raw`C:\work\input.xlsx`;
+        const options = {errorLanguage: 'ja-JP', hostAnsiCodePage: 932,
+            applicationState: {standardFontStartup: {profileUtf16: cases.startup_profile_utf16}},
+            fileContext: {packageBytes: original, fullName, readOnly: true, editRevision: 0,
+                folders: [String.raw`C:\work`], files: [{path: inputPath, bytes: new Uint8Array(input)}]}};
+        const book = wasm.parse_spreadsheet(original);
+        const session = route === 'session' ? new wasm.SpreadsheetVbaSession() : null;
+        try {
+            const args = [item.mode, inputPath];
+            const outcome = session
+                ? session.run(book, cases.program, 'Probe', args, 0, fullName, options)
+                : wasm.run_spreadsheet_vba_with_outcome(book, cases.program, 'Probe', args, 0, fullName, options);
+            const label = `Worksheets.Add Count mode ${item.mode} ${route}`;
+            assert.equal(outcome.error, undefined, label);
+            assert.deepEqual(outcome.result.value.values.map(v => v.value), item.expected, label);
+        } finally {
+            session?.free();
+        }
+    }
+}
+
 assert.deepEqual(failures, [], 'Excel saves validation and inherited row/column formatting');
-console.log(JSON.stringify({passed: true, native_iconset_variant_cases: 20, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));
+console.log(JSON.stringify({passed: true, native_worksheet_add_count_conditions: 31, native_worksheet_add_count_route_observations: 62, native_iconset_variant_cases: 20, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));

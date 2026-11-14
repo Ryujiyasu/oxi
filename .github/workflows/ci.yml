@@ -58,6 +58,11 @@ jobs:
         run: >-
           cargo test -p oxicells-core --lib --locked
           --config profile.test.package.oxivba-core.opt-level=1 sheet_package_
+      - name: Worksheet Add Count variant conversion and error state
+        run: >-
+          cargo test -p oxidocs-wasm --lib --features suite --locked
+          --config profile.test.package.oxivba-core.opt-level=1 -- --exact
+          spreadsheet_vba::tests::worksheet_add_count_arguments_match_native_types_errors_and_state
       - name: Sheet structure changes and immediate Saved state
         run: >-
           cargo test -p oxidocs-wasm --lib --features suite --locked
