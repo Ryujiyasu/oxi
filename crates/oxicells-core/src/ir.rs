@@ -402,6 +402,10 @@ pub struct Sheet {
     /// A block has 1024 IDs; its first slot is the initial drawing-group root.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drawing_id_blocks: Vec<u32>,
+    /// Back-to-front order of the shared legacy drawing layer, by physical ID.
+    /// This layer is independent of the ordinary DrawingML anchor order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_drawing_order: Vec<u32>,
     #[serde(default, skip_serializing_if = "SheetKind::is_worksheet")]
     pub kind: SheetKind,
     /// Whether the sheet is shown, and how firmly it is hidden when it is not.

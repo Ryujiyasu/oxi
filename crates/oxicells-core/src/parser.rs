@@ -4104,6 +4104,30 @@ fn vml_shape_attribute(shape: &str, name: &str) -> Option<String> {
     }
 }
 
+fn parse_legacy_drawing_order(xml: &str) -> Vec<u32> {
+    let mut reader = Reader::from_str(xml);
+    let mut shapes = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(shape) | Event::Empty(shape)) if local_name(shape.name().as_ref()) == "shape" => {
+                let id = get_attr(&shape, "spid").or_else(|| get_attr(&shape, "id"))
+                    .and_then(|id| id.strip_prefix("_x0000_s").unwrap_or(&id).parse::<u32>().ok());
+                if let Some(id) = id {
+                    let z = get_attr(&shape, "style").and_then(|style| style.split(';').find_map(|item| {
+                        let (key, value) = item.split_once(':')?;
+                        (key.trim() == "z-index").then(|| value.trim().parse::<i64>().ok()).flatten()
+                    })).unwrap_or(0);
+                    shapes.push((z, id));
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {},
+        }
+    }
+    shapes.sort_by_key(|(z, _)| *z);
+    shapes.into_iter().map(|(_, id)| id).collect()
+}
+
 fn parse_drawing_id_blocks(xml: &str) -> Vec<u32> {
     let mut reader = Reader::from_str(xml);
     loop {
@@ -5879,6 +5903,7 @@ fn parse_worksheet(
         },
         unsupported_elements: unsupported,
         drawing_id_blocks: Vec::new(),
+        legacy_drawing_order: Vec::new(),
         header_footer: parse_header_footer(xml)?,
         protected,
         protection,
@@ -6446,6 +6471,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
 
                     };
                     sheet.drawing_id_blocks = vml.as_deref().map(parse_drawing_id_blocks).unwrap_or_default();
+                    sheet.legacy_drawing_order = vml.as_deref().map(parse_legacy_drawing_order).unwrap_or_default();
                     let ole_shadows = vml.as_deref().map(parse_vml_ole_shadows).unwrap_or_default();
 
                     let notes = match beside("/comments") {

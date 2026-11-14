@@ -13585,6 +13585,12 @@ impl<'a> WorkbookHost<'a> {
                 || !(range.start_row..=range.end_row).contains(&note.at.row)
                 || !(range.start_column..=range.end_column).contains(&note.at.column)
         });
+        if clear_legacy {
+            let removed: std::collections::HashSet<_> = self.shapes.iter()
+                .filter(|shape| shape.comment_at.is_some_and(in_range))
+                .map(|shape| shape.non_visual_id).collect();
+            self.workbook.sheets[range.sheet].legacy_drawing_order.retain(|id| !removed.contains(id));
+        }
         self.shapes.retain(|shape| {
             if !clear_legacy { return true; }
             shape.comment_at.is_none_or(|at| {
@@ -13661,6 +13667,10 @@ impl<'a> WorkbookHost<'a> {
         }
         if name.eq_ignore_ascii_case("delete") {
             self.notes.remove(index);
+            let removed: std::collections::HashSet<_> = self.shapes.iter()
+                .filter(|shape| shape.comment_at == Some(at))
+                .map(|shape| shape.non_visual_id).collect();
+            self.workbook.sheets[at.sheet].legacy_drawing_order.retain(|id| !removed.contains(id));
             self.shapes.retain(|shape| shape.comment_at != Some(at));
             self.saved = false;
             return Ok(Some(Value::Empty));
@@ -16024,6 +16034,7 @@ impl<'a> WorkbookHost<'a> {
             conditional_rules: Vec::new(),
             tab_color: None,
             drawing_id_blocks: Vec::new(),
+        legacy_drawing_order: Vec::new(),
             header_footer: None,
             origin_id: None,
         };
@@ -16453,8 +16464,11 @@ impl<'a> WorkbookHost<'a> {
         let mut drawing_number = 0u32;
         let handles: std::collections::HashMap<u64, u64> = copied.iter().enumerate()
             .map(|(offset, shape)| (shape.id, self.next_shape_id + offset as u64)).collect();
+        let original_legacy_order = self.workbook.sheets[from].legacy_drawing_order.clone();
+        let mut legacy_rebase = std::collections::HashMap::new();
         self.next_shape_id += copied.len() as u64;
         for mut shape in copied {
+            let old_physical_id = shape.non_visual_id;
             if let shapes::ShapeKind::Chart(chart) = &mut shape.kind {
                 for reference in std::iter::once(&mut chart.category_axis_reference).chain(
                     chart.series.iter_mut().flat_map(|series| [&mut series.name_ref,
@@ -16493,8 +16507,11 @@ impl<'a> WorkbookHost<'a> {
                 self.comment_shape_aliases.entry(to).or_default().insert(number, shape.id);
                 if shape.name_is_automatic { shape.name = format!("Comment {number}"); }
             }
+            legacy_rebase.insert(old_physical_id, shape.non_visual_id);
             self.shapes.push(shape);
         }
+        self.workbook.sheets[to].legacy_drawing_order = original_legacy_order.iter()
+            .filter_map(|id| legacy_rebase.get(id).copied()).collect();
         self.shape_counters.insert(to, drawing_number);
         if let Some(count) = self.ole_object_counters.get(&from).copied() {
             self.ole_object_counters.insert(to, count);
@@ -16653,8 +16670,11 @@ impl<'a> WorkbookHost<'a> {
         let mut drawing_number = 0u32;
         let handles: std::collections::HashMap<u64, u64> = copied.iter().enumerate()
             .map(|(offset, shape)| (shape.id, self.next_shape_id + offset as u64)).collect();
+        let original_legacy_order = source.workbook.sheets[from].legacy_drawing_order.clone();
+        let mut legacy_rebase = std::collections::HashMap::new();
         self.next_shape_id += copied.len() as u64;
         for mut shape in copied {
+            let old_physical_id = shape.non_visual_id;
             if let shapes::ShapeKind::Chart(chart) = &mut shape.kind {
                 for reference in std::iter::once(&mut chart.category_axis_reference).chain(
                     chart.series.iter_mut().flat_map(|series| [&mut series.name_ref,
@@ -16693,8 +16713,11 @@ impl<'a> WorkbookHost<'a> {
                 self.comment_shape_aliases.entry(to).or_default().insert(number, shape.id);
                 if shape.name_is_automatic { shape.name = format!("Comment {number}"); }
             }
+            legacy_rebase.insert(old_physical_id, shape.non_visual_id);
             self.shapes.push(shape);
         }
+        self.workbook.sheets[to].legacy_drawing_order = original_legacy_order.iter()
+            .filter_map(|id| legacy_rebase.get(id).copied()).collect();
         self.shape_counters.insert(to, drawing_number);
         if let Some(count) = source.ole_object_counters.get(&from).copied() {
             self.ole_object_counters.insert(to, count);
@@ -31455,7 +31478,11 @@ impl<'a> ApplicationHost<'a> {
                     let target=application.native_owner(destination).and_then(|owner|application.hosts.get(&owner)?.worksheet(destination).map(|sheet|(owner,sheet)));
                     if let Some((target_owner,target_sheet))=target.filter(|(owner,_)|*owner!=source_owner) {
                         let at=target_sheet+usize::from(after.is_some());
-                        return Some(application.copy_sheet_to_workbook(source_owner,source_sheet,target_owner,at).map(Some));
+                        return Some(application.copy_sheet_to_workbook(source_owner,source_sheet,target_owner,at).map_err(|error| {
+                            #[cfg(test)]
+                            if std::env::var_os("OXI_VBA_SAVE_TRACE").is_some() { eprintln!("VBA existing-book copy: {error}"); }
+                            error
+                        }).map(Some));
                     }
                 }
             }
@@ -59525,7 +59552,10 @@ End Function"####;
     }
 
     fn assert_complete_ole_insert_native9(group_id: &str) {
-        let corpus: serde_json::Value = serde_json::from_slice(include_bytes!("../../../tests/fixtures/vba/ole_copy_native.json")).unwrap();
+        let corpus_bytes: &[u8] = if matches!(group_id, "mixed_drawing_layers9" | "explicit_font9") {
+            include_bytes!("../../../tests/fixtures/vba/ole_legacy_layers_native.json")
+        } else { include_bytes!("../../../tests/fixtures/vba/ole_copy_native.json") };
+        let corpus: serde_json::Value = serde_json::from_slice(corpus_bytes).unwrap();
         let group = corpus["groups"].as_array().unwrap().iter().find(|g| g["id"] == group_id).unwrap();
         let bytes = include_bytes!("../../../tests/fixtures/vba/scale_picture_original_ole.xlsx");
         let caller = include_bytes!("../../../tests/fixtures/vba/cell_width.xlsm");
@@ -59534,6 +59564,7 @@ End Function"####;
         for case in cases {
             let mode = case["mode"].as_i64().unwrap();
             let mut context = failure_context();
+            context.host_ansi_code_page = Some(AnsiCodePage::Japanese);
             let mut files = vec![file_io::ProducedFile {path:r"C:\work\provider.xlsx".into(),bytes:bytes.to_vec()}];
             if let Some(text) = group["sample_text"].as_str() {
                 files.push(file_io::ProducedFile {path:r"C:\work\sample.txt".into(),bytes:text.as_bytes().to_vec()});
@@ -59563,6 +59594,16 @@ End Function"####;
             }
         }
         assert!(failures.is_empty(),"Complete Native OLE insertion vectors differ:\n{}",failures.join("\n"));
+    }
+
+    #[test]
+    fn legacy_layers_native_mixed_order_and_moves9() {
+        assert_complete_ole_insert_native9("mixed_drawing_layers9");
+    }
+
+    #[test]
+    fn legacy_layers_native_copy_explicit_fonts9() {
+        assert_complete_ole_insert_native9("explicit_font9");
     }
 
     #[test]
@@ -108553,6 +108594,7 @@ End Function
                 conditional_rules: Vec::new(),
                 tab_color: None,
                 drawing_id_blocks: Vec::new(),
+        legacy_drawing_order: Vec::new(),
                 header_footer: None,
                 origin_id: None,
             }],
@@ -138072,6 +138114,7 @@ End Function
             conditional_rules: Vec::new(),
             tab_color: None,
             drawing_id_blocks: Vec::new(),
+        legacy_drawing_order: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -138151,6 +138194,7 @@ End Function
             conditional_rules: Vec::new(),
             tab_color: None,
             drawing_id_blocks: Vec::new(),
+        legacy_drawing_order: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146104,6 +146148,7 @@ End Function"#;
             conditional_rules: Vec::new(),
             tab_color: None,
             drawing_id_blocks: Vec::new(),
+        legacy_drawing_order: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146374,6 +146419,7 @@ End Function"#;
             conditional_rules: Vec::new(),
             tab_color: None,
             drawing_id_blocks: Vec::new(),
+        legacy_drawing_order: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146445,6 +146491,7 @@ End Function"#;
             conditional_rules: Vec::new(),
             tab_color: None,
             drawing_id_blocks: Vec::new(),
+        legacy_drawing_order: Vec::new(),
             header_footer: None,
             origin_id: None,
         });
@@ -146588,6 +146635,7 @@ End Function"#;
             conditional_rules: Vec::new(),
             tab_color: None,
             drawing_id_blocks: Vec::new(),
+        legacy_drawing_order: Vec::new(),
             header_footer: None,
             origin_id: None,
         });

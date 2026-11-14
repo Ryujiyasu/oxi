@@ -43,6 +43,7 @@ pub(super) struct ShapeRangeRecord {
     pub ordinary_range: bool,
     pub ordinary_slots: Vec<u64>,
     pub ordinary_initialized: bool,
+    pub legacy_ole: bool,
 }
 
 /// The workbook allocator owns ID blocks even after their last shape is deleted.
@@ -1019,6 +1020,7 @@ impl<'a> WorkbookHost<'a> {
             self.adopt_shape_groups(sheet);
         }
         self.adopt_comment_shapes();
+        for sheet in 0..self.workbook.sheets.len() { self.sync_legacy_drawing_order(sheet); }
     }
 
     fn adopt_shape_groups(&mut self, sheet: usize) {
@@ -1245,6 +1247,7 @@ impl<'a> WorkbookHost<'a> {
             }
         }
         self.shapes.push(record);
+        self.sync_legacy_drawing_order(at.sheet);
     }
 
     pub(super) fn comment_shape_alias_owner(&self, sheet: usize, name: &str) -> Option<u64> {
@@ -1401,6 +1404,7 @@ impl<'a> WorkbookHost<'a> {
 
     /// The sheet's drawings, rebuilt from its records.
     pub(super) fn mirror_drawings(&mut self, sheet: usize) {
+        self.sync_legacy_drawing_order(sheet);
         let records: Vec<ShapeRecord> =
             self.shapes.iter().filter(|shape| shape.sheet == sheet).cloned().collect();
         let drawings: Vec<Drawing> = records
@@ -1453,6 +1457,7 @@ impl<'a> WorkbookHost<'a> {
     /// Commit the session-local legacy note objects to the workbook IR before
     /// SaveCopyAs. Excel saves both the comment text part and its VML shape.
     pub(super) fn sync_legacy_notes_for_save(&mut self) {
+        for sheet in 0..self.workbook.sheets.len() { self.sync_legacy_drawing_order(sheet); }
         for sheet in 0..self.workbook.sheets.len() {
             let original = std::mem::take(&mut self.workbook.sheets[sheet].comments);
             let mut comments: Vec<_> = original.iter().filter(|comment| comment.author.strip_prefix("tc=").is_some_and(|id| self.threaded_notes.iter().any(|thread| !thread.deleted && thread.at.sheet == sheet && thread.at.row == comment.cell.0 + 1 && thread.at.column == comment.cell.1 && thread.id.eq_ignore_ascii_case(id)))).cloned().collect();
