@@ -437,7 +437,16 @@ fn hex_to_rgb(h: &str) -> Option<[f64; 3]> {
     Some([p(0)?, p(2)?, p(4)?])
 }
 
+/// PowerPoint keeps a colour as linear light in whole 1/100000 units (the
+/// scRGB percentage) — on the way in and on the way out. That is what breaks
+/// exact .5 ties: white under lumMod 50% is 7F7F7F, 808080 under lumOff −10%
+/// is 676767 (lummod_round probe, 336/336 arms of lumMod/lumOff/lum).
+fn quantize_linear(c: [f64; 3]) -> [f64; 3] {
+    c.map(|v| to_srgb((to_linear(v.clamp(0.0, 1.0)) * 100000.0).round() / 100000.0))
+}
+
 fn rgb_to_hex(c: [f64; 3]) -> String {
+    let c = quantize_linear(c);
     let q = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("{:02X}{:02X}{:02X}", q(c[0]), q(c[1]), q(c[2]))
 }
@@ -479,13 +488,18 @@ fn rgb_to_hsl(c: [f64; 3]) -> [f64; 3] {
     [h * 60.0, s, l]
 }
 
+/// The HSL q / p pair (the brightest / dimmest channel of the colour).
+fn hsl_qp(s: f64, l: f64) -> (f64, f64) {
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    (q, 2.0 * l - q)
+}
+
 fn hsl_to_rgb(hsl: [f64; 3]) -> [f64; 3] {
-    let (h, s, l) = (hsl[0].rem_euclid(360.0) / 360.0, hsl[1].clamp(0.0, 1.0), hsl[2].clamp(0.0, 1.0));
+    let (h, s, l) = (hsl[0].rem_euclid(360.0) / 360.0, hsl[1], hsl[2].clamp(0.0, 1.0));
     if s == 0.0 {
         return [l, l, l];
     }
-    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
-    let p = 2.0 * l - q;
+    let (q, p) = hsl_qp(s, l);
     let f = |mut t: f64| {
         if t < 0.0 {
             t += 1.0;
@@ -503,7 +517,7 @@ fn hsl_to_rgb(hsl: [f64; 3]) -> [f64; 3] {
             p
         }
     };
-    [f(h + 1.0 / 3.0), f(h), f(h - 1.0 / 3.0)]
+    [f(h + 1.0 / 3.0), f(h), f(h - 1.0 / 3.0)].map(|v| v.clamp(0.0, 1.0))
 }
 
 /// What a colour element resolves to.
@@ -551,7 +565,7 @@ impl ColorCtx<'_> {
     /// modifier children applied in document order.
     pub fn resolve(&self, e: &Elem) -> Option<Resolved> {
         let pct = |v: Option<&str>| v.and_then(|v| v.trim_end_matches('%').parse::<f64>().ok());
-        let mut rgb = match e.local() {
+        let rgb = match e.local() {
             "srgbClr" => hex_to_rgb(e.attr("val")?)?,
             "schemeClr" => hex_to_rgb(&self.scheme(e.attr("val")?)?)?,
             "sysClr" => match e.attr("lastClr") {
@@ -571,6 +585,7 @@ impl ColorCtx<'_> {
             }
             _ => return None,
         };
+        let mut rgb = quantize_linear(rgb);
         let mut alpha = 1.0f64;
         for m in e.child_elems() {
             let Some(v) = pct(m.attr("val")) else {
@@ -609,6 +624,7 @@ impl ColorCtx<'_> {
                 "lumMod" | "lumOff" | "lum" | "satMod" | "satOff" | "sat" | "hueMod"
                 | "hueOff" | "hue" => {
                     let mut h = rgb_to_hsl(rgb);
+                    let achromatic = rgb[0] == rgb[1] && rgb[1] == rgb[2];
                     match m.local() {
                         "lumMod" => h[2] *= f,
                         "lumOff" => h[2] += f,
@@ -622,9 +638,20 @@ impl ColorCtx<'_> {
                         "hue" => h[0] = v / 60000.0,
                         _ => {}
                     }
-                    h[1] = h[1].clamp(0.0, 1.0);
+                    // Saturation is NOT clamped (either way): satMod 150% on
+                    // 156082 is PowerPoint's 006A9D, satOff -30% on 808080 is
+                    // 5AA6FF; the channels are clamped after the conversion.
                     h[2] = h[2].clamp(0.0, 1.0);
-                    rgb = hsl_to_rgb(h);
+                    rgb = if achromatic && h[1] != 0.0 {
+                        // A grey has no hue; saturating one gives PowerPoint's
+                        // (q, p, 3p - 2q) — 808080 under sat 50% is BF4000,
+                        // C0C0C0 is DFA123 (a hue of 40°), whatever hue was
+                        // set before (grey_hue probe, 192 arms).
+                        let (q, p) = hsl_qp(h[1], h[2]);
+                        [q, p, 3.0 * p - 2.0 * q].map(|v| v.clamp(0.0, 1.0))
+                    } else {
+                        hsl_to_rgb(h)
+                    };
                 }
                 "red" | "green" | "blue" | "redMod" | "greenMod" | "blueMod" | "redOff"
                 | "greenOff" | "blueOff" => {
@@ -1528,10 +1555,11 @@ mod tests {
 
     #[test]
     fn lum_mod_and_clr_map() {
-        // bg1 lumMod 50% = 808080 grey; tx1 lumMod 75% lumOff 25% = 404040
+        // bg1 lumMod 50% = PowerPoint's 7F7F7F (the 127.5 tie goes down through
+        // the 1/100000 linear store); tx1 lumMod 75% lumOff 25% = 404040
         let xml = r#"<a:p><a:solidFill><a:schemeClr val="bg1"><a:lumMod val="50000"/></a:schemeClr></a:solidFill><a:solidFill><a:schemeClr val="tx1"><a:lumMod val="75000"/><a:lumOff val="25000"/></a:schemeClr></a:solidFill><a:solidFill><a:schemeClr val="accent1"><a:lumMod val="20000"/><a:lumOff val="80000"/></a:schemeClr></a:solidFill></a:p>"#;
         let out = norm(xml);
-        assert!(out.contains(r#"<a:srgbClr val="808080"/>"#), "{out}");
+        assert!(out.contains(r#"<a:srgbClr val="7F7F7F"/>"#), "{out}");
         assert!(out.contains(r#"<a:srgbClr val="404040"/>"#), "{out}");
         // PowerPoint's "Accent 1, Lighter 80%" of 4472C4 is DAE3F3.
         assert!(out.contains(r#"<a:srgbClr val="DAE3F3"/>"#), "{out}");

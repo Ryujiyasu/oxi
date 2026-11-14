@@ -35,11 +35,10 @@ fn first_text(sh: &oxislides_core::ir::Shape) -> String {
     }
 }
 
-/// Within one step per channel: PowerPoint's 50% grey is 7F7F7F where exact
-/// HSL arithmetic lands on the 127.5 tie.
+/// Byte for byte, ties included (PowerPoint's 50% grey is 7F7F7F; see
+/// colour_mods_integration.rs).
 fn near(a: &str, b: &str) -> bool {
-    let c = |h: &str, i: usize| i32::from_str_radix(&h[i..i + 2], 16).unwrap();
-    a.len() == 6 && (0..3).all(|k| (c(a, 2 * k) - c(b, 2 * k)).abs() <= 1)
+    a.eq_ignore_ascii_case(b)
 }
 
 #[test]
