@@ -19655,7 +19655,7 @@ mod tests {
 
     #[test]
     fn grouped_anchor_order_uses_the_first_ranked_child_when_parent_is_not_in_ir() {
-        let xml = r#"<xdr:wsDr xmlns:xdr="urn:test" xmlns:u="urn:future"><xdr:twoCellAnchor u:keep="group"><xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="4" name="Bundle"/></xdr:nvGrpSpPr><xdr:sp><xdr:cNvPr id="2" name="Left"/></xdr:sp><xdr:sp><xdr:cNvPr id="3" name="Right"/></xdr:sp></xdr:grpSp></xdr:twoCellAnchor><xdr:twoCellAnchor u:keep="chart"><xdr:graphicFrame><xdr:cNvPr id="5" name="Chart"/></xdr:graphicFrame></xdr:twoCellAnchor><xdr:extLst u:keep="extension"/></xdr:wsDr>"#;
+        let xml = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:u="urn:future"><xdr:twoCellAnchor u:keep="group"><xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="4" name="Bundle"/></xdr:nvGrpSpPr><xdr:sp><xdr:cNvPr id="2" name="Left"/></xdr:sp><xdr:sp><xdr:cNvPr id="3" name="Right"/></xdr:sp></xdr:grpSp></xdr:twoCellAnchor><xdr:twoCellAnchor u:keep="chart"><xdr:graphicFrame><xdr:cNvPr id="5" name="Chart"/></xdr:graphicFrame></xdr:twoCellAnchor><xdr:extLst u:keep="extension"/></xdr:wsDr>"#;
         for (order, group_first) in [
             (vec!["Left", "Right", "Chart"], true),
             (vec!["Chart", "Left", "Right"], false),
