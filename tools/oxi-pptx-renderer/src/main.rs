@@ -160,7 +160,10 @@ fn main() {
 
     if let Some(path) = dump_layout {
         #[cfg(windows)]
-        dump_layout_json_gdi(&pres, &path, dpi, supersample);
+        {
+            dump_layout_json_gdi(&pres, &path, dpi, supersample);
+            d2demoji::shutdown();
+        }
         #[cfg(not(windows))]
         dump_layout_json_plain(&pres, &path);
         eprintln!("Layout dumped to {}", path);
@@ -170,6 +173,7 @@ fn main() {
     #[cfg(windows)]
     {
         render_slides_gdi(&pres, output_prefix, dpi, supersample);
+        d2demoji::shutdown();
     }
 
     #[cfg(not(windows))]
@@ -17532,6 +17536,8 @@ fn layout_paragraph_baselines(
             // line gets none).
             if let Some(pct) = m.spc_bef_pct {
                 *cursor_pt += pct * fs * 1.2 * n;
+            } else if let Some(pts) = m.spc_bef_pts {
+                *cursor_pt += pts;
             }
         }
     }

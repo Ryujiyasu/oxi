@@ -160,6 +160,13 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
     let mut in_level = false;
     let mut in_def_rpr_lvl = false;
     let mut in_spc_bef = false;
+    // `a:lnSpc` and `a:defRPr/a:solidFill` of the open level. The Office
+    // default master states its body pitch (`lnSpc 90%`, `spcBef 10pt`) and
+    // its text colour (`tx1`) here and nowhere else.
+    let s_txspacing = std::env::var("OXI_TXSPACING_DISABLE").is_err();
+    let s_txcolor = std::env::var("OXI_TXCOLOR_DISABLE").is_err();
+    let mut in_ln_spc = false;
+    let mut in_def_fill = false;
     let mut level_bullet_font: Option<String> = None;
 
     // Push the just-finished level into the active context Vec.
@@ -211,6 +218,8 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                         in_spc_bef = false;
                     }
                     "spcBef" if in_level => in_spc_bef = true,
+                    "lnSpc" if in_level => in_ln_spc = true,
+                    "solidFill" if in_def_rpr_lvl => in_def_fill = true,
                     // a:defRPr/@sz (hundredths of a point) — the placeholder
                     // default font size for this outline level (Spec #5). The
                     // level's own paragraph run properties override it at
@@ -263,6 +272,24 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                         }
                     }
                     // Children of a non-self-closing level (Start form).
+                    "spcPct" if in_ln_spc && s_txspacing => {
+                        if let Some(x) = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                            cur_level.line_spacing = Some(x / 100000.0);
+                        }
+                    }
+                    "spcPts" if in_spc_bef && s_txspacing => {
+                        // hundredths of a point
+                        if let Some(x) = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                            cur_level.spc_bef_pts = Some(x / 100.0);
+                        }
+                    }
+                    // Colours reach this parser already resolved to srgbClr
+                    // (see `normalize`).
+                    "srgbClr" if in_def_fill && s_txcolor => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            cur_level.color = Some(v);
+                        }
+                    }
                     "spcPct" if in_spc_bef => {
                         // a:spcBef/a:spcPct/@val is the fraction in 100000ths.
                         if let Some(v) = get_attr(&e, "val") {
@@ -307,6 +334,8 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                     "bodyStyle" => in_body_style = false,
                     "otherStyle" => in_other_style = false,
                     "spcBef" => in_spc_bef = false,
+                    "lnSpc" => in_ln_spc = false,
+                    "solidFill" => in_def_fill = false,
                     "defRPr" if in_def_rpr_lvl => in_def_rpr_lvl = false,
                     n if is_master_lvl(n) && in_level => {
                         in_def_rpr_lvl = false;
@@ -500,6 +529,12 @@ fn parse_layout_ph_lststyles(
     let mut in_lvl_highlight = false;
     let s_highlight_lvl = std::env::var("OXI_HIGHLIGHTLVL_DISABLE").is_err();
     let mut in_ln_spc_lvl = false;
+    // Bullets, indents and space-before of a placeholder level (the Office
+    // title layout's subtitle says `buNone` + marL/indent 0 here, and nowhere
+    // else). OXI_PHBULLET_DISABLE ignores them, as before.
+    let s_phbullet = std::env::var("OXI_PHBULLET_DISABLE").is_err();
+    let mut in_spc_bef_lvl = false;
+    let mut lvl_bu_font: Option<String> = None;
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
@@ -530,8 +565,53 @@ fn parse_layout_ph_lststyles(
                             levels.push(MasterStyleLevel::default());
                         }
                         cur_lvl = Some(idx);
+                        lvl_bu_font = None;
                         if let Some(a) = get_attr(&e, "algn") {
                             levels[idx].algn = Some(parse_alignment_attr(&a));
+                        }
+                        if s_phbullet {
+                            let emu = |k: &str| {
+                                get_attr(&e, k).and_then(|v| v.parse::<f32>().ok()).map(emu_to_pt)
+                            };
+                            levels[idx].own_mar_l = emu("marL");
+                            levels[idx].own_indent = emu("indent");
+                        }
+                    }
+                    "spcBef" if in_lst && s_phbullet => in_spc_bef_lvl = true,
+                    "spcPct" if in_spc_bef_lvl && cur_lvl.is_some() => {
+                        if let (Some(idx), Some(x)) =
+                            (cur_lvl, get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()))
+                        {
+                            levels[idx].spc_bef_pct = Some(x / 100000.0);
+                        }
+                    }
+                    "spcPts" if in_spc_bef_lvl && cur_lvl.is_some() => {
+                        if let (Some(idx), Some(x)) =
+                            (cur_lvl, get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()))
+                        {
+                            levels[idx].spc_bef_pts = Some(x / 100.0);
+                        }
+                    }
+                    "buFont" if in_lst && s_phbullet && cur_lvl.is_some() => {
+                        lvl_bu_font = get_attr(&e, "typeface").filter(|t| !t.is_empty());
+                    }
+                    "buChar" if in_lst && s_phbullet && cur_lvl.is_some() => {
+                        if let (Some(idx), Some(c)) =
+                            (cur_lvl, get_attr(&e, "char").and_then(|c| c.chars().next()))
+                        {
+                            levels[idx].bullet = SlideBullet::Char { ch: c, font: lvl_bu_font.take() };
+                        }
+                    }
+                    "buNone" if in_lst && s_phbullet && cur_lvl.is_some() => {
+                        if let Some(idx) = cur_lvl {
+                            levels[idx].bullet = SlideBullet::None;
+                        }
+                    }
+                    "buAutoNum" if in_lst && s_phbullet && cur_lvl.is_some() => {
+                        if let Some(idx) = cur_lvl {
+                            let kind = get_attr(&e, "type").unwrap_or_else(|| "arabicPeriod".to_string());
+                            let start_at = get_attr(&e, "startAt").and_then(|v| v.parse::<u32>().ok());
+                            levels[idx].bullet = SlideBullet::AutoNum { kind, start_at };
                         }
                     }
                     "spcPct" if in_lst && in_ln_spc_lvl && cur_lvl.is_some() => {
@@ -612,6 +692,7 @@ fn parse_layout_ph_lststyles(
                 }
                 "highlight" if in_lvl_highlight => in_lvl_highlight = false,
                 "lnSpc" => in_ln_spc_lvl = false,
+                "spcBef" => in_spc_bef_lvl = false,
                 "lstStyle" => in_lst = false,
                 "sp" => {
                     if in_sp && !levels.is_empty() {
@@ -1110,6 +1191,13 @@ fn parse_slide(
     let mut shape_anchor: Option<String> = None;
     let mut shape_wrap = true;
     let mut shape_spc_first_last = false;
+    // `a:bodyPr/a:normAutofit` (fontScale, lnSpcReduction) of the open shape.
+    let mut shape_autofit: Option<(f32, f32)> = None;
+    // `spPr/a:ln/a:noFill` of the open shape: an outline the shape turns OFF.
+    // The width may still be stated (`<a:ln w="12700"><a:noFill/></a:ln>`), and
+    // a width with no colour is stroked black downstream.
+    let mut shape_ln_nofill = false;
+    let s_lnnofill = std::env::var("OXI_LNNOFILL_DISABLE").is_err();
 
     // Shape property context tracking
     let mut in_sp_pr = false; // inside <p:spPr> or <xdr:spPr>
@@ -1809,6 +1897,16 @@ fn parse_slide(
                     }
                     // `a:prstTxWarp` is normally self-closing, so both arms
                     // route here (the Start/Empty trap this file keeps).
+                    "normAutofit" if in_shape => {
+                        let frac = |k: &str| {
+                            get_attr(&e, k).and_then(|v| v.parse::<f32>().ok()).map(|v| v / 100000.0)
+                        };
+                        let fs = frac("fontScale").unwrap_or(1.0);
+                        let red = frac("lnSpcReduction").unwrap_or(0.0);
+                        if fs < 1.0 || red > 0.0 {
+                            shape_autofit = Some((fs, red));
+                        }
+                    }
                     "prstTxWarp" if in_body_pr => {
                         shape_text_warp = get_attr(&e, "prst");
                     }
@@ -2305,6 +2403,7 @@ fn parse_slide(
                             ),
                         });
                     }
+                    "noFill" if in_ln && in_sp_pr && s_lnnofill => shape_ln_nofill = true,
                     "ln" if in_sp_pr => {
                         // Empty <a:ln/> — no border content, just attributes
                         shape_border_dash = None;
@@ -2519,6 +2618,16 @@ fn parse_slide(
                     // `<a:prstTxWarp prst="textPlain"/>` is self-closing, so
                     // THIS is the arm that fires; the Start arm above exists
                     // only for the rare form with children.
+                    "normAutofit" if in_shape => {
+                        let frac = |k: &str| {
+                            get_attr(&e, k).and_then(|v| v.parse::<f32>().ok()).map(|v| v / 100000.0)
+                        };
+                        let fs = frac("fontScale").unwrap_or(1.0);
+                        let red = frac("lnSpcReduction").unwrap_or(0.0);
+                        if fs < 1.0 || red > 0.0 {
+                            shape_autofit = Some((fs, red));
+                        }
+                    }
                     "prstTxWarp" if in_body_pr => {
                         shape_text_warp = get_attr(&e, "prst");
                     }
@@ -3002,9 +3111,17 @@ fn parse_slide(
                             content,
                             fill_color: shape_fill_color.take(),
                             fill_alpha: shape_fill_alpha.take(),
-                            border_color: shape_border_color.take(),
+                            border_color: shape_border_color
+                                .take()
+                                .filter(|_| !shape_ln_nofill),
                             border_alpha: shape_border_alpha.take(),
-                            border_width: shape_border_width.take(),
+                            // The flag is cleared whether or not a width was
+                            // stated: a `filter` closure would only run on
+                            // Some and leak "no outline" to the next shape.
+                            border_width: {
+                                let off = std::mem::take(&mut shape_ln_nofill);
+                                shape_border_width.take().filter(|_| !off)
+                            },
                             border_dash: shape_border_dash.take(),
                             head_end: shape_head_end.take(),
                             tail_end: shape_tail_end.take(),
@@ -3041,6 +3158,7 @@ fn parse_slide(
                                 &mut cg_unsupported,
                             ),
                             shadow: shape_shadow.take(),
+                            norm_autofit: shape_autofit.take(),
                         });
                         in_shape = false;
                     }
@@ -3185,9 +3303,17 @@ fn parse_slide(
                             content,
                             fill_color: shape_fill_color.take(),
                             fill_alpha: shape_fill_alpha.take(),
-                            border_color: shape_border_color.take(),
+                            border_color: shape_border_color
+                                .take()
+                                .filter(|_| !shape_ln_nofill),
                             border_alpha: shape_border_alpha.take(),
-                            border_width: shape_border_width.take(),
+                            // The flag is cleared whether or not a width was
+                            // stated: a `filter` closure would only run on
+                            // Some and leak "no outline" to the next shape.
+                            border_width: {
+                                let off = std::mem::take(&mut shape_ln_nofill);
+                                shape_border_width.take().filter(|_| !off)
+                            },
                             border_dash: shape_border_dash.take(),
                             head_end: shape_head_end.take(),
                             tail_end: shape_tail_end.take(),
@@ -3206,6 +3332,7 @@ fn parse_slide(
                                 &mut cg_unsupported,
                             ),
                             shadow: shape_shadow.take(),
+                            norm_autofit: None,
                         });
                     }
                     "r" | "fld" if in_run => {
@@ -4087,6 +4214,7 @@ fn parse_inherited_shapes(
                                             })
                                         },
                                         shadow: ig_shadow.take(),
+                                        norm_autofit: None,
                                         });
                                 }
                             }
@@ -4943,6 +5071,15 @@ fn merge_ph_levels(
                 highlight: l.highlight.clone().or(m.highlight.clone()),
                 italic: l.italic || m.italic,
                 bold: l.bold.or(m.bold),
+                spc_bef_pct: l.spc_bef_pct.or(m.spc_bef_pct),
+                spc_bef_pts: l.spc_bef_pts.or(m.spc_bef_pts),
+                own_mar_l: l.own_mar_l.or(m.own_mar_l),
+                own_indent: l.own_indent.or(m.own_indent),
+                bullet: if matches!(l.bullet, SlideBullet::Inherit) {
+                    m.bullet.clone()
+                } else {
+                    l.bullet.clone()
+                },
                 ..l
             }
         })
@@ -5727,9 +5864,64 @@ fn scheme_color_to_hex(scheme: &str) -> String {
     .to_string()
 }
 
+/// Bake `a:normAutofit` into the text it shrinks.
+///
+/// PowerPoint saves the shrink it computed for an overfull "shrink text on
+/// overflow" box as `fontScale` / `lnSpcReduction`; it draws every run at its
+/// effective size times `fontScale` and every percentage line spacing reduced
+/// by `lnSpcReduction`. The effective size is resolved exactly the way the
+/// consumers resolve it -- the run's own size, else its outline level's (the
+/// shape's placeholder chain over the master txStyles list for its kind), else
+/// 18pt -- and written back as the run's explicit size, so no consumer has to
+/// know about the shrink. `OXI_AUTOFIT_DISABLE` leaves the text unshrunk.
+fn apply_norm_autofit(pres: &mut Presentation) {
+    if std::env::var("OXI_AUTOFIT_DISABLE").is_ok() {
+        return;
+    }
+    let styles = pres.master_styles.clone();
+    for slide in &mut pres.slides {
+        for sh in &mut slide.shapes {
+            let Some((scale, red)) = sh.norm_autofit else { continue };
+            let master: &[MasterStyleLevel] = match sh.ph_type.as_deref() {
+                Some("title") | Some("ctrTitle") => &styles.title,
+                Some(_) => &styles.body,
+                None => &styles.other,
+            };
+            let ph_levels = sh.ph_levels.clone();
+            let paragraphs = match &mut sh.content {
+                ShapeContent::TextBox { paragraphs } | ShapeContent::AutoShape { paragraphs } => {
+                    paragraphs
+                }
+                _ => continue,
+            };
+            // PowerPoint draws the scaled size rounded half-up to a whole
+            // point: probe autofit_snap, 8 base sizes x 9 stored scales, all
+            // 72 PDF span sizes = round(base * fontScale) (7.5 -> 8,
+            // 15.4 -> 15, 49.95 -> 50).
+            let snap = |pt: f32| (((pt * scale) * 1000.0).round() / 1000.0 + 0.5).floor().max(1.0);
+            for para in paragraphs.iter_mut() {
+                let m = crate::layout::resolve_level(master, &ph_levels, para.lvl);
+                let base = m.font_size.unwrap_or(18.0);
+                for run in para.runs.iter_mut() {
+                    run.font_size = Some(snap(run.font_size.unwrap_or(base)));
+                }
+                para.end_para_size = Some(snap(para.end_para_size.unwrap_or(base)));
+                if red > 0.0 && para.line_spacing_pts.is_none() {
+                    let ls = para.line_spacing.or(m.line_spacing).unwrap_or(1.0);
+                    para.line_spacing = Some((ls - red).max(0.0));
+                }
+            }
+        }
+    }
+}
+
 /// Parse a .pptx file from raw bytes into a Presentation IR.
 pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
     let mut archive = OoxmlArchive::new(data)?;
+    // Resolve style references, colour modifiers, the colour map, bgRef and
+    // theme-font tokens in every slide/layout/master before anything reads
+    // them (see `normalize`).
+    crate::normalize::normalize_archive(&mut archive);
 
     // 1. Parse presentation.xml for slide list and slide size
     let pres_xml = archive.read_part("ppt/presentation.xml")?;
@@ -5835,7 +6027,7 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         }
     }
 
-    Ok(Presentation {
+    let mut pres = Presentation {
         slides,
         slide_width,
         slide_height,
@@ -5844,7 +6036,9 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         theme_colors,
         master_styles,
         embedded_fonts,
-    })
+    };
+    apply_norm_autofit(&mut pres);
+    Ok(pres)
 }
 
 #[cfg(test)]
@@ -6065,6 +6259,47 @@ mod tests {
             &HashMap::new(),
         )
         .expect("slide must parse")
+    }
+
+    #[test]
+    fn an_outline_turned_off_stays_on_its_own_shape() {
+        // fontembedwin s27: a homePlate with `<a:ln><a:noFill/></a:ln>` (no
+        // width) followed by a connector with a real 0.75pt line. The "no
+        // outline" flag must not leak onto the connector.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+ <p:cSld><p:spTree>
+  <p:sp><p:nvSpPr><p:cNvPr id="2" name="a"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+   <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>
+    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>
+    <a:ln><a:noFill/></a:ln></p:spPr></p:sp>
+  <p:cxnSp><p:nvCxnSpPr><p:cNvPr id="3" name="b"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+   <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="914400"/></a:xfrm>
+    <a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom><a:noFill/>
+    <a:ln w="9525"><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></a:ln></p:spPr></p:cxnSp>
+  <p:sp><p:nvSpPr><p:cNvPr id="4" name="c"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+   <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>
+    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+    <a:ln w="12700"><a:noFill/></a:ln></p:spPr></p:sp>
+ </p:spTree></p:cSld>
+</p:sld>"#;
+        let mut ar = archive_of("ppt/slides/slide1.xml", xml);
+        let s = parse_slide(
+            xml,
+            SlidePos { index: 1, first_slide_num: 1 },
+            &mut ar,
+            "ppt/slides/_rels/slide1.xml.rels",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect("slide must parse");
+        assert_eq!(s.shapes[0].border_width, None);
+        assert_eq!(s.shapes[1].border_color.as_deref(), Some("00FF00"));
+        assert_eq!(s.shapes[1].border_width, Some(0.75));
+        // a stated width under noFill is no outline either
+        assert_eq!((s.shapes[2].border_width, s.shapes[2].border_color.as_deref()), (None, None));
     }
 
     fn only_text(s: &Slide) -> String {

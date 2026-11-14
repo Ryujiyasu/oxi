@@ -61,6 +61,19 @@ thread_local! {
 /// or an overhanging shadow is not clipped.
 const PAD: f32 = 8.0;
 
+/// Release the COM factories and the rasters while COM is still up.
+///
+/// Left to themselves they are released by the main thread's TLS destructor,
+/// which runs during process detach after COM has been torn down -- the
+/// `Release` then faults and the process exits 0xC0000005 after every slide
+/// was already written (10 of the 64 dev decks, all of them decks that draw a
+/// colour glyph). `main` calls this before returning.
+pub fn shutdown() {
+    CACHE.with(|c| c.borrow_mut().clear());
+    // `Some(None)` = "already tried": nothing is rebuilt after shutdown.
+    FACTORIES.with(|c| *c.borrow_mut() = Some(None));
+}
+
 fn factories<R>(f: impl FnOnce(&Factories) -> R) -> Option<R> {
     FACTORIES.with(|cell| {
         let mut slot = cell.borrow_mut();

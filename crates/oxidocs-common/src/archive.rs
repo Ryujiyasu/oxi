@@ -48,6 +48,9 @@ fn clamp_eocd_comment(data: &mut [u8]) -> bool {
 /// Generic OOXML archive wrapper for reading parts from ZIP files
 pub struct OoxmlArchive {
     archive: ZipArchive<Cursor<Vec<u8>>>,
+    /// Text parts a consumer has rewritten in memory (e.g. a pre-pass that
+    /// resolves indirections); reads return these instead of the zip entry.
+    overrides: std::collections::HashMap<String, String>,
 }
 
 impl OoxmlArchive {
@@ -64,11 +67,20 @@ impl OoxmlArchive {
             )));
         }
 
-        Ok(Self { archive })
+        Ok(Self { archive, overrides: Default::default() })
+    }
+
+    /// Replace what later reads of the text part `name` return. The zip
+    /// itself is untouched.
+    pub fn set_part_override(&mut self, name: &str, xml: String) {
+        self.overrides.insert(name.to_string(), xml);
     }
 
     /// Read a text part from the archive with size validation
     pub fn read_part(&mut self, name: &str) -> Result<String, OxiError> {
+        if let Some(s) = self.overrides.get(name) {
+            return Ok(s.clone());
+        }
         let mut file = self
             .archive
             .by_name(name)

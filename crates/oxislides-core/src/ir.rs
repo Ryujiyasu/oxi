@@ -94,6 +94,20 @@ pub struct MasterStyleLevel {
     /// advance (e.g. 0.2 = 20000). None = no spcBef on this level.
     #[serde(default)]
     pub spc_bef_pct: Option<f32>,
+    /// a:spcBef/a:spcPts val/100 -- space-before in points. The Office default
+    /// master's body levels say `spcPts 1000` (10pt). `spc_bef_pct` wins when
+    /// a level states both forms (it cannot; the schema allows one).
+    #[serde(default)]
+    pub spc_bef_pts: Option<f32>,
+    /// A PLACEHOLDER level's own `@marL` / `@indent` in points, None when the
+    /// level does not state one (so it inherits). `mar_l` / `indent` above are
+    /// the master txStyles values, where an absent attribute simply means 0.
+    /// The Office title layout's subtitle states `marL="0" indent="0"` over a
+    /// master body level of 0.25in / -0.25in.
+    #[serde(default)]
+    pub own_mar_l: Option<f32>,
+    #[serde(default)]
+    pub own_indent: Option<f32>,
     /// a:defRPr/@sz in points — the placeholder default font size for this
     /// outline level. None = no explicit size (engine default 18pt applies).
     /// Word render-truth (phfs probe, 2026-08): a body placeholder inherits
@@ -503,6 +517,14 @@ pub struct Shape {
     /// native aspect (portrait 977x1350 into a 297x282pt box).
     #[serde(default)]
     pub fill_rect: Option<(f32, f32, f32, f32)>,
+    /// `a:bodyPr/a:normAutofit` as (fontScale, lnSpcReduction), both as
+    /// fractions (0.625, 0.2). PowerPoint stores the shrink it computed for an
+    /// overfull "shrink text on overflow" box here. The parser applies it to
+    /// the runs' sizes and the paragraphs' line spacing at the end of
+    /// `parse_pptx`, so consumers read already-shrunk text; the value is kept
+    /// for an editor that needs to know the box shrinks.
+    #[serde(default)]
+    pub norm_autofit: Option<(f32, f32)>,
 }
 
 /// `a:custGeom` — one or more closed/open outlines in their own coordinate

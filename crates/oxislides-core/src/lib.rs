@@ -7,6 +7,7 @@ pub mod font_adv;
 pub mod font_adv_local;
 pub mod ir;
 pub mod layout;
+mod normalize;
 pub mod parser;
 
 pub use editor::PptxEditor;

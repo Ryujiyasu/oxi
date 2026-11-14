@@ -1518,6 +1518,19 @@ pub fn resolve_level(
         if l.bold.is_some() {
             m.bold = l.bold;
         }
+        if let Some(v) = l.own_mar_l {
+            m.mar_l = v;
+        }
+        if let Some(v) = l.own_indent {
+            m.indent = v;
+        }
+        if !matches!(l.bullet, crate::ir::SlideBullet::Inherit) {
+            m.bullet = l.bullet.clone();
+        }
+        if l.spc_bef_pct.is_some() || l.spc_bef_pts.is_some() {
+            m.spc_bef_pct = l.spc_bef_pct;
+            m.spc_bef_pts = l.spc_bef_pts;
+        }
     }
     m
 }
@@ -2058,6 +2071,7 @@ pub fn layout_text_shape(
             cursor += para
                 .space_before
                 .or_else(|| level.spc_bef_pct.map(|p| p * adv))
+                .or(level.spc_bef_pts)
                 .unwrap_or(0.0);
         }
 
