@@ -14151,6 +14151,16 @@ pub fn serialize_cell_font(style: &CellStyle) -> String {
     font_xml(style)
 }
 
+/// Serialize a cell fill with the same defaults used for saved resources.
+pub fn serialize_cell_fill(style: &CellStyle) -> String {
+    fill_xml(style)
+}
+
+/// Serialize a cell border with the same defaults used for saved resources.
+pub fn serialize_cell_border(style: &CellStyle) -> String {
+    border_xml(style)
+}
+
 fn font_xml(style: &CellStyle) -> String {
     let mut font = String::from("<font>");
     if style.bold {
@@ -24119,5 +24129,22 @@ mod installed_external_formula_map_tests {
         let unchanged=map_imported_part_formulas(&package,&[sheet.into()],|units|Ok(units.to_vec())).unwrap();
         assert_eq!(unchanged,package);
         assert!(map_imported_part_formulas(&package,&[sheet.into()],|_|Err(XlsxError::InvalidData("stop".into()))).is_err());
+    }
+}
+
+#[cfg(test)]
+mod serialized_style_component_tests {
+    use super::*;
+
+    #[test]
+    fn default_fill_presence_is_equal_but_real_fill_and_border_edits_differ() {
+        let plain=CellStyle::default();let mut explicit=plain.clone();
+        explicit.pattern_fill=Some(Box::new(crate::ir::CellFill::default()));
+        assert_eq!(serialize_cell_fill(&plain),serialize_cell_fill(&explicit));
+        assert_eq!(serialize_cell_border(&plain),serialize_cell_border(&explicit));
+        explicit.pattern_fill=None;explicit.bg_color=Some("123456".into());
+        assert_ne!(serialize_cell_fill(&plain),serialize_cell_fill(&explicit));
+        explicit.border_top=Some(crate::ir::BorderLine {style:"thin".into(),color:Some("000000".into()),color_reference:None});
+        assert_ne!(serialize_cell_border(&plain),serialize_cell_border(&explicit));
     }
 }

@@ -47227,32 +47227,83 @@ fn inherit_implicit_font_color(style: &mut CellStyle, normal: &CellStyle) {
     }
 }
 
-/// Older editing views omit a wholly inherited cell font. Resolve that
-/// omission on the export copy; explicit font resources and edited groups
-/// retain their own values and provenance.
-fn resolve_implicit_cell_styles(workbook: &mut Workbook) {
-    let empty = Dress::of_style(&CellStyle::default());
-    let normal = workbook.default_style.clone();
-    let font = Dress::of_style(&normal);
-    for cell in workbook.sheets.iter_mut().flat_map(|sheet| &mut sheet.rows).flat_map(|row| &mut row.cells) {
-        if cell.style.normal_font_link.is_none() && cell.style.named_font_link.is_none()
-            && cell.style.format_reference.is_none() && Dress::of_style(&cell.style) == empty {
-            font.write_font(&mut cell.style);
-            cell.style.normal_font_link = normal.normal_font_link;
-            cell.style.named_font_link = normal.named_font_link;
-            cell.style.format_reference = normal.format_reference.clone();
-            // Keep editor changes to other groups when adding the missing
-            // inheritance record. Its flags must describe those changes too.
-            for part in [oxicells_core::ir::CellFormatComponent::NumberFormat,
-                oxicells_core::ir::CellFormatComponent::Fill, oxicells_core::ir::CellFormatComponent::Border,
-                oxicells_core::ir::CellFormatComponent::Alignment, oxicells_core::ir::CellFormatComponent::Protection] {
-                if !WorkbookHost::same_style_group(&cell.style, &normal, part) {
-                    cell.style.format_reference.get_or_insert_with(Default::default).mark(part);
-                }
-            }
-        } else {
-            inherit_implicit_font_color(&mut cell.style, &normal);
+/// Complete an older editor font before allocating its saved resource.
+/// Missing fields inherit the default font; explicit values stay explicit.
+fn complete_implicit_font(style: &mut CellStyle, normal: &CellStyle) {
+    inherit_implicit_font_color(style, normal);
+    if style.latin_font_units().is_none()
+        && style.font_reference.as_ref().and_then(|reference|reference.scheme.as_ref()).is_none() {
+        style.font_name=normal.font_name.clone();
+        if let Some(source)=normal.font_reference.as_ref() {
+            let reference=style.font_reference.get_or_insert_with(Default::default);
+            reference.latin_name=source.latin_name.clone();
+            reference.latin_name_utf16=source.latin_name_utf16.clone();
+            reference.scheme=source.scheme.clone();
         }
+    }
+    style.font_size=style.font_size.or(normal.font_size);
+    if style.latin_font_name()==normal.latin_font_name() {
+        style.font_family=style.font_family.or(normal.font_family);
+        style.font_charset=style.font_charset.or(normal.font_charset);
+    } else if let Some(face)=style.latin_font_name() {
+        let (family,charset)=requested_font_metadata(face);
+        style.font_family=style.font_family.or(family).or(normal.font_family);
+        style.font_charset=style.font_charset.or(charset);
+    }
+}
+
+/// Resource defaults have canonical XML forms. An omitted fill and an
+/// explicit empty fill must not become a spurious application flag.
+fn same_export_style_group(left: &CellStyle, right: &CellStyle,
+    part: oxicells_core::ir::CellFormatComponent) -> bool {
+    use oxicells_core::ir::CellFormatComponent::*;
+    match part {
+        Font=>oxicells_core::editor::serialize_cell_font(left)==oxicells_core::editor::serialize_cell_font(right),
+        Fill=>oxicells_core::editor::serialize_cell_fill(left)==oxicells_core::editor::serialize_cell_fill(right),
+        Border=>oxicells_core::editor::serialize_cell_border(left)==oxicells_core::editor::serialize_cell_border(right),
+        _=>WorkbookHost::same_style_group(left,right,part),
+    }
+}
+
+/// Older views can omit font resources and application flags. Resolve them
+/// before execution as well as saving, so a later Normal edit cannot change
+/// a font that was already edited independently. Keep known identities intact.
+fn resolve_implicit_cell_styles(workbook: &mut Workbook) {
+    use oxicells_core::ir::CellFormatComponent::*;
+    let empty=Dress::of_style(&CellStyle::default());
+    let fallback=workbook.default_style.clone();
+    let normal=workbook.named_styles.iter().find(|style|style.builtin_id==Some(0));
+    let parent=normal.map_or(0,|style|style.source_id);
+    let normal=normal.map_or(&fallback,|style|&style.style).clone();
+    for sheet in &mut workbook.sheets {
+        let bands=&sheet.band_styles;
+        for row in &mut sheet.rows { for cell in &mut row.cells {
+            if cell.style.normal_font_link.is_some() || cell.style.named_font_link.is_some()
+                || cell.style.format_reference.is_some() {continue;}
+            // This is the same row/column/sheet precedence as template_style.
+            let mut default=bands.rows.get(&row.index).or_else(||bands.columns.get(&cell.col))
+                .or(bands.sheet.as_ref()).unwrap_or(&fallback).clone();
+            if default.normal_font_link.is_none() && default.named_font_link.is_none()
+                && default.format_reference.is_none() {complete_implicit_font(&mut default,&fallback);}
+            if Dress::of_style(&cell.style)==empty {Dress::of_style(&default).write_font(&mut cell.style);}
+            complete_implicit_font(&mut cell.style,&default);
+            let font_changed=!same_export_style_group(&cell.style,&default,Font);
+            let mut reference=if let Some(reference)=default.format_reference.as_deref() {reference.clone()}
+                else {
+                    let mut reference=oxicells_core::ir::CellFormatReference::for_style(parent);
+                    for part in [NumberFormat,Font,Fill,Border,Alignment,Protection] {
+                        if !same_export_style_group(&default,&normal,part) {reference.mark(part);}
+                    }
+                    reference
+                };
+            for part in [NumberFormat,Font,Fill,Border,Alignment,Protection] {
+                if !same_export_style_group(&cell.style,&default,part) {reference.mark(part);}
+            }
+            cell.style.normal_font_link=Some(!font_changed && default.normal_font_link
+                .unwrap_or_else(||same_export_style_group(&cell.style,&normal,Font)));
+            cell.style.named_font_link=if font_changed {None}else{default.named_font_link};
+            cell.style.format_reference=Some(Box::new(reference));
+        }}
     }
 }
 
@@ -47288,7 +47339,10 @@ fn package_has_styles(package: &[u8]) -> Result<bool, String> {
 fn initialize_initial_caller_styles(
     workbook: &mut Workbook, package: &[u8], application_font: &CellStyle,
 ) -> Result<bool, String> {
-    if package_has_styles(package)? { return Ok(false); }
+    if package_has_styles(package)? {
+        resolve_implicit_cell_styles(workbook);
+        return Ok(false);
+    }
     let original = oxicells_core::parse_xlsx_preserving_values(package)
         .map_err(|error| error.to_string())?;
     let mut loaded = original.clone();
@@ -47303,12 +47357,27 @@ fn initialize_initial_caller_styles(
     } else if Dress::of_style(&workbook.default_style)==Dress::of_style(&original.default_style) {
         Dress::of_style(&wanted).write_font(&mut workbook.default_style);
     }
-    inherit_implicit_font_color(&mut workbook.default_style, &loaded.default_style);
+    if workbook.default_style.normal_font_link.is_none() && workbook.default_style.named_font_link.is_none()
+        && workbook.default_style.format_reference.is_none() {
+        complete_implicit_font(&mut workbook.default_style,&loaded.default_style);
+        // A font-only edit to the implicit default still owns cell format 0
+        // and shares Normal's first font resource. Preserve non-font edits.
+        if [oxicells_core::ir::CellFormatComponent::NumberFormat,oxicells_core::ir::CellFormatComponent::Fill,
+            oxicells_core::ir::CellFormatComponent::Border,oxicells_core::ir::CellFormatComponent::Alignment,
+            oxicells_core::ir::CellFormatComponent::Protection].into_iter()
+            .all(|part|same_export_style_group(&workbook.default_style,&original.default_style,part)) {
+            workbook.default_style.normal_font_link=loaded.default_style.normal_font_link;
+            workbook.default_style.format_reference=loaded.default_style.format_reference.clone();
+        }
+    }
     if let Some(normal)=workbook.named_styles.iter_mut().find(|style|style.builtin_id==Some(0)) {
         if Dress::of_style(&normal.style)==Dress::of_style(old_normal) {
             Dress::of_style(&workbook.default_style).write_font(&mut normal.style);
         } else {
-            inherit_implicit_font_color(&mut normal.style, &loaded.default_style);
+            if normal.style.normal_font_link.is_none() && normal.style.named_font_link.is_none()
+                && normal.style.format_reference.is_none() {
+                complete_implicit_font(&mut normal.style,&loaded.default_style);
+            }
         }
     } else {
         let mut normal=loaded.named_styles.iter().find(|style|style.builtin_id==Some(0))
@@ -47344,6 +47413,7 @@ fn initialize_initial_caller_styles(
             sheet.default_row_height=height;
         }
     }
+    resolve_implicit_cell_styles(workbook);
     Ok(true)
 }
 
@@ -143970,6 +144040,7 @@ End Function"#;
         let normal=workbook.default_style.clone();
         let row=&mut workbook.sheets[0].rows[0];
         assert!(row.cells.len()>=3);
+        for cell in &mut row.cells[..3] {cell.style=CellStyle::default();}
         row.cells[0].style.bg_color=Some("123456".into());
         row.cells[1].style.font_name=Some("Arial".into());
         row.cells[1].style.font_size=Some(17.0);
@@ -143982,11 +144053,49 @@ End Function"#;
         assert_eq!(row.cells[0].style.format_reference.as_ref().unwrap().style_id,
             normal.format_reference.as_ref().unwrap().style_id);
         assert_eq!(row.cells[0].style.format_reference.as_ref().unwrap().fill,Some(true));
-        assert_eq!(row.cells[1].style,explicit);
+        assert_eq!(row.cells[1].style.font_name,explicit.font_name);
+        assert_eq!(row.cells[1].style.font_size,explicit.font_size);
+        assert_eq!(row.cells[1].style.font_color,normal.font_color);
+        assert_eq!(row.cells[1].style.format_reference.as_ref().unwrap().font,Some(true));
+        assert_eq!(row.cells[1].style.format_reference.as_ref().unwrap().fill,None);
+        assert_eq!(row.cells[1].style.format_reference.as_ref().unwrap().border,None);
         assert_eq!(row.cells[2].style,detached);
         let before=serde_json::to_value(&workbook).unwrap();
         resolve_implicit_cell_styles(&mut workbook);
         assert_eq!(serde_json::to_value(&workbook).unwrap(),before);
+    }
+
+    #[test]
+    fn initial_editor_font_edits_keep_their_resource_when_normal_changes() {
+        let package=include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        for kind in 0..4 {
+            let mut incoming=oxicells_core::parse_xlsx_preserving_values(package).unwrap();
+            let style=&mut incoming.sheets[0].rows[0].cells[0].style;
+            match kind {
+                0=>style.font_size=Some(17.0),
+                1=>{style.font_name=Some("Arial".into());style.font_size=Some(17.0);},
+                2=>{},
+                _=>style.font_color=Some("000000".into()),
+            }
+            let changed_to=if kind==1 {"Verdana"}else{"Arial"};
+            let source=format!(r#"Public Function ChangeNormal() As Variant
+                beforeName = Range("A1").Font.Name
+                ActiveWorkbook.Styles("Normal").Font.Name = "{changed_to}"
+                ChangeNormal = Array(beforeName, Range("A1").Font.Name, Range("A1").Font.Size)
+            End Function"#);
+            let mut context=failure_context();
+            context.file_context=Some(file_io::FileContext {
+                package_bytes:Some(package.to_vec()),full_name:Some(r"C:\work\original.xlsx".into()),
+                read_only:Some(true),folders:vec![r"C:\work".into()],..Default::default()
+            });
+            let result=execute_workbook_action_in_session(incoming,&source,Some("ChangeNormal"),vec![],0,context,&mut None).unwrap();
+            assert!(result.error.is_none());
+            let value=serde_json::to_value(&result.result).unwrap();let values=value["value"]["values"].as_array().unwrap();
+            let original=if kind==1 {"Arial"}else{"\u{6e38}\u{30b4}\u{30b7}\u{30c3}\u{30af}"};
+            assert_eq!(values[0]["value"].as_str(),Some(original),"kind {kind}");
+            assert_eq!(values[1]["value"].as_str(),Some(if kind==2 {changed_to}else{original}),"kind {kind}");
+            assert_eq!(values[2]["value"].as_f64(),Some(if kind<2 {17.0}else{11.0}),"kind {kind}");
+        }
     }
 
     #[test]
@@ -144039,6 +144148,20 @@ End Function"#;
                     assert_eq!(cell.style.normal_font_link,Some(true));
                 },
             }
+            for (phase,book) in [("hot",outcome.workbook.clone()),("cold",saved.clone())] {
+                let mut context=failure_context();
+                context.file_context=Some(file_io::FileContext {
+                    package_bytes:Some(bytes.clone()),full_name:Some(r"C:\work\edited.xlsx".into()),
+                    read_only:Some(true),folders:vec![r"C:\work".into()],..Default::default()
+                });
+                let copied=execute_workbook_action_in_session(book,
+                    r#"Public Sub NoEdit()
+                        ActiveWorkbook.SaveCopyAs "C:\work\repeat.xlsx"
+                    End Sub"#,Some("NoEdit"),vec![],0,context,&mut None).unwrap();
+                assert!(copied.error.is_none(),"kind {kind}, {phase}");
+                assert_eq!(&copied.files.iter().find(|file|file.path==r"C:\work\repeat.xlsx").unwrap().bytes,
+                    bytes,"kind {kind}, {phase}: no-edit copies must retain the original bytes");
+            }
             if let Some(directory)=std::env::var_os("OXI_VBA_IMPLICIT_COPY_CAPTURE") {
                 std::fs::write(std::path::Path::new(&directory).join(format!("editor-{kind}.xlsx")),bytes).unwrap();
             }
@@ -144081,7 +144204,20 @@ End Function"#;
         workbook.sheets[0].column_width_font=Some("Arial".into());
         let rows=serde_json::to_value(&workbook.sheets[0].rows).unwrap();
         assert!(initialize_initial_caller_styles(&mut workbook,package,&default_application_font()).unwrap());
-        assert_eq!(serde_json::to_value(&workbook.sheets[0].rows).unwrap(),rows);
+        let strip_font_metadata=|mut rows:serde_json::Value| {
+            for row in rows.as_array_mut().unwrap() { for cell in row["cells"].as_array_mut().unwrap() {
+                let style=cell["style"].as_object_mut().unwrap();
+                for key in ["normal_font_link","named_font_link","format_reference","bold","italic","underline",
+                    "underline_kind","strikethrough","font_position","font_size","font_name","font_color",
+                    "font_family","font_charset","font_reference"] {style.remove(key);}
+            }}
+            rows
+        };
+        assert_eq!(strip_font_metadata(serde_json::to_value(&workbook.sheets[0].rows).unwrap()),strip_font_metadata(rows));
+        let edited=&workbook.sheets[0].rows[0].cells[0];
+        assert_eq!(edited.style.font_name.as_deref(),Some("Arial"));assert_eq!(edited.style.font_size,Some(17.0));
+        assert_eq!(edited.value,CellValue::String("edited".into()));
+        assert_eq!(workbook.sheets[0].rows[0].height,Some(28.0));assert!(workbook.sheets[0].rows[0].custom_height);
         assert_eq!(workbook.default_style.bg_color.as_deref(),Some("123456"));
         let normal=workbook.named_styles.iter().find(|style|style.builtin_id==Some(0)).unwrap();
         assert_eq!(normal.style.normal_font_link,None);
