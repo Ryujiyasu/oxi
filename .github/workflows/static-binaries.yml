@@ -41,9 +41,13 @@ jobs:
         run: |
           target/musl/release/oxidocs docx-to-pdf tests/fixtures/comprehensive_test.docx smoke.pdf
           target/musl/release/oxidocs docx-to-png --width 256 tests/fixtures/comprehensive_test.docx smoke.png
+          target/musl/release/oxidocs pptx-to-pdf tests/fixtures/multi_slide.pptx smoke-slides.pdf
+          target/musl/release/oxidocs pptx-to-png --width 256 tests/fixtures/multi_slide.pptx smoke-slides.png
           # The same binary on Alpine, with nothing else installed.
           docker run --rm -v "$PWD:/w" -w /w alpine:3 \
             target/musl/release/oxidocs docx-to-pdf tests/fixtures/comprehensive_test.docx smoke-alpine.pdf
+          docker run --rm -v "$PWD:/w" -w /w alpine:3 \
+            target/musl/release/oxidocs pptx-to-pdf tests/fixtures/multi_slide.pptx smoke-alpine-slides.pdf
       - name: Package
         run: |
           name="oxidocs-${{ matrix.arch }}-unknown-linux-musl"
