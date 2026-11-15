@@ -685,6 +685,7 @@ struct Checker<'a> {
     document_modules: Option<&'a BTreeMap<String, String>>,
     compilation_year: Option<i64>,
     variables: BTreeMap<String, Type>,
+    variable_storage: BTreeMap<String, TypeName>,
     fixed_arrays: BTreeSet<String>,
     functions: BTreeMap<String, Type>,
     constants: BTreeSet<String>,
@@ -745,6 +746,7 @@ impl<'a> Checker<'a> {
             document_modules: references.map(|r| r.documents),
             compilation_year: references.map(|r| r.current_year),
             variables: BTreeMap::new(),
+            variable_storage: BTreeMap::new(),
             fixed_arrays: BTreeSet::new(),
             functions: BTreeMap::new(),
             constants: BTreeSet::new(),
@@ -953,6 +955,7 @@ impl<'a> Checker<'a> {
                 .map(|name| checker.declared(name))
                 .unwrap_or(Type::Variant);
             checker.variables.insert(key(&procedure.name), result);
+            checker.variable_storage.insert(key(&procedure.name), procedure.return_type.clone().unwrap_or_else(TypeName::implicit));
             checker.declared_locals.insert(key(&procedure.name));
         }
         if let Some((name, _)) = classes
@@ -972,6 +975,9 @@ impl<'a> Checker<'a> {
             }
             checker.fixed_arrays.remove(&key(&param.name));
             checker.variables.insert(key(&param.name), kind);
+            let mut storage = param.type_name.clone();
+            storage.is_array |= param.is_array || param.mode == ParamMode::ParamArray;
+            checker.variable_storage.insert(key(&param.name), storage);
             checker.declared_locals.insert(key(&param.name));
         }
         if let Some(procedure) = procedure {
@@ -1431,6 +1437,62 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    fn scalar_storage_kind(&self, name: &TypeName) -> Option<&'static str> {
+        if name.is_array || name.name.ends_with("()") {
+            return None;
+        }
+        let key = self.source_type_key(&name.name);
+        match key.strip_prefix("vba.").unwrap_or(&key) {
+            "byte" => Some("byte"),
+            "integer" => Some("integer"),
+            "long" => Some("long"),
+            "longlong" | "longptr" => Some("longlong"),
+            "single" => Some("single"),
+            "double" => Some("double"),
+            "currency" => Some("currency"),
+            "date" => Some("date"),
+            "boolean" => Some("boolean"),
+            "string" => Some("string"),
+            "variant" => Some("variant"),
+            _ => None,
+        }
+    }
+
+    fn storage_declaration(&self, expr: &Expr) -> Option<TypeName> {
+        let record_field = |kind: Type, name: &str| {
+            let Type::Record(record) = kind else { return None };
+            let field = self.records.get(&record)?.fields.iter()
+                .find(|field| field.name.eq_ignore_ascii_case(name))?;
+            let mut declared = field.type_name.clone();
+            declared.is_array |= field.array_bounds.is_some();
+            Some(declared)
+        };
+        match expr {
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
+                let name = key(name);
+                if self.constant_expressions.contains_key(&name) {
+                    return None;
+                }
+                self.variable_storage.get(&name).cloned()
+            }
+            Expr::Member { object, name, .. } | Expr::Bang { object, name, .. } => {
+                record_field(self.infer(object), name)
+            }
+            Expr::WithMember(name, _) | Expr::WithBangMember(name, _) => {
+                record_field(self.with_types.last().cloned().unwrap_or(Type::Unknown), name)
+            }
+            Expr::Index { target, args, .. } if !args.is_empty() && matches!(self.infer(target), Type::Array { .. }) => {
+                let mut declared = self.storage_declaration(target)?;
+                declared.is_array = false;
+                if let Some(element) = declared.name.strip_suffix("()") {
+                    declared.name = element.to_string();
+                }
+                Some(declared)
+            }
+            _ => None,
+        }
+    }
+
     fn declared_array(&self, element: Type, name: &TypeName) -> Type {
         let key = self.source_type_key(name.name.strip_suffix("()").unwrap_or(&name.name));
         let byte_elements = element == Type::Scalar && matches!(key.as_str(), "byte" | "vba.byte");
@@ -1515,6 +1577,9 @@ impl<'a> Checker<'a> {
             self.fixed_arrays.insert(key(&variable.name));
         }
         self.variables.insert(key(&variable.name), kind);
+        let mut storage = variable.type_name.clone();
+        storage.is_array |= variable.array_bounds.is_some();
+        self.variable_storage.insert(key(&variable.name), storage);
         if is_const {
             self.constants.insert(key(&variable.name));
             if let Some(value) = &variable.value {
@@ -3619,6 +3684,19 @@ impl<'a> Checker<'a> {
                             if parameter.mode == ParamMode::ByRef && actual != declared {
                                 failure = Some(self.failure(CompileErrorKind::ByRefArgumentTypeMismatch, value.span()));
                                 return;
+                            }
+                        }
+                        if parameter.mode == ParamMode::ByRef && !parameter.is_array
+                            && !forced && !argument.force_by_value && !matches!(value, Expr::Group { .. })
+                        {
+                            if let (Some(expected), Some(actual)) = (
+                                self.scalar_storage_kind(&parameter.type_name),
+                                self.storage_declaration(value).as_ref().and_then(|kind| self.scalar_storage_kind(kind)),
+                            ) {
+                                if expected != "variant" && expected != actual {
+                                    failure = Some(self.failure(CompileErrorKind::ByRefArgumentTypeMismatch, value.span()));
+                                    return;
+                                }
                             }
                         }
                         if !parameter.is_array || parameter.mode == ParamMode::ParamArray {
@@ -6506,5 +6584,75 @@ mod native_local_declaration_order_tests {
             assert_eq!(error.vba_number, Some(1004), "{id}: {error:?}");
         }
         assert_eq!(MODULE_UNAVAILABLE_CASES.len(), 5);
+    }
+}
+
+#[cfg(test)]
+mod scalar_byref_tests {
+    use super::*;
+
+    #[test]
+    fn scalar_byref_arguments_use_native_declared_storage_types() {
+        let declarations = r#"Attribute VB_Name = "ByRefScalarOracle1299"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Private Function BumpLong(ByRef value As Long) As Long
+ value = value + 1: BumpLong = value
+End Function
+Private Function BumpValue(ByVal value As Long) As Long
+ value = value + 1: BumpValue = value
+End Function
+Private Function BumpVariant(ByRef value As Variant) As Long
+ value = CLng(value) + 1: BumpVariant = CLng(value)
+End Function
+Private Function BumpLongLong(ByRef value As LongLong) As Long
+ value = value + 1: BumpLongLong = CLng(value)
+End Function
+Private Function BumpLongPtr(ByRef value As LongPtr) As Long
+ value = value + 1: BumpLongPtr = CLng(value)
+End Function
+"#;
+        let cases = [
+            ("Long", "CLng(11)", "BumpLong(value)", false, "0|12|3|12|Long|3|2|ran"),
+            ("Variant", "CLng(11)", "BumpLong(value)", true, ""),
+            ("Variant", "CLng(11)", "BumpLong((value))", false, "0|12|3|11|Long|3|2|ran"),
+            ("Integer", "CInt(11)", "BumpLong(value)", true, ""),
+            ("Variant", "CInt(11)", "BumpValue(value)", false, "0|12|2|11|Integer|3|2|ran"),
+            ("Long", "CLng(11)", "BumpVariant(value)", false, "0|12|3|12|Long|3|2|ran"),
+            ("LongPtr", "CLngPtr(11)", "BumpLongLong(value)", false, "0|12|20|12|LongLong|3|2|ran"),
+            ("LongLong", "CLngLng(11)", "BumpLongPtr(value)", false, "0|12|20|12|LongLong|3|2|ran"),
+            ("Byte", "CByte(11)", "BumpLong(value)", true, ""),
+        ];
+        for (case, (declared, initial, call, rejected, expected)) in cases.iter().enumerate() {
+            let source = format!(r#"{declarations}Public Function Probe(ByVal mode As Long, ByVal binding As Long) As Variant
+ Dim value As {declared}, returned As Long
+ value = {initial}
+ On Error Resume Next
+ Err.Clear
+ returned = {call}
+ Probe = Array(Err.Number, returned, VarType(value), CStr(value), TypeName(value), VarType(returned), Len(CStr(value)), "ran")
+End Function
+
+"#);
+            let compiled = compile_project(&source);
+            if *rejected {
+                let failure = compiled.expect_err(&format!("Native case {case} must fail compilation"));
+                assert_eq!(failure.error.kind, CompileErrorKind::ByRefArgumentTypeMismatch, "case {case}");
+            } else {
+                compiled.unwrap();
+                let (module, classes) = crate::parse_project(&source).unwrap();
+                let mut runtime = crate::Runtime::new(&module).with_classes(&classes);
+                let value = runtime.call("ByRefScalarOracle1299.Probe", vec![Value::Integer(0), Value::Integer(0)]).unwrap();
+                let Value::Array(array) = value else { panic!("case {case}: expected array") };
+                let actual = array.values.iter().map(|value| match value {
+                    Value::Byte(n) => n.to_string(),
+                    Value::Int16(n) => n.to_string(),
+                    Value::Integer(n) | Value::LongLong(n) => n.to_string(),
+                    Value::String(text) => text.clone(),
+                    other => panic!("case {case}: unexpected field {other:?}"),
+                }).collect::<Vec<_>>().join("|");
+                assert_eq!(actual, *expected, "case {case}");
+            }
+        }
     }
 }
