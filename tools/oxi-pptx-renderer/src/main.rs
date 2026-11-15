@@ -7465,7 +7465,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // ---- major gridlines (behind the fills) ----
                         {
                             let grid_pen =
-                                CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                                CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                             let old_pen = SelectObject(mem_dc, grid_pen);
                             let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                             let gl = (plot_left * scale).round() as i32;
@@ -7589,7 +7589,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // ---- axis lines + ticks (on top of the fills) ----
                         {
                             let axis_pen =
-                                CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                                CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                             let old_pen = SelectObject(mem_dc, axis_pen);
                             let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                             let pl = (plot_left * scale).round() as i32;
@@ -8139,7 +8139,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
 
                         // Horizontal major gridlines, BEFORE the bubbles.
                         let grid_pen =
-                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                            CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                         let old_grid_pen = SelectObject(mem_dc, grid_pen);
                         let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                         let gl = (plot_left * scale).round() as i32;
@@ -8331,7 +8331,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // Axis lines + ticks (each axis rides the OTHER axis'
                         // zero crossing when that axis spans zero).
                         let axis_pen =
-                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                            CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                         let old_axis_pen = SelectObject(mem_dc, axis_pen);
                         let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                         let pl = (plot_left * scale).round() as i32;
@@ -8581,7 +8581,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // Horizontal major gridlines at the value ticks
                         // i=1..=y_steps, BEFORE the series.
                         let grid_pen =
-                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                            CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                         let old_grid_pen = SelectObject(mem_dc, grid_pen);
                         let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                         let gl = (plot_left * scale).round() as i32;
@@ -8799,7 +8799,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // plot_bot, plot top edge, Y ticks 0..=y_steps at
                         // plot_left-5.71, X ticks 0..=x_div at plot_bot+5.71.
                         let axis_pen =
-                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                            CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                         let old_axis_pen = SelectObject(mem_dc, axis_pen);
                         let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                         let pl = (plot_left * scale).round() as i32;
@@ -9906,7 +9906,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // section below), BEFORE the polyline.
                         let grid_pen = CreatePen(
                             PS_SOLID,
-                            2,
+                            chart_hair_px(scale),
                             COLORREF(colorref(0, 0, 0)),
                         );
                         let old_grid_pen = SelectObject(mem_dc, grid_pen);
@@ -10306,7 +10306,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // edge painted).
                         let axis_pen = CreatePen(
                             PS_SOLID,
-                            2,
+                            chart_hair_px(scale),
                             COLORREF(colorref(0, 0, 0)),
                         );
                         let old_axis_pen = SelectObject(mem_dc, axis_pen);
@@ -10538,7 +10538,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // ---- value-axis gridlines (vertical, behind the bars) ----
                         {
                             let grid_pen =
-                                CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                                CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                             let old_pen = SelectObject(mem_dc, grid_pen);
                             let _ =
                                 SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
@@ -10875,7 +10875,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // ---- axis lines + ticks ----
                         {
                             let axis_pen =
-                                CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                                CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                             let old_pen = SelectObject(mem_dc, axis_pen);
                             let _ =
                                 SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
@@ -11133,7 +11133,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         if axis_steps > 0 {
                             let grid_pen = CreatePen(
                                 PS_SOLID,
-                                2,
+                                chart_hair_px(scale),
                                 COLORREF(colorref(0, 0, 0)),
                             );
                             let old_grid_pen =
@@ -11769,7 +11769,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         //     CATEGORY BOUNDARIES, not the centres)
                         let axis_pen = CreatePen(
                             PS_SOLID,
-                            2,
+                            chart_hair_px(scale),
                             COLORREF(colorref(0, 0, 0)),
                         );
                         let old_axis_pen = SelectObject(mem_dc, axis_pen);
@@ -12781,6 +12781,20 @@ fn fmt_axis_value(v: f64, step: f64) -> String {
 /// closes to (56.28, 57.76] over all 19 measured points and 57.0 sits inside;
 /// the model then reproduces 19 of 19 (the earlier headroom-free model with a
 /// 53pt threshold reproduced 15).
+/// A chart's 0.75pt hairline (gridlines, axes, ticks, outlines) in device
+/// pixels. The chart painters used a fixed 2-pixel pen, which at the
+/// renderer's 150dpi x3 supersampling is 0.32pt: PowerPoint's PDF of every
+/// chart probe strokes these 0.75pt black (chart_negative: the gridline
+/// column reads 0 / 118 in PowerPoint's raster, 101 / 223 in Oxi's).
+/// `OXI_CHARTPEN_DISABLE=1` puts the 2-pixel pen back.
+fn chart_hair_px(scale: f64) -> i32 {
+    if std::env::var("OXI_CHARTPEN_DISABLE").is_ok() {
+        2
+    } else {
+        ((0.75 * scale).round() as i32).max(1)
+    }
+}
+
 /// `OXI_SURFACE_DISABLE=1` leaves surface charts to the generic fallback.
 fn surface_on() -> bool {
     std::env::var("OXI_SURFACE_DISABLE").is_err()
