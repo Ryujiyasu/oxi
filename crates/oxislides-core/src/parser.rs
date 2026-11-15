@@ -5874,6 +5874,17 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         }
     }
 
+    // A category cache may hold fewer points than the series has values: an
+    // empty cell is simply not written (`c:ptCount val="1"` + one `c:pt` over
+    // three values, chart_doughnut_wrap). PowerPoint still has one category
+    // per value -- the doughnut legend shows three swatches, two of them
+    // unnamed -- so pad the names with empties.
+    if std::env::var("OXI_CATPAD_DISABLE").is_err() {
+        let n_vals = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
+        if !categories.is_empty() && categories.len() < n_vals {
+            categories.resize(n_vals, String::new());
+        }
+    }
     Ok(Chart {
         val_min,
         val_max,
