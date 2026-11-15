@@ -13643,7 +13643,7 @@ pub(crate) fn call_builtin(
                     line,
                 ));
             }
-            return Ok(Value::Integer(0));
+            return Ok(Value::Int16(0));
         }
         if name == "qbcolor" {
             if args.len() != 1 {
@@ -25708,16 +25708,19 @@ Attribute VB_Name = "TextStream"
 
     #[test]
     fn doevents_returns_zero_for_the_browser_host() {
-        let value = run(
-            "Public Function PumpEvents() As String\n\
-               PumpEvents = DoEvents & \"|\" & DoEvents()\n\
-             End Function\n",
-            "PumpEvents",
-            vec![],
-        )
-        .unwrap();
-
-        assert_eq!(value, Value::String("0|0".to_string()));
+        // Excel 16.0.20527.20196 returns Variant/Integer zero for both forms.
+        // A declared Integer destination would hide the intrinsic's subtype.
+        for expression in ["DoEvents", "DoEvents()"] {
+            let source = format!(
+                "Public Function PumpEvents() As String\n\
+                   Dim result As Variant\n\
+                   result = {expression}\n\
+                   PumpEvents = CStr(result) & \"|\" & CStr(VarType(result)) & \"|\" & TypeName(result)\n\
+                 End Function\n"
+            );
+            let value = run(&source, "PumpEvents", vec![]).unwrap();
+            assert_eq!(value, Value::String("0|2|Integer".into()), "{expression}");
+        }
     }
 
     #[test]
