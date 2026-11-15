@@ -9,7 +9,9 @@ readme = "README.md"
 requires-python = ">=3.9"
 # The bundled oxidocs binary is MPL-2.0; this package's Python code is MIT OR Apache-2.0.
 license = "MPL-2.0 AND (MIT OR Apache-2.0)"
-dynamic = ["version"]
+# The engine inside is oxidocs 0.9.0 (its number is a measured score, see
+# CHANGELOG.md); a post-release marks a packaging-level addition on top of it.
+version = "0.9.0.post1"
 keywords = ["docx", "pptx", "pdf", "word", "powerpoint", "office", "converter", "libreoffice"]
 classifiers = [
     "Development Status :: 4 - Beta",
