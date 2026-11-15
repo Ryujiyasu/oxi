@@ -1,0 +1,77 @@
+name: OxiCells Python
+
+on:
+  pull_request:
+    paths:
+      - 'crates/oxicells-python/**'
+      - 'crates/oxidocs-cli/**'
+      - 'crates/oxidocs-wasm/**'
+      - 'crates/oxicells-core/**'
+      - 'crates/oxicells-calc/**'
+      - 'crates/oxivba-core/**'
+      - 'tests/fixtures/vba/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/oxicells-python.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oxicells-python-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
+jobs:
+  wheel:
+    name: Installed VBA wheel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: '3.12' }
+          - { os: windows-latest, python: '3.10' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: oxicells-python-${{ matrix.os }}
+      - run: python -m pip install 'maturin>=1.16,<2'
+      - name: Build the platform wheel
+        working-directory: crates/oxicells-python
+        run: >-
+          python -m maturin build --profile dev --locked --out dist
+          --config profile.test.package.oxivba-core.opt-level=1
+          --config profile.test.package.oxidocs-wasm.opt-level=1
+          --config profile.dev.package.oxivba-core.opt-level=1
+          --config profile.dev.package.oxidocs-wasm.opt-level=1
+      - name: Install only the OxiCells wheel
+        shell: bash
+        run: python -m pip install --no-deps crates/oxicells-python/dist/*.whl
+      - name: Exercise the installed Python API and native executable
+        env:
+          OXICELLS_TEST_INSTALLED: '1'
+          PYTHON: python
+        run: >-
+          cargo test --locked -p oxidocs-cli --features vba-execution --bin oxicells --test cells_python
+          --config profile.test.package.oxivba-core.opt-level=1
+          --config profile.test.package.oxidocs-wasm.opt-level=1
+          --config profile.dev.package.oxivba-core.opt-level=1
+          --config profile.dev.package.oxidocs-wasm.opt-level=1
+          -- --nocapture
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxicells-wheel-${{ matrix.os }}
+          path: crates/oxicells-python/dist/*.whl
+          retention-days: 7
