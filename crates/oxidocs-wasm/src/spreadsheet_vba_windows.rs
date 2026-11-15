@@ -143,12 +143,29 @@ impl WorkbookHost<'_> {
         }
     }
 
-    fn new_window(&mut self) -> Value {
+    fn activate_window_frame(&mut self, id: usize) {
+        self.load_window(id);
+        let maximized = self.window_frames.frames.iter().any(|frame| frame.open && frame.state == -4137);
+        if maximized {
+            for frame in &mut self.window_frames.frames {
+                if frame.open && frame.state == -4137 { frame.state = -4143; }
+            }
+            if self.window_frames.frames[id].state != -4140 {
+                self.window_frames.frames[id].state = -4137;
+            }
+        }
+        self.window_frames.active = id;
+    }
+
+    fn new_window(&mut self, source: Option<usize>) -> Value {
+        if let Some(id) = source { self.load_window(id); }
         let sheet = self.active_sheet;
-        let primary = *self.window_frames.open_ids().last().expect("open workbook has a frame");
-        self.load_window(primary);
-        if self.active_sheet != sheet {
-            self.activate_sheet(sheet);
+        if source.is_none() {
+            let primary = *self.window_frames.open_ids().last().expect("open workbook has a frame");
+            self.load_window(primary);
+            if self.active_sheet != sheet {
+                self.activate_sheet(sheet);
+            }
         }
         let mut view = WindowView::take_from(self);
         let home = CellRange::single(CellAddress { sheet, row: 1, column: 0 });
@@ -285,10 +302,16 @@ impl ApplicationHost<'_> {
             let host = application.hosts.get_mut(&owner).expect("active window owner");
             return Some(Ok(Some(host.object(HostObject::Window(host.window_frames.active)))));
         }
-        if let Some(owner) = book.filter(|_| name.eq_ignore_ascii_case("NewWindow")) {
-            if !args.is_empty() { return Some(Err(host_error(450, "Workbook.NewWindow takes no arguments"))); }
+        let new_window = book.map(|owner| (owner, None))
+            .or_else(|| window.map(|(owner, id)| (owner, Some(id))));
+        if let Some((owner, source)) = new_window.filter(|_| name.eq_ignore_ascii_case("NewWindow")) {
+            if !args.is_empty() {
+                return Some(Err(host_error(450, if source.is_some() {
+                    "Window.NewWindow takes no arguments"
+                } else { "Workbook.NewWindow takes no arguments" })));
+            }
             application.ensure_application_owner(owner);
-            let result = application.hosts.get_mut(&owner).expect("NewWindow owner").new_window();
+            let result = application.hosts.get_mut(&owner).expect("NewWindow owner").new_window(source);
             let id = application.hosts[&owner].window_frames.active;
             application.window_z_order.push((owner, id));
             application.window_enumeration_available = true;
@@ -301,8 +324,7 @@ impl ApplicationHost<'_> {
             if application.active == owner {
                 let host = application.hosts.get_mut(&owner).expect("Workbook.Activate owner");
                 if let Some(primary) = host.window_frames.open_ids().last().copied() {
-                    host.load_window(primary);
-                    host.window_frames.active = primary;
+                    host.activate_window_frame(primary);
                 }
                 application.activate(owner);
             }
@@ -332,8 +354,7 @@ impl ApplicationHost<'_> {
                 application.activate(owner);
                 if application.active == owner {
                     let host = application.hosts.get_mut(&owner).expect("Window owner");
-                    host.load_window(id);
-                    host.window_frames.active = id;
+                    host.activate_window_frame(id);
                     application.activate(owner);
                 }
                 return Some(Ok(Some(Value::Empty)));
@@ -459,5 +480,10 @@ mod tests {
     #[test]
     fn window_property_types_and_errors_match_native() {
         native_group(5);
+    }
+
+    #[test]
+    fn explicit_window_new_window_matches_native() {
+        native_group(6);
     }
 }

@@ -2154,6 +2154,7 @@ let nativeWindowObservations = 0;
     assert.deepEqual(fixture.groups.map(group => [group.id, group.cases.length]), [
         ['binding_and_coercion', 112], ['frame_lifecycle', 64], ['new_window_state_trace', 8],
         ['dispatch_identity', 4], ['close_reference_state', 8], ['property_types', 8],
+        ['explicit_window_new_window', 24],
     ]);
     for (const group of fixture.groups) {
         const carrier = Buffer.from(group.carrier_bytes_hex, 'hex');
@@ -2197,8 +2198,8 @@ let nativeWindowObservations = 0;
             }
         }
     }
-    assert.equal(nativeWindowObservations, 408);
+    assert.equal(nativeWindowObservations, 456);
 }
 
 assert.deepEqual(failures, [], 'Excel saves validation and inherited row/column formatting');
-console.log(JSON.stringify({passed: true, native_window_conditions: 204, native_window_route_observations: nativeWindowObservations, native_sheet_collection_conditions: 93, native_sheet_binding_profile_conditions: 60, native_selected_sheet_add_conditions: 144, native_chart_anchor_boundary_conditions: 48, native_sheet_additional_route_observations: nativeSheetAddObservations, native_worksheet_add_count_conditions: 31, native_worksheet_add_count_route_observations: 62, native_iconset_variant_cases: 20, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));
+console.log(JSON.stringify({passed: true, native_window_conditions: 228, native_window_route_observations: nativeWindowObservations, native_sheet_collection_conditions: 93, native_sheet_binding_profile_conditions: 60, native_selected_sheet_add_conditions: 144, native_chart_anchor_boundary_conditions: 48, native_sheet_additional_route_observations: nativeSheetAddObservations, native_worksheet_add_count_conditions: 31, native_worksheet_add_count_route_observations: 62, native_iconset_variant_cases: 20, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));
