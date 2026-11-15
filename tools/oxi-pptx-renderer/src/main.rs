@@ -7911,6 +7911,25 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // c in [1.04, 1.07); the ~1pt is probably the bubble
                         // outline, and no pure multiple of r_max satisfies both.
                         let pad_pt = (r_max - 1.05).max(0.0);
+                        // PowerPoint's bubble pad is in DATA units, not the
+                        // bubble's points: each axis grows by
+                        // `bubbleScale/600` of the data span (zero included)
+                        // at both ends. chart_bubble_pad (12 arms, PowerPoint
+                        // PDF): Y 21.4 -> 0..30 up to scale 225 and 0..35 from
+                        // 250; X 1..3 -> 0..4 at 200 and -1..5 from 225;
+                        // X 2..4 / 3..5 / 6..8 at 300 -> 0..6 / 0..8 / 0..15;
+                        // and the 600pt-wide and 400pt-tall frames give the
+                        // same axes as the 396x288 one, which no pad in points
+                        // can do. It also reproduces the older U7 arm
+                        // (y -8..12 at 100 -> -15..20).
+                        let pad_frac = scale_pct / 600.0;
+                        let (pad_y_data, pad_x_data) = {
+                            let ys = chart.series.iter().flat_map(|s| s.values.iter().copied());
+                            let (ylo, yhi) = ys.fold((0.0f64, 0.0f64), |(a, b), v| (a.min(v), b.max(v)));
+                            let xs = chart.series.iter().flat_map(|s| s.x_values.iter().copied());
+                            let (xlo, xhi) = xs.fold((0.0f64, 0.0f64), |(a, b), v| (a.min(v), b.max(v)));
+                            (pad_frac * (yhi - ylo), pad_frac * (xhi - xlo))
+                        };
                         // Word sizes the value axis with the ordinary ~5-tick
                         // step (nice_axis_max's rule) and COARSENS it only when
                         // the ticks would crowd below VERT_MIN_SPACING.  The
@@ -7960,7 +7979,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             pick_y(y_min_data, y_max_data, plot_h);
                         for _ in 0..3 {
                             let span = (y_axis - y_min).max(1e-9);
-                            let pad = if plot_h > 0.0 {
+                            let pad = if bubblepad_on() {
+                                pad_y_data
+                            } else if plot_h > 0.0 {
                                 pad_pt * span / plot_h
                             } else {
                                 0.0
@@ -7994,6 +8015,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             .flat_map(|s| s.x_values.iter().copied())
                             .fold(0.0f64, f64::min);
                         let x_has_neg = x_min_data < 0.0;
+                        let mut x_neg = x_has_neg;
                         let (x_lo_real, x_hi_real) = chart
                             .series
                             .iter()
@@ -8077,7 +8099,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         };
                         for pass in 0..4 {
                             let pw = (plot_right - plot_left).max(1.0);
-                            let pad = if pass == 0 {
+                            let pad = if bubblepad_on() {
+                                pad_x_data
+                            } else if pass == 0 {
                                 0.0
                             } else {
                                 pad_pt * (x_axis - x_min).max(1e-9) / pw
@@ -8085,11 +8109,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let elo = (x_lo_real - pad).min(0.0);
                             let ehi = (x_hi_real + pad).max(0.0);
                             let (lo, hi, dv) = pick_x(elo, ehi, pw);
-                            x_min = if x_has_neg { lo } else { 0.0 };
+                            // The padded extent may cross zero on its own: the
+                            // axis then runs negative too (chart_bubble_pad P3:
+                            // x 1..3 at scale 225 -> -1..5).
+                            x_neg = x_has_neg || (bubblepad_on() && lo < 0.0);
+                            x_min = if x_neg { lo } else { 0.0 };
                             x_axis = hi;
                             x_div = dv.max(1);
                             let step = (x_axis - x_min) / x_div as f64;
-                            if x_has_neg {
+                            if x_neg {
                                 plot_left = sx
                                     + 11.0
                                     + label_w(&fmt_axis_value(x_min, step)) / 2.0;
@@ -8104,7 +8132,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let val_x =
                             |v: f64| plot_left + ((v - x_min) / x_span) * plot_w;
                         let zero_x = val_x(0.0);
-                        let y_axis_x = if x_has_neg { zero_x } else { plot_left };
+                        let y_axis_x = if x_neg { zero_x } else { plot_left };
                         let x_axis_y = if y_has_neg { zero_y } else { plot_bot };
 
                         let radius = |sz: f64| -> f64 {
@@ -12793,6 +12821,11 @@ fn chart_hair_px(scale: f64) -> i32 {
     } else {
         ((0.75 * scale).round() as i32).max(1)
     }
+}
+
+/// `OXI_BUBBLEPAD_DISABLE=1` restores the bubble axis pad in points.
+fn bubblepad_on() -> bool {
+    std::env::var("OXI_BUBBLEPAD_DISABLE").is_err()
 }
 
 /// `OXI_SURFACE_DISABLE=1` leaves surface charts to the generic fallback.
