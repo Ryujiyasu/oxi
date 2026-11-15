@@ -687,7 +687,7 @@ pub(super) fn from_chart(xml: &str, theme: &ThemeColors, w: f32, h: f32) -> Opti
     match kind {
         "pieChart" | "pie3DChart" | "doughnutChart" => draw_pie(&mut g, first, &all_series, vary, plot, (w, h), &base, xml, theme),
         "scatterChart" => draw_scatter(&mut g, area, &all_series, plot, inner_manual, &base, xml, theme),
-        _ => draw_category(&mut g, area, &plot_nodes, &all_series, plot, inner_manual, &base, xml, theme),
+        _ => draw_category(&mut g, area, &plot_nodes, &all_series, plot, inner_manual, (w, h), &base, xml, theme),
     }
     Some(g)
 }
@@ -739,6 +739,7 @@ fn draw_category(
     sers: &[Series],
     plot: (f32, f32, f32, f32),
     inner_manual: bool,
+    chart_wh: (f32, f32),
     base: &TextStyle,
     xml: &str,
     theme: &ThemeColors,
@@ -908,13 +909,28 @@ fn draw_category(
                         let st_lbl = st_ser.get(j).unwrap_or(&st_lbl);
                         let lh = line_h(st_lbl);
                         let lw = text_width(&txt, st_lbl.size) + 6.0;
-                        let rr = if stacked {
+                        let mut rr = if stacked {
                             (r.0 + r.2 / 2.0 - lw / 2.0, r.1 + r.3 / 2.0 - lh / 2.0, lw, lh)
                         } else if horizontal {
                             (r.0 + r.2 + 2.0, r.1 + r.3 / 2.0 - lh / 2.0, lw, lh)
                         } else {
                             (r.0 + r.2 / 2.0 - lw / 2.0, r.1 - lh, lw, lh)
                         };
+                        // OXI_CHART_BAR_DLBL_OFFSET (2026-11-16, default ON, opt-out _DISABLE): a
+                        // point's own c:dLbl manualLayout moves its label by (x, y) x the chart
+                        // size from the default place, as the pie labels already do. blind-J
+                        // ja/reports__7a8daf36 chart6 «3.1%» (x +0.024, y -0.167): Word sets it
+                        // above the stacked bar's right end; Oxi drew it over «12.5%».
+                        let pt = ser_nodes.get(j).and_then(|sn| sn.child("dLbls")).and_then(|d| d.children.iter().find(|c| c.name == "dLbl"
+                            && c.child("idx").and_then(|n| n.num("val")).map(|v| v as usize) == Some(i)))
+                            .filter(|_| !crate::env_flag!("OXI_CHART_BAR_DLBL_OFFSET_DISABLE"));
+                        if pt.is_some_and(|d| d.child("delete").and_then(|n| n.attr("val")) == Some("1")) {
+                            continue;
+                        }
+                        if let Some(m) = pt.and_then(|d| d.path(&["layout", "manualLayout"])) {
+                            rr.0 += m.child("x").and_then(|n| n.num("val")).unwrap_or(0.0) as f32 * chart_wh.0;
+                            rr.1 += m.child("y").and_then(|n| n.num("val")).unwrap_or(0.0) as f32 * chart_wh.1;
+                        }
                         label(g, &txt, st_lbl, rr, Alignment::Center);
                     }
                 }
