@@ -7603,8 +7603,19 @@ impl<'a> ParagraphLayouter<'a> {
                         // «STATEMENT OF POLICY AND PROCEDURE» is w:w=80 words between
                         // spaced space runs; the unscaled sum (73.3 for a 58.7 word)
                         // pushed every word 14pt right and drew the heading spread out.
+                        // OXI_S672_NEG_CS (2026-11-15, default ON, opt-out _DISABLE): a CONDENSED
+                        // run (w:spacing < 0) keeps its spacing in the true advance. Left out, the
+                        // true sum always exceeds the committed widths (which carry it), so every
+                        // condensed line took this render track and drew each word |cs| per char
+                        // further right: blind-J en/legal__005ce334 (Arial 9pt, w:spacing -6) ran
+                        // «...the current company» to 529 where Word ends at 500.9. Expanded runs
+                        // keep 0 (the golden regression noted above).
+                        let neg_cs = |st: &crate::ir::RunStyle| -> f32 {
+                            let c = st.character_spacing.unwrap_or(0.0);
+                            if c < 0.0 && !crate::env_flag!("OXI_S672_NEG_CS_DISABLE") { snap_character_spacing(c) } else { 0.0 }
+                        };
                         let (sc, cs) = if crate::env_flag!("OXI_S672_SCALE_DISABLE") { (1.0, 0.0) } else {
-                            (f.style.text_scale.map_or(1.0, |s| s / 100.0), 0.0)
+                            (f.style.text_scale.map_or(1.0, |s| s / 100.0), neg_cs(&f.style))
                         };
                         let tw: f32 = f.text.chars().map(|c| m.char_width_em(c) * fs * sc + cs).sum();
                         (f.width + frag_width_adjustments[fi], tw)
@@ -9590,7 +9601,10 @@ impl<'a> ParagraphLayouter<'a> {
                 // fragment emits where this word actually ends on screen.
                 if s672_latinx {
                     let (sc, cs) = if crate::env_flag!("OXI_S672_SCALE_DISABLE") { (1.0, 0.0) } else {
-                        (frag.style.text_scale.map_or(1.0, |s| s / 100.0), 0.0)
+                        // OXI_S672_NEG_CS: the condensed spacing, as in line_true above
+                        let c = frag.style.character_spacing.unwrap_or(0.0);
+                        let c = if c < 0.0 && !crate::env_flag!("OXI_S672_NEG_CS_DISABLE") { snap_character_spacing(c) } else { 0.0 };
+                        (frag.style.text_scale.map_or(1.0, |s| s / 100.0), c)
                     };
                     let true_w: f32 = frag
                         .text
