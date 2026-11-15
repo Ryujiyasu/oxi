@@ -48670,6 +48670,119 @@ pub struct SpreadsheetVbaSession {
     state: Option<ProjectSessionState>,
 }
 
+/// A native invocation shares the browser host and keeps its project storage.
+/// `current_time` is the caller's local OLE date serial; `random_seed` seeds a
+/// new project. Supplying both keeps host clock and locale policy with callers.
+pub struct NativeVbaCall<'a> {
+    pub source: &'a str,
+    pub action: NativeVbaAction<'a>,
+    pub args: Vec<Value>,
+    pub active_sheet: usize,
+    pub file_name: Option<String>,
+    /// JSON object or null, using the browser execution options.
+    pub options: &'a str,
+    pub current_time: f64,
+    pub random_seed: u64,
+}
+
+pub enum NativeVbaAction<'a> {
+    Run { procedure: &'a str },
+    PrepareSave,
+    SaveWorkbook { copy_name: Option<String> },
+    CompileProject,
+    Invoke { reference: String, member: String, kind: i64 },
+    Release { references: Vec<String> },
+    ReleaseAll,
+}
+
+impl<'a> NativeVbaCall<'a> {
+    pub fn new(source: &'a str, procedure: &'a str, args: Vec<Value>, current_time: f64, random_seed: u64) -> Self {
+        Self { source, action: NativeVbaAction::Run { procedure }, args,
+            active_sheet: 0, file_name: None, options: "null", current_time, random_seed }
+    }
+}
+
+/// The typed result preserves VBA subtypes and BSTR contents. The workbook
+/// includes edits made before a runtime failure, matching the outcome API.
+pub struct NativeVbaOutcome {
+    outcome: RunOutcome,
+    result: Value,
+}
+
+impl NativeVbaOutcome {
+    pub fn result(&self) -> &Value { &self.result }
+    pub fn workbook(&self) -> &Workbook { &self.outcome.workbook }
+    pub fn into_workbook(self) -> Workbook { self.outcome.workbook }
+
+    /// A browser-compatible JSON view. Use `result()` to distinguish VBA
+    /// subtypes. Non-finite result numbers need the typed result accessor.
+    pub fn to_json(&self) -> Result<String,String> {
+        fn finite(value: &Value) -> bool {
+            match value {
+                Value::Single(value) => value.is_finite(),
+                Value::Double(value) | Value::Date(value) => value.is_finite(),
+                Value::Array(array) => array.values.iter().all(finite),
+                Value::Record(record) => record.fields.iter().all(|(_,value)| finite(value)),
+                _ => true,
+            }
+        }
+        if !finite(&self.result) { return Err("non-finite VBA result: use the typed result accessor".into()); }
+        serde_json::to_string(&self.outcome).map_err(|error| error.to_string())
+    }
+}
+
+// These methods use Rust values and do not expose JavaScript entrypoints.
+impl SpreadsheetVbaSession {
+    pub fn run_native(&mut self, mut workbook: Workbook, call: NativeVbaCall<'_>) -> Result<NativeVbaOutcome,String> {
+        let NativeVbaCall { source, action, args, active_sheet, file_name, options, current_time, random_seed } = call;
+        if !current_time.is_finite() { return Err("invalid VBA current time: expected a finite OLE date serial".into()); }
+        let shape:serde_json::Value=serde_json::from_str(options)
+            .map_err(|error| format!("invalid VBA options: {error}"))?;
+        if !shape.is_object() && !shape.is_null() { return Err("invalid VBA options: expected an object or null".into()); }
+        let options:Option<VbaExecutionOptions>=serde_json::from_str(options)
+            .map_err(|error| format!("invalid VBA options: {error}"))?;
+        let options=options.unwrap_or_default();
+        let releasing=matches!(&action,NativeVbaAction::Release { .. } | NativeVbaAction::ReleaseAll);
+        if releasing && options.source_edits.is_some() { return Err("invalid VBA source edits: releasing references cannot edit source".into()); }
+        if !args.is_empty() && !matches!(&action,NativeVbaAction::Run { .. } | NativeVbaAction::Invoke { .. }) {
+            return Err("invalid VBA arguments: this action takes no arguments".into());
+        }
+        let loaded_source=if releasing {
+            Some(self.state.as_ref().ok_or("no loaded VBA project")?.source.clone())
+        } else { None };
+        let invocation=match action {
+            NativeVbaAction::Run { procedure } => VbaInvocation::new(Some(procedure),args),
+            NativeVbaAction::PrepareSave => VbaInvocation::new(None,args),
+            NativeVbaAction::SaveWorkbook { copy_name } => VbaInvocation { procedure:None,args,action:Some(ExternalObjectAction::SaveWorkbook { copy_name }) },
+            NativeVbaAction::CompileProject => VbaInvocation { procedure:None,args,action:Some(ExternalObjectAction::CompileProject) },
+            NativeVbaAction::Invoke { reference,member,kind } => VbaInvocation { procedure:None,args,action:Some(ExternalObjectAction::Invoke { reference,member,kind }) },
+            NativeVbaAction::Release { references } => VbaInvocation { procedure:None,args,action:Some(ExternalObjectAction::Release { references }) },
+            NativeVbaAction::ReleaseAll => {
+                let references=self.state.as_ref().ok_or("no loaded VBA project")?.external_references.tokens_in_release_order();
+                VbaInvocation { procedure:None,args,action:Some(ExternalObjectAction::Release { references }) }
+            }
+        };
+        let project_name=invocation_project_name(self.state.as_ref(),options.project_name.as_deref());
+        let source_edits=options.source_edits.clone().map(|edits| edits.into_iter().map(|edit| oxivba_core::SourceEdit {
+            line:edit.line,delete_lines:edit.delete_lines,text:edit.text,
+        }).collect());
+        let application_state=options.application_state.clone().map(VbaApplicationState::validate).transpose()
+            .map_err(|error| format!("invalid VBA application state: {error}"))?;
+        let document_modules=options.document_modules.clone();
+        let file_context=options.file_context.clone();
+        let file_system_state=options.file_system_state.clone();
+        let host_ansi_code_page=options.host_ansi_code_page.map(AnsiCodePage::from_id).transpose()?;
+        if let Some(language)=options.worksheet_dbcs_language { workbook.calculation.dbcs_language=Some(language); }
+        let environment=options.error_environment()?;
+        let context=VbaRunContext { environment,host_ansi_code_page,project_name,file_name,random_seed,current_time,
+            application_state,source_edits,document_modules,file_context,file_system_state };
+        let mut result=Value::Empty;
+        let outcome=execute_workbook_invocation_capturing(workbook,loaded_source.as_deref().unwrap_or(source),
+            invocation,active_sheet,context,&mut self.state,Some(&mut result))?;
+        Ok(NativeVbaOutcome { outcome,result })
+    }
+}
+
 fn validate_editor_revision(value: JsValue) -> Result<u64, JsError> {
     if !js_sys::Number::is_safe_integer(&value) || value.as_f64().is_none_or(|number| number < 0.0) {
         return Err(JsError::new("editor revision must be a non-negative safe integer"));
@@ -49462,8 +49575,16 @@ fn imported_module_readiness(source: &str, project_name: &str,
 }
 
 fn execute_workbook_invocation(
+    workbook: Workbook, source: &str, invocation: VbaInvocation<'_, Vec<Value>>,
+    active_sheet: usize, context: VbaRunContext, session: &mut Option<ProjectSessionState>,
+) -> Result<RunOutcome, String> {
+    execute_workbook_invocation_capturing(workbook,source,invocation,active_sheet,context,session,None)
+}
+
+fn execute_workbook_invocation_capturing(
     mut workbook: Workbook, source: &str, invocation: VbaInvocation<'_, Vec<Value>>,
     active_sheet: usize, context: VbaRunContext, session: &mut Option<ProjectSessionState>,
+    captured: Option<&mut Value>,
 ) -> Result<RunOutcome, String> {
     let VbaInvocation { procedure, args, action } = invocation;
     let save_request = match &action { Some(ExternalObjectAction::SaveWorkbook { copy_name }) => Some(copy_name.clone()), _ => None };
@@ -49981,7 +50102,10 @@ fn execute_workbook_invocation(
     workbook.calculation.on_save = on_save;
     let workbook_changed = application_setting_dirtied || conditions_changed || before != after.map_err(|error| error.to_string())?;
     let (mut result, error) = match result {
-        Ok(value) => (value.into(), None),
+        Ok(value) => {
+            if let Some(target)=captured { *target=value.clone(); }
+            (value.into(), None)
+        },
         Err(failure) => {
             let kind = match failure.kind {
                 oxivba_core::RuntimeErrorKind::Compile => "compile",
