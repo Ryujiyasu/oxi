@@ -1332,11 +1332,28 @@ fn parse_slide(
     let mut in_chart_graphic = false;
     let mut chart_r_id: Option<String> = None;
 
+    // Depth inside `spPr/a:extLst`. Office writes the fill and line a shape
+    // does NOT show there (`a14:hiddenFill`, `a14:hiddenLine`), so a shape
+    // with `<a:noFill/>` read the hidden fill's colour as its own and was
+    // painted solid (dash probe: 14 outlined shapes filled 156082).
+    let mut sppr_ext: u32 = 0;
+    let s_hiddenext = std::env::var("OXI_HIDDENEXT_DISABLE").is_err();
+
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
                 let name = local_name(e.name().as_ref());
                 _depth += 1;
+                if sppr_ext > 0 {
+                    if name == "extLst" {
+                        sppr_ext += 1;
+                    }
+                    continue;
+                }
+                if s_hiddenext && name == "extLst" && in_sp_pr {
+                    sppr_ext = 1;
+                    continue;
+                }
 
                 match name.as_str() {
                     "bg" => {
@@ -2163,6 +2180,9 @@ fn parse_slide(
             }
             Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
+                if sppr_ext > 0 {
+                    continue;
+                }
                 match name.as_str() {
                     // A SELF-CLOSING outerShdw is legal (nothing but
                     // attributes); the schema's default colour is black. The
@@ -2831,6 +2851,12 @@ fn parse_slide(
             Event::End(e) => {
                 let name = local_name(e.name().as_ref());
                 _depth -= 1;
+                if sppr_ext > 0 {
+                    if name == "extLst" {
+                        sppr_ext -= 1;
+                    }
+                    continue;
+                }
 
                 match name.as_str() {
                     "bg" => {
@@ -3967,6 +3993,8 @@ fn parse_inherited_shapes(
             .unwrap_or(0.0)
     };
 
+    let mut ig_ext: u32 = 0;
+    let s_hiddenext = std::env::var("OXI_HIDDENEXT_DISABLE").is_err();
     loop {
         let ev = reader.read_event_into(&mut buf);
         let (e, empty) = match &ev {
@@ -3974,6 +4002,13 @@ fn parse_inherited_shapes(
             Ok(Event::Empty(e)) => (Some(e), true),
             Ok(Event::End(e)) => {
                 let name = local_name(e.name().as_ref());
+                if ig_ext > 0 {
+                    if name == "extLst" {
+                        ig_ext -= 1;
+                    }
+                    buf.clear();
+                    continue;
+                }
                 match name.as_str() {
                     "spTree" => in_tree = false,
                     "outerShdw" if in_ig_shdw => {
@@ -4320,6 +4355,15 @@ fn parse_inherited_shapes(
             }
         };
         let name = local_name(e.name().as_ref());
+        // As in the slide walk: what sits in `spPr/a:extLst` is the fill and
+        // line the shape does NOT show.
+        if ig_ext > 0 || (s_hiddenext && name == "extLst" && in_sp_pr) {
+            if !empty && name == "extLst" {
+                ig_ext += 1;
+            }
+            buf.clear();
+            continue;
+        }
 
         if name == "spTree" {
             in_tree = true;
@@ -5324,6 +5368,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut bubble_scale: Option<f64> = None;
     let mut size_represents: Option<String> = None;
     let mut hi_low_lines = false;
+    let mut surface_wireframe = false;
     let mut up_down_bars = false;
     let mut up_down_gap: Option<f64> = None;
     let mut in_up_down = false;
@@ -5433,6 +5478,12 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "stockChart" => {
                         chart_type = Some("stock".to_string());
                     }
+                    // <c:surfaceChart> and <c:surface3DChart> render alike in
+                    // PowerPoint (chart_surface P1 vs P3: identical images) --
+                    // both are the 3-D mesh unless view3D says otherwise.
+                    "surfaceChart" | "surface3DChart" => {
+                        chart_type = Some("surface".to_string());
+                    }
                     // <c:upDownBars> is a Start element (its gapWidth is
                     // a child); hiLowLines is self-closing (Empty arm).
                     "upDownBars" => {
@@ -5448,7 +5499,8 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                             || chart_type.as_deref() == Some("scatter")
                             || chart_type.as_deref() == Some("bubble")
                             || chart_type.as_deref() == Some("radar")
-                            || chart_type.as_deref() == Some("stock") =>
+                            || chart_type.as_deref() == Some("stock")
+                            || chart_type.as_deref() == Some("surface") =>
                     {
                         in_ser = true;
                         ser_target = "";
@@ -5623,6 +5675,9 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     // black w=0.75 when there is no <c:spPr>).
                     "hiLowLines" => {
                         hi_low_lines = true;
+                    }
+                    "wireframe" => {
+                        surface_wireframe = get_attr(&e, "val").as_deref() == Some("1");
                     }
                     // <c:gapWidth> inside <c:upDownBars> (the bar chart's
                     // own gapWidth is handled by its own path).
@@ -5819,6 +5874,17 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         }
     }
 
+    // A category cache may hold fewer points than the series has values: an
+    // empty cell is simply not written (`c:ptCount val="1"` + one `c:pt` over
+    // three values, chart_doughnut_wrap). PowerPoint still has one category
+    // per value -- the doughnut legend shows three swatches, two of them
+    // unnamed -- so pad the names with empties.
+    if std::env::var("OXI_CATPAD_DISABLE").is_err() {
+        let n_vals = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
+        if !categories.is_empty() && categories.len() < n_vals {
+            categories.resize(n_vals, String::new());
+        }
+    }
     Ok(Chart {
         val_min,
         val_max,
@@ -5830,6 +5896,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         size_represents: size_represents
             .unwrap_or_else(default_chart_size_represents),
         hi_low_lines,
+        surface_wireframe,
         up_down_bars,
         up_down_gap: up_down_gap.unwrap_or_else(default_chart_updown_gap),
         legend_overlay,

@@ -4192,10 +4192,21 @@ impl<'a> PageLayouter<'a> {
                                 let bot = bdr.iter().map(|&i| elements[i].y + elements[i].height).fold(f32::NEG_INFINITY, f32::max);
                                 if top.is_finite() && bot - top + 0.01 < h {
                                     let d = top + h - bot;
+                                    // OXI_FRAME_SIDE_REACH (2026-11-15, default ON, opt-out _DISABLE):
+                                    // a side rule that stops a border width short of the bottom
+                                    // rule (the side runs between the rules) is stretched to the
+                                    // moved bottom too. blind-J ja/reports__7a8daf36's reply frame
+                                    // (h 781tw, pBdr sz 6 all round): sides ended 0.8 above the
+                                    // bottom rule and were left one line tall (726.3 + 15) under a
+                                    // box Word draws 724.5..763.
+                                    let reach = !crate::env_flag!("OXI_FRAME_SIDE_REACH_DISABLE");
                                     for &i in &bdr {
                                         let e = &mut elements[i];
-                                        if (e.y + e.height - bot).abs() < 0.01 {
+                                        let gap = bot - (e.y + e.height);
+                                        if gap.abs() < 0.01 {
                                             if e.height <= 3.0 && e.width > e.height { e.y += d; } else { e.height += d; }
+                                        } else if reach && e.height > e.width && e.width <= 3.0 && gap > 0.0 && gap <= 3.0 {
+                                            e.height += d;
                                         }
                                     }
                                 }
