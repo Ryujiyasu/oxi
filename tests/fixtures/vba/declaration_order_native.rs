@@ -248,4 +248,117 @@ Probe = ProcedureScopeProbe()
 End Function
 
 "########, native_kind: Some("DuplicateDeclaration"), description: Some("同じ適用範囲内で宣言が重複しています。") },
+    // Native full-project source SHA256: 587fec64fc8bf7d2082fb64c2e45a819ef4342d1a366268bab84ac4a90ee597a
+    Case { id: "duplicate_dim_same_statement", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Public Function Probe() As Variant
+On Error Resume Next
+Dim counter As Long, counter As Long
+Probe = counter
+End Function
+"########, native_kind: Some("DuplicateDeclaration"), description: Some("同じ適用範囲内で宣言が重複しています。") },
+    // Native full-project source SHA256: 5534449e2a4bd1f37f87d650a0ccb92453007e3d5580666cc7cd497df7331e82
+    Case { id: "duplicate_dim_same_statement_implicit", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+' Self-authored conformance probe, CC BY-SA 4.0.
+Public Function Probe() As Variant
+On Error Resume Next
+Dim counter As Long, counter As Long
+Probe = counter
+End Function
+"########, native_kind: Some("DuplicateDeclaration"), description: Some("同じ適用範囲内で宣言が重複しています。") },
+    // Native full-project source SHA256: 0bf1b0fa0546f0519e409623a0f20dddb28ff5c1b26c5585ed25367a366bfc28
+    Case { id: "duplicate_dim_case_insensitive", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Public Function Probe() As Variant
+On Error Resume Next
+Dim counter As Long, COUNTER As Long
+Probe = counter
+End Function
+"########, native_kind: Some("DuplicateDeclaration"), description: Some("同じ適用範囲内で宣言が重複しています。") },
+    // Native full-project source SHA256: a6f31bd5a9474f78ffac62065825eacf044e5070ca1b59f0e66551102d1a4f45
+    Case { id: "distinct_dim_same_statement", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Public Function Probe() As Variant
+On Error Resume Next
+Dim counter As Long, other As Long
+counter = 3
+other = 4
+Probe = counter + other
+End Function
+"########, native_kind: None, description: None },
+    // Native full-project source SHA256: a42b2231ff01144a68ed8aa71cbbb77b7b12a4b2f6e12d9dc82dc8661ca72df4
+    Case { id: "duplicate_const_same_statement", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Public Function Probe() As Variant
+On Error Resume Next
+Const counter As Long = 1, counter As Long = 2
+Probe = counter
+End Function
+"########, native_kind: Some("DuplicateDeclaration"), description: Some("同じ適用範囲内で宣言が重複しています。") },
+    // Native full-project source SHA256: fee74eb01814592db45ac7b1c00c77360d3189c3dcdaa17dd6a41b50841cbe20
+    Case { id: "distinct_const_same_statement", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Public Function Probe() As Variant
+On Error Resume Next
+Const counter As Long = 1, other As Long = 2
+Probe = counter + other
+End Function
+"########, native_kind: None, description: None },
+    // Native full-project source SHA256: 0bf3105847293b96583211cee4585ac7de227c9b3bf4c1e8542b3b86e87239be
+    Case { id: "duplicate_dim_colon", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Public Function Probe() As Variant
+On Error Resume Next
+Dim counter As Long: Dim counter As Long
+Probe = counter
+End Function
+"########, native_kind: Some("DuplicateDeclaration"), description: Some("同じ適用範囲内で宣言が重複しています。") },
+    // Native full-project source SHA256: 9a56731023cd84d16222fad9bd168ee7d76010e4793df2bc8cdd1a992a440d16
+    Case { id: "nested_unexecuted_declaration_before_read", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Public Function Probe() As Variant
+On Error Resume Next
+If False Then
+Dim counter As Long
+End If
+Probe = counter
+End Function
+"########, native_kind: None, description: None },
+    // Native full-project source SHA256: 5a6c5df20047a3ac706fa607d30770d55166b394f42feb47c64507a0a9219572
+    Case { id: "module_const_distinct_chain", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Private Const first As Long = 1, second As Long = first + 2
+Public Function Probe() As Variant
+On Error Resume Next
+Probe = second
+End Function
+"########, native_kind: None, description: None },
+    // Native full-project source SHA256: 45ab30986d06ee511cced4f369215740f88d842a03719f58a02b2256fb599c64
+    Case { id: "local_const_distinct_chain", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Public Function Probe() As Variant
+On Error Resume Next
+Const first As Long = 1, second As Long = first + 2
+Probe = second
+End Function
+"########, native_kind: None, description: None },
+    // Native full-project source SHA256: 297cfb990b93acb302749507d713a0c6a67d7448dd8789b759b2117c602615e0
+    Case { id: "module_distinct_dim_control", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Private counter As Long, other As Long
+Public Function Probe() As Variant
+On Error Resume Next
+Probe = counter + other
+End Function
+"########, native_kind: None, description: None },
 ];

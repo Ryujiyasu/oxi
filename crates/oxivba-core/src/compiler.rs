@@ -1458,41 +1458,45 @@ impl<'a> Checker<'a> {
 
     fn declaration_in(&mut self, declaration: &VarDecl, owner: Option<&'a Module>) {
         for variable in &declaration.items {
-            let mut kind = self.declared(&variable.type_name);
-            if declaration.is_const && kind == Type::Variant {
-                if let Some(value) = &variable.value {
-                    kind = self.infer(value);
-                }
+            self.declaration_item_in(variable, declaration.is_const, owner);
+        }
+    }
+
+    fn declaration_item_in(&mut self, variable: &VarItem, is_const: bool, owner: Option<&'a Module>) {
+        let mut kind = self.declared(&variable.type_name);
+        if is_const && kind == Type::Variant {
+            if let Some(value) = &variable.value {
+                kind = self.infer(value);
             }
-            if variable.array_bounds.is_some() {
-                kind = self.declared_array(kind, &variable.type_name);
+        }
+        if variable.array_bounds.is_some() {
+            kind = self.declared_array(kind, &variable.type_name);
+        }
+        self.fixed_arrays.remove(&key(&variable.name));
+        if variable
+            .array_bounds
+            .as_ref()
+            .is_some_and(|bounds| !bounds.is_empty())
+        {
+            self.fixed_arrays.insert(key(&variable.name));
+        }
+        self.variables.insert(key(&variable.name), kind);
+        if is_const {
+            self.constants.insert(key(&variable.name));
+            if let Some(value) = &variable.value {
+                self.constant_expressions.insert(
+                    key(&variable.name),
+                    ConstantBinding {
+                        expression: value.clone(),
+                        declared: variable.type_name.clone(),
+                        owner,
+                        enumeration: None,
+                    },
+                );
             }
-            self.fixed_arrays.remove(&key(&variable.name));
-            if variable
-                .array_bounds
-                .as_ref()
-                .is_some_and(|bounds| !bounds.is_empty())
-            {
-                self.fixed_arrays.insert(key(&variable.name));
-            }
-            self.variables.insert(key(&variable.name), kind);
-            if declaration.is_const {
-                self.constants.insert(key(&variable.name));
-                if let Some(value) = &variable.value {
-                    self.constant_expressions.insert(
-                        key(&variable.name),
-                        ConstantBinding {
-                            expression: value.clone(),
-                            declared: variable.type_name.clone(),
-                            owner,
-                            enumeration: None,
-                        },
-                    );
-                }
-            } else {
-                self.constant_expressions.remove(&key(&variable.name));
-                self.constants.remove(&key(&variable.name));
-            }
+        } else {
+            self.constant_expressions.remove(&key(&variable.name));
+            self.constants.remove(&key(&variable.name));
         }
     }
 
@@ -3966,8 +3970,14 @@ impl<'a> Checker<'a> {
                             }
                         }
                     }
+                    if self.procedure.is_some() {
+                        self.declaration_item_in(variable, declaration.is_const, None);
+                        self.declared_locals.insert(key(&variable.name));
+                    }
                 }
-                self.declaration(declaration);
+                if self.procedure.is_none() {
+                    self.declaration(declaration);
+                }
             }
             Statement::ReDim { items, .. } => {
                 for item in items {
