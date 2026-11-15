@@ -1799,6 +1799,9 @@ impl<'a> LineBreaker<'a> {
             punctuation_offset += fragment.0.chars().count();
         }
         let mut accepted_punctuation_unit: Option<(usize, usize)> = None;
+        // OXI_RUBY_GROUP_CAP: the S1490 regime of the previous fragment (the ruby-field
+        // branch runs before this fragment's regime is computed).
+        let mut prev_s1490_regime = false;
         for (frag_outer_idx, &(text, style, frag_field_type, frag_run_index, frag_char_start)) in
             fragments.iter().enumerate()
         {
@@ -2042,9 +2045,53 @@ impl<'a> LineBreaker<'a> {
                     })
                     .sum();
                 let cw_tw = pt_to_tw(cw);
+                // OXI_RUBY_GROUP_CAP (2026-11-15, default ON, opt-out _DISABLE): in the
+                // compat-15 S1490 regime an overflowing ruby field of X base characters
+                // stays when its X-1 trailing cells are paid by fully halving 2(X-1) of
+                // the line's k marks and the first character fits the capacity table
+                // with the k - 2(X-1) marks left (k_eff = 0: an exact fit only).
+                // `_pb_compcap_ruby_gen.py` PB_XRUBY (ＭＳ 明朝 12, n 14/26, k 1-4, X 1-3,
+                // 9 arms, every one fitted); ja/administrative__1fc69a4f p2 «…懇談会を開催»
+                // (k=2 （）, 開 over by 1tw): Word halves （ and ） and keeps 開催.
+                let ruby_group_fits = {
+                    let over_tw = current_width_tw + cw_tw - available_tw;
+                    let x = text.chars().count();
+                    if over_tw <= 0 || x == 0 || vertical || !prev_s1490_regime
+                        || current_line.fragments.is_empty()
+                        || crate::env_flag!("OXI_RUBY_GROUP_CAP_DISABLE")
+                    {
+                        false
+                    } else {
+                        let is_mark = |c: char| {
+                            matches!(c, '、' | '。' | '，' | '．' | '・')
+                                || kinsoku::is_yakumono_opening(c)
+                                || kinsoku::is_yakumono_closing(c)
+                        };
+                        let line_chars: Vec<char> = current_line.fragments.iter().flat_map(|f| f.text.chars()).collect();
+                        let mut k = line_chars.iter().filter(|&&c| is_mark(c)).count();
+                        // a line-initial opening bracket offers no blank (S1346)
+                        if line_chars.first().is_some_and(|&c| kinsoku::is_yakumono_opening(c)) {
+                            k = k.saturating_sub(1);
+                        }
+                        let cell_tw = pt_to_tw(font_size);
+                        let need = 2 * (x - 1);
+                        let over_first = over_tw - (x as i32 - 1) * cell_tw;
+                        if k < need {
+                            false
+                        } else if k == need {
+                            over_first <= 2
+                        } else {
+                            let n: usize = current_line.fragments.iter()
+                                .filter(|f| !f.style.ruby_field)
+                                .map(|f| f.text.chars().count()).sum();
+                            over_first <= LayoutEngine::modern_punctuation_capacity_tw(n, k - need, cell_tw, false, None)
+                        }
+                    }
+                };
                 if (if vertical { current_capw_tw } else { current_width_tw }) + cw_tw > available_tw
                     && !current_line.fragments.is_empty()
                     && !para_all_whitespace
+                    && !ruby_group_fits
                 {
                     lines.push(std::mem::take(&mut current_line));
                     current_width = 0.0;
@@ -2792,6 +2839,7 @@ impl<'a> LineBreaker<'a> {
                 && self.compress_punctuation
                 && self.compat_mode >= 15
                 && self.compat_mode_explicit;
+            prev_s1490_regime = s1490_regime;
             let s1318_at_default_regime = (s568_legacy_oikomi
                     && s1236_regime_delta.map_or(false, |d| d.abs() < 1.5))
                 || s1490_regime || japanese_language_oikomi;
