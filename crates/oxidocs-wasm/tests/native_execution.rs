@@ -362,3 +362,209 @@ fn native_project_rejects_invalid_packages_and_unsupported_source_encodings() {
     let error = read_spreadsheet_vba_project_native(bytes, Some(65_535)).unwrap_err();
     assert!(!error.is_empty());
 }
+
+const CODEC_SOURCE: &str = concat!(
+    "Attribute VB_Name = \"NativeCodec\"\n",
+    "Public Function Echo(ByVal value As Variant) As Variant\n Echo = value\nEnd Function\n",
+    "Public Function TypedArray() As Variant\n Dim data(-2 To -1) As Integer\n",
+    " data(-2) = 7\n data(-1) = 9\n TypedArray = data\nEnd Function\n",
+    "Public Function InspectArray(ByVal data As Variant) As Variant\n",
+    " InspectArray = Array(VarType(data), LBound(data), UBound(data), data(-2), data(-1))\nEnd Function\n",
+    "Public Function Pointer(ByVal text As String) As LongLong\n Pointer = StrPtr(text)\nEnd Function\n"
+);
+
+#[test]
+fn native_values_json_round_trips_subtypes_and_array_shape() {
+    let source = format!("{SOURCE}{CODEC_SOURCE}");
+    let mut session = SpreadsheetVbaSession::default();
+    let result = session
+        .run_native(
+            workbook(),
+            NativeVbaCall::new(&source, "NativeRun.TypedValues", vec![], 45_000.0, 1),
+        )
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&result.to_typed_json().unwrap()).unwrap();
+    let values = &json["result"]["value"]["values"];
+    assert_eq!(values[0], serde_json::json!({"type":"byte","value":255}));
+    assert_eq!(values[1], serde_json::json!({"type":"single","value":1.25}));
+    assert_eq!(values[2], serde_json::json!({"type":"date","value":1.5}));
+    assert_eq!(
+        values[3],
+        serde_json::json!({"type":"long_long","value":"9007199254740993"})
+    );
+    assert_eq!(
+        values[4],
+        serde_json::json!({"type":"utf16","value":[0xd800]})
+    );
+    let args = session
+        .decode_native_arguments(&serde_json::json!([json["result"]]).to_string())
+        .unwrap();
+    let echoed = session
+        .run_native(
+            result.into_workbook(),
+            NativeVbaCall::new(&source, "NativeCodec.Echo", args, 45_000.0, 1),
+        )
+        .unwrap();
+    let again: serde_json::Value = serde_json::from_str(&echoed.to_typed_json().unwrap()).unwrap();
+    assert_eq!(again["result"], json["result"]);
+
+    let typed = session
+        .run_native(
+            echoed.into_workbook(),
+            NativeVbaCall::new(&source, "NativeCodec.TypedArray", vec![], 45_000.0, 1),
+        )
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&typed.to_typed_json().unwrap()).unwrap();
+    assert_eq!(
+        json["result"]["value"]["element_default"],
+        serde_json::json!({"type":"integer","value":0})
+    );
+    assert_eq!(
+        json["result"]["value"]["dimensions"],
+        serde_json::json!([{"lower_bound":-2,"length":2}])
+    );
+    let args = session
+        .decode_native_arguments(&serde_json::json!([json["result"]]).to_string())
+        .unwrap();
+    let inspected = session
+        .run_native(
+            typed.into_workbook(),
+            NativeVbaCall::new(&source, "NativeCodec.InspectArray", args, 45_000.0, 1),
+        )
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&inspected.to_json().unwrap()).unwrap();
+    let fields: Vec<_> = json["result"]["value"]["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["value"].clone())
+        .collect();
+    assert_eq!(
+        fields,
+        serde_json::json!([8194, -2, -1, 7, 9])
+            .as_array()
+            .unwrap()
+            .clone()
+    );
+}
+
+#[test]
+fn native_values_json_preserves_exact_numbers_and_bstr_contents() {
+    let descriptors = vec![
+        serde_json::json!({"type":"currency","value":"-922337203685477.5808"}),
+        serde_json::json!({"type":"decimal","value":{"negative":false,"magnitude":"79228162514264337593543950335","scale":28}}),
+        serde_json::json!({"type":"double","value":{"bits":"7ff8000000000001"}}),
+        serde_json::json!({"type":"single","value":{"bits":"7f800000"}}),
+        serde_json::json!({"type":"utf16","value":[0xd800]}),
+        serde_json::json!({"type":"bstr","value":[65,0,66]}),
+    ];
+    let mut session = SpreadsheetVbaSession::default();
+    let mut book = workbook();
+    for descriptor in descriptors {
+        let args = session
+            .decode_native_arguments(&serde_json::json!([descriptor]).to_string())
+            .unwrap();
+        let result = session
+            .run_native(
+                book,
+                NativeVbaCall::new(CODEC_SOURCE, "NativeCodec.Echo", args, 45_000.0, 1),
+            )
+            .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&result.to_typed_json().unwrap()).unwrap();
+        assert!(json["error"].is_null(), "{json}");
+        assert_eq!(json["result"], descriptor);
+        book = result.into_workbook();
+    }
+    let args = session
+        .decode_native_arguments(r#"[{"type":"null_string"}]"#)
+        .unwrap();
+    let null = session
+        .run_native(
+            book,
+            NativeVbaCall::new(CODEC_SOURCE, "NativeCodec.Pointer", args, 45_000.0, 1),
+        )
+        .unwrap();
+    assert!(matches!(null.result(), Value::LongLong(0)));
+}
+
+#[test]
+fn native_values_json_objects_release_user_classes_in_the_owning_session() {
+    const SOURCE: &str = concat!(
+        "Attribute VB_Name = \"NativeLife\"\n",
+        "Public Function MakeBox() As Object\n Set MakeBox = New Box\nEnd Function\n",
+        "Public Function CallBox(ByVal item As Object) As Long\n CallBox = item.Touch()\nEnd Function\n",
+        "VERSION 1.0 CLASS\nAttribute VB_Name = \"Box\"\n",
+        "Public Function Touch() As Long\n Range(\"A1\").Value = 17\n Touch = 17\nEnd Function\n",
+        "Private Sub Class_Terminate()\n ThisWorkbook.Worksheets(1).Range(\"A1\").Value = 41\nEnd Sub\n"
+    );
+    let mut session = SpreadsheetVbaSession::default();
+    let object = session
+        .run_native(
+            workbook(),
+            NativeVbaCall::new(SOURCE, "NativeLife.MakeBox", vec![], 45_000.0, 1),
+        )
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&object.to_typed_json().unwrap()).unwrap();
+    let reference = json["result"]["value"]["reference"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let descriptor = serde_json::json!([json["result"]]).to_string();
+    assert!(SpreadsheetVbaSession::default()
+        .decode_native_arguments(&descriptor)
+        .is_err());
+    let book = object.into_workbook();
+    let args = session.decode_native_arguments(&descriptor).unwrap();
+    let touched = session
+        .run_native(
+            book,
+            NativeVbaCall::new(SOURCE, "NativeLife.CallBox", args, 45_000.0, 1),
+        )
+        .unwrap();
+    assert!(matches!(touched.result(), Value::Integer(17)));
+    let mut release = NativeVbaCall::new(SOURCE, "", vec![], 45_000.0, 1);
+    release.action = NativeVbaAction::Release {
+        references: vec![reference],
+    };
+    let released = session
+        .run_native(touched.into_workbook(), release)
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&released.to_json().unwrap()).unwrap();
+    assert!(json["error"].is_null(), "{json}");
+    assert!(matches!(
+        released.workbook().sheets[0].rows[0].cells[0].value,
+        CellValue::Number(41.0)
+    ));
+    assert!(session.decode_native_arguments(&descriptor).is_err());
+}
+
+#[test]
+fn native_values_json_rejects_invalid_arguments_without_resetting_storage() {
+    let mut session = SpreadsheetVbaSession::default();
+    let first = session
+        .run_native(workbook(), call("NativeRun.Step", vec![Value::Integer(2)]))
+        .unwrap();
+    for invalid in [
+        r#"{}"#,
+        r#"[{"type":"long","value":1,"extra":0}]"#,
+        r#"[{"type":"empty","value":null}]"#,
+        r#"[{"type":"long","value":2147483648}]"#,
+        r#"[{"type":"long_long","value":1}]"#,
+        r#"[{"type":"double","value":{"bits":"not hex"}}]"#,
+        r#"[{"type":"decimal","value":{"negative":false,"magnitude":"1","scale":29}}]"#,
+        r#"[{"type":"array","value":{"dimensions":[{"lower_bound":0,"length":2}],"element_default":{"type":"empty"},"resizable":true,"values":[]}}]"#,
+    ] {
+        assert!(
+            session.decode_native_arguments(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+    let next = session
+        .run_native(
+            first.into_workbook(),
+            call("NativeRun.Step", vec![Value::Integer(3)]),
+        )
+        .unwrap();
+    assert!(matches!(next.result(), Value::Integer(5)));
+}
