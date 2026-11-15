@@ -12828,6 +12828,11 @@ fn bubblepad_on() -> bool {
     std::env::var("OXI_BUBBLEPAD_DISABLE").is_err()
 }
 
+/// `OXI_SURFNEG_DISABLE=1` keeps surface axes on the floor and the headroom.
+fn surfneg_on() -> bool {
+    std::env::var("OXI_SURFNEG_DISABLE").is_err()
+}
+
 /// `OXI_SURFACE1_DISABLE=1` draws a one-series surface like a two-series one.
 fn surface1_on() -> bool {
     std::env::var("OXI_SURFACE1_DISABLE").is_err()
@@ -12933,7 +12938,10 @@ unsafe fn draw_surface_chart(
         } else {
             16.0
         };
-    let plot_bot = sy + shh - 40.02;
+    // With negative data the category labels ride the 0 line, and the band
+    // under the floor goes: plot bottom = frame bottom - 16.1 (8 negative
+    // arms of chart_surface_sweep4: 343.9 in a 360 frame, 455.9 in 472).
+    let plot_bot = sy + shh - if surfneg_on() && lo < 0.0 { 16.1 } else { 40.02 };
     let (rx, ry) = (-13.7136f64.to_radians(), 19.7754f64.to_radians());
     let (h_coef, d_coef) = (1.0013f64, 3.599f64);
 
@@ -13013,7 +13021,14 @@ unsafe fn draw_surface_chart(
         let a = project((0.0, 0.0, 0.0), depth, height, s, ph);
         let b = project((0.0, 1.0, 0.0), depth, height, s, ph);
         let front = (a.1 - b.1).abs();
-        axis = if single { (0.0, 1.5, 3) } else { nice_axis_range(lo, hi, front, 26.5) };
+        // No 5% headroom on a surface axis: data down to -29.3 gives -30..0
+        // (chart_surface_sweep4 P9); nice_axis_range adds it, so cancel it.
+        let hr = if surfneg_on() { AXIS_HEADROOM } else { 1.0 };
+        axis = if single {
+            (0.0, 1.5, 3)
+        } else {
+            nice_axis_range(lo / hr, hi / hr, front, 26.5)
+        };
         let step = (axis.1 - axis.0) / axis.2 as f64;
         let widest = (0..=axis.2)
             .map(|i| wid(&fmt_axis_value(axis.0 + step * i as f64, step)))
@@ -13068,6 +13083,15 @@ unsafe fn draw_surface_chart(
     }
     seg(at(0.0, 0.0, 0.0), at(1.0, 0.0, 0.0));
     seg(at(1.0, 0.0, 0.0), at(1.0, 0.0, 1.0));
+    // With negative values the category and series axes run at the value-0
+    // level (chart_surface_sweep4: the Q ticks sit on the 0 tick in all 9
+    // arms, at the top when every value is negative); the floor stays at the
+    // axis minimum.
+    let v_axis = if surfneg_on() && amin < 0.0 { vnorm(0.0f64.min(amax)) } else { 0.0 };
+    if v_axis > 0.0 {
+        seg(at(0.0, v_axis, 0.0), at(1.0, v_axis, 0.0));
+        seg(at(1.0, v_axis, 0.0), at(1.0, v_axis, 1.0));
+    }
     seg(at(0.0, 0.0, 0.0), at(0.0, 1.0, 0.0));
     SelectObject(dc, old_pen);
     let _ = DeleteObject(pen);
@@ -13193,7 +13217,10 @@ unsafe fn draw_surface_chart(
     for i in 0..=adiv {
         let p = at(0.0, i as f64 / adiv as f64, 0.0);
         tick(p.0, p.1, p.0 - 5.73, p.1);
-        let t = fmt_axis_value(amin + step * i as f64, step);
+        let v = amin + step * i as f64;
+        // the top of an all-negative axis is -0.0, which prints "-0"
+        let v = if v.abs() < step * 1e-9 { 0.0 } else { v };
+        let t = fmt_axis_value(v, step);
         draw_text_baseline(
             dc,
             ((p.0 - 16.7 - wid(&t)) * scale).round() as i32,
@@ -13209,7 +13236,7 @@ unsafe fn draw_surface_chart(
         if single && ci + 1 < nc {
             continue;
         }
-        let p = at(xpos(ci), 0.0, 0.0);
+        let p = at(xpos(ci), v_axis, 0.0);
         tick(p.0, p.1, p.0, p.1 + 5.75);
         let ci = if single { 0 } else { ci };
         if let Some(name) = chart.categories.get(ci) {
@@ -13229,7 +13256,7 @@ unsafe fn draw_surface_chart(
         if single && si == 0 {
             continue;
         }
-        let p = at(1.0, 0.0, zpos(si));
+        let p = at(1.0, v_axis, zpos(si));
         tick(p.0, p.1, p.0 + 5.69, p.1);
         if single || si % 2 == 0 {
             let si_label = if single { 0 } else { si };

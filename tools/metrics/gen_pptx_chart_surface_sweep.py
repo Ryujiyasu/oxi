@@ -26,7 +26,8 @@ from pptx.util import Emu
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-NAME = ("chart_surface_sweep3" if "3" in sys.argv[1:] else
+NAME = ("chart_surface_sweep4" if "4" in sys.argv[1:] else
+        "chart_surface_sweep3" if "3" in sys.argv[1:] else
         "chart_surface_sweep2" if "2" in sys.argv[1:] else "chart_surface_sweep")
 DIR = os.path.abspath(os.path.join("pipeline_data", "pptx_probes", NAME))
 OUT = os.path.join(DIR, NAME + ".pptx")
@@ -63,6 +64,15 @@ if "3" in sys.argv[1:]:
     BASE = BASE + [17.5, 19.9, 21.1, 18.8]
     ARMS = [(396, 288, 4, 1, 1.0), (396, 288, 6, 1, 1.0), (500, 400, 4, 1, 1.0)] +            [(396, 288, 8, ns, 1.0) for ns in (3, 4, 5, 6, 8)] +            [(396, 400, 4, ns, 1.0) for ns in (3, 5, 7)] +            [(600, 288, 4, ns, 1.0) for ns in (3, 5)]
 
+# sweep 4 (`... 4`): negative values -- (w, h, nc, ns, scale, shift)
+SHIFT = {}
+if "4" in sys.argv[1:]:
+    ARMS = [(396, 288, 4, 2, 1.0), (396, 288, 4, 3, 1.0), (396, 288, 4, 4, 1.0),
+            (396, 400, 4, 3, 1.0), (396, 288, 8, 3, 1.0), (600, 288, 4, 3, 1.0),
+            (396, 288, 4, 3, 1.0), (396, 288, 4, 3, 1.0), (396, 288, 4, 3, 1.0)]
+    SHIFT = {i: 15.0 for i in range(6)}
+    SHIFT.update({6: 5.0, 7: 25.0, 8: 40.0})
+
 
 def pt(v):
     return Emu(int(round(v * 12700)))
@@ -72,13 +82,14 @@ def build():
     prs = Presentation()
     prs.slide_width = pt(720)
     prs.slide_height = pt(540)
-    for w, h, nc, ns, k in ARMS:
+    for ai, (w, h, nc, ns, k) in enumerate(ARMS):
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         cd = CategoryChartData()
         cd.categories = ["Q%d" % (i + 1) for i in range(nc)]
         for s in range(ns):
             cd.add_series("Ser%d" % (s + 1),
-                          [round(BASE[i] * k * (1 - 0.18 * s), 1) for i in range(nc)])
+                          [round(BASE[i % len(BASE)] * k * (1 - 0.18 * s) - SHIFT.get(ai, 0.0), 1)
+                           for i in range(nc)])
         gf = slide.shapes.add_chart(XL_CHART_TYPE.LINE, pt(72), pt(72), pt(w), pt(h), cd)
         gf.chart.has_title = False
         gf.chart.has_legend = False
