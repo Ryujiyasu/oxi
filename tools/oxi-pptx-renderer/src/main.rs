@@ -12828,6 +12828,17 @@ fn bubblepad_on() -> bool {
     std::env::var("OXI_BUBBLEPAD_DISABLE").is_err()
 }
 
+/// Minimum tick spacing on the projected front edge of a surface value axis.
+/// `OXI_SURFSPACE=<pt>` overrides it for measurement.
+fn surf_min_spacing() -> f64 {
+    std::env::var("OXI_SURFSPACE").ok().and_then(|v| v.parse().ok()).unwrap_or(26.5)
+}
+
+/// `OXI_SURFCAM_DISABLE=1` goes back to the fitted surface projection.
+fn surfcam_on() -> bool {
+    std::env::var("OXI_SURFCAM_DISABLE").is_err()
+}
+
 /// `OXI_SURFNEG_DISABLE=1` keeps surface axes on the floor and the headroom.
 fn surfneg_on() -> bool {
     std::env::var("OXI_SURFNEG_DISABLE").is_err()
@@ -12942,8 +12953,27 @@ unsafe fn draw_surface_chart(
     // under the floor goes: plot bottom = frame bottom - 16.1 (8 negative
     // arms of chart_surface_sweep4: 343.9 in a 360 frame, 455.9 in 472).
     let plot_bot = sy + shh - if surfneg_on() && lo < 0.0 { 16.1 } else { 40.02 };
-    let (rx, ry) = (-13.7136f64.to_radians(), 19.7754f64.to_radians());
-    let (h_coef, d_coef) = (1.0013f64, 3.599f64);
+    // S-SURFCAM: PowerPoint's own view (rotX 15, rotY 20) through a camera
+    // whose field of view is perspective/2 = 15 degrees over the plot height
+    // (LibreOffice's import halves c:perspective the same way): the eye sits
+    // (plot_h/2)/tan(7.5deg) = 3.80 plot heights away, aimed at the plot
+    // centre. With the box shifted sideways in view space this reproduces
+    // every tick of 28 sweep arms to 0.04..0.09pt (the fitted 13.71/19.78
+    // model below to 0.5..5pt). OXI_SURFCAM_DISABLE = the fitted model.
+    let cam = surfcam_on();
+    let (rx, ry) = if cam {
+        (-15f64.to_radians(), 20f64.to_radians())
+    } else {
+        (-13.7136f64.to_radians(), 19.7754f64.to_radians())
+    };
+    let (h_coef, d_coef) = if cam { (1.0f64, 3.599f64) } else { (1.0013f64, 3.599f64) };
+    let eye = |ph: f64, s: f64| {
+        if cam {
+            (ph / 2.0) / 7.5f64.to_radians().tan() / s
+        } else {
+            d_coef * ph / s
+        }
+    };
 
     // The legend lists the bands, highest first (chart_surface P5).
     let layout = |plot_left: f64, plot_right: f64| {
@@ -12954,20 +12984,22 @@ unsafe fn draw_surface_chart(
         let height = h_coef * (ph / pw) * (((nc + ns_h - 1) / 2) as f64) / nc as f64;
         (pw, ph, depth, height)
     };
-    let project = |p: (f64, f64, f64), depth: f64, height: f64, s: f64, ph: f64| {
+    // `e` = the box's sideways shift in view space, in points.
+    let project = |p: (f64, f64, f64), depth: f64, height: f64, s: f64, ph: f64, e: (f64, f64)| {
         let (x, y, z) = (p.0 - 0.5, (p.1 - 0.5) * height, (p.2 - 0.5) * depth);
         let (x, z) = (x * ry.cos() + z * ry.sin(), -x * ry.sin() + z * ry.cos());
         let (y, z) = (y * rx.cos() - z * rx.sin(), y * rx.sin() + z * rx.cos());
-        let dist = d_coef * ph / s;
+        let (x, y) = (x + e.0 / s, y + e.1 / s);
+        let dist = eye(ph, s);
         let f = dist / (dist + z);
         (s * x * f, -s * y * f, z)
     };
     let corners: Vec<(f64, f64, f64)> = (0..8)
         .map(|i| ((i & 1) as f64, ((i >> 1) & 1) as f64, ((i >> 2) & 1) as f64))
         .collect();
-    let extent = |depth: f64, height: f64, s: f64, ph: f64| {
+    let extent = |depth: f64, height: f64, s: f64, ph: f64, e: (f64, f64)| {
         let pts: Vec<(f64, f64, f64)> =
-            corners.iter().map(|&c| project(c, depth, height, s, ph)).collect();
+            corners.iter().map(|&c| project(c, depth, height, s, ph, e)).collect();
         let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
         for p in &pts {
             x0 = x0.min(p.0);
@@ -12978,14 +13010,30 @@ unsafe fn draw_surface_chart(
         (x0, x1, y0, y1)
     };
     // Scale for a target: bisection on the monotone projected extent.
+    // The shift that centres the projected box, found by iteration (the
+    // perspective makes each step move the box a little less than asked).
+    let centre = |depth: f64, height: f64, s: f64, ph: f64| -> (f64, f64) {
+        if !cam {
+            return (0.0, 0.0);
+        }
+        let mut e = (0.0f64, 0.0f64);
+        for _ in 0..30 {
+            let (x0, x1, y0, y1) = extent(depth, height, s, ph, e);
+            e.0 -= (x0 + x1) / 2.0;
+            e.1 += (y0 + y1) / 2.0;
+        }
+        e
+    };
     let fit = |depth: f64, height: f64, pw: f64, ph: f64| -> (f64, bool) {
+        let (fw, fh) = if cam { (0.9724, 0.9724) } else { (0.969, 0.97) };
         let solve = |target: f64, horiz: bool| {
             let (mut a, mut b) = (1.0f64, 20000.0f64);
-            for _ in 0..80 {
+            for _ in 0..60 {
                 let m = 0.5 * (a + b);
-                let (x0, x1, y0, y1) = extent(depth, height, m, ph);
-                let e = if horiz { x1 - x0 } else { y1 - y0 };
-                if e > target {
+                let e = centre(depth, height, m, ph);
+                let (x0, x1, y0, y1) = extent(depth, height, m, ph, e);
+                let ext = if horiz { x1 - x0 } else { y1 - y0 };
+                if ext > target {
                     b = m;
                 } else {
                     a = m;
@@ -12993,10 +13041,11 @@ unsafe fn draw_surface_chart(
             }
             0.5 * (a + b)
         };
-        let s_w = solve(0.969 * pw, true);
-        let (_, _, y0, y1) = extent(depth, height, s_w, ph);
-        if y1 - y0 > 0.97 * ph {
-            (solve(0.97 * ph, false), true)
+        let s_w = solve(fw * pw, true);
+        let e = centre(depth, height, s_w, ph);
+        let (_, _, y0, y1) = extent(depth, height, s_w, ph, e);
+        if y1 - y0 > fh * ph {
+            (solve(fh * ph, false), true)
         } else {
             (s_w, false)
         }
@@ -13018,8 +13067,9 @@ unsafe fn draw_surface_chart(
         let plot_right = right_edge(legend_w);
         let (pw, ph, depth, height) = layout(plot_left, plot_right);
         let (s, _) = fit(depth, height, pw, ph);
-        let a = project((0.0, 0.0, 0.0), depth, height, s, ph);
-        let b = project((0.0, 1.0, 0.0), depth, height, s, ph);
+        let e = centre(depth, height, s, ph);
+        let a = project((0.0, 0.0, 0.0), depth, height, s, ph, e);
+        let b = project((0.0, 1.0, 0.0), depth, height, s, ph, e);
         let front = (a.1 - b.1).abs();
         // No 5% headroom on a surface axis: data down to -29.3 gives -30..0
         // (chart_surface_sweep4 P9); nice_axis_range adds it, so cancel it.
@@ -13027,7 +13077,7 @@ unsafe fn draw_surface_chart(
         axis = if single {
             (0.0, 1.5, 3)
         } else {
-            nice_axis_range(lo / hr, hi / hr, front, 26.5)
+            nice_axis_range(lo / hr, hi / hr, front, surf_min_spacing())
         };
         let step = (axis.1 - axis.0) / axis.2 as f64;
         let widest = (0..=axis.2)
@@ -13046,17 +13096,27 @@ unsafe fn draw_surface_chart(
     let plot_right = right_edge(legend_w);
     let (pw, ph, depth, height) = layout(plot_left, plot_right);
     let (s, vbind) = fit(depth, height, pw, ph);
-    let (x0, x1, y0, y1) = extent(depth, height, s, ph);
+    let mut e_box = centre(depth, height, s, ph);
+    let (x0, x1, y0, y1) = extent(depth, height, s, ph, e_box);
     let cx = (plot_left + plot_right) / 2.0;
-    let cy = (plot_top + plot_bot) / 2.0 - if vbind { 0.0 } else { 0.011 * ph };
-    let (tx, ty) = (cx - (x0 + x1) / 2.0, cy - (y0 + y1) / 2.0);
+    let (tx, ty) = if cam {
+        // Above the centred place by 5*free/(free+45) of the free height
+        // (0.4..5.3pt over the arms; the law behind it is not derived and
+        // leaves up to ~2pt).
+        let free = (ph - (y1 - y0)).max(0.0);
+        e_box.1 += 5.0 * free / (free + 45.0);
+        (cx, (plot_top + plot_bot) / 2.0)
+    } else {
+        let cy = (plot_top + plot_bot) / 2.0 - if vbind { 0.0 } else { 0.011 * ph };
+        (cx - (x0 + x1) / 2.0, cy - (y0 + y1) / 2.0)
+    };
     if std::env::var("OXI_SURFACE_DEBUG").is_ok() {
         eprintln!("SURFACE plot {plot_left:.2}..{plot_right:.2} x {plot_top:.2}..{plot_bot:.2} D {depth:.3} H {height:.3} s {s:.2} vbind {vbind} t ({tx:.2},{ty:.2}) axis {amin}..{amax}/{adiv}");
     }
     let vnorm = |v: f64| ((v - amin) / (amax - amin)).clamp(0.0, 1.0);
     // page point (pt) + rotated depth
     let at = |x: f64, v01: f64, z: f64| {
-        let p = project((x, v01, z), depth, height, s, ph);
+        let p = project((x, v01, z), depth, height, s, ph, e_box);
         (tx + p.0, ty + p.1, p.2)
     };
     let px = |p: (f64, f64, f64)| POINT {
@@ -13136,7 +13196,7 @@ unsafe fn draw_surface_chart(
                 };
                 let nr = turn(n);
                 let cen = turn(((a.0 + b.0 + c.0) / 3.0, (a.1 + b.1 + c.1) / 3.0, (a.2 + b.2 + c.2) / 3.0));
-                let dist = d_coef * ph / s;
+                let dist = eye(ph, s);
                 let eye = (-cen.0, -cen.1, -dist - cen.2);
                 let top = nr.0 * eye.0 + nr.1 * eye.1 + nr.2 * eye.2 > 0.0;
                 for band in 0..adiv {
