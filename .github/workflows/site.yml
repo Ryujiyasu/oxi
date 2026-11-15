@@ -1,0 +1,164 @@
+name: Site
+
+# Builds the site (docs/ plus the WebAssembly engine) and hands it to GitLab
+# Pages, which serves it at the URL that has been given out.
+#
+# The build used to run on GitLab for every push to main. It takes about 14
+# minutes, main moves 20-40 times a day, and GitLab's free compute quota
+# (about 400 minutes a month) ran out within the first days of each month, so
+# from then on every deploy was refused before it started and the site
+# silently stayed weeks old. GitHub builds a public repository for free, so the
+# build is here now and GitLab only unpacks the result, which takes a minute.
+#
+# It runs twice a day and by hand, not per push: each deploy still costs GitLab
+# minutes. A build whose content is byte-identical to the one already published
+# deploys nothing. A failed build deploys nothing either, so Pages keeps serving
+# the previous site.
+#
+# Publishing: the tarball goes to the rolling pre-release `site`
+# (https://github.com/Ryujiyasu/oxi/releases/download/site/site.tar.gz), then
+# GitLab is asked to deploy it through a pipeline trigger, passing the SHA-256
+# it must find.
+#
+# Needs a GitLab pipeline trigger token (GitLab: Settings > CI/CD > Pipeline
+# trigger tokens) stored here as the secret GITLAB_TRIGGER_TOKEN. The job fails
+# without it rather than skipping: a deploy that silently stops is the failure
+# this workflow exists to end.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+    - cron: "17 15 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Deploy even if the content is unchanged"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: site
+  cancel-in-progress: true
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: site
+      - uses: actions/cache/restore@v4
+        id: wasm-tools
+        with:
+          path: ~/.local/share/oxi-wasm-tools
+          key: wasm-tools-v1-${{ runner.os }}-${{ runner.arch }}-pack-0.15.1-opt-130
+      - name: Install pinned WebAssembly build tools
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools_dir="$HOME/.local/share/oxi-wasm-tools"
+          mkdir -p "$tools_dir/bin"
+          download_asset() {
+            local repo="$1" asset="$2" expected="$3" archive="$4"
+            curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+              --connect-timeout 15 --max-time 180 --retry-max-time 300 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/octet-stream" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$repo/releases/assets/$asset" \
+              --output "$archive"
+            printf '%s  %s\n' "$expected" "$archive" | sha256sum --check
+          }
+          if [[ ! -x "$tools_dir/bin/wasm-pack" ]]; then
+            archive="$RUNNER_TEMP/oxi-wasm-pack.tar.gz"
+            download_asset wasm-bindgen/wasm-pack 691077448 \
+              410101009739b9d01c7d5affaaad6e9c9a24b4cba6791a4805db8e89b9bf7af2 "$archive"
+            tar -xzf "$archive" --strip-components=1 -C "$tools_dir/bin" \
+              wasm-pack-v0.15.1-x86_64-unknown-linux-musl/wasm-pack
+          fi
+          if [[ ! -x "$tools_dir/bin/wasm-opt" ]]; then
+            archive="$RUNNER_TEMP/oxi-binaryen.tar.gz"
+            download_asset WebAssembly/binaryen 435610959 \
+              0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc "$archive"
+            tar -xzf "$archive" --strip-components=2 -C "$tools_dir/bin" \
+              binaryen-version_130/bin/wasm-opt
+          fi
+          test "$("$tools_dir/bin/wasm-pack" --version)" = "wasm-pack 0.15.1"
+          "$tools_dir/bin/wasm-opt" --version | grep -E '^wasm-opt version 130([[:space:]]|$)'
+          echo "$tools_dir/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache/save@v4
+        if: steps.wasm-tools.outputs.cache-hit != 'true'
+        with:
+          path: ~/.local/share/oxi-wasm-tools
+          key: wasm-tools-v1-${{ runner.os }}-${{ runner.arch }}-pack-0.15.1-opt-130
+      # The same build the GitLab job ran: the full suite, because the Word,
+      # Excel and PowerPoint pages all load this one module, and the per-face
+      # font catalog left out of it (docs/font-catalog.js fetches the faces a
+      # document needs from font_catalog/, one file per face, since Pages does
+      # not honour Range requests).
+      - run: wasm-pack build --target web --release -- --features suite,external-font-catalog
+        working-directory: crates/oxidocs-wasm
+      - name: Assemble the site
+        run: |
+          set -eu
+          mkdir -p public
+          cp -r docs/* public/
+          cp crates/oxidocs-wasm/pkg/oxidocs_wasm.js crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm \
+             crates/oxidocs-wasm/pkg/oxidocs_wasm.d.ts crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm.d.ts public/
+          sh tools/site/split_font_catalog.sh public/font_catalog
+          ls -la public/oxidocs_wasm_bg.wasm
+          # Byte-reproducible, so an unchanged site gives an unchanged hash.
+          tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - public | gzip -n -9 > site.tar.gz
+          sha256sum site.tar.gz | tee site.tar.gz.sha256
+          echo "SITE_SHA256=$(cut -d' ' -f1 site.tar.gz.sha256)" >> "$GITHUB_ENV"
+          du -h site.tar.gz
+      - name: Compare with the published site
+        id: changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          published=$(curl -fsSL "https://github.com/${{ github.repository }}/releases/download/site/site.tar.gz.sha256" 2>/dev/null | cut -d' ' -f1 || true)
+          echo "published: ${published:-none}  built: $SITE_SHA256"
+          if [ "$published" = "$SITE_SHA256" ] && [ "$FORCE" != "true" ]; then
+            echo "Unchanged since the last deploy; nothing to publish."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish the tarball
+        if: steps.changed.outputs.deploy == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view site >/dev/null 2>&1; then
+            # A pre-release that is never "latest", so the repository's
+            # latest release stays the engine's.
+            gh release create site --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "Site build (rolling)" \
+              --notes "The built site that GitLab Pages serves, replaced by the Site workflow. Not a release of Oxi."
+          fi
+          gh release upload site site.tar.gz site.tar.gz.sha256 --clobber
+      - name: Ask GitLab to deploy it
+        if: steps.changed.outputs.deploy == 'true'
+        env:
+          TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "GITLAB_TRIGGER_TOKEN is not set, so the site was built but not deployed." >&2
+            echo "Add a GitLab pipeline trigger token (Settings > CI/CD > Pipeline trigger tokens) as that secret." >&2
+            exit 1
+          fi
+          curl --fail-with-body -sS -X POST \
+            -F "token=$TOKEN" -F "ref=main" -F "variables[SITE_SHA256]=$SITE_SHA256" \
+            "https://gitlab.com/api/v4/projects/Ryujiyasu%2Foxi/trigger/pipeline" | head -c 400
