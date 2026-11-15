@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Convert .docx to PDF with the Oxi engine, without LibreOffice or Word.
+"""Convert .docx and .pptx to PDF with the Oxi engine, without LibreOffice,
+Word or PowerPoint.
 
     import oxidocs
 
     result = oxidocs.docx_to_pdf("report.docx", "report.pdf")
     print(result.pages)
+
+    oxidocs.pptx_to_pdf("deck.pptx", "deck.pdf")  # one page per slide
 
     # Many documents: keep one engine process running.
     with oxidocs.Converter(threads=4) as converter:
@@ -15,7 +18,8 @@ With ``strict=True`` a document that holds content Oxi does not draw (a
 chart type it does not support, SmartArt with no saved drawing, less than
 90% of the document's own text drawn) raises :class:`UnsupportedContent`
 instead of producing an incomplete PDF, so the caller can fall back to
-another converter.
+another converter. For slides, charts, gradient fills, dashed outlines and
+rotated text are among what is not drawn yet.
 
 The package ships the ``oxidocs`` command-line binary (also on your PATH
 after installing) and drives it through its ``serve`` mode: one JSON request
@@ -42,6 +46,7 @@ __all__ = [
     "UnsupportedContent",
     "binary_path",
     "docx_to_pdf",
+    "pptx_to_pdf",
 ]
 
 PathLike = Union[str, "os.PathLike[str]"]
@@ -192,7 +197,11 @@ class Converter:
     # -- conversion --------------------------------------------------------
 
     def convert(self, docx: PathLike, pdf: PathLike, *, strict: bool = False, timeout: Optional[float] = None) -> Result:
-        """Convert ``docx`` to ``pdf``; see :func:`docx_to_pdf`."""
+        """Convert ``docx`` to ``pdf``; see :func:`docx_to_pdf`.
+
+        A presentation (.pptx and its variants) is converted too, one page
+        per slide: the engine tells the formats apart by name and content.
+        """
         source, target = Path(docx).resolve(), Path(pdf).resolve()
         if not source.is_file():
             raise ConversionError(f"no such file: {source}")
@@ -248,3 +257,22 @@ def docx_to_pdf(
     """
     with Converter(threads=1) as converter:
         return converter.convert(docx, pdf, strict=strict, timeout=timeout)
+
+
+def pptx_to_pdf(
+    pptx: PathLike,
+    pdf: PathLike,
+    *,
+    strict: bool = False,
+    timeout: Optional[float] = None,
+) -> Result:
+    """Convert one .pptx file to PDF, one page per slide.
+
+    Returns and raises as :func:`docx_to_pdf`. Slides are newer in Oxi than
+    Word documents: charts, gradient fills, dashed outlines and rotated text
+    or pictures are not drawn as PowerPoint draws them yet, and
+    ``strict=True`` raises :class:`UnsupportedContent` naming them rather
+    than produce a PDF with them missing.
+    """
+    with Converter(threads=1) as converter:
+        return converter.convert(pptx, pdf, strict=strict, timeout=timeout)
