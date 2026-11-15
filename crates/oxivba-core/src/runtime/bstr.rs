@@ -7,6 +7,22 @@
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0x1_2000_0000);
+
+/// Reserve disjoint interpreter storage, sharing the BSTR address space.
+/// No returned integer is a native address or can be dereferenced by Rust.
+pub(super) fn reserve_storage(bytes: u64) -> Result<i64, RuntimeError> {
+    let size = bytes.checked_add(15).map(|value| (value & !15).max(32))
+        .ok_or_else(|| error(RuntimeErrorKind::Overflow, "VBA address range overflow", None))?;
+    let mut address = NEXT.load(Ordering::Relaxed);
+    loop {
+        let end = address.checked_add(size).filter(|end| *end <= i64::MAX as u64)
+            .ok_or_else(|| error(RuntimeErrorKind::Overflow, "VBA address range overflow", None))?;
+        match NEXT.compare_exchange_weak(address, end, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(address as i64),
+            Err(current) => address = current,
+        }
+    }
+}
 #[derive(Clone)]
 pub(super) struct Allocation {
     pub(super) pointer: i64,
