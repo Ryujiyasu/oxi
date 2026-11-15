@@ -3,7 +3,9 @@
 #![cfg(feature = "suite")]
 
 use oxicells_core::ir::{CellValue, Workbook};
-use oxidocs_wasm::{NativeVbaAction, NativeVbaCall, SpreadsheetVbaSession};
+use oxidocs_wasm::{
+    read_spreadsheet_vba_project_native, NativeVbaAction, NativeVbaCall, SpreadsheetVbaSession,
+};
 use oxivba_core::Value;
 
 const SOURCE: &str = concat!(
@@ -283,4 +285,80 @@ fn native_execution_typed_nonfinite_results_are_never_silently_json_null() {
         .to_json()
         .unwrap_err()
         .contains("non-finite VBA result"));
+}
+
+#[test]
+fn native_project_reads_packaged_source_and_binds_code_names_after_a_sheet_rename() {
+    let bytes = include_bytes!("../../../tests/fixtures/vba/row_height_state.xlsm");
+    let mut info: serde_json::Value =
+        serde_json::from_str(&read_spreadsheet_vba_project_native(bytes, Some(932)).unwrap())
+            .unwrap();
+    assert_eq!(info["projectName"], "VBAProject");
+    let documents = info["documentModules"].as_array().unwrap();
+    assert!(documents.iter().any(|doc| doc["name"] == "ThisWorkbook"
+        && doc["baseType"] == "Excel.Workbook"
+        && doc["codeName"] == "ThisWorkbook"));
+    assert!(documents.iter().any(|doc| doc["name"] == "Sheet1"
+        && doc["baseType"] == "Excel.Worksheet"
+        && doc["codeName"] == "Sheet1"
+        && doc["sheetIndex"] == 0));
+    let mut source = info
+        .as_object_mut()
+        .unwrap()
+        .remove("source")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(source.contains("Attribute VB_Name = \"SaveProbe\""));
+    let options = info.to_string();
+    let mut session = SpreadsheetVbaSession::default();
+    let mut call = NativeVbaCall::new(
+        &source,
+        "SaveProbe.HeightProbeIdentity",
+        vec![],
+        45_000.0,
+        1,
+    );
+    call.options = &options;
+    let identity = session
+        .run_native(oxicells_core::parse_xlsx(bytes).unwrap(), call)
+        .unwrap();
+    assert!(matches!(identity.result(), Value::Integer(2_026_102_025)));
+
+    let mut book = identity.into_workbook();
+    book.sheets[0].name = "Renamed".into();
+    source.push_str("\r\nPublic Function WriteBoundSheet() As Long\r\n Sheet1.Range(\"A1\").Value = 23\r\n WriteBoundSheet = Sheet1.Index\r\nEnd Function\r\n");
+    let mut call = NativeVbaCall::new(&source, "SaveProbe.WriteBoundSheet", vec![], 45_000.0, 1);
+    call.options = &options;
+    let written = session.run_native(book, call).unwrap();
+    assert!(
+        matches!(written.result(), Value::Integer(1)),
+        "{}",
+        written.to_json().unwrap()
+    );
+    assert_eq!(written.workbook().sheets[0].name, "Renamed");
+    assert!(matches!(
+        written.workbook().sheets[0].rows[0].cells[0].value,
+        CellValue::Number(23.0)
+    ));
+}
+
+#[test]
+fn native_project_without_vba_reports_absence_without_javascript() {
+    let bytes = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+    let info: serde_json::Value =
+        serde_json::from_str(&read_spreadsheet_vba_project_native(bytes, None).unwrap()).unwrap();
+    assert!(info["source"].is_null());
+    assert!(info["projectName"].is_null());
+    assert!(info["documentModules"].is_array());
+}
+
+#[test]
+fn native_project_rejects_invalid_packages_and_unsupported_source_encodings() {
+    let error = read_spreadsheet_vba_project_native(b"not an OOXML archive", None).unwrap_err();
+    assert!(!error.is_empty());
+    let bytes = include_bytes!("../../../tests/fixtures/vba/row_height_state.xlsm");
+    let error = read_spreadsheet_vba_project_native(bytes, Some(65_535)).unwrap_err();
+    assert!(!error.is_empty());
 }
