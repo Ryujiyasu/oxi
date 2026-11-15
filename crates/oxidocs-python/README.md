@@ -1,6 +1,6 @@
 # oxidocs
 
-Convert `.docx` to PDF in Python without LibreOffice or Microsoft Word.
+Convert `.docx` and `.pptx` to PDF in Python without LibreOffice or Microsoft Office.
 
 ```sh
 pip install oxidocs
@@ -11,6 +11,8 @@ import oxidocs
 
 result = oxidocs.docx_to_pdf("report.docx", "report.pdf")
 print(result.pages)
+
+oxidocs.pptx_to_pdf("deck.pptx", "deck.pdf")   # one page per slide
 ```
 
 The package bundles the [Oxi](https://github.com/Ryujiyasu/oxi) engine as a single binary. Oxi is an open-source Rust engine that lays out Word documents the way Word does. There is no office suite to install and no server to run. The document is converted on the machine that holds it.
@@ -39,6 +41,19 @@ except oxidocs.UnsupportedContent as e:
 
 `ConversionError` (the base class) covers files that cannot be read at all.
 
+## Presentations
+
+`pptx_to_pdf` writes one PDF page per slide, with text laid out by rules measured from PowerPoint. Slides are newer in Oxi than Word documents, and some content is not drawn as PowerPoint draws it yet: charts, gradient fills (drawn in one colour), dashed outlines (drawn solid), rotated text and pictures, and text warps. `strict=True` raises `UnsupportedContent` for a deck that holds any of these, as it does for documents:
+
+```python
+try:
+    oxidocs.pptx_to_pdf(src, dst, strict=True)
+except oxidocs.UnsupportedContent as e:
+    print("falling back:", e.kinds)   # e.g. ['chart']
+```
+
+A `Converter` takes documents and presentations alike.
+
 ## Command line
 
 Installing the package also puts the `oxidocs` command on your PATH:
@@ -46,11 +61,14 @@ Installing the package also puts the `oxidocs` command on your PATH:
 ```sh
 oxidocs docx-to-pdf report.docx report.pdf
 oxidocs docx-to-pdf --strict report.docx report.pdf   # exit status 3 on content Oxi does not draw
+oxidocs pptx-to-pdf deck.pptx deck.pdf
 ```
 
 `python -m oxidocs ...` runs the same command. The `OXIDOCS_BINARY` environment variable points the package at another oxidocs binary.
 
 ## How faithful is it?
+
+The figures below are for Word documents. Slides have no such measurement for this PDF output yet.
 
 We froze 50 English and 50 Japanese documents from the public [docx-corpus](https://docxcorp.us) before any engine rendered them. Each was converted by this engine and by LibreOffice 26.8.2.2 on the same Linux machine, and both outputs were scored against Microsoft Word's own PDF of the same file.
 
