@@ -15134,8 +15134,10 @@ struct KernSource {
 ///     'AV' 40pt, `kern="0"`        -0.055pt   zero means off, not always
 ///     'To' 40pt                    -4.494pt   and 'oT' does not move
 ///
-/// So `a:rPr/@kern` is a MINIMUM SIZE in hundredths of a point, kerning is on
-/// when the attribute is absent, and which pairs move is the font's own data.
+/// So `a:rPr/@kern` is a MINIMUM SIZE in hundredths of a point and which pairs
+/// move is the font's own data. (CORRECTED 2026-11-15: "no attribute" here was
+/// the run's; its master said `kern="1200"`. With no `kern` anywhere PowerPoint
+/// does not kern -- see `kern_size_on`.)
 /// The -0.055pt in the unkerned arms is the two glyphs' side bearings, which
 /// is what the `kern0` and `kern9600` arms are for: without them a bearing
 /// difference reads as a kern.
@@ -15164,7 +15166,7 @@ fn kern_legacy_em(family: &str, bold: bool, italic: bool, first: char, second: c
 
 thread_local! {
     /// The paragraph's `kern` threshold in points (run `a:rPr/@kern`, else its
-    /// level's `defRPr/@kern`); None = no attribute anywhere = kern. Set by
+    /// level's `defRPr/@kern`); None = no attribute anywhere = NOT kerned. Set by
     /// `layout_paragraph_baselines`, which runs just before that paragraph is
     /// measured and drawn.
     static KERN_MIN: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
@@ -15172,9 +15174,16 @@ thread_local! {
 
 /// Whether text at `fs` points is kerned under the current paragraph's `kern`
 /// (`gen_pptx_kern.py`: kern="1200" kerns 40pt, kern="9600" and kern="0" do not).
+///
+/// With NO `kern` anywhere PowerPoint does not kern: the `ppt_defaults` probe
+/// with all 28 `kern="1200"` stripped draws 'Te' at 9.60pt (unkerned) instead
+/// of 8.04 and the line 2.06pt wider -- the table's sum. That is also why the
+/// dev corpus (Google Slides exports, no `kern` attribute in any deck) shows
+/// no kerning: turning it on there cost 0.967353 -> 0.966898, 8 decks down.
+/// `gen_pptx_kern.py`'s "no attribute" arm sat under a master that says 1200.
 fn kern_size_on(fs: f32) -> bool {
     match KERN_MIN.with(|k| k.get()) {
-        None => true,
+        None => false,
         Some(min) => min > 0.0 && fs + 1e-3 >= min,
     }
 }
