@@ -250,10 +250,15 @@ class Workbook:
         self._answers: queue.Queue[Optional[str]] = queue.Queue()
         self._sequence = 0
         self._closed = False
+        self._stderr_lock = threading.Lock()
+        self._stderr_tail = bytearray()
         self._process = subprocess.Popen([binary or binary_path(), "serve"], stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", bufsize=1,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        threading.Thread(target=self._read, daemon=True).start()
+        self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
+        self._stdout_thread = threading.Thread(target=self._read, daemon=True)
+        self._stderr_thread.start()
+        self._stdout_thread.start()
         try:
             info = self._rpc("open", path=str(self.path), sourceCodePage=source_code_page,
                              seed=secrets.randbits(64))
@@ -271,6 +276,29 @@ class Workbook:
         finally:
             self._answers.put(None)
 
+    def _read_stderr(self) -> None:
+        assert self._process.stderr is not None
+        stream = self._process.stderr
+        try:
+            # Read bounded chunks, including when the engine emits one very
+            # long line. Drain concurrently so a full stderr pipe cannot stall it.
+            while chunk := stream.buffer.read1(4096):
+                with self._stderr_lock:
+                    self._stderr_tail.extend(chunk)
+                    del self._stderr_tail[:-16384]
+        except (OSError, ValueError):
+            pass
+        finally:
+            stream.close()
+
+    def _engine_message(self, message: str) -> str:
+        code = self._process.returncode
+        if code is not None: message += f" (exit code {code})"
+        with self._stderr_lock:
+            tail = bytes(self._stderr_tail).decode("utf-8", errors="replace").strip()
+        if tail: message += "\nRecent engine stderr:\n" + tail
+        return message
+
     def _rpc(self, operation: str, **fields: Any) -> dict[str, Any]:
         with self._lock:
             if self._closed: raise OxiCellsError("workbook session is closed")
@@ -285,19 +313,19 @@ class Workbook:
                 line = self._answers.get(timeout=self.timeout)
             except queue.Empty as error:
                 self._stop()
-                raise TimeoutError("VBA request timed out; workbook session was terminated") from error
+                raise TimeoutError(self._engine_message("VBA request timed out; workbook session was terminated")) from error
             except (OSError, ValueError) as error:
                 self._stop()
-                raise OxiCellsError("OxiCells engine connection closed") from error
+                raise OxiCellsError(self._engine_message("OxiCells engine connection closed")) from error
             if line is None:
                 self._stop()
-                raise OxiCellsError("OxiCells engine exited")
+                raise OxiCellsError(self._engine_message("OxiCells engine exited"))
             try:
                 answer = json.loads(line)
                 if answer.get("id") != self._sequence: raise ValueError("response id does not match")
             except ValueError as error:
                 self._stop()
-                raise OxiCellsError("invalid OxiCells engine response") from error
+                raise OxiCellsError(self._engine_message("invalid OxiCells engine response")) from error
             if not answer.get("ok"): raise OxiCellsError(answer.get("error", "engine request failed"))
             return answer["outcome"]
 
@@ -333,7 +361,9 @@ class Workbook:
         except (OSError, subprocess.TimeoutExpired):
             self._process.kill()
             self._process.wait()
-        if self._process.stdout: self._process.stdout.close()
+        self._stderr_thread.join(timeout=1)
+        self._stdout_thread.join(timeout=1)
+        if self._process.stdout and not self._stdout_thread.is_alive(): self._process.stdout.close()
 
     def close(self) -> None:
         with self._lock:

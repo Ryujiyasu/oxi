@@ -6,6 +6,54 @@
 
 use std::{fs, path::Path, process::Command, time::SystemTime};
 
+#[test]
+fn source_code_page_also_preserves_native_document_identity() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/vba");
+    let cases: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("unicode_modules.json")).unwrap()).unwrap();
+    for case in cases.as_array().unwrap() {
+        let bytes = fs::read(root.join(case["package_fixture"].as_str().unwrap())).unwrap();
+        let metadata: serde_json::Value = serde_json::from_str(
+            &oxidocs_wasm::read_spreadsheet_vba_project_native(&bytes, Some(932)).unwrap(),
+        )
+        .unwrap();
+        if case["name"] == "unicode_workbook" {
+            // These JSON expectations describe source execution with explicit
+            // document bindings. This saved package still names ThisWorkbook;
+            // opening the actual file in Excel leaves the renamed class unbound
+            // and Driver.Probe raises 429. Preserve that package distinction.
+            let documents = metadata["documentModules"].as_array().unwrap();
+            let unbound = documents
+                .iter()
+                .find(|d| d["name"] == "日本語台帳")
+                .unwrap();
+            assert_eq!(unbound["unbound"], true);
+            assert!(unbound["codeName"].is_null());
+            assert!(documents.iter().any(|d| d["name"] == "ThisWorkbook"
+                && d["codeName"] == "ThisWorkbook"
+                && d["unbound"] != true));
+            continue;
+        }
+        for expected in case["document_modules"].as_array().unwrap() {
+            let actual = metadata["documentModules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|document| document["name"] == expected["name"])
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: document {} missing from {}",
+                        case["name"], expected["name"], metadata["documentModules"]
+                    )
+                });
+            for (key, value) in expected.as_object().unwrap() {
+                assert_eq!(&actual[key], value, "{}: {key}: {actual}", case["name"]);
+            }
+            assert_ne!(actual["unbound"], true, "{}: {actual}", case["name"]);
+        }
+    }
+}
+
 /// Exercises Python, JSONL, the real native engine and persisted OOXML together.
 #[test]
 fn python_runs_the_native_workbook_contract() {
@@ -63,6 +111,10 @@ fn python_runs_the_native_workbook_contract() {
     }
     let result = python
         .env("OXICELLS_TEST_FIXTURE", &fixture)
+        .env(
+            "OXICELLS_TEST_VBA_FIXTURES",
+            root.join("tests/fixtures/vba"),
+        )
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .status();
     // This directory is created exclusively by this test; never remove caller paths.

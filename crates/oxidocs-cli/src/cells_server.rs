@@ -95,6 +95,61 @@ fn capability_name(value: oxivba_core::Capability) -> &'static str {
     }
 }
 
+fn parse_error_message(message: &str, source: &str) -> String {
+    if source.is_ascii() {
+        message.into()
+    } else {
+        format!("{message}; non-ASCII VBA source may use a different code page; reopen with source_code_page=... if the recorded encoding is incorrect")
+    }
+}
+
+fn procedure_metadata(procedure: &oxivba_core::Procedure) -> Value {
+    use oxivba_core::ast::{ParamMode, ProcKind, Visibility};
+    let kind = match procedure.kind {
+        ProcKind::Sub => "Sub",
+        ProcKind::Function => "Function",
+        ProcKind::PropertyGet => "Property Get",
+        ProcKind::PropertyLet => "Property Let",
+        ProcKind::PropertySet => "Property Set",
+    };
+    let visibility = match procedure.visibility {
+        Visibility::Private => "Private",
+        Visibility::Friend => "Friend",
+        Visibility::Default | Visibility::Public | Visibility::Global => "Public",
+    };
+    let returns_value = matches!(procedure.kind, ProcKind::Function | ProcKind::PropertyGet);
+    let return_type = returns_value.then(|| {
+        procedure
+            .return_type
+            .as_ref()
+            .map_or("Variant", |kind| kind.name.as_str())
+    });
+    let parameters: Vec<_> = procedure
+        .params
+        .iter()
+        .map(|parameter| {
+            let mode = match parameter.mode {
+                ParamMode::ByRef => "ByRef",
+                ParamMode::ByVal => "ByVal",
+                ParamMode::ParamArray => "ParamArray",
+            };
+            json!({"name":parameter.name,"mode":mode,"type":parameter.type_name.name,
+            "optional":parameter.optional || parameter.mode == ParamMode::ParamArray,
+            "is_array":parameter.is_array || parameter.type_name.is_array,
+            "has_default":parameter.default.is_some()})
+        })
+        .collect();
+    let required = procedure
+        .params
+        .iter()
+        .filter(|parameter| !parameter.optional && parameter.mode != ParamMode::ParamArray)
+        .count();
+    json!({"name":procedure.name,"line":procedure.span.line,"kind":kind,
+        "visibility":visibility,"parameters":parameters,"required_arguments":required,
+        "return_type":return_type,
+        "returns_array":procedure.return_type.as_ref().is_some_and(|kind|kind.is_array)})
+}
+
 /// Read source only. This does not initialize a runtime or certify compatibility.
 fn inspect_source(source: &str) -> Value {
     let mut modules = Vec::new();
@@ -117,8 +172,13 @@ fn inspect_source(source: &str) -> Value {
                     | oxivba_core::LexError::UnexpectedChar { line, .. } => *line,
                 };
                 complete = false;
-                modules.push(json!({"name":name,"is_class":block.class,"source_line":block.line,
-                    "parse_error":{"message":error.to_string(),"line":line,"source_line":block.line + line as usize - 1}}));
+                modules.push(
+                    json!({"name":name,"is_class":block.class,"source_line":block.line,
+                    "procedures":[],"api_names":{},"external_declares":[],
+                    "unparsed_lines":0,"syntax_error_lines":[],
+                    "parse_error":{"message":parse_error_message(&error.to_string(), &block.text),
+                        "line":line,"source_line":block.line + line as usize - 1}}),
+                );
                 continue;
             }
         };
@@ -145,7 +205,10 @@ fn inspect_source(source: &str) -> Value {
         modules.push(json!({"name":name,"is_class":block.class,"source_line":block.line,
             "unparsed_lines":analysis.metrics.unparsed,
             "syntax_error_lines":parsed.syntax_errors.iter().map(|span|span.line).collect::<Vec<_>>(),
-            "procedures":analysis.procedures.iter().map(|proc|json!({"name":proc.name,"line":proc.line})).collect::<Vec<_>>(),
+            "procedures":parsed.items.iter().filter_map(|item|match item {
+                oxivba_core::ModuleItem::Procedure(procedure)=>Some(procedure_metadata(procedure)),
+                _=>None,
+            }).collect::<Vec<_>>(),"parse_error":null,
             "api_names":analysis.api_names,"external_declares":analysis.external_declares}));
     }
     json!({"has_macros":!source.is_empty(),"modules":modules,"signals":signals,"auto_run":auto_run,
@@ -362,7 +425,13 @@ impl OpenBook {
             call.file_name = Some(self.initial_name.clone());
         }
         let book = self.book.take().ok_or("workbook session is unavailable")?;
-        let outcome = self.session.run_native(book, call)?;
+        let outcome = self.session.run_native(book, call).map_err(|error| {
+            if !self.source.is_ascii() && oxivba_core::parse_project(&self.source).is_err() {
+                parse_error_message(&error, &self.source)
+            } else {
+                error
+            }
+        })?;
         let mut answer: Value =
             serde_json::from_str(&outcome.to_typed_json()?).map_err(|e| e.to_string())?;
         answer["sheets"] = json!(outcome
@@ -486,6 +555,10 @@ mod tests {
         assert_eq!(report["analysis_complete"], false);
         assert_eq!(report["compatibility_verified"], false);
         assert_eq!(report["modules"][1]["parse_error"]["line"], 4);
+        assert_eq!(report["modules"][1]["procedures"], json!([]));
+        assert_eq!(report["modules"][1]["api_names"], json!({}));
+        assert_eq!(report["modules"][1]["external_declares"], json!([]));
+        assert!(report["modules"][0]["parse_error"].is_null());
         assert!(report["unparsed_lines"].as_u64().unwrap() > 0);
         assert_eq!(report["auto_run"], json!(["Clean.Auto_Open"]));
         let shell = report["signals"]
@@ -513,5 +586,70 @@ mod tests {
         assert_eq!(report["signals"], json!([]));
         assert_eq!(report["auto_run"], json!([]));
         assert_eq!(report["unparsed_lines"], 0);
+    }
+
+    #[test]
+    fn inspection_reports_procedure_signatures_and_effective_defaults() {
+        let report = inspect_source(concat!(
+            "Attribute VB_Name = \"Metadata\"\nSub Defaults(item)\nEnd Sub\n",
+            "Private Function Compute(ByVal count As Long, Optional ByRef label As String = \"x\") As Long\nEnd Function\n",
+            "Public Sub Collect(ParamArray items() As Variant)\nEnd Sub\n",
+            "Public Function Values() As Long()\nEnd Function\n",
+            "VERSION 1.0 CLASS\nAttribute VB_Name = \"Box\"\n",
+            "Friend Property Get Title() As String\nEnd Property\n",
+            "Public Property Let Title(ByVal value As String)\nEnd Property\n",
+            "Private Property Set Item(ByVal value As Object)\nEnd Property\n"
+        ));
+        assert_eq!(report["analysis_complete"], true, "{report}");
+        let procedures = &report["modules"][0]["procedures"];
+        assert_eq!(procedures[0]["kind"], "Sub");
+        assert_eq!(procedures[0]["visibility"], "Public");
+        assert_eq!(procedures[0]["required_arguments"], 1);
+        assert_eq!(
+            procedures[0]["parameters"][0],
+            json!({"name":"item","mode":"ByRef",
+            "type":"Variant","optional":false,"is_array":false,"has_default":false})
+        );
+        assert!(procedures[0]["return_type"].is_null());
+        assert_eq!(procedures[1]["kind"], "Function");
+        assert_eq!(procedures[1]["visibility"], "Private");
+        assert_eq!(procedures[1]["return_type"], "Long");
+        assert_eq!(procedures[1]["required_arguments"], 1);
+        assert_eq!(procedures[1]["parameters"][0]["mode"], "ByVal");
+        assert_eq!(
+            procedures[1]["parameters"][1],
+            json!({"name":"label","mode":"ByRef",
+            "type":"String","optional":true,"is_array":false,"has_default":true})
+        );
+        assert_eq!(procedures[2]["required_arguments"], 0);
+        assert_eq!(procedures[2]["parameters"][0]["mode"], "ParamArray");
+        assert_eq!(procedures[2]["parameters"][0]["optional"], true);
+        assert_eq!(procedures[2]["parameters"][0]["is_array"], true);
+        assert_eq!(procedures[3]["return_type"], "Long");
+        assert_eq!(procedures[3]["returns_array"], true);
+        let properties = &report["modules"][1]["procedures"];
+        assert_eq!(properties[0]["kind"], "Property Get");
+        assert_eq!(properties[0]["visibility"], "Friend");
+        assert_eq!(properties[1]["kind"], "Property Let");
+        assert_eq!(properties[2]["kind"], "Property Set");
+        assert_eq!(properties[2]["visibility"], "Private");
+        assert!(properties[2]["return_type"].is_null());
+    }
+
+    #[test]
+    fn non_ascii_parse_failures_keep_the_error_and_suggest_the_code_page_option() {
+        for (source, hint) in [
+            ("Sub A()\n ' 日本語\n }\nEnd Sub", true),
+            ("Sub A()\n }\nEnd Sub", false),
+        ] {
+            let report = inspect_source(source);
+            let message = report["modules"][0]["parse_error"]["message"]
+                .as_str()
+                .unwrap();
+            assert!(message.contains("unexpected character"), "{message}");
+            assert_eq!(message.contains("source_code_page="), hint, "{message}");
+            assert_eq!(report["modules"][0]["procedures"], json!([]));
+            assert_eq!(report["analysis_complete"], false);
+        }
     }
 }

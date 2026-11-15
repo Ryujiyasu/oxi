@@ -7,11 +7,47 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 import oxicells as ox
+
+
+class EngineDiagnostics(unittest.TestCase):
+    def launch(self, source):
+        # Inject a real child-process failure, exercising the actual pipes and
+        # reader threads without introducing a deliberate panic into the engine.
+        real_popen = subprocess.Popen
+        def start(_command, **options):
+            return real_popen([sys.executable, "-c", source], **options)
+        return patch("oxicells.subprocess.Popen", side_effect=start)
+
+    def test_engine_exit_keeps_a_bounded_stderr_tail(self):
+        source = ("import sys; sys.stdin.readline(); "
+                  "sys.stderr.buffer.write(b'FIRST_DIAGNOSTIC\\n'+b'x'*65536+"
+                  "'\\npanic fixture: 日本語\\n'.encode('utf-8')); "
+                  "sys.stderr.flush(); sys.exit(37)")
+        with self.launch(source), self.assertRaises(ox.OxiCellsError) as raised:
+            ox.open("unused.xlsx", binary=sys.executable, timeout=10)
+        message = str(raised.exception)
+        self.assertIn("exit code 37", message)
+        self.assertIn("panic fixture: 日本語", message)
+        self.assertNotIn("FIRST_DIAGNOSTIC", message)
+        self.assertLess(len(message), 17000)
+
+    def test_stderr_flood_does_not_block_valid_protocol_responses(self):
+        source = ("import json,sys\n"
+                  "for line in sys.stdin:\n"
+                  " r=json.loads(line)\n"
+                  " sys.stderr.buffer.write(b'x'*65536);sys.stderr.flush()\n"
+                  " outcome={'protocol':1,'sheets':[],'hasMacros':False} if r['op']=='open' else {}\n"
+                  " print(json.dumps({'id':r['id'],'ok':True,'outcome':outcome}),flush=True)\n")
+        with self.launch(source), ox.open("unused.xlsx", binary=sys.executable, timeout=10) as wb:
+            self.assertFalse(wb.has_macros)
+            self.assertEqual(wb.sheets, ())
 
 
 @unittest.skipUnless(os.environ.get("OXICELLS_TEST_FIXTURE"), "run the cells_python Cargo integration test")
@@ -57,6 +93,62 @@ class NativeWorkbook(unittest.TestCase):
             self.assertEqual(report.auto_run, ())
             self.assertTrue(report.analysis_complete)
             self.assertFalse(report.compatibility_verified)
+
+    def test_inspection_exposes_parameters_and_callable_arity(self):
+        report = self.wb.inspect_macros()
+        modules = {module["name"]: module for module in report.modules}
+        procedures = {procedure["name"]: procedure for procedure in modules["PythonBridge"]["procedures"]}
+        step = procedures["Step"]
+        self.assertEqual(step["kind"], "Function")
+        self.assertEqual(step["visibility"], "Public")
+        self.assertEqual(step["return_type"], "Long")
+        self.assertEqual(step["required_arguments"], 1)
+        self.assertEqual(step["parameters"], [{"name":"delta","mode":"ByVal","type":"Long",
+            "optional":False,"is_array":False,"has_default":False}])
+        self.assertEqual(procedures["Auto_Open"]["kind"], "Sub")
+        self.assertEqual(procedures["Auto_Open"]["parameters"], [])
+        self.assertEqual(procedures["ReadCell"]["required_arguments"], 0)
+        self.assertIsNone(modules["PythonBridge"]["parse_error"])
+        destructor = next(p for p in modules["BridgeBox"]["procedures"] if p["name"]=="Class_Terminate")
+        self.assertEqual(destructor["visibility"], "Private")
+        self.assertEqual(self.wb.run("PythonBridge.Step", 3), 3)
+
+    def test_code_page_override_matches_unicode_packages_and_keeps_errors_actionable(self):
+        fixtures = Path(os.environ["OXICELLS_TEST_VBA_FIXTURES"])
+        cases = json.loads((fixtures/"unicode_modules.json").read_text(encoding="utf-8"))
+        failing_defaults = {"unicode_mixed", "unicode_workbook", "unicode_chart"}
+        with tempfile.TemporaryDirectory(prefix="oxicells-code-page-") as folder:
+            for index, case in enumerate(cases):
+                path = fixtures/case["package_fixture"]
+                with self.subTest(case=case["name"]):
+                    if case["name"] in failing_defaults:
+                        report = ox.inspect_macros(path, timeout=60)
+                        errors = [m["parse_error"] for m in report.modules if m["parse_error"]]
+                        self.assertTrue(errors, report.modules)
+                        self.assertTrue(any("source_code_page=" in e["message"] for e in errors))
+                        self.assertTrue(all("procedures" in m for m in report.modules))
+                        with ox.open(path, timeout=60) as wrong:
+                            with self.assertRaises(ox.OxiCellsError) as raised:
+                                wrong.run(case["procedure"])
+                            self.assertIn("source_code_page=", str(raised.exception))
+                    report = ox.inspect_macros(path, source_code_page=932, timeout=60)
+                    self.assertTrue(report.analysis_complete, report.modules)
+                    with ox.open(path, source_code_page=932, timeout=60) as wb:
+                        expected = case["expected"].replace(case["host_context"]["book_name"], path.name)
+                        if case["name"] == "unicode_workbook":
+                            # Actual saved-file Excel observations differ from
+                            # this JSON's explicitly bound source-only context.
+                            with self.assertRaises(ox.MacroError) as raised:
+                                wb.run(case["procedure"])
+                            self.assertIn("ActiveX component cannot create object", str(raised.exception))
+                            self.assertIn("日本語台帳", str(raised.exception))
+                        else:
+                            self.assertEqual(wb.run(case["procedure"]), expected)
+                        output = Path(folder)/f"unicode-{index}.xlsx"
+                        wb.save(output)
+                    with zipfile.ZipFile(output) as package:
+                        self.assertIsNone(package.testzip())
+                        self.assertNotIn("xl/vbaProject.bin", package.namelist())
 
     def test_exact_scalar_values_and_invalid_arguments_keep_state(self):
         self.wb.run("PythonBridge.Step", 2)
