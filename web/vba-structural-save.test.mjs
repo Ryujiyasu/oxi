@@ -2148,5 +2148,57 @@ let nativeSheetAddObservations = 0;
     assert.equal(nativeSheetAddObservations, 690);
 }
 
+let nativeWindowObservations = 0;
+{
+    const fixture = JSON.parse(await readFile(path.join(root, 'tests/fixtures/vba/window_collections_native.json'), 'utf8'));
+    assert.deepEqual(fixture.groups.map(group => [group.id, group.cases.length]), [
+        ['binding_and_coercion', 112], ['frame_lifecycle', 64], ['new_window_state_trace', 8],
+        ['dispatch_identity', 4], ['close_reference_state', 8], ['property_types', 8],
+    ]);
+    for (const group of fixture.groups) {
+        const carrier = Buffer.from(group.carrier_bytes_hex, 'hex');
+        const fullName = path.win32.join(String.raw`C:\work`, group.file_name);
+        for (const item of group.cases) for (const route of ['direct', 'session']) {
+            const options = {errorLanguage: 'ja-JP', vbaHelpFile: group.help_file,
+                applicationState: {visible: false, enableEvents: false, displayAlerts: false,
+                    standardFontStartup: {profileUtf16: group.startup_profile_utf16}},
+                fileContext: {packageBytes: carrier, fullName, readOnly: true, folders: [String.raw`C:\work`]}};
+            const book = wasm.parse_spreadsheet(carrier);
+            const session = route === 'session' ? new wasm.SpreadsheetVbaSession() : null;
+            const label = `${group.id} mode ${item.mode} binding ${item.binding} ${route}`;
+            try {
+                const args = [item.mode, item.binding];
+                const outcome = session
+                    ? session.run(book, group.program, 'Probe', args, 0, fullName, options)
+                    : wasm.run_spreadsheet_vba_with_outcome(book, group.program, 'Probe', args, 0, fullName, options);
+                assert.equal(outcome.error, undefined, label);
+                assert.equal(outcome.result.type, 'array', label);
+                assert.equal(outcome.result.value.values.length, group.fields.length, label);
+                const actual = outcome.result.value.values.map((value, at) => {
+                    if (item.expected[at] === null) {
+                        assert.equal(value.type, 'empty', `${label} ${group.fields[at]} Empty`);
+                        return null;
+                    }
+                    if (group.id === 'property_types' && at < 39 && at % 3 === 0 && item.expected[at + 1] === 10) {
+                        assert.equal(value.type, 'error', `${label} ${group.fields[at]} VT_ERROR`);
+                        assert.ok(Number.isInteger(value.value) && value.value >= 0 && value.value <= 65535);
+                        return value.value | 0x800a0000;
+                    }
+                    return value.value;
+                });
+                assert.deepEqual(actual, item.expected, label);
+                assert.equal(outcome.application_state.visible, false, label + ' visibility profile retained');
+                assert.equal(outcome.workbook_changed, false, label + ' caller unchanged');
+                assert.deepEqual(outcome.files ?? [], [], label + ' no output files');
+                assert.deepEqual(outcome.deleted_files ?? [], [], label + ' no deleted files');
+                nativeWindowObservations++;
+            } finally {
+                session?.free();
+            }
+        }
+    }
+    assert.equal(nativeWindowObservations, 408);
+}
+
 assert.deepEqual(failures, [], 'Excel saves validation and inherited row/column formatting');
-console.log(JSON.stringify({passed: true, native_sheet_collection_conditions: 93, native_sheet_binding_profile_conditions: 60, native_selected_sheet_add_conditions: 144, native_chart_anchor_boundary_conditions: 48, native_sheet_additional_route_observations: nativeSheetAddObservations, native_worksheet_add_count_conditions: 31, native_worksheet_add_count_route_observations: 62, native_iconset_variant_cases: 20, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));
+console.log(JSON.stringify({passed: true, native_window_conditions: 204, native_window_route_observations: nativeWindowObservations, native_sheet_collection_conditions: 93, native_sheet_binding_profile_conditions: 60, native_selected_sheet_add_conditions: 144, native_chart_anchor_boundary_conditions: 48, native_sheet_additional_route_observations: nativeSheetAddObservations, native_worksheet_add_count_conditions: 31, native_worksheet_add_count_route_observations: 62, native_iconset_variant_cases: 20, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));
