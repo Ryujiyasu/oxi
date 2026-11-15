@@ -31,6 +31,29 @@ class MacroError(OxiCellsError):
         super().__init__(details.get("message", "VBA execution failed"))
 
 
+@dataclass(frozen=True)
+class MacroReport:
+    """Source evidence, without executing macros or certifying runtime support.
+
+    Signal lines are 1-based exported-module lines; zero means no exact line.
+    ``source_line`` refers to the combined exported source.
+    """
+    has_macros: bool
+    modules: tuple[dict[str, Any], ...]
+    signals: tuple[dict[str, Any], ...]
+    auto_run: tuple[str, ...]
+    unresolved_calls: tuple[dict[str, Any], ...]
+    unparsed_lines: int
+    analysis_complete: bool
+    compatibility_verified: bool
+
+    @property
+    def external_calls(self) -> tuple[dict[str, Any], ...]:
+        kinds = {"starts_program", "network", "dll", "registry", "files",
+                 "outside_excel", "dynamic_target"}
+        return tuple(signal for signal in self.signals if signal["capability"] in kinds)
+
+
 class Byte(int): pass
 class Integer(int): pass
 class Long(int): pass
@@ -292,6 +315,13 @@ class Workbook:
         self._call("compile")
         return self.last_outcome["compilation"]
 
+    def inspect_macros(self) -> MacroReport:
+        info = self._rpc("inspect")
+        return MacroReport(has_macros=info["has_macros"], modules=tuple(info["modules"]),
+            signals=tuple(info["signals"]), auto_run=tuple(info["auto_run"]),
+            unresolved_calls=tuple(info["unresolved_calls"]), unparsed_lines=info["unparsed_lines"],
+            analysis_complete=info["analysis_complete"], compatibility_verified=info["compatibility_verified"])
+
     def save(self, path: os.PathLike[str] | str) -> None:
         self._call("save", path=str(Path(path).resolve()))
 
@@ -322,3 +352,9 @@ class Workbook:
 def open(path: os.PathLike[str] | str, **options: Any) -> Workbook:
     """Open a workbook without executing macros; use ``run`` explicitly."""
     return Workbook(path, **options)
+
+
+def inspect_macros(path: os.PathLike[str] | str, **options: Any) -> MacroReport:
+    """Read macro source capabilities without executing or compiling the project."""
+    with open(path, **options) as workbook:
+        return workbook.inspect_macros()

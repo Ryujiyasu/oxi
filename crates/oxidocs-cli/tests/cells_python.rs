@@ -31,6 +31,10 @@ fn python_runs_the_native_workbook_contract() {
             "Public Function MakeBox() As Object\n Set MakeBox = New BridgeBox\nEnd Function\n",
             "Public Function CallBox(ByVal item As Object) As Long\n CallBox = item.Touch()\nEnd Function\n",
             "Public Sub Auto_Open()\n Range(\"A1\").Value = 999\nEnd Sub\n",
+            "Public Sub ExternalCalls(ByVal target As String)\n",
+            " Dim remote As Object\n Call Shell(\"never-run.exe\", 1)\n",
+            " Set remote = CreateObject(\"MSXML2.XMLHTTP\")\n",
+            " Set remote = CreateObject(target)\nEnd Sub\n",
             "VERSION 1.0 CLASS\nAttribute VB_Name = \"BridgeBox\"\n",
             "Public Function Touch() As Long\n Range(\"A1\").Value = 17\n Touch = 17\nEnd Function\n",
             "Private Sub Class_Terminate()\n ThisWorkbook.Worksheets(1).Range(\"A1\").Value = 41\nEnd Sub\n"

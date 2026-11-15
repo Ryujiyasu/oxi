@@ -263,13 +263,23 @@ fn designer_header(source: &str) -> Option<(String, Span)> {
         lines.next();
     }
     let first = first?;
-    if !first.trim_start().starts_with("VERSION ") {
+    if !first.trim_start().get(..8).is_some_and(|prefix| prefix.eq_ignore_ascii_case("VERSION ")) {
         return None;
     }
     let start = offset;
     let start_line = line_number;
     offset += first.len();
     lines.next();
+    // Packaged class exports may omit the optional BEGIN/END attributes block.
+    // Recognize only the exact class version followed by an Attribute header;
+    // arbitrary VERSION-like source remains visible as unread code.
+    if first.trim().eq_ignore_ascii_case("VERSION 1.0 CLASS")
+        && lines.clone().find(|line| !line.trim().is_empty()).is_some_and(|line|
+            line.trim_start().get(..10).is_some_and(|prefix| prefix.eq_ignore_ascii_case("Attribute ")))
+    {
+        let end = start + first.trim_end_matches(['\r', '\n']).len();
+        return Some((source[start..end].to_string(), Span { line: start_line, start, end }));
+    }
     // Then a Begin.
     let mut depth = 0usize;
     let mut seen_begin = false;
@@ -3239,6 +3249,29 @@ fn def_type_name(keyword: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn class_export_headers_are_metadata_without_hiding_unread_code() {
+        for prefix in [
+            "VERSION 1.0 CLASS\r\n",
+            "version 1.0 class\n",
+            "VERSION 1.0 CLASS\nBEGIN\n MultiUse = -1\nEND\n",
+        ] {
+            let source = format!("{prefix}Attribute VB_Name = \"Box\"\nPublic Function Value() As Long\nValue = 7\nEnd Function\n");
+            let parsed = parse_module(&source).unwrap();
+            assert_eq!(crate::analyse(&parsed).metrics.unparsed, 0, "{prefix}");
+            assert!(matches!(parsed.items[0], ModuleItem::DesignerHeader { .. }));
+            let procedure = parsed.items.iter().find_map(|item| match item {
+                ModuleItem::Procedure(proc) => Some(proc),
+                _ => None,
+            }).unwrap();
+            assert_eq!(procedure.span.line as usize, prefix.lines().count() + 2);
+            let damaged = source.replace("Value = 7", "Else");
+            assert!(crate::analyse(&parse_module(&damaged).unwrap()).metrics.unparsed > 0);
+        }
+        let unknown = parse_module("VERSION 1.1 CLASS\nAttribute VB_Name = \"Box\"\n").unwrap();
+        assert!(crate::analyse(&unknown).metrics.unparsed > 0);
+    }
 
     fn module(src: &str) -> Module {
         parse_module(src).expect("should parse")

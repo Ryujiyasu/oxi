@@ -64,7 +64,7 @@ jobs:
           OXICELLS_TEST_INSTALLED: '1'
           PYTHON: python
         run: >-
-          cargo test --locked -p oxidocs-cli --features vba-execution --test cells_python
+          cargo test --locked -p oxidocs-cli --features vba-execution --bin oxicells --test cells_python
           --config profile.test.package.oxivba-core.opt-level=1
           --config profile.test.package.oxidocs-wasm.opt-level=1
           --config profile.dev.package.oxivba-core.opt-level=1

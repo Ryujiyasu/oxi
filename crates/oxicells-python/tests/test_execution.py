@@ -28,6 +28,36 @@ class NativeWorkbook(unittest.TestCase):
         self.wb.compile()
         self.assertEqual(self.wb.run("PythonBridge.Step", 3), 5)
 
+    def test_inspection_reports_capabilities_without_execution_or_state_reset(self):
+        self.wb.run("PythonBridge.Step", 2)
+        report = self.wb.inspect_macros()
+        self.assertTrue(report.has_macros)
+        self.assertIn("PythonBridge.Auto_Open", report.auto_run)
+        self.assertTrue(report.analysis_complete, report.modules)
+        self.assertFalse(report.compatibility_verified)
+        self.assertEqual(report.unparsed_lines, 0)
+        self.assertIn("PythonBridge", [module["name"] for module in report.modules])
+        self.assertTrue(any(signal["capability"] == "starts_program" for signal in report.external_calls))
+        self.assertTrue(any("MSXML2.XMLHTTP" in signal["what"] for signal in report.external_calls))
+        self.assertTrue(any(item["module"] == "PythonBridge" and item["line"] > 0
+                            for item in report.unresolved_calls))
+        self.assertEqual(self.wb.run("PythonBridge.Step", 3), 5)
+        standalone = ox.inspect_macros(self.fixture, timeout=60)
+        self.assertEqual(standalone.auto_run, report.auto_run)
+        self.assertEqual(standalone.external_calls, report.external_calls)
+
+    def test_macro_free_inspection_reports_absence(self):
+        with tempfile.TemporaryDirectory(prefix="oxicells-inspection-") as folder:
+            path = Path(folder) / "plain.xlsx"
+            self.wb.save(path)
+            report = ox.inspect_macros(path, timeout=60)
+            self.assertFalse(report.has_macros)
+            self.assertEqual(report.modules, ())
+            self.assertEqual(report.signals, ())
+            self.assertEqual(report.auto_run, ())
+            self.assertTrue(report.analysis_complete)
+            self.assertFalse(report.compatibility_verified)
+
     def test_exact_scalar_values_and_invalid_arguments_keep_state(self):
         self.wb.run("PythonBridge.Step", 2)
         values = [ox.Byte(255), ox.Integer(-32768), ox.Long(2147483647),

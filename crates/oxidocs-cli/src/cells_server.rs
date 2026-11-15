@@ -79,6 +79,80 @@ fn clock(request: &Value) -> Result<f64, String> {
         .ok_or_else(|| "currentTime must be a finite local OLE date serial".into())
 }
 
+fn capability_name(value: oxivba_core::Capability) -> &'static str {
+    use oxivba_core::Capability;
+    match value {
+        Capability::RunsOnOpen => "auto_run",
+        Capability::WritesItsOwnCode => "writes_code",
+        Capability::StartsAProgram => "starts_program",
+        Capability::ReachesTheNetwork => "network",
+        Capability::CallsIntoADll => "dll",
+        Capability::TouchesTheRegistry => "registry",
+        Capability::TouchesFiles => "files",
+        Capability::ReachesOutsideExcel => "outside_excel",
+        Capability::HidesWhatItReaches => "dynamic_target",
+        Capability::QuietensExcel => "quiets_excel",
+    }
+}
+
+/// Read source only. This does not initialize a runtime or certify compatibility.
+fn inspect_source(source: &str) -> Value {
+    let mut modules = Vec::new();
+    let mut signals = Vec::new();
+    let mut auto_run = Vec::new();
+    let mut unresolved = Vec::new();
+    let mut unparsed = 0;
+    let mut complete = true;
+    for (index, block) in oxivba_core::source_modules(source).into_iter().enumerate() {
+        let name = block
+            .named
+            .unwrap_or_else(|| format!("Module{}", index + 1));
+        let parsed = match oxivba_core::parse_module(&block.text) {
+            Ok(module) => module,
+            Err(error) => {
+                let line = match &error {
+                    oxivba_core::LexError::UnterminatedString { line }
+                    | oxivba_core::LexError::UnterminatedDate { line }
+                    | oxivba_core::LexError::UnterminatedBracketExpr { line }
+                    | oxivba_core::LexError::UnexpectedChar { line, .. } => *line,
+                };
+                complete = false;
+                modules.push(json!({"name":name,"is_class":block.class,"source_line":block.line,
+                    "parse_error":{"message":error.to_string(),"line":line,"source_line":block.line + line as usize - 1}}));
+                continue;
+            }
+        };
+        let analysis = oxivba_core::analyse(&parsed);
+        let safety = oxivba_core::assess(&parsed, &analysis);
+        complete &= analysis.metrics.unparsed == 0 && parsed.syntax_errors.is_empty();
+        unparsed += analysis.metrics.unparsed;
+        for signal in safety.signals {
+            signals.push(
+                json!({"module":name,"capability":capability_name(signal.capability),
+                "what":signal.what,"reason":signal.reason,"line":signal.line,
+                "source_line":(signal.line>0).then(||block.line + signal.line as usize - 1)}),
+            );
+        }
+        auto_run.extend(
+            safety
+                .runs_without_asking
+                .into_iter()
+                .map(|entry| format!("{name}.{entry}")),
+        );
+        unresolved.extend(safety.unresolved_late_binding.into_iter().map(
+            |line| json!({"module":name,"line":line,"source_line":block.line + line as usize - 1}),
+        ));
+        modules.push(json!({"name":name,"is_class":block.class,"source_line":block.line,
+            "unparsed_lines":analysis.metrics.unparsed,
+            "syntax_error_lines":parsed.syntax_errors.iter().map(|span|span.line).collect::<Vec<_>>(),
+            "procedures":analysis.procedures.iter().map(|proc|json!({"name":proc.name,"line":proc.line})).collect::<Vec<_>>(),
+            "api_names":analysis.api_names,"external_declares":analysis.external_declares}));
+    }
+    json!({"has_macros":!source.is_empty(),"modules":modules,"signals":signals,"auto_run":auto_run,
+        "unresolved_calls":unresolved,"unparsed_lines":unparsed,"analysis_complete":complete,
+        "compatibility_verified":false,"execution_support":"not_assessed"})
+}
+
 fn package_active_sheet(bytes: &[u8], count: usize) -> Result<usize, String> {
     let mut archive =
         oxidocs_common::archive::OoxmlArchive::new(bytes).map_err(|e| e.to_string())?;
@@ -192,6 +266,10 @@ impl OpenBook {
         )?;
         let current_time = clock(request)?;
         let operation = text(request, "op")?;
+        if operation == "inspect" {
+            fields(request, &["id", "op", "currentTime"])?;
+            return Ok(inspect_source(&self.source));
+        }
         let args_json = request
             .get("args")
             .cloned()
@@ -390,4 +468,50 @@ pub(super) fn serve(input: impl BufRead, mut output: impl Write) -> Result<(), S
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspection_keeps_unread_modules_visible_and_preserves_other_findings() {
+        let source = concat!(
+            "Attribute VB_Name = \"Clean\"\nPublic Sub Auto_Open()\n Call Shell(\"never.exe\", 1)\nEnd Sub\n",
+            "Attribute VB_Name = \"BadLex\"\nPublic Sub Broken()\n Dim name As String\n name = \"unterminated\nEnd Sub\n",
+            "Attribute VB_Name = \"BadSyntax\"\nPublic Sub Broken()\n Else\nEnd Sub\n"
+        );
+        let report = inspect_source(source);
+        assert_eq!(report["modules"].as_array().unwrap().len(), 3);
+        assert_eq!(report["analysis_complete"], false);
+        assert_eq!(report["compatibility_verified"], false);
+        assert_eq!(report["modules"][1]["parse_error"]["line"], 4);
+        assert!(report["unparsed_lines"].as_u64().unwrap() > 0);
+        assert_eq!(report["auto_run"], json!(["Clean.Auto_Open"]));
+        let shell = report["signals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|signal| signal["capability"] == "starts_program" && signal["module"] == "Clean")
+            .unwrap();
+        // API names are aggregated per module by the existing analyzer.
+        // Preserve its unknown position rather than inventing a location.
+        assert_eq!(shell["line"], 0);
+        assert!(shell["source_line"].is_null());
+    }
+
+    #[test]
+    fn inspection_does_not_treat_comments_strings_or_inactive_branches_as_calls() {
+        let source = concat!(
+            "VERSION 1.0 CLASS\nAttribute VB_Name = \"Box\"\n",
+            "' Shell(\"comment.exe\")\n#If Mac Then\n",
+            "Public Sub Auto_Open()\n Shell \"dead.exe\"\nEnd Sub\n#End If\n",
+            "Public Function Text() As String\n Text = \"Shell CreateObject\"\nEnd Function\n"
+        );
+        let report = inspect_source(source);
+        assert_eq!(report["analysis_complete"], true);
+        assert_eq!(report["signals"], json!([]));
+        assert_eq!(report["auto_run"], json!([]));
+        assert_eq!(report["unparsed_lines"], 0);
+    }
 }
