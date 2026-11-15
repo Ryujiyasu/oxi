@@ -10276,7 +10276,7 @@ impl<'a> Runtime<'a> {
         if name.eq_ignore_ascii_case("objptr") {
             return match args.as_slice() {
                 [Value::Object(object)] => {
-                    let next = 0x1_0000 + self.object_pointers.len() as i64 * 8;
+                    let next = 0x1_0001_0000 + self.object_pointers.len() as i64 * 8;
                     let identity = (
                         object.handle,
                         key(&object.kind),
@@ -28150,6 +28150,52 @@ Attribute VB_Name = "TextStream"
             run(source, "Ask", vec![]).unwrap(),
             Value::String("Null|Null|Null|String|Empty|Integer|Empty".to_string())
         );
+    }
+
+    #[test]
+    fn virtual_string_and_object_pointers_use_win64_width() {
+        let source = r#"Attribute VB_Name = "PointerWidthValuesOracle1270"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0. No addresses returned or dereferenced.
+Public Function Probe(ByVal mode As Long, ByVal binding As Long) As Variant
+ Dim text As String, target As Collection, pointer As LongPtr, result As Variant, converted As Variant
+ Dim initialError As Long, longError As Long, integerError As Long, byteError As Long
+ Dim longlongType As Long, longptrType As Long
+ text = "abc"
+ On Error Resume Next
+ Err.Clear
+ Select Case mode
+ Case 0: pointer = StrPtr(text)
+ Case 1: text = ChrW(&HD800): pointer = StrPtr(text)
+ Case 2: pointer = StrPtr(vbNullString)
+ Case 3: Set target = New Collection: pointer = ObjPtr(target)
+ Case 4: Set target = Nothing: pointer = ObjPtr(target)
+ End Select
+ initialError = Err.Number
+ Err.Clear: converted = CLng(pointer): longError = Err.Number
+ Err.Clear: converted = CInt(pointer): integerError = Err.Number
+ Err.Clear: converted = CByte(pointer): byteError = Err.Number
+ Err.Clear: converted = CLngLng(pointer): longlongType = VarType(converted)
+ Err.Clear: converted = CLngPtr(pointer): longptrType = VarType(converted)
+ result = Array(initialError, VarType(pointer), pointer > 2147483647#, longError, integerError, byteError, longlongType, longptrType)
+ Probe = result
+End Function
+"#;
+        let (module, classes) = crate::parse_project(source).unwrap();
+        let mut runtime = Runtime::new(&module).with_classes(&classes);
+        let expected = [
+            "0|20|True|6|6|6|20|20",
+            "0|20|True|6|6|6|20|20",
+            "0|20|False|0|0|0|20|20",
+            "0|20|True|6|6|6|20|20",
+            "0|20|False|0|0|0|20|20",
+        ];
+        for (mode, expected) in expected.iter().enumerate() {
+            let value = runtime.call("PointerWidthValuesOracle1270.Probe", vec![Value::Integer(mode as i64), Value::Integer(0)]).unwrap();
+            let Value::Array(array) = value else { panic!("mode {mode}: expected array") };
+            let actual = array.values.iter().map(|value| text(value).unwrap()).collect::<Vec<_>>().join("|");
+            assert_eq!(actual, *expected, "mode {mode}");
+        }
     }
 
     /// `With` takes a record as readily as an object.
