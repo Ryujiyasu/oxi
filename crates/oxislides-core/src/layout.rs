@@ -436,21 +436,69 @@ pub fn line_width_pt(
 /// `"e-mail"` can break as `"e-"` + `"mail"`. A trailing hyphen does not split,
 /// which would leave an empty tail piece.
 pub fn break_pieces(text: &str, hyphen_breaks: bool) -> Vec<&str> {
-    if !hyphen_breaks {
-        return text.split_inclusive(' ').collect();
-    }
     let mut out = Vec::new();
     for chunk in text.split_inclusive(' ') {
         let mut start = 0usize;
+        let mut prev: Option<char> = None;
         for (i, ch) in chunk.char_indices() {
-            if ch == '-' && i + 1 < chunk.len() {
+            if let Some(p) = prev {
+                if cjk_break_between(p, ch) && i > start {
+                    out.push(&chunk[start..i]);
+                    start = i;
+                }
+            }
+            if hyphen_breaks && ch == '-' && i + 1 < chunk.len() {
                 out.push(&chunk[start..i + 1]);
                 start = i + 1;
             }
+            prev = Some(ch);
         }
-        out.push(&chunk[start..]);
+        if start < chunk.len() || chunk.is_empty() {
+            out.push(&chunk[start..]);
+        }
     }
     out
+}
+
+/// East Asian text breaks between any two characters where either side is
+/// CJK -- PowerPoint broke `Code for Japanに所属しつつ...` after `Japan`,
+/// where a space-only wrap had to drop the whole tail to the next line
+/// (pptx_newdev 919f1dfa, every table cell with mixed Latin and Japanese) --
+/// except before a character that may not start a line (、。）」 small kana
+/// ...) or after one that may not end it (（「 ...). `OXI_CJKBREAK_DISABLE=1`
+/// breaks at spaces only again.
+fn cjk_break_between(a: char, b: char) -> bool {
+    if !cjkbreak_on() {
+        return false;
+    }
+    // An ideographic space (U+3000) behaves like a space: it stays with the
+    // text before it and the line may break only after it (252cbc8c s48:
+    // `データ、　　　学校` broke before 学校, the spaces hanging at the line end).
+    (is_cjk(a) || is_cjk(b))
+        && !no_line_start(b)
+        && !no_line_end(a)
+        && !(a == ' ' || b == ' ')
+        && b != '\u{3000}'
+}
+
+fn cjkbreak_on() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("OXI_CJKBREAK_DISABLE").is_err())
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3000..=0x303F | 0x3040..=0x309F | 0x30A0..=0x30FF | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF | 0xAC00..=0xD7AF)
+}
+
+fn no_line_start(c: char) -> bool {
+    "、。，．・：；？！ー）］｝」』】〕〉》〙〟’”ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶ々ゝゞヽヾ〜‐,.:;?!)]}%％"
+        .contains(c)
+}
+
+fn no_line_end(c: char) -> bool {
+    "（［｛「『【〔〈《〘〝‘“([{".contains(c)
 }
 
 #[cfg(test)]
@@ -470,6 +518,7 @@ mod wrap_tests {
             font_family: None,
             spacing: None,
             kern: None,
+            baseline_shift: None,
         }
     }
 
@@ -532,6 +581,16 @@ pub struct WrapOpts {
     pub char_wrap: bool,
     /// A hyphen opens a break site, so `"e-mail"` may break as `"e-" + "mail"`.
     pub hyphen_breaks: bool,
+    /// `hangingPunct`: ONE trailing `. , 、 。 ， ．` may stand past the right
+    /// edge -- the line is judged without it. PowerPoint COM on 919f1dfa: `No.`
+    /// (19.87pt) stays whole in a 19.6pt cell, `Nox` / `No!` / `No)` / `No」`
+    /// break, `No..` breaks, and hangingPunct="0" breaks `No.` too.
+    pub hang_punct: bool,
+}
+
+/// The characters `hangingPunct` lets stand past the line end.
+pub fn is_hanging_punct(c: char) -> bool {
+    matches!(c, '.' | ',' | '\u{3001}' | '\u{3002}' | '\u{FF0C}' | '\u{FF0E}')
 }
 
 /// Break `text` into lines that fit `first_width_pt`, then `rest_width_pt`.
@@ -572,11 +631,26 @@ where
     let mut current_w = 0i32;
     // Characters already committed to finished lines.
     let mut emitted = 0usize;
+    // The fit test with the hanging character taken off the end.
+    let fits_h = |t: &str, w: f32, px: i32, e: usize| -> bool {
+        if fits(t, w, px, e) {
+            return true;
+        }
+        if opts.hang_punct {
+            if let Some(c) = t.chars().last() {
+                if is_hanging_punct(c) {
+                    let head = &t[..t.len() - c.len_utf8()];
+                    return !head.is_empty() && fits(head, w, px, e);
+                }
+            }
+        }
+        false
+    };
     for word in break_pieces(text, opts.hyphen_breaks) {
         let ok = if opts.trim_trailing_space {
             let mut candidate = current.clone();
             candidate.push_str(word);
-            fits(candidate.trim_end(), width_pt, width_px, emitted)
+            fits_h(candidate.trim_end(), width_pt, width_px, emitted)
         } else {
             current_w + measure_px(word) <= width_px
         };
@@ -591,14 +665,23 @@ where
             let mut rest = word;
             loop {
                 let trimmed = rest.trim_end();
-                if trimmed.is_empty() || fits(trimmed, width_pt, width_px, emitted) {
+                if trimmed.is_empty() || fits_h(trimmed, width_pt, width_px, emitted) {
                     break;
                 }
                 // Longest prefix that fits, never empty so the loop ends.
                 let mut last_ok = 0usize;
                 for (i, ch) in rest.char_indices() {
                     let end = i + ch.len_utf8();
-                    if fits(rest[..end].trim_end(), width_pt, width_px, emitted) {
+                    // A character may hang only at the true line end: `No..`
+                    // breaks as `No` + `..`, the second stop refusing to
+                    // start a line on its own.
+                    let at_end = !rest[end..].chars().next().is_some_and(is_hanging_punct);
+                    let ok = if at_end {
+                        fits_h(rest[..end].trim_end(), width_pt, width_px, emitted)
+                    } else {
+                        fits(rest[..end].trim_end(), width_pt, width_px, emitted)
+                    };
+                    if ok {
                         last_ok = end;
                     } else {
                         break;
@@ -639,6 +722,7 @@ mod wrap_loop_tests {
         trim_trailing_space: true,
         char_wrap: true,
         hyphen_breaks: false,
+        hang_punct: false,
     };
 
     /// Every character is one point wide, so a width in points is a character
@@ -687,6 +771,19 @@ mod wrap_loop_tests {
             t.len() as i32
         });
         assert_eq!(got, vec!["aaaaaaa"]);
+    }
+
+    #[test]
+    fn hanging_punctuation_stands_past_the_edge() {
+        let opts = WrapOpts { hang_punct: true, ..OPTS };
+        let got = wrap_lines("No.", 2.0, 2.0, 1.0, &opts, one_pt_per_char, |t| t.len() as i32);
+        assert_eq!(got, vec!["No."]);
+        // Only one character hangs.
+        let got = wrap_lines("No..", 2.0, 2.0, 1.0, &opts, one_pt_per_char, |t| t.len() as i32);
+        assert_eq!(got, vec!["No", ".."]);
+        // And only punctuation.
+        let got = wrap_lines("Nox", 2.0, 2.0, 1.0, &opts, one_pt_per_char, |t| t.len() as i32);
+        assert_eq!(got, vec!["No", "x"]);
     }
 
     #[test]
@@ -834,6 +931,7 @@ fn break_segment(
         // start on the line that says `Find more icons at `, and every line
         // after it fell one line low.
         hyphen_breaks: true,
+        hang_punct: false,
     };
     Some(wrap_lines(
         text,
@@ -880,6 +978,7 @@ mod paragraph_tests {
             font_family: None,
             spacing: None,
             kern: None,
+            baseline_shift: None,
         }
     }
 
@@ -1395,6 +1494,8 @@ mod size_tests {
             mar_l: None,
             indent: None,
             bullet: crate::ir::SlideBullet::default(),
+            hanging_punct: None,
+            ea_lang: false,
         }
     }
 
@@ -1411,6 +1512,7 @@ mod size_tests {
             font_family: None,
             spacing: None,
             kern: None,
+            baseline_shift: None,
         }
     }
 
@@ -2238,6 +2340,7 @@ mod shape_tests {
             font_family: Some("Arial".to_string()),
             spacing: None,
             kern: None,
+            baseline_shift: None,
         }
     }
 
@@ -2254,6 +2357,8 @@ mod shape_tests {
             mar_l: None,
             indent: None,
             bullet: crate::ir::SlideBullet::default(),
+            hanging_punct: None,
+            ea_lang: false,
         }
     }
 

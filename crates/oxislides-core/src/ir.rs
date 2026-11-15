@@ -36,6 +36,11 @@ pub struct Presentation {
     /// typography instead of a substitute.
     #[serde(default)]
     pub embedded_fonts: Vec<EmbeddedFont>,
+    /// `p:defaultTextStyle/a:lvl1pPr/@hangingPunct` -- whether a paragraph that
+    /// says nothing lets line-end punctuation hang (see
+    /// `SlideParagraph::hanging_punct`).
+    #[serde(default)]
+    pub default_hanging_punct: bool,
 }
 
 /// One face of an embedded font (`p:embeddedFontLst/p:embeddedFont`).
@@ -918,6 +923,13 @@ pub struct TableCell {
     /// its left and is not drawn in its own right.
     #[serde(default)]
     pub h_merge: bool,
+    /// `a:tc/@rowSpan` -- how many rows this cell covers; the cells below it
+    /// are `v_merge` continuations.
+    #[serde(default = "default_grid_span")]
+    pub row_span: u32,
+    /// `a:tc/@vMerge` -- this cell continues the spanning cell above it.
+    #[serde(default)]
+    pub v_merge: bool,
 }
 
 pub fn default_grid_span() -> u32 {
@@ -979,6 +991,18 @@ pub struct SlideParagraph {
     /// the master txStyles level's bullet.
     #[serde(default)]
     pub bullet: SlideBullet,
+    /// `a:pPr/@hangingPunct`: None = not stated (the presentation default
+    /// applies). When on, ONE trailing `. , 、 。 ， ．` may stand past the
+    /// right edge instead of breaking (PowerPoint COM, 919f1dfa's `No.` in a
+    /// 19.6pt cell and twelve control characters).
+    #[serde(default)]
+    pub hanging_punct: Option<bool>,
+    /// Some run's `lang` or `altLang` is Japanese, Chinese or Korean. Hanging
+    /// punctuation needs it: wrapfit's `west war.` (lang="en-US") breaks
+    /// before `war.` even under hangingPunct="1", and hangs with altLang="ja-JP"
+    /// or lang="ja-JP" (PowerPoint COM).
+    #[serde(default)]
+    pub ea_lang: bool,
 }
 
 /// Bullet marker specification for a paragraph (Spec #8, measured model).
@@ -994,6 +1018,12 @@ pub enum SlideBullet {
     Char {
         ch: char,
         font: Option<String>, // a:buFont/@typeface
+        /// a:buClr colour: 6-hex, or a scheme name resolved by the renderer.
+        #[serde(default)]
+        color: Option<String>,
+        /// a:buSzPct/@val as a fraction of the text size.
+        #[serde(default)]
+        size_pct: Option<f32>,
     },
     /// a:buAutoNum — an automatically numbered marker (Spec #11, derived
     /// 2026-08-06: kind-specific formats, per-(lvl, kind, startAt) counters,
@@ -1071,6 +1101,11 @@ pub struct SlideRun {
     /// every `kern` stripped).
     #[serde(default)]
     pub kern: Option<f32>,
+    /// `a:rPr/@baseline` turned into points: how far the run is raised (+) or
+    /// lowered (-) from the line's baseline. Set together with a font size
+    /// already reduced to 2/3 (see `parser::superscript_size`).
+    #[serde(default)]
+    pub baseline_shift: Option<f32>,
 }
 
 static BZERO_OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

@@ -64,6 +64,11 @@ fn parse_theme(xml: &str) -> Result<(String, String, HashMap<String, String>), P
     // child srgbClr/sysClr supplies the hex.
     let mut in_clr_scheme = false;
     let mut cur_slot: Option<String> = None;
+    // `a:extraClrSchemeLst` holds ALTERNATIVE schemes the user may switch to;
+    // reading them overwrote the theme's own: 252cbc8c's theme1 says hlink
+    // 0000FF and its third extra scheme 969696, and the links came out grey.
+    let mut in_extra = false;
+    let s_extra = std::env::var("OXI_EXTRACLR_DISABLE").is_err();
 
     loop {
         match reader.read_event()? {
@@ -72,7 +77,8 @@ fn parse_theme(xml: &str) -> Result<(String, String, HashMap<String, String>), P
                 match name.as_str() {
                     "minorFont" => in_minor = true,
                     "majorFont" => in_major = true,
-                    "clrScheme" => in_clr_scheme = true,
+                    "extraClrSchemeLst" if s_extra => in_extra = true,
+                    "clrScheme" if !in_extra => in_clr_scheme = true,
                     "latin" if in_minor => {
                         if let Some(t) = get_attr(&e, "typeface") {
                             if !t.is_empty() {
@@ -116,6 +122,7 @@ fn parse_theme(xml: &str) -> Result<(String, String, HashMap<String, String>), P
                     "minorFont" => in_minor = false,
                     "majorFont" => in_major = false,
                     "clrScheme" => in_clr_scheme = false,
+                    "extraClrSchemeLst" => in_extra = false,
                     "dk1" | "dk2" | "lt1" | "lt2" | "tx1" | "tx2" | "accent1" | "accent2"
                     | "accent3" | "accent4" | "accent5" | "accent6" | "hlink" | "folHlink"
                         if in_clr_scheme =>
@@ -147,6 +154,26 @@ fn is_master_lvl(name: &str) -> bool {
 /// the 0-based outline level (a:lvlNpPr with N = level+1). A level that is
 /// absent from the part stays an empty `MasterStyleLevel` (marL=0, indent=0,
 /// bullet=Inherit, spcBef=None), which reproduces a plain paragraph.
+/// A raised or lowered run (`a:rPr/@baseline`) is set at 2/3 of its size and
+/// moved by `baseline * size` -- PowerPoint's PDF of a real deck
+/// (pptx_newdev 54542be9: 10.5pt -> 6.96pt raised 3.12pt, 11pt -> 7.32pt;
+/// 30% of 10.5 = 3.15). `OXI_SUPERSCRIPT_DISABLE=1` draws it in line.
+fn superscript_on() -> bool {
+    std::env::var("OXI_SUPERSCRIPT_DISABLE").is_err()
+}
+fn superscript_size(size: Option<f32>, baseline: Option<f32>) -> Option<f32> {
+    match (size, baseline) {
+        (Some(s), Some(_)) if superscript_on() => Some(s * 2.0 / 3.0),
+        _ => size,
+    }
+}
+fn superscript_shift(size: Option<f32>, baseline: Option<f32>) -> Option<f32> {
+    match (size, baseline) {
+        (Some(s), Some(b)) if superscript_on() => Some(b * s),
+        _ => None,
+    }
+}
+
 fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
     let mut reader = Reader::from_str(xml);
     let mut body: Vec<MasterStyleLevel> = Vec::new();
@@ -168,6 +195,7 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
     let mut in_ln_spc = false;
     let mut in_def_fill = false;
     let mut level_bullet_font: Option<String> = None;
+    let (mut lb_pend, mut lb_color, mut lb_size): (bool, Option<String>, Option<f32>) = (false, None, None);
 
     // Push the just-finished level into the active context Vec.
     macro_rules! push_level {
@@ -186,6 +214,14 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
         match reader.read_event()? {
             Event::Start(e) => {
                 let name = local_name(e.name().as_ref());
+                if name == "buClr" {
+                    lb_pend = true;
+                } else if lb_pend && (name == "srgbClr" || name == "schemeClr") {
+                    lb_color = get_attr(&e, "val");
+                    lb_pend = false;
+                } else if name == "buSzPct" {
+                    lb_size = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()).map(|v| v / 100_000.0);
+                }
                 match name.as_str() {
                     "titleStyle" => in_title_style = true,
                     "bodyStyle" => in_body_style = true,
@@ -243,13 +279,42 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                         if let Some(k) = get_attr(&e, "kern").and_then(|v| v.parse::<f32>().ok()) {
                             cur_level.kern = Some(k / 100.0);
                         }
+                        // The level's weight (919f1dfa: titleStyle `b="1"`,
+                        // and every title drew regular). OXI_TXBOLD_DISABLE.
+                        if std::env::var("OXI_TXBOLD_DISABLE").is_err() {
+                            if let Some(bv) = get_attr(&e, "b") {
+                                cur_level.bold = Some(bv == "1" || bv == "true");
+                            }
+                        }
                     }
                     _ => {}
                 }
             }
             Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
+                if name == "buClr" {
+                    lb_pend = true;
+                } else if lb_pend && (name == "srgbClr" || name == "schemeClr") {
+                    lb_color = get_attr(&e, "val");
+                    lb_pend = false;
+                } else if name == "buSzPct" {
+                    lb_size = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()).map(|v| v / 100_000.0);
+                }
                 match name.as_str() {
+                    // `<a:latin typeface=.../>` is self-closing in every deck, so
+                    // the Start arm alone never saw it: 252cbc8c's bodyStyle says
+                    // メイリオ and its body text came out in the theme's Calibri.
+                    "latin"
+                        if in_level
+                            && in_def_rpr_lvl
+                            && std::env::var("OXI_TXLATIN_DISABLE").is_err() =>
+                    {
+                        if let Some(t) = get_attr(&e, "typeface") {
+                            if !t.is_empty() && cur_level.font_family.is_none() {
+                                cur_level.font_family = Some(t);
+                            }
+                        }
+                    }
                     // Self-closing level: parse and push immediately.
                     n if is_master_lvl(n) => {
                         let mut lvl = MasterStyleLevel::default();
@@ -281,6 +346,13 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                         }
                         if let Some(k) = get_attr(&e, "kern").and_then(|v| v.parse::<f32>().ok()) {
                             cur_level.kern = Some(k / 100.0);
+                        }
+                        // The level's weight (919f1dfa: titleStyle `b="1"`,
+                        // and every title drew regular). OXI_TXBOLD_DISABLE.
+                        if std::env::var("OXI_TXBOLD_DISABLE").is_err() {
+                            if let Some(bv) = get_attr(&e, "b") {
+                                cur_level.bold = Some(bv == "1" || bv == "true");
+                            }
                         }
                     }
                     // Children of a non-self-closing level (Start form).
@@ -323,6 +395,8 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                                 cur_level.bullet = SlideBullet::Char {
                                     ch: c,
                                     font: level_bullet_font.take(),
+                                    color: lb_color.take(),
+                                    size_pct: lb_size.take(),
                                 };
                             }
                         }
@@ -369,6 +443,15 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
         other,
         title,
     })
+}
+
+/// `p:defaultTextStyle/a:lvl1pPr/@hangingPunct` (absent = off).
+fn parse_default_hanging_punct(xml: &str) -> bool {
+    let Some(i) = xml.find("defaultTextStyle") else { return false };
+    let rest = &xml[i..];
+    let Some(j) = rest.find("lvl1pPr") else { return false };
+    let tag = &rest[j..rest[j..].find('>').map(|k| j + k).unwrap_or(rest.len())];
+    tag.contains("hangingPunct=\"1\"") || tag.contains("hangingPunct=\"true\"")
 }
 
 /// Parse presentation.xml to get slide relationship IDs (in order).
@@ -547,10 +630,19 @@ fn parse_layout_ph_lststyles(
     let s_phbullet = std::env::var("OXI_PHBULLET_DISABLE").is_err();
     let mut in_spc_bef_lvl = false;
     let mut lvl_bu_font: Option<String> = None;
+    let (mut yb_pend, mut yb_color, mut yb_size): (bool, Option<String>, Option<f32>) = (false, None, None);
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
                 let name = local_name(e.name().as_ref());
+                if name == "buClr" {
+                    yb_pend = true;
+                } else if yb_pend && (name == "srgbClr" || name == "schemeClr") {
+                    yb_color = get_attr(&e, "val");
+                    yb_pend = false;
+                } else if name == "buSzPct" {
+                    yb_size = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()).map(|v| v / 100_000.0);
+                }
                 match name.as_str() {
                     "sp" => {
                         in_sp = true;
@@ -611,7 +703,7 @@ fn parse_layout_ph_lststyles(
                         if let (Some(idx), Some(c)) =
                             (cur_lvl, get_attr(&e, "char").and_then(|c| c.chars().next()))
                         {
-                            levels[idx].bullet = SlideBullet::Char { ch: c, font: lvl_bu_font.take() };
+                            levels[idx].bullet = SlideBullet::Char { ch: c, font: lvl_bu_font.take(), color: yb_color.take(), size_pct: yb_size.take() };
                         }
                     }
                     "buNone" if in_lst && s_phbullet && cur_lvl.is_some() => {
@@ -930,6 +1022,23 @@ fn parse_slide(
         }
         (geoms, anchors, styles)
     };
+    // Placeholder text insets, layout then master (see `lookup_ph_insets`).
+    let (layout_ph_insets, master_ph_insets) = {
+        let mut lay = HashMap::new();
+        for rel in rels.values() {
+            if rel.rel_type.ends_with("/slideLayout") {
+                let layout_path = resolve_slide_relative_path(slide_rels_path, &rel.target);
+                if let Ok(Some(x)) = archive.try_read_part(&layout_path) {
+                    lay = parse_ph_insets(&x);
+                }
+            }
+        }
+        let mas = match archive.try_read_part("ppt/slideMasters/slideMaster1.xml") {
+            Ok(Some(x)) => parse_ph_insets(&x),
+            _ => HashMap::new(),
+        };
+        (lay, mas)
+    };
 
     // A slide with no <p:bg> of its own inherits the layout's background, and
     // the layout the master's -- PowerPoint paints that inherited fill edge to
@@ -1244,6 +1353,9 @@ fn parse_slide(
     let mut shape_r_ins: f32 = 7.2;
     let mut shape_t_ins: f32 = 3.6;
     let mut shape_b_ins: f32 = 3.6;
+    // Which of l/r/t/b the shape's own bodyPr stated; the rest inherit from
+    // the placeholder chain.
+    let mut shape_ins_set = [false; 4];
 
     // Paragraph state
     let mut in_paragraph = false;
@@ -1263,10 +1375,13 @@ fn parse_slide(
     let mut in_spc_aft = false;
     // Spec #8: bullet / indent (a:pPr/@lvl, @marL, @indent + a:buChar/buFont/buNone/buAutoNum)
     let mut para_lvl: u32 = 0;
+    let mut para_hang: Option<bool> = None;
+    let mut para_ea_lang = false;
     let mut para_mar_l: Option<f32> = None;
     let mut para_indent: Option<f32> = None;
     let mut para_bullet = SlideBullet::Inherit;
     let mut para_bullet_font: Option<String> = None;
+    let (mut pb_pend, mut pb_color, mut pb_size): (bool, Option<String>, Option<f32>) = (false, None, None);
     let mut para_end_size: Option<f32> = None;
 
     // Run state
@@ -1283,10 +1398,16 @@ fn parse_slide(
     let mut run_bold: Option<bool> = None;
     let mut run_italic = false;
     let mut run_underline = false;
+    // `a:rPr/a:hlinkClick`: PowerPoint draws the run in the theme `hlink`
+    // colour, underlined, whatever its own solidFill says -- unless the link
+    // carries `ahyp:hlinkClr val="tx"`, which keeps the text colour.
+    let mut run_hlink = false;
+    let mut run_hlink_tx = false;
     let mut run_font_size: Option<f32> = None;
     let mut run_spacing: Option<f32> = None;
     // `a:rPr/@kern` in points (see `SlideRun::kern`).
     let mut run_kern: Option<f32> = None;
+    let mut run_baseline: Option<f32> = None;
     let mut run_color: Option<String> = None;
     let mut run_color_alpha: Option<f32> = None;
     // `a:rPr/a:highlight` -- the run's text highlight. It holds a colour
@@ -1312,6 +1433,8 @@ fn parse_slide(
     let mut in_tbl_cell = false;
     let mut tbl_cur_cell_paragraphs: Vec<SlideParagraph> = Vec::new();
     let mut tc_grid_span: u32 = 1;
+    let mut tc_row_span: u32 = 1;
+    let mut tc_v_merge = false;
     let mut tc_h_merge = false;
     // a:tcPr — the cell's own fill, per-side borders, margins and anchor. The
     // corpus states all of them explicitly (an INVISIBLE edge is written as a
@@ -1344,6 +1467,14 @@ fn parse_slide(
             Event::Start(e) => {
                 let name = local_name(e.name().as_ref());
                 _depth += 1;
+                if name == "buClr" {
+                    pb_pend = true;
+                } else if pb_pend && (name == "srgbClr" || name == "schemeClr") {
+                    pb_color = get_attr(&e, "val");
+                    pb_pend = false;
+                } else if name == "buSzPct" {
+                    pb_size = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()).map(|v| v / 100_000.0);
+                }
                 if sppr_ext > 0 {
                     if name == "extLst" {
                         sppr_ext += 1;
@@ -1442,6 +1573,7 @@ fn parse_slide(
                         shape_r_ins = 7.2;
                         shape_t_ins = 3.6;
                         shape_b_ins = 3.6;
+                        shape_ins_set = [false; 4];
                         shape_anchor = None;
                         shape_wrap = true;
                     }
@@ -1492,6 +1624,7 @@ fn parse_slide(
                         shape_r_ins = 7.2;
                         shape_t_ins = 3.6;
                         shape_b_ins = 3.6;
+                        shape_ins_set = [false; 4];
                         shape_anchor = None;
                         shape_wrap = true;
                     }
@@ -1551,6 +1684,14 @@ fn parse_slide(
                             .max(1);
                         tc_h_merge = matches!(
                             get_attr(&e, "hMerge").as_deref(),
+                            Some("1") | Some("true")
+                        );
+                        tc_row_span = get_attr(&e, "rowSpan")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .unwrap_or(1)
+                            .max(1);
+                        tc_v_merge = matches!(
+                            get_attr(&e, "vMerge").as_deref(),
                             Some("1") | Some("true")
                         );
                     }
@@ -1925,6 +2066,8 @@ fn parse_slide(
                         in_spc_bef = false;
                         in_spc_aft = false;
                         para_lvl = 0;
+                        para_hang = None;
+                        para_ea_lang = false;
                         para_mar_l = None;
                         para_indent = None;
                         para_bullet = SlideBullet::Inherit;
@@ -1944,7 +2087,11 @@ fn parse_slide(
                         }
                     }
                     "prstTxWarp" if in_body_pr => {
-                        shape_text_warp = get_attr(&e, "prst");
+                        // `textNoShape` is "no warp" -- PowerPoint writes it on
+                        // ordinary text boxes (68ffbed2: a dozen per slide), and
+                        // reading it as WordArt stretched their text to the box.
+                        shape_text_warp = get_attr(&e, "prst")
+                            .filter(|p| p != "textNoShape" || std::env::var("OXI_NOSHAPEWARP_DISABLE").is_ok());
                     }
                     "bodyPr" if in_shape => {
                         in_body_pr = true;
@@ -1952,21 +2099,25 @@ fn parse_slide(
                         if let Some(v) = get_attr(&e, "lIns") {
                             if let Ok(v) = v.parse::<f32>() {
                                 shape_l_ins = emu_to_pt(v);
+                                shape_ins_set[0] = true;
                             }
                         }
                         if let Some(v) = get_attr(&e, "rIns") {
                             if let Ok(v) = v.parse::<f32>() {
                                 shape_r_ins = emu_to_pt(v);
+                                shape_ins_set[1] = true;
                             }
                         }
                         if let Some(v) = get_attr(&e, "tIns") {
                             if let Ok(v) = v.parse::<f32>() {
                                 shape_t_ins = emu_to_pt(v);
+                                shape_ins_set[2] = true;
                             }
                         }
                         if let Some(v) = get_attr(&e, "bIns") {
                             if let Ok(v) = v.parse::<f32>() {
                                 shape_b_ins = emu_to_pt(v);
+                                shape_ins_set[3] = true;
                             }
                         }
                         // Spec #6: a:bodyPr/@anchor — vertical text anchoring.
@@ -2004,6 +2155,9 @@ fn parse_slide(
                                 para_lvl = v;
                             }
                         }
+                        if let Some(v) = get_attr(&e, "hangingPunct") {
+                            para_hang = Some(v == "1" || v == "true");
+                        }
                         if let Some(mar_l) = get_attr(&e, "marL") {
                             if let Ok(v) = mar_l.parse::<f32>() {
                                 para_mar_l = Some(emu_to_pt(v));
@@ -2039,6 +2193,8 @@ fn parse_slide(
                                 para_bullet = SlideBullet::Char {
                                     ch: c,
                                     font: para_bullet_font.take(),
+                                    color: pb_color.take(),
+                                    size_pct: pb_size.take(),
                                 };
                             }
                         }
@@ -2062,9 +2218,12 @@ fn parse_slide(
                         run_bold = None;
                         run_italic = false;
                         run_underline = false;
+                        run_hlink = false;
+                        run_hlink_tx = false;
                         run_font_size = None;
                         run_spacing = None;
                         run_kern = None;
+                        run_baseline = None;
                         run_color = None;
                         run_color_alpha = None;
                         run_highlight = None;
@@ -2075,7 +2234,20 @@ fn parse_slide(
                             .and_then(|v| v.parse::<f32>().ok())
                             .map(|v| v / 100.0);
                     }
+                    "hlinkClick" if in_run => {
+                        run_hlink = true;
+                    }
+                    "hlinkClr" if in_run => {
+                        run_hlink_tx = get_attr(&e, "val").as_deref() == Some("tx");
+                    }
                     "rPr" if in_run => {
+                        for k in ["lang", "altLang"] {
+                            if get_attr(&e, k).is_some_and(|v| {
+                                v.starts_with("ja") || v.starts_with("zh") || v.starts_with("ko")
+                            }) {
+                                para_ea_lang = true;
+                            }
+                        }
                         if let Some(b) = get_attr(&e, "b") {
                             run_bold = Some(b == "1" || b == "true");
                         }
@@ -2093,6 +2265,9 @@ fn parse_slide(
                         }
                         if let Some(k) = get_attr(&e, "kern").and_then(|v| v.parse::<f32>().ok()) {
                             run_kern = Some(k / 100.0);
+                        }
+                        if let Some(b) = get_attr(&e, "baseline").and_then(|v| v.parse::<f32>().ok()) {
+                            run_baseline = Some(b / 100_000.0).filter(|b| *b != 0.0);
                         }
                         if s_letterspc {
                             if let Some(spc) = get_attr(&e, "spc") {
@@ -2160,7 +2335,7 @@ fn parse_slide(
                         para_runs.push(SlideRun {
                             text: "
 ".to_string(),
-                            font_size: run_font_size,
+                            font_size: superscript_size(run_font_size, run_baseline),
                             bold: None,
                             italic: false,
                             underline: false,
@@ -2170,6 +2345,7 @@ fn parse_slide(
                             font_family: run_font_family.clone(),
                             spacing: run_spacing,
                             kern: run_kern,
+                            baseline_shift: superscript_shift(run_font_size, run_baseline),
                         });
                     }
                     "t" if in_run => {
@@ -2182,6 +2358,14 @@ fn parse_slide(
                 let name = local_name(e.name().as_ref());
                 if sppr_ext > 0 {
                     continue;
+                }
+                if name == "buClr" {
+                    pb_pend = true;
+                } else if pb_pend && (name == "srgbClr" || name == "schemeClr") {
+                    pb_color = get_attr(&e, "val");
+                    pb_pend = false;
+                } else if name == "buSzPct" {
+                    pb_size = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()).map(|v| v / 100_000.0);
                 }
                 match name.as_str() {
                     // A SELF-CLOSING outerShdw is legal (nothing but
@@ -2261,7 +2445,7 @@ fn parse_slide(
                         if get_attr(&e, "type").as_deref() == Some("slidenum") {
                             para_runs.push(SlideRun {
                                 text: (slide_index as u32 + first_slide_num - 1).to_string(),
-                                font_size: run_font_size,
+                                font_size: superscript_size(run_font_size, run_baseline),
                                 bold: None,
                                 italic: false,
                                 underline: false,
@@ -2271,6 +2455,7 @@ fn parse_slide(
                                 font_family: run_font_family.clone(),
                                 spacing: run_spacing,
                                 kern: run_kern,
+                            baseline_shift: superscript_shift(run_font_size, run_baseline),
                             });
                         }
                     }
@@ -2287,7 +2472,7 @@ fn parse_slide(
                     "br" if in_paragraph && s_softbreak => {
                         para_runs.push(SlideRun {
                             text: "\n".to_string(),
-                            font_size: run_font_size,
+                            font_size: superscript_size(run_font_size, run_baseline),
                             bold: None,
                             italic: false,
                             underline: false,
@@ -2297,6 +2482,7 @@ fn parse_slide(
                             font_family: run_font_family.clone(),
                             spacing: run_spacing,
                             kern: run_kern,
+                            baseline_shift: superscript_shift(run_font_size, run_baseline),
                         });
                     }
                     // `<a:endParaRPr sz="1400"/>` normally has no children, so it
@@ -2445,6 +2631,14 @@ fn parse_slide(
                                 .max(1),
                             h_merge: matches!(
                                 get_attr(&e, "hMerge").as_deref(),
+                                Some("1") | Some("true")
+                            ),
+                            row_span: get_attr(&e, "rowSpan")
+                                .and_then(|v| v.parse::<u32>().ok())
+                                .unwrap_or(1)
+                                .max(1),
+                            v_merge: matches!(
+                                get_attr(&e, "vMerge").as_deref(),
                                 Some("1") | Some("true")
                             ),
                         });
@@ -2637,7 +2831,20 @@ fn parse_slide(
                             pct(get_attr(&e, "b")),
                         ));
                     }
+                    "hlinkClick" if in_run => {
+                        run_hlink = true;
+                    }
+                    "hlinkClr" if in_run => {
+                        run_hlink_tx = get_attr(&e, "val").as_deref() == Some("tx");
+                    }
                     "rPr" if in_run => {
+                        for k in ["lang", "altLang"] {
+                            if get_attr(&e, k).is_some_and(|v| {
+                                v.starts_with("ja") || v.starts_with("zh") || v.starts_with("ko")
+                            }) {
+                                para_ea_lang = true;
+                            }
+                        }
                         if let Some(b) = get_attr(&e, "b") {
                             run_bold = Some(b == "1" || b == "true");
                         }
@@ -2654,6 +2861,9 @@ fn parse_slide(
                         }
                         if let Some(k) = get_attr(&e, "kern").and_then(|v| v.parse::<f32>().ok()) {
                             run_kern = Some(k / 100.0);
+                        }
+                        if let Some(b) = get_attr(&e, "baseline").and_then(|v| v.parse::<f32>().ok()) {
+                            run_baseline = Some(b / 100_000.0).filter(|b| *b != 0.0);
                         }
                         if s_letterspc {
                             if let Some(spc) = get_attr(&e, "spc") {
@@ -2678,28 +2888,36 @@ fn parse_slide(
                         }
                     }
                     "prstTxWarp" if in_body_pr => {
-                        shape_text_warp = get_attr(&e, "prst");
+                        // `textNoShape` is "no warp" -- PowerPoint writes it on
+                        // ordinary text boxes (68ffbed2: a dozen per slide), and
+                        // reading it as WordArt stretched their text to the box.
+                        shape_text_warp = get_attr(&e, "prst")
+                            .filter(|p| p != "textNoShape" || std::env::var("OXI_NOSHAPEWARP_DISABLE").is_ok());
                     }
                     "bodyPr" if in_shape => {
                         // Self-closing <p:bodyPr .../> with inset attributes.
                         if let Some(v) = get_attr(&e, "lIns") {
                             if let Ok(v) = v.parse::<f32>() {
                                 shape_l_ins = emu_to_pt(v);
+                                shape_ins_set[0] = true;
                             }
                         }
                         if let Some(v) = get_attr(&e, "rIns") {
                             if let Ok(v) = v.parse::<f32>() {
                                 shape_r_ins = emu_to_pt(v);
+                                shape_ins_set[1] = true;
                             }
                         }
                         if let Some(v) = get_attr(&e, "tIns") {
                             if let Ok(v) = v.parse::<f32>() {
                                 shape_t_ins = emu_to_pt(v);
+                                shape_ins_set[2] = true;
                             }
                         }
                         if let Some(v) = get_attr(&e, "bIns") {
                             if let Ok(v) = v.parse::<f32>() {
                                 shape_b_ins = emu_to_pt(v);
+                                shape_ins_set[3] = true;
                             }
                         }
                         // Spec #6: a:bodyPr/@anchor — vertical text anchoring.
@@ -2732,6 +2950,9 @@ fn parse_slide(
                                 para_lvl = v;
                             }
                         }
+                        if let Some(v) = get_attr(&e, "hangingPunct") {
+                            para_hang = Some(v == "1" || v == "true");
+                        }
                         if let Some(mar_l) = get_attr(&e, "marL") {
                             if let Ok(v) = mar_l.parse::<f32>() {
                                 para_mar_l = Some(emu_to_pt(v));
@@ -2758,6 +2979,8 @@ fn parse_slide(
                                 para_bullet = SlideBullet::Char {
                                     ch: c,
                                     font: para_bullet_font.take(),
+                                    color: pb_color.take(),
+                                    size_pct: pb_size.take(),
                                 };
                             }
                         }
@@ -3121,6 +3344,31 @@ fn parse_slide(
                         // shape wins; otherwise a placeholder inherits the anchor
                         // of the matching layout/master placeholder (empty bodyPr
                         // in the chain = inherit).
+                        // The insets a placeholder leaves out come from its
+                        // layout / master placeholder: 252cbc8c's body and
+                        // title placeholders say lIns="0" there and nothing on
+                        // the slide, and Oxi set the text 7.2pt in.
+                        if shape_ph_type.is_some() && phinset_on() {
+                            let inh = lookup_ph_insets(
+                                &layout_ph_insets,
+                                &master_ph_insets,
+                                shape_ph_type.as_ref(),
+                                shape_ph_idx.as_ref(),
+                            );
+                            let slots = [
+                                &mut shape_l_ins,
+                                &mut shape_r_ins,
+                                &mut shape_t_ins,
+                                &mut shape_b_ins,
+                            ];
+                            for (i, slot) in slots.into_iter().enumerate() {
+                                if !shape_ins_set[i] {
+                                    if let Some(v) = inh[i] {
+                                        *slot = v;
+                                    }
+                                }
+                            }
+                        }
                         let resolved_anchor = match shape_anchor.take() {
                             Some(a) => Some(a),
                             None => {
@@ -3231,6 +3479,8 @@ fn parse_slide(
                             indent: para_indent,
                             bullet: std::mem::take(&mut para_bullet),
                             end_para_size: para_end_size.take(),
+                            hanging_punct: para_hang.take(),
+                            ea_lang: std::mem::take(&mut para_ea_lang),
                         };
                         if in_tbl_cell {
                             tbl_cur_cell_paragraphs.push(para);
@@ -3277,6 +3527,8 @@ fn parse_slide(
                             anchor: tc_anchor.take(),
                             grid_span: std::mem::replace(&mut tc_grid_span, 1),
                             h_merge: std::mem::take(&mut tc_h_merge),
+                            row_span: std::mem::replace(&mut tc_row_span, 1),
+                            v_merge: std::mem::take(&mut tc_v_merge),
                         });
                         tc_mar = (default_l_ins(), default_r_ins(), default_t_ins(), default_b_ins());
                     }
@@ -3413,16 +3665,27 @@ fn parse_slide(
                         if !run_text.is_empty() {
                             para_runs.push(SlideRun {
                                 text: std::mem::take(&mut run_text),
-                                font_size: run_font_size,
+                                font_size: superscript_size(run_font_size, run_baseline),
                                 bold: run_bold,
                                 italic: run_italic,
-                            underline: run_underline,
-                                color: run_color.take(),
+                            underline: run_underline || (run_hlink && !run_hlink_tx && hlink_on()),
+                                color: if run_hlink && !run_hlink_tx && hlink_on() {
+                                    run_color.take();
+                                    Some(
+                                        theme_colors
+                                            .get("hlink")
+                                            .cloned()
+                                            .unwrap_or_else(|| "0563C1".to_string()),
+                                    )
+                                } else {
+                                    run_color.take()
+                                },
                             color_alpha: run_color_alpha.take(),
                                 highlight: run_highlight.take(),
                                 font_family: run_font_family.take(),
                                 spacing: run_spacing,
                                 kern: run_kern,
+                            baseline_shift: superscript_shift(run_font_size, run_baseline),
                             });
                         }
                     }
@@ -4119,7 +4382,13 @@ fn parse_inherited_shapes(
                                 }
                             }
                             // Close the candidate.
-                            if ok && have_off && have_ext && w > 0.0 && h > 0.0 {
+                            // A line is 0pt tall (horizontal) or 0pt wide.
+                            let is_line = prst.as_deref() == Some("line");
+                            if ok
+                                && have_off
+                                && have_ext
+                                && ((w > 0.0 && h > 0.0) || (is_line && (w > 0.0 || h > 0.0)))
+                            {
                                 let content = match kind {
                                     _ if ig_fill_img && embed.is_some() => {
                                         embed.take().and_then(|rid| {
@@ -4171,7 +4440,8 @@ fn parse_inherited_shapes(
                                     // navy slab over the slide -- 0.8800 ->
                                     // 0.6489.
                                     _ if fill.is_some()
-                                        || (s_gradshape && gr_stops.len() >= 2) =>
+                                        || (s_gradshape && gr_stops.len() >= 2)
+                                        || (is_line && ln_color.is_some() && !ln_no_fill) =>
                                     {
                                         Some(ShapeContent::AutoShape {
                                             paragraphs: Vec::new(),
@@ -4575,6 +4845,10 @@ fn parse_inherited_shapes(
                 {
                     prst = Some(p)
                 }
+                // A master's rules are `prst="line"` shapes (252cbc8c: the
+                // line under every title and the one above the footer); the
+                // renderer strokes them like a connector.
+                Some(p) if lmline_on() && p == "line" => prst = Some(p),
                 _ => ok = false,
             },
             "custGeom" if s_inherit_geom => {
@@ -5085,7 +5359,28 @@ fn lookup_ph_geom(
             return Some(g);
         }
     }
+    // A master holds ONE placeholder per type, and a slide placeholder of
+    // that type inherits it whatever idx either side carries (the rule
+    // `lookup_ph_levels_in` already applies to styles). 252cbc8c's slide
+    // numbers are `<p:ph type="sldNum" idx="10"/>` on slide AND layout -- the
+    // layout one without an xfrm -- while the master's is idx="4"; with no
+    // match the number landed at the slide's top-left in a 0pt box.
+    if phtypegeom_on() {
+        if let Some(ty) = ph_type.filter(|t| t.as_str() != "obj" && t.as_str() != "body") {
+            let mut hits = master.iter().filter(|(k, _)| k.0.as_deref() == Some(ty.as_str()));
+            if let Some((_, &g)) = hits.next() {
+                if hits.next().is_none() {
+                    return Some(g);
+                }
+            }
+        }
+    }
     None
+}
+
+/// `OXI_PHTYPEGEOM_DISABLE=1` stops matching a master placeholder by type alone.
+fn phtypegeom_on() -> bool {
+    std::env::var("OXI_PHTYPEGEOM_DISABLE").is_err()
 }
 
 /// Spec #6: look up a placeholder's bodyPr anchor through the same
@@ -5274,6 +5569,115 @@ fn lookup_ph_levels(
     ph_idx: Option<&String>,
 ) -> Vec<MasterStyleLevel> {
     lookup_ph_levels_in(layout, ph_type, ph_idx, false)
+}
+
+type PhInsets = HashMap<(Option<String>, Option<String>), [Option<f32>; 4]>;
+
+/// `OXI_PHINSET_DISABLE=1` keeps the 7.2/7.2/3.6/3.6 defaults for placeholders
+/// whose own bodyPr states no inset.
+fn lmline_on() -> bool {
+    std::env::var("OXI_LMLINE_DISABLE").is_err()
+}
+
+fn hlink_on() -> bool {
+    std::env::var("OXI_HLINK_DISABLE").is_err()
+}
+
+fn phinset_on() -> bool {
+    std::env::var("OXI_PHINSET_DISABLE").is_err()
+}
+
+/// Each placeholder's `a:bodyPr` lIns/rIns/tIns/bIns (pt), keyed like
+/// `parse_layout_ph_info`'s maps.
+fn parse_ph_insets(xml: &str) -> PhInsets {
+    let mut out: PhInsets = HashMap::new();
+    let mut reader = Reader::from_str(xml);
+    let mut depth_sp = 0usize;
+    let mut key: Option<(Option<String>, Option<String>)> = None;
+    let mut ins: [Option<f32>; 4] = [None; 4];
+    loop {
+        let ev = match reader.read_event() {
+            Ok(e) => e,
+            Err(_) => break,
+        };
+        let is_start = matches!(ev, Event::Start(_));
+        match ev {
+            Event::Start(e) | Event::Empty(e) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "sp" if is_start => {
+                        depth_sp += 1;
+                        key = None;
+                        ins = [None; 4];
+                    }
+                    "ph" if depth_sp > 0 => {
+                        let ty = match get_attr(&e, "type") {
+                            Some(t) if !t.is_empty() => Some(t),
+                            _ => Some("obj".to_string()),
+                        };
+                        key = Some((ty, get_attr(&e, "idx")));
+                    }
+                    "bodyPr" if depth_sp > 0 => {
+                        for (i, a) in ["lIns", "rIns", "tIns", "bIns"].iter().enumerate() {
+                            if let Some(v) = get_attr(&e, a).and_then(|v| v.parse::<f32>().ok()) {
+                                ins[i] = Some(emu_to_pt(v));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(e) => {
+                if local_name(e.name().as_ref()) == "sp" && depth_sp > 0 {
+                    depth_sp -= 1;
+                    if let Some(k) = key.take() {
+                        if ins.iter().any(|v| v.is_some()) {
+                            out.insert(k, ins);
+                        }
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A placeholder's inherited insets, field by field through the
+/// `lookup_ph_anchor` key chain (layout before master at each key).
+fn lookup_ph_insets(
+    layout: &PhInsets,
+    master: &PhInsets,
+    ph_type: Option<&String>,
+    ph_idx: Option<&String>,
+) -> [Option<f32>; 4] {
+    let mut keys: Vec<(Option<String>, Option<String>)> = Vec::new();
+    keys.push((ph_type.cloned(), ph_idx.cloned()));
+    if let Some(ty) = ph_type {
+        if ty == "ctrTitle" {
+            keys.push((Some("title".to_string()), ph_idx.cloned()));
+        }
+    }
+    if let Some(idx) = ph_idx {
+        keys.push((Some("body".to_string()), Some(idx.clone())));
+        keys.push((Some("obj".to_string()), Some(idx.clone())));
+        keys.push((None, Some(idx.clone())));
+    } else if let Some(ty) = ph_type {
+        keys.push((Some(ty.clone()), None));
+    }
+    let mut out = [None; 4];
+    for (i, slot) in out.iter_mut().enumerate() {
+        'k: for k in &keys {
+            for m in [layout, master] {
+                if let Some(v) = m.get(k).and_then(|a| a[i]) {
+                    *slot = Some(v);
+                    break 'k;
+                }
+            }
+        }
+    }
+    out
 }
 
 fn lookup_ph_anchor(
@@ -6134,6 +6538,7 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         theme_colors,
         master_styles,
         embedded_fonts,
+        default_hanging_punct: parse_default_hanging_punct(&pres_xml),
     };
     apply_norm_autofit(&mut pres);
     Ok(pres)

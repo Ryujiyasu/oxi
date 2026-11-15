@@ -120,6 +120,7 @@ fn main() {
         strip_feff(&mut pres);
     }
     let pres = pres;
+    HANG_DEFAULT.store(pres.default_hanging_punct, std::sync::atomic::Ordering::Relaxed);
 
     eprintln!(
         "Parsed {} slides, size={}x{}pt, DPI={} supersample={}x",
@@ -274,6 +275,9 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str, dpi: u32, supersample: 
                                         match sh.ph_type.as_deref() {
                                             Some("title") | Some("ctrTitle") => {
                                                 &pres.master_styles.title
+                                            }
+                                            Some("dt") | Some("ftr") | Some("sldNum") | Some("hdr") if footerstyle_on() => {
+                                                &pres.master_styles.other
                                             }
                                             Some(_) => &pres.master_styles.body,
                                             None => &pres.master_styles.other,
@@ -472,6 +476,9 @@ fn compute_shape_anchor_off(
     let inner_h = (sh.height - sh.t_ins - sh.b_ins - geom_t - geom_b).max(0.0);
     let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
         Some("title") | Some("ctrTitle") => &pres.master_styles.title,
+        Some("dt") | Some("ftr") | Some("sldNum") | Some("hdr") if footerstyle_on() => {
+            &pres.master_styles.other
+        }
         Some(_) => &pres.master_styles.body,
         None => &pres.master_styles.other,
     };
@@ -630,6 +637,13 @@ fn paragraph_family_inner(
 
 /// A placeholder's declared face is honoured unless this is set, which restores
 /// resolving straight to the theme.
+/// Footer placeholders (date, footer, slide number, header) take the master
+/// `otherStyle`, not `bodyStyle`: 252cbc8c's slide number drew the body ■
+/// bullet and broke `89` in two. `OXI_FOOTERSTYLE_DISABLE=1` restores body.
+fn footerstyle_on() -> bool {
+    std::env::var("OXI_FOOTERSTYLE_DISABLE").is_err()
+}
+
 fn phfont_on() -> bool {
     std::env::var("OXI_PHFONT_DISABLE").is_err()
 }
@@ -863,8 +877,10 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     let prst = match sh.shape_type.as_deref() {
         Some(
             p @ ("ellipse" | "roundRect" | "homePlate" | "chevron" | "teardrop" | "pie"
-                | "star10" | "wedgeRectCallout" | "blockArc" | "chord" | "rtTriangle"),
+                | "star10" | "wedgeRectCallout" | "blockArc" | "chord" | "rtTriangle"
+                | "rightArrow" | "foldedCorner"),
         ) if (p != "pie" || pie_on())
+            && (!matches!(p, "rightArrow" | "foldedCorner") || arrowfold_on())
             && (p != "chord" || chordclip_on())
             && (p != "rtTriangle" || chordclip_on())
             && (p != "chevron" || chevron_on())
@@ -920,6 +936,35 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
             line(map(r, h));
             bezier(map(r - K * r, h), map(0.0, h - r + K * r), map(0.0, h - r));
             line(map(0.0, r));
+        }
+        // ECMA-376 presetShapeDefinitions. 68ffbed2 draws its process flow
+        // with these: three rightArrows and four foldedCorner notes that Oxi
+        // filled as plain rectangles.
+        "rightArrow" => {
+            let ss = w.min(h);
+            let a1 = sh.adjustments.get("adj1").copied().unwrap_or(50_000.0).clamp(0.0, 100_000.0);
+            let max2 = 100_000.0 * w / ss;
+            let a2 = sh.adjustments.get("adj2").copied().unwrap_or(50_000.0).clamp(0.0, max2);
+            let x1 = w - ss * a2 / 100_000.0;
+            let dy1 = h * a1 / 200_000.0;
+            let (y1, y2) = (h / 2.0 - dy1, h / 2.0 + dy1);
+            let p = map(0.0, y1); let _ = MoveToEx(dc, p.x, p.y, None);
+            line(map(x1, y1)); line(map(x1, 0.0)); line(map(w, h / 2.0));
+            line(map(x1, h)); line(map(x1, y2)); line(map(0.0, y2));
+        }
+        "foldedCorner" => {
+            let ss = w.min(h);
+            let a = sh.adjustments.get("adj").copied().unwrap_or(16_667.0).clamp(0.0, 50_000.0);
+            let dy2 = ss * a / 100_000.0;
+            let dy1 = dy2 / 5.0;
+            let (x1, x2) = (w - dy2, w - dy2 + dy1);
+            let (y2, y1) = (h - dy2, h - dy2 + dy1);
+            let p = map(0.0, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
+            line(map(w, 0.0)); line(map(w, y2)); line(map(x1, h)); line(map(0.0, h));
+            let _ = CloseFigure(dc);
+            // the turned-up flap
+            let p = map(x1, h); let _ = MoveToEx(dc, p.x, p.y, None);
+            line(map(x2, y1)); line(map(w, y2));
         }
         "homePlate" => {
             let adj = sh.adjustments.get("adj").copied().unwrap_or(50_000.0);
@@ -5594,6 +5639,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let anchor_off = compute_shape_anchor_off(mem_dc, pres, sh);
                         let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
                             Some("title") | Some("ctrTitle") => &pres.master_styles.title,
+                            Some("dt") | Some("ftr") | Some("sldNum") | Some("hdr") if footerstyle_on() => {
+                                &pres.master_styles.other
+                            }
                             Some(_) => &pres.master_styles.body,
                             None => &pres.master_styles.other,
                         };
@@ -5639,11 +5687,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     m.map(std::slice::from_ref).unwrap_or(&[]),
                                 ),
                             );
+                            // The MASTER text style's level colour comes last:
+                            // 640d6e4e's titleStyle says `bg1` (white) and the
+                            // layout title only names the face.
+                            let lvl_m_color = m
+                                .filter(|_| sh.ph_type.is_some())
+                                .and_then(|mm| mm.color.clone())
+                                .filter(|_| std::env::var("OXI_TXCOLORDRAW_DISABLE").is_err());
                             let color = p
                                 .runs
                                 .iter()
                                 .find_map(|r| r.color.clone())
-                                .or_else(|| phl.and_then(|l| l.color.clone()));
+                                .or_else(|| phl.and_then(|l| l.color.clone()))
+                                .or_else(|| lvl_m_color.clone());
                             // A level can declare the highlight too, and then
                             // every run inherits it: d35's master title level
                             // carries the white slab behind "BIG CONCEPT".
@@ -5654,7 +5710,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // whole quotation blue where PowerPoint has black.
                             // 30 paragraphs over 9 decks mix the two.
                             let run_default_color = if runcolordef_on() {
-                                phl.and_then(|l| l.color.clone())
+                                phl.and_then(|l| l.color.clone()).or_else(|| lvl_m_color.clone())
                             } else {
                                 color.clone()
                             };
@@ -5717,6 +5773,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         }
                                     }
                                 }
+                                let bu_hex: Option<String> = m.color.as_deref().and_then(|c| {
+                                    if c.len() == 6 && c.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                                        Some(c.to_string())
+                                    } else {
+                                        pres.theme_colors.get(c).cloned()
+                                    }
+                                });
                                 draw_text_baseline(
                                     mem_dc,
                                     marker_x,
@@ -5724,7 +5787,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     &m.text,
                                     m.fs,
                                     mark_face,
-                                    color.as_deref(),
+                                    bu_hex.as_deref().or(color.as_deref()),
                                     scale,
                                 );
                             }
@@ -5770,8 +5833,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // while leaving the weight at 400 -- "Team
                             // Presentation" 264.5pt of ink against
                             // PowerPoint's 271.7 at 32pt.
-                            let lvl_bold =
-                                lvlbold_on() && phl.and_then(|l| l.bold).unwrap_or(false);
+                            // ...and from the master text style when the
+                            // placeholder chain says nothing (919f1dfa's
+                            // titleStyle `b="1"`: the layout measured the
+                            // title bold and this drew it regular).
+                            let lvl_bold = lvlbold_on()
+                                && phl
+                                    .and_then(|l| l.bold)
+                                    .or_else(|| m.and_then(|mm| mm.bold).filter(|_| std::env::var("OXI_TXBOLD_DISABLE").is_err()))
+                                    .unwrap_or(false);
                             let para_weight =
                                 if para_is_bold(&p.runs, lvl_bold) && parabold_on() {
                                     700
@@ -5967,6 +6037,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // not move -- four decks lost 0.003 to 0.006 each.
                                 let mut need = 0.0f32;
                                 for (c, cell) in row.iter().enumerate() {
+                                    // A cell spanning rows (or continuing one)
+                                    // does not size the row it starts in.
+                                    if vmerge_on() && (cell.row_span > 1 || cell.v_merge) {
+                                        continue;
+                                    }
                                     let mut text = 0.0f32;
                                     let mut sized = true;
                                     for p in &cell.paragraphs {
@@ -6011,6 +6086,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                         );
                                                         let bold =
                                                             para_is_bold(&p.runs, false);
+                                                        set_para_hang(p);
                                                         n = gdi_wrap_lines(
                                                             mem_dc, &body, inner, inner,
                                                             scale, fs, &family, bold, false,
@@ -6117,6 +6193,27 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 if hmerge_on() && cell.h_merge {
                                     continue;
                                 }
+                                // A row-span continuation is inside the cell
+                                // above it: no ink, but its column still
+                                // advances the cursor (pptx_newdev 919f1dfa:
+                                // the area column's 北海道 / 東北 / 関東 each
+                                // span two rows).
+                                if vmerge_on() && cell.v_merge {
+                                    cx += pw;
+                                    cx_pt += w_pt;
+                                    continue;
+                                }
+                                let ph = if vmerge_on() && cell.row_span > 1 {
+                                    let span = (cell.row_span as usize).min(row_h.len() - r);
+                                    let h: f64 = row_h[r..r + span].iter().map(|v| *v as f64).sum();
+                                    if tbledge_on() {
+                                        y + ((cy_pt + h) * scale).round() as i32 - cy
+                                    } else {
+                                        (h * scale).round() as i32
+                                    }
+                                } else {
+                                    ph
+                                };
                                 let cell_rect = RECT {
                                     left: cx,
                                     top: cy,
@@ -6243,6 +6340,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                     ),
                                                 );
                                                 let bold = para_is_bold(&p.runs, false);
+                                                set_para_hang(p);
                                                 n = gdi_wrap_lines(
                                                     mem_dc,
                                                     &body,
@@ -6350,6 +6448,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         // 213.6pt column and over its neighbour.
                                         let inner_pt =
                                             (right - left).max(1) as f64 / scale;
+                                        set_para_hang(p);
                                         let lines = gdi_wrap_lines(
                                             mem_dc,
                                             &text,
@@ -12834,6 +12933,21 @@ fn surf_min_spacing() -> f64 {
     std::env::var("OXI_SURFSPACE").ok().and_then(|v| v.parse().ok()).unwrap_or(26.5)
 }
 
+/// `OXI_ARROWFOLD_DISABLE=1` draws rightArrow / foldedCorner as rectangles again.
+fn arrowfold_on() -> bool {
+    std::env::var("OXI_ARROWFOLD_DISABLE").is_err()
+}
+
+/// `OXI_BUCLR_DISABLE=1` draws bullets in the text colour and size again.
+fn buclr_on() -> bool {
+    std::env::var("OXI_BUCLR_DISABLE").is_err()
+}
+
+/// `OXI_VMERGE_DISABLE=1` draws every table cell in its own row again.
+fn vmerge_on() -> bool {
+    std::env::var("OXI_VMERGE_DISABLE").is_err()
+}
+
 /// `OXI_SURFCAM_DISABLE=1` goes back to the fitted surface projection.
 fn surfcam_on() -> bool {
     std::env::var("OXI_SURFCAM_DISABLE").is_err()
@@ -14200,6 +14314,8 @@ unsafe fn draw_line_runs(
         } else {
             Vec::new()
         };
+        // A raised / lowered run sits off the line's baseline.
+        let baseline = baseline - run.baseline_shift.unwrap_or(0.0);
         if chunks.is_empty() {
             draw_text_baseline_wiu(
                 dc,
@@ -15953,6 +16069,25 @@ thread_local! {
     /// `layout_paragraph_baselines`, which runs just before that paragraph is
     /// measured and drawn.
     static KERN_MIN: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+    /// The paragraph's `hangingPunct`, resolved (see `WrapOpts::hang_punct`).
+    /// Set with KERN_MIN; the table-cell wraps set it themselves.
+    static HANG_PUNCT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `p:defaultTextStyle`'s `hangingPunct`, for paragraphs that say nothing.
+static HANG_DEFAULT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Resolve and publish a paragraph's `hangingPunct` for the wraps that follow.
+/// `OXI_HANGPUNCT_DISABLE=1` never hangs.
+fn set_para_hang(para: &oxislides_core::ir::SlideParagraph) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let on = *ON.get_or_init(|| std::env::var("OXI_HANGPUNCT_DISABLE").is_err());
+    let v = on
+        && (para.ea_lang || std::env::var("OXI_HANGEA_DISABLE").is_ok())
+        && para
+            .hanging_punct
+            .unwrap_or_else(|| HANG_DEFAULT.load(std::sync::atomic::Ordering::Relaxed));
+    HANG_PUNCT.with(|h| h.set(v));
 }
 
 /// Whether text at `fs` points is kerned under the current paragraph's `kern`
@@ -17518,6 +17653,7 @@ fn gdi_wrap_lines(
         trim_trailing_space: std::env::var("OXI_WRAPTRIM_DISABLE").is_err(),
         char_wrap: charwrap_on(),
         hyphen_breaks: hyphbrk_on(),
+        hang_punct: HANG_PUNCT.with(|h| h.get()),
     };
     let lines = oxislides_core::layout::wrap_lines(
         text,
@@ -18267,6 +18403,8 @@ struct MarkerInfo {
     x_pt: f32,
     baseline: f32,
     fs: f32,
+    /// a:buClr, when the paragraph's level states one (6-hex or scheme name).
+    color: Option<String>,
     /// Line 0's alignment offset. A centred or right-aligned line carries its
     /// marker WITH it -- d24 s2's two bullets sit at 47.95 and 53.71pt in
     /// PowerPoint's own PDF because each line is centred as a unit -- so the
@@ -18321,6 +18459,7 @@ fn layout_paragraph_baselines(
     // Master txStyles level for this paragraph's outline level (Spec #8).
     let m = oxislides_core::layout::resolve_level(master, ph_levels, para.lvl);
     KERN_MIN.with(|k| k.set(para.runs.iter().find_map(|r| r.kern).or(m.kern)));
+    set_para_hang(para);
     // Effective font size: a run's explicit sz wins (the max over runs);
     // otherwise the master txStyles level default (Spec #5, phfs probe: V3
     // run 14pt overrides master 32pt); else the engine default. An EMPTY
@@ -18475,8 +18614,15 @@ fn layout_paragraph_baselines(
     let mut line0_x_off = geom.first_x;
     let mut marker: Option<MarkerInfo> = None;
     match &bullet {
-        SlideBullet::Char { ch, font } => {
+        SlideBullet::Char { ch, font, color: bu_color, size_pct } => {
             let marker_family = font.clone().unwrap_or_else(|| family.clone());
+            // a:buSzPct scales the marker against the text; a:buClr colours
+            // it (252cbc8c: master bullets are Wingdings at 75% in 00B0F0,
+            // which Oxi drew full-size in the text colour).
+            let fs = match size_pct.filter(|_| buclr_on()) {
+                Some(p) if p > 0.0 => fs * p,
+                _ => fs,
+            };
             // The marker moves on the same grid as the text beside it.
             // It only reaches the layout when it OVERFLOWS its own indent
             // (`marker_push` takes a max), so this is worth at most one
@@ -18498,6 +18644,7 @@ fn layout_paragraph_baselines(
                 x_pt: marker_rel,
                 baseline: 0.0, // line 0's baseline, filled in the line loop
                 fs,
+                color: bu_color.clone().filter(|_| buclr_on()),
                 align_off: 0.0, // filled in the line loop, with line 0's
             });
         }
@@ -18529,10 +18676,19 @@ fn layout_paragraph_baselines(
                 x_pt: marker_rel,
                 baseline: 0.0, // line 0's baseline, filled in the line loop
                 fs,
+                color: None,
                 align_off: 0.0, // filled in the line loop, with line 0's
             });
         }
         _ => {}
+    }
+    // An EMPTY paragraph draws no marker: 252cbc8c ends most bodies with a
+    // bare `<a:endParaRPr/>` paragraph, and PowerPoint leaves that line blank
+    // where Oxi drew the level's ■.
+    if para.runs.iter().all(|r| r.text.is_empty())
+        && std::env::var("OXI_EMPTYBULLET_DISABLE").is_err()
+    {
+        marker = None;
     }
 
     // PowerPoint wraps each line against the same RIGHT EDGE, so the width a
