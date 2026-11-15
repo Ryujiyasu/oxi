@@ -568,3 +568,45 @@ fn native_values_json_rejects_invalid_arguments_without_resetting_storage() {
         .unwrap();
     assert!(matches!(next.result(), Value::Integer(5)));
 }
+
+#[test]
+fn native_save_as_converts_the_package_and_keeps_the_live_project() {
+    let bytes = include_bytes!("../../../tests/fixtures/vba/row_height_state.xlsm");
+    let options = serde_json::json!({
+        "applicationState":{"displayAlerts":false,"enableEvents":false},
+        "fileContext":{"packageBytes":bytes.as_slice(),"fullName":"C:\\work\\input.xlsm","folders":["C:\\work"]}
+    }).to_string();
+    let mut session = SpreadsheetVbaSession::default();
+    let mut write = call("NativeRun.Step", vec![Value::Integer(23)]);
+    write.options = &options;
+    write.file_name = Some("input.xlsm".into());
+    let written = session
+        .run_native(oxicells_core::parse_xlsx(bytes).unwrap(), write)
+        .unwrap();
+    assert!(matches!(written.result(), Value::Integer(23)));
+    let mut save = call("", vec![]);
+    save.action = NativeVbaAction::SaveAs {
+        file_name: "C:\\work\\result.xlsx".into(),
+        format: 51,
+    };
+    let saved = session.run_native(written.into_workbook(), save).unwrap();
+    let details: serde_json::Value = serde_json::from_str(&saved.to_json().unwrap()).unwrap();
+    assert!(details["error"].is_null(), "{details}");
+    assert_eq!(details["save"]["completed"], true);
+    let package = saved.saved_package_bytes().unwrap();
+    let project: serde_json::Value =
+        serde_json::from_str(&read_spreadsheet_vba_project_native(package, None).unwrap()).unwrap();
+    assert!(project["source"].is_null());
+    let reopened = oxicells_core::parse_xlsx(package).unwrap();
+    assert!(matches!(
+        reopened.sheets[0].rows[0].cells[0].value,
+        CellValue::Number(23.0)
+    ));
+    let next = session
+        .run_native(
+            saved.into_workbook(),
+            call("NativeRun.Step", vec![Value::Integer(1)]),
+        )
+        .unwrap();
+    assert!(matches!(next.result(), Value::Integer(24)));
+}

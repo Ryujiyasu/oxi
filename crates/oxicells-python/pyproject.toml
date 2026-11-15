@@ -1,0 +1,34 @@
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "oxicells"
+description = "Run supported Excel workbook VBA without Microsoft Excel, using the Oxi engine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MPL-2.0 AND (MIT OR Apache-2.0)"
+dynamic = ["version"]
+keywords = ["excel", "xlsx", "xlsm", "vba", "macro"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Office/Business :: Office Suites",
+]
+
+[project.urls]
+Source = "https://github.com/Ryujiyasu/oxi/tree/main/crates/oxicells-python"
+Issues = "https://github.com/Ryujiyasu/oxi/issues"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "../oxidocs-cli/Cargo.toml"
+features = ["vba-execution"]
+targets = [{ name = "oxicells", kind = "bin" }]
+module-name = "oxicells"
+python-source = "python"
+python-packages = ["oxicells"]
+strip = true
+locked = true

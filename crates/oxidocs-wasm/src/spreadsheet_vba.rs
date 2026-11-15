@@ -48224,6 +48224,7 @@ enum ExternalObjectAction {
     Invoke { reference: String, member: String, kind: i64 },
     Release { references: Vec<String> },
     SaveWorkbook { copy_name: Option<String> },
+    SaveAs { file_name: String, format: i64 },
     CompileProject,
 }
 
@@ -48689,6 +48690,7 @@ pub enum NativeVbaAction<'a> {
     Run { procedure: &'a str },
     PrepareSave,
     SaveWorkbook { copy_name: Option<String> },
+    SaveAs { file_name: String, format: i64 },
     CompileProject,
     Invoke { reference: String, member: String, kind: i64 },
     Release { references: Vec<String> },
@@ -48713,6 +48715,11 @@ impl NativeVbaOutcome {
     pub fn result(&self) -> &Value { &self.result }
     pub fn workbook(&self) -> &Workbook { &self.outcome.workbook }
     pub fn into_workbook(self) -> Workbook { self.outcome.workbook }
+
+    /// The package produced by a successful save, without JSON byte-array copies.
+    pub fn saved_package_bytes(&self) -> Option<&[u8]> {
+        self.outcome.save.as_ref().and_then(|save|save.package_bytes.as_deref())
+    }
 
     /// Native JSON retains VBA numeric subtypes, array defaults and BSTR data.
     /// Decimal carries its sign, magnitude and scale; non-finite floats carry
@@ -48901,6 +48908,7 @@ impl SpreadsheetVbaSession {
             NativeVbaAction::Run { procedure } => VbaInvocation::new(Some(procedure),args),
             NativeVbaAction::PrepareSave => VbaInvocation::new(None,args),
             NativeVbaAction::SaveWorkbook { copy_name } => VbaInvocation { procedure:None,args,action:Some(ExternalObjectAction::SaveWorkbook { copy_name }) },
+            NativeVbaAction::SaveAs { file_name,format } => VbaInvocation { procedure:None,args,action:Some(ExternalObjectAction::SaveAs { file_name,format }) },
             NativeVbaAction::CompileProject => VbaInvocation { procedure:None,args,action:Some(ExternalObjectAction::CompileProject) },
             NativeVbaAction::Invoke { reference,member,kind } => VbaInvocation { procedure:None,args,action:Some(ExternalObjectAction::Invoke { reference,member,kind }) },
             NativeVbaAction::Release { references } => VbaInvocation { procedure:None,args,action:Some(ExternalObjectAction::Release { references }) },
@@ -49734,7 +49742,7 @@ fn execute_workbook_invocation_capturing(
     captured: Option<&mut Value>,
 ) -> Result<RunOutcome, String> {
     let VbaInvocation { procedure, args, action } = invocation;
-    let save_request = match &action { Some(ExternalObjectAction::SaveWorkbook { copy_name }) => Some(copy_name.clone()), _ => None };
+    let save_request = match &action { Some(ExternalObjectAction::SaveWorkbook { copy_name }) => Some(copy_name.clone()), Some(ExternalObjectAction::SaveAs { .. }) => Some(None), _ => None };
     // The editor can retain the old IR after Close. It cannot revive that
     // project's macros or save its discarded edits as a new invocation.
     if action.is_none() && session.as_ref().is_some_and(|state| state.application.as_ref()
@@ -49935,7 +49943,7 @@ fn execute_workbook_invocation_capturing(
     let action_references: &[String] = match &action {
         Some(ExternalObjectAction::Invoke { reference, .. }) => std::slice::from_ref(reference),
         Some(ExternalObjectAction::Release { references }) => references,
-        Some(ExternalObjectAction::SaveWorkbook { .. } | ExternalObjectAction::CompileProject) => &[],
+        Some(ExternalObjectAction::SaveWorkbook { .. } | ExternalObjectAction::SaveAs { .. } | ExternalObjectAction::CompileProject) => &[],
         None => &[],
     };
     let mut seen = BTreeSet::new();
@@ -50107,6 +50115,8 @@ fn execute_workbook_invocation_capturing(
         let external_action = action.is_some();
         let mut result = match action {
             Some(ExternalObjectAction::CompileProject) => unreachable!("project compilation does not execute VBA"),
+            Some(ExternalObjectAction::SaveAs { file_name,format }) =>
+                runtime.invoke_host("ThisWorkbook","SaveAs",vec![Value::String(file_name),Value::Integer(format)]),
             Some(ExternalObjectAction::SaveWorkbook { copy_name }) => {
                 if copy_name.is_some() {
                     runtime.invoke_host("ThisWorkbook", "SaveCopyAs",
