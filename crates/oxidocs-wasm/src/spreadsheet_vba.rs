@@ -48714,6 +48714,16 @@ impl NativeVbaOutcome {
     pub fn workbook(&self) -> &Workbook { &self.outcome.workbook }
     pub fn into_workbook(self) -> Workbook { self.outcome.workbook }
 
+    /// Native JSON retains VBA numeric subtypes, array defaults and BSTR data.
+    /// Decimal carries its sign, magnitude and scale; non-finite floats carry
+    /// exact hexadecimal bits. Object references remain owned by this session.
+    pub fn to_typed_json(&self) -> Result<String,String> {
+        let mut output=serde_json::to_value(&self.outcome).map_err(|error|error.to_string())?;
+        let result=native_value_descriptor(&self.result,&output["result"])?;
+        output["result"]=result;
+        serde_json::to_string(&output).map_err(|error|error.to_string())
+    }
+
     /// A browser-compatible JSON view. Use `result()` to distinguish VBA
     /// subtypes. Non-finite result numbers need the typed result accessor.
     pub fn to_json(&self) -> Result<String,String> {
@@ -48731,8 +48741,145 @@ impl NativeVbaOutcome {
     }
 }
 
+fn native_float_descriptor(tag:&str,value:f64,bits:u64,width:usize)->serde_json::Value {
+    let payload=if value.is_finite(){serde_json::json!(value)}
+        else{serde_json::json!({"bits":format!("{bits:0width$x}")})};
+    serde_json::json!({"type":tag,"value":payload})
+}
+
+fn native_value_descriptor(value:&Value,original:&serde_json::Value)->Result<serde_json::Value,String> {
+    use serde_json::json;
+    Ok(match value {
+        Value::Byte(value)=>json!({"type":"byte","value":value}),
+        Value::Int16(value)=>json!({"type":"integer","value":value}),
+        Value::Integer(value)=>json!({"type":"long","value":value}),
+        Value::LongLong(value)=>json!({"type":"long_long","value":value.to_string()}),
+        Value::Single(value)=>native_float_descriptor("single",f64::from(*value),u64::from(value.to_bits()),8),
+        Value::Double(value)=>native_float_descriptor("double",*value,value.to_bits(),16),
+        Value::Date(value)=>native_float_descriptor("date",*value,value.to_bits(),16),
+        Value::Decimal(value)=>json!({"type":"decimal","value":{
+            "negative":value.negative,"magnitude":value.magnitude.to_string(),"scale":value.scale}}),
+        Value::NullString=>json!({"type":"null_string"}),
+        Value::Array(array)=>{
+            let old=original["value"]["values"].as_array();
+            let values=array.values.iter().enumerate().map(|(index,value)|
+                native_value_descriptor(value,old.and_then(|values|values.get(index)).unwrap_or(&serde_json::Value::Null)))
+                .collect::<Result<Vec<_>,_>>()?;
+            let dimensions=array.dimensions.iter().map(|dimension|
+                json!({"lower_bound":dimension.lower_bound,"length":dimension.length})).collect::<Vec<_>>();
+            json!({"type":"array","value":{"dimensions":dimensions,"resizable":array.resizable,
+                "element_default":native_value_descriptor(&array.element_default,&serde_json::Value::Null)?,"values":values}})
+        },
+        Value::Record(record)=>{
+            let old=original["value"]["fields"].as_array();
+            let fields=record.fields.iter().enumerate().map(|(index,(name,value))|
+                native_value_descriptor(value,old.and_then(|fields|fields.get(index)).map(|pair|&pair[1]).unwrap_or(&serde_json::Value::Null))
+                    .map(|value|json!([name,value]))).collect::<Result<Vec<_>,_>>()?;
+            json!({"type":"record","value":{"type_name":record.type_name,"fields":fields}})
+        },
+        Value::Object(_)=>{
+            if original["type"]!="object" || !original["value"]["reference"].is_string(){
+                return Err("native object has no retained session reference".into());
+            }
+            original.clone()
+        },
+        _=>serde_json::to_value(OutputValue::from(value.clone())).map_err(|error|error.to_string())?,
+    })
+}
+
+fn native_descriptor_fields<'a>(input:&'a serde_json::Value,required:&[&str],optional:&[&str])
+    ->Result<&'a serde_json::Map<String,serde_json::Value>,String> {
+    let object=input.as_object().ok_or("native VBA value must be an object")?;
+    if required.iter().any(|field|!object.contains_key(*field)) || object.keys().any(|field|
+        !required.contains(&field.as_str()) && !optional.contains(&field.as_str())) {
+        return Err("unknown or missing native VBA value field".into());
+    }
+    Ok(object)
+}
+
+fn decode_native_value(input:&serde_json::Value,references:Option<&ExternalReferences>)->Result<Value,String> {
+    let tag=input.get("type").and_then(|value|value.as_str()).ok_or("native VBA value has no type")?;
+    match tag {
+        "array"=>{
+            native_descriptor_fields(input,&["type","value"],&[])?;
+            let payload=&input["value"];
+            native_descriptor_fields(payload,&["dimensions","element_default","resizable","values"],&[])?;
+            let values=payload["values"].as_array().ok_or("native array values must be an array")?.iter()
+                .map(|value|decode_native_value(value,references)).collect::<Result<Vec<_>,_>>()?;
+            let default=decode_native_value(&payload["element_default"],references)?;
+            let metadata=serde_json::json!({"dimensions":payload["dimensions"],"element_type":"variant","resizable":payload["resizable"]});
+            let mut schema=decode_vba_input_array_schema(&metadata,values.len())?;
+            schema.element_type=payload["element_default"]["type"].as_str().unwrap_or("").into();
+            schema.element_default=match &default {
+                Value::String(_) | Value::Utf16(_) | Value::ByteString(_)=>Value::NullString,
+                _=>default.clone(),
+            };
+            let Value::Array(mut array)=finish_vba_input_array(schema,values)? else{unreachable!()};
+            array.element_default=Box::new(default);
+            Ok(Value::Array(array))
+        },
+        "record"=>{
+            native_descriptor_fields(input,&["type","value"],&[])?;
+            let payload=&input["value"];native_descriptor_fields(payload,&["type_name","fields"],&[])?;
+            let name=payload["type_name"].as_str().filter(|value|!value.is_empty()).ok_or("native record has no type name")?;
+            let mut names=std::collections::BTreeSet::new();
+            let fields=payload["fields"].as_array().ok_or("native record fields must be an array")?.iter().map(|pair|{
+                let pair=pair.as_array().filter(|pair|pair.len()==2).ok_or("native record field must be a name/value pair")?;
+                let name=pair[0].as_str().filter(|value|!value.is_empty()).ok_or("native record field has no name")?;
+                if !names.insert(name.to_ascii_lowercase()){return Err("duplicate native record field".into());}
+                decode_native_value(&pair[1],references).map(|value|(name.to_owned(),value))
+            }).collect::<Result<Vec<_>,String>>()?;
+            Ok(Value::Record(oxivba_core::runtime::RecordValue{type_name:name.into(),fields}))
+        },
+        "object"=>{
+            native_descriptor_fields(input,&["type","value"],&[])?;
+            let payload=&input["value"];native_descriptor_fields(payload,&["reference"],&["kind","handle"])?;
+            let reference=payload["reference"].as_str().ok_or("native object reference must be a string")?;
+            let object=references.and_then(|references|references.values.get(reference))
+                .ok_or("released, stale, or foreign native object reference")?;
+            if payload.get("kind").is_some_and(|kind|kind.as_str()!=Some(object.kind.as_str())){
+                return Err("native object kind does not match".into());
+            }
+            if let Some(handle)=payload.get("handle") {
+                let handle=handle.as_u64().or_else(||handle.as_str().and_then(|value|value.parse().ok()));
+                if handle!=Some(object.handle){return Err("native object handle does not match".into());}
+            }
+            Ok(Value::Object(object.clone()))
+        },
+        "decimal" if input.get("value").is_some_and(serde_json::Value::is_object)=>{
+            native_descriptor_fields(input,&["type","value"],&[])?;
+            let payload=&input["value"];native_descriptor_fields(payload,&["negative","magnitude","scale"],&[])?;
+            let negative=payload["negative"].as_bool().ok_or("native Decimal sign must be boolean")?;
+            let magnitude=payload["magnitude"].as_str().ok_or("native Decimal magnitude must be a decimal string")?
+                .parse::<u128>().map_err(|_|"native Decimal magnitude is out of range")?;
+            let scale=payload["scale"].as_u64().filter(|value|*value<=28).ok_or("native Decimal scale exceeds 28")? as u8;
+            if magnitude>(1u128<<96)-1{return Err("native Decimal magnitude exceeds 96 bits".into());}
+            Ok(Value::Decimal(oxivba_core::decimal::Dec{negative,magnitude,scale}))
+        },
+        "single" | "double" | "date" if input.get("value").is_some_and(serde_json::Value::is_object)=>{
+            native_descriptor_fields(input,&["type","value"],&[])?;
+            let payload=&input["value"];native_descriptor_fields(payload,&["bits"],&[])?;
+            let text=payload["bits"].as_str().ok_or("native floating bits must be hexadecimal")?;
+            if text.len()!=if tag=="single"{8}else{16} || !text.bytes().all(|byte|byte.is_ascii_hexdigit()){
+                return Err("native floating bits have invalid width or digits".into());
+            }
+            let bits=u64::from_str_radix(text,16).map_err(|_|"native floating bits are out of range")?;
+            Ok(match tag{"single"=>Value::Single(f32::from_bits(bits as u32)),"date"=>Value::Date(f64::from_bits(bits)),_=>Value::Double(f64::from_bits(bits))})
+        },
+        _=>decode_typed_scalar(input),
+    }
+}
+
 // These methods use Rust values and do not expose JavaScript entrypoints.
 impl SpreadsheetVbaSession {
+    /// Decode typed native JSON arguments without executing or resetting VBA.
+    /// Object tokens must belong to this session and must not be released.
+    pub fn decode_native_arguments(&self,input:&str)->Result<Vec<Value>,String> {
+        let values:Vec<serde_json::Value>=serde_json::from_str(input).map_err(|error|format!("invalid native VBA arguments: {error}"))?;
+        let references=self.state.as_ref().map(|state|&state.external_references);
+        values.iter().map(|value|decode_native_value(value,references)).collect()
+    }
+
     pub fn run_native(&mut self, mut workbook: Workbook, call: NativeVbaCall<'_>) -> Result<NativeVbaOutcome,String> {
         let NativeVbaCall { source, action, args, active_sheet, file_name, options, current_time, random_seed } = call;
         if !current_time.is_finite() { return Err("invalid VBA current time: expected a finite OLE date serial".into()); }
