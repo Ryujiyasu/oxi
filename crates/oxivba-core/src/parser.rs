@@ -3104,7 +3104,7 @@ impl<'a> Parser<'a> {
                     }
                     // Words that can only start a statement; stop the expression
                     // so the caller can see them.
-                    "then" | "else" | "elseif" | "to" | "step" | "in" | "as" | "end" | "next"
+                    "then" | "else" | "elseif" | "to" | "in" | "as" | "end" | "next"
                     | "loop" | "wend" | "case" | "until" | "while" => return None,
                     _ => {}
                 }
@@ -3561,6 +3561,76 @@ mod tests {
 
     fn post_test_is_while(d: &DoStmt) -> bool {
         d.post.as_ref().is_some_and(|t| !t.until)
+    }
+
+    #[test]
+    fn step_names_and_for_markers_match_native() {
+        // Five self-authored cases, each repeated in two fresh Excel instances.
+        const SOURCE: &str = r#"Attribute VB_Name = "StepContextOracle1450"
+' Self-authored conformance probe, CC BY-SA 4.0.
+Private Function Step(ByVal value As Long) As Long
+ Step = value + 1
+End Function
+Private Function Advance(ByVal value As Long) As Long
+ Advance = value + 1
+End Function
+Private Function LocalValue() As Long
+ Dim step As Long
+ step = 11
+ LocalValue = step + 1
+End Function
+Private Function LoopLiteral() As Long
+ Dim i As Long, n As Long
+ For i = 1 To 3 Step 2
+  n = n + i
+ Next i
+ LoopLiteral = n
+End Function
+Private Function LoopName() As Long
+ Dim step As Long, i As Long, n As Long
+ step = 2
+ For i = 1 To 5 Step step
+  n = n + i
+ Next i
+ LoopName = n
+End Function
+Public Function Probe(ByVal mode As Long, ByVal binding As Long) As Variant
+ Dim returned As Long
+ On Error Resume Next
+ Err.Clear
+ Select Case mode
+ Case 0: returned = Step(11)
+ Case 1: returned = Advance(11)
+ Case 2: returned = LocalValue()
+ Case 3: returned = LoopLiteral()
+ Case 4: returned = LoopName()
+ End Select
+ Probe = Array(Err.Number, returned, VarType(returned), CStr(returned), TypeName(returned), VarType(returned), Len(CStr(returned)), "ran")
+End Function
+"#;
+        let module = parse_module(SOURCE).unwrap();
+        let mut runtime = crate::runtime::Runtime::new(&module);
+        let integral = |value: &crate::runtime::Value| match value {
+            crate::runtime::Value::Int16(value) => i64::from(*value),
+            crate::runtime::Value::Integer(value) | crate::runtime::Value::LongLong(value) => *value,
+            other => panic!("expected an integral field, got {other:?}"),
+        };
+        for (mode, expected) in [12, 12, 12, 4, 9].into_iter().enumerate() {
+            let value = runtime.call("Probe", vec![
+                crate::runtime::Value::Integer(mode as i64),
+                crate::runtime::Value::Integer(0),
+            ]).unwrap();
+            let crate::runtime::Value::Array(array) = value else { panic!("expected oracle array"); };
+            assert_eq!(array.values.len(), 8);
+            for (index, expected) in [(0, 0), (1, expected), (2, 3), (5, 3),
+                (6, expected.to_string().len() as i64)] {
+                assert_eq!(integral(&array.values[index]), expected, "mode {mode}, field {index}");
+            }
+            for (index, expected) in [(3, expected.to_string()), (4, "Long".into()), (7, "ran".into())] {
+                assert!(matches!(&array.values[index], crate::runtime::Value::String(value) if value == &expected),
+                    "mode {mode}, field {index}: {:?}", array.values[index]);
+            }
+        }
     }
 
     #[test]
