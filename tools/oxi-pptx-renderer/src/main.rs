@@ -9692,6 +9692,17 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 400,
                             );
                         }
+                        } else if chart.chart_type == "surface" && surface_on() {
+                            draw_surface_chart(
+                                mem_dc,
+                                chart,
+                                pres,
+                                sh.x as f64,
+                                sh.y as f64,
+                                sh.width as f64,
+                                sh.height as f64,
+                                scale,
+                            );
                         } else if chart.chart_type == "line" {
                         // Line chart (Word render-truth 2026-08-06, fitz
                         // get_drawings + rawdict on the 7-variant probe
@@ -12770,6 +12781,446 @@ fn fmt_axis_value(v: f64, step: f64) -> String {
 /// closes to (56.28, 57.76] over all 19 measured points and 57.0 sits inside;
 /// the model then reproduces 19 of 19 (the earlier headroom-free model with a
 /// 53pt threshold reproduced 15).
+/// `OXI_SURFACE_DISABLE=1` leaves surface charts to the generic fallback.
+fn surface_on() -> bool {
+    std::env::var("OXI_SURFACE_DISABLE").is_err()
+}
+
+/// A 3-D surface chart (`c:surfaceChart` / `c:surface3DChart`, PowerPoint's
+/// default view: no `c:view3D`).
+///
+/// DERIVED 2026-11-15 from PowerPoint's own PDFs (`chart_surface`, and the
+/// 14 + 15 arm sweeps `chart_surface_sweep` / `_sweep2`,
+/// `tools/metrics/gen_pptx_chart_surface_sweep.py`). PowerPoint exports the
+/// mesh and the walls as an IMAGE and only the ticks and labels as vectors, so
+/// the projection was recovered from the projected tick positions (3 to 6
+/// value ticks, 2 to 10 category ticks, 2 to 6 series ticks per arm):
+///
+/// * the box, in units of the category axis length: width 1, depth
+///   `ns / nc`, height `(plot_h / plot_w) * floor((nc + ns - 1) / 2) / nc`
+///   (the height coefficient fits as 1.0013 over 28 arms);
+/// * turned 19.78 degrees about the vertical, then tilted 13.71 degrees
+///   (fitted globally; PowerPoint's own `rotX 15 / rotY 20` with this camera
+///   model fits worse), seen through a camera `3.599 * plot_h / scale` away;
+/// * scaled uniformly so the projected box spans 96.9% of the plot width,
+///   centred -- unless its height would then pass 97% of the plot height, in
+///   which case that binds -- and set 1.1% of the plot height above centre
+///   (the measured offset runs 0.07%..2.0% and has no law yet).
+///   Residual over the sweeps: under 1pt on most arms, 1.8pt worst.
+/// * the value axis is the shared 1/2/5 search over the projected front edge
+///   with a 26.5pt minimum spacing (5 divisions of 26.36pt are refused,
+///   26.67pt accepted).
+/// * the faces are the theme accents per value band (one band per axis step,
+///   lowest = accent1); a face seen from above is drawn at 0.967 of the accent,
+///   one seen from below at 0.345 (every face of the 3-series probe, whatever
+///   its normal: 0.343..0.347).
+/// * walls: gridlines on the left side wall and the back wall at every value
+///   tick, the floor's front and right edges and the front-left value axis,
+///   0.75pt black. Ticks 5.7pt long, labels Calibri 18pt: value labels end
+///   16.7pt left of the tick point, baseline +6.2; category labels centred,
+///   baseline +29.9; series labels 16.7pt right, baseline +6.2, every other.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw_surface_chart(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    chart: &oxislides_core::ir::Chart,
+    pres: &Presentation,
+    sx: f64,
+    sy: f64,
+    sw: f64,
+    shh: f64,
+    scale: f64,
+) {
+    use windows::Win32::Foundation::{COLORREF, POINT};
+    use windows::Win32::Graphics::Gdi::*;
+
+    let family = "Calibri";
+    let fs = 18.0f32;
+    let wid = |t: &str| {
+        font_adv::line_hmtx_width_pt(t, fs, family)
+            .unwrap_or_else(|| t.chars().count() as f32 * fs * 0.5) as f64
+    };
+    let ns = chart.series.len();
+    let nc = chart
+        .series
+        .iter()
+        .map(|s| s.values.len())
+        .max()
+        .unwrap_or(0)
+        .max(chart.categories.len());
+    if ns == 0 || nc < 2 {
+        return;
+    }
+    let ns_box = ns.max(2);
+    let (lo, hi) = chart
+        .series
+        .iter()
+        .flat_map(|s| s.values.iter().copied())
+        .fold((0.0f64, 0.0f64), |(a, b), v| (a.min(v), b.max(v)));
+
+    let accent = |k: usize| -> (u8, u8, u8) {
+        pres.theme_colors
+            .get(&format!("accent{}", k % 6 + 1))
+            .map(|s| s.as_str())
+            .or_else(|| DEFAULT_ACCENT.get(k % 6).copied())
+            .and_then(parse_hex_rgb)
+            .unwrap_or((0x4F, 0x81, 0xBD))
+    };
+
+    // ---- plot area (same frame insets as the 2-D value charts) ----
+    let plot_top = sy
+        + if chart.explicit_title.is_some() {
+            45.69
+        } else {
+            16.0
+        };
+    let plot_bot = sy + shh - 40.02;
+    let (rx, ry) = (-13.7136f64.to_radians(), 19.7754f64.to_radians());
+    let (h_coef, d_coef) = (1.0013f64, 3.599f64);
+
+    // The legend lists the bands, highest first (chart_surface P5).
+    let layout = |plot_left: f64, plot_right: f64| {
+        let pw = (plot_right - plot_left).max(1.0);
+        let ph = (plot_bot - plot_top).max(1.0);
+        let depth = ns_box as f64 / nc as f64;
+        let height = h_coef * (ph / pw) * (((nc + ns_box - 1) / 2) as f64) / nc as f64;
+        (pw, ph, depth, height)
+    };
+    let project = |p: (f64, f64, f64), depth: f64, height: f64, s: f64, ph: f64| {
+        let (x, y, z) = (p.0 - 0.5, (p.1 - 0.5) * height, (p.2 - 0.5) * depth);
+        let (x, z) = (x * ry.cos() + z * ry.sin(), -x * ry.sin() + z * ry.cos());
+        let (y, z) = (y * rx.cos() - z * rx.sin(), y * rx.sin() + z * rx.cos());
+        let dist = d_coef * ph / s;
+        let f = dist / (dist + z);
+        (s * x * f, -s * y * f, z)
+    };
+    let corners: Vec<(f64, f64, f64)> = (0..8)
+        .map(|i| ((i & 1) as f64, ((i >> 1) & 1) as f64, ((i >> 2) & 1) as f64))
+        .collect();
+    let extent = |depth: f64, height: f64, s: f64, ph: f64| {
+        let pts: Vec<(f64, f64, f64)> =
+            corners.iter().map(|&c| project(c, depth, height, s, ph)).collect();
+        let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for p in &pts {
+            x0 = x0.min(p.0);
+            x1 = x1.max(p.0);
+            y0 = y0.min(p.1);
+            y1 = y1.max(p.1);
+        }
+        (x0, x1, y0, y1)
+    };
+    // Scale for a target: bisection on the monotone projected extent.
+    let fit = |depth: f64, height: f64, pw: f64, ph: f64| -> (f64, bool) {
+        let solve = |target: f64, horiz: bool| {
+            let (mut a, mut b) = (1.0f64, 20000.0f64);
+            for _ in 0..80 {
+                let m = 0.5 * (a + b);
+                let (x0, x1, y0, y1) = extent(depth, height, m, ph);
+                let e = if horiz { x1 - x0 } else { y1 - y0 };
+                if e > target {
+                    b = m;
+                } else {
+                    a = m;
+                }
+            }
+            0.5 * (a + b)
+        };
+        let s_w = solve(0.969 * pw, true);
+        let (_, _, y0, y1) = extent(depth, height, s_w, ph);
+        if y1 - y0 > 0.97 * ph {
+            (solve(0.97 * ph, false), true)
+        } else {
+            (s_w, false)
+        }
+    };
+
+    // Value axis over the projected front edge; the left inset follows its
+    // widest label, so settle the two together.
+    let right_edge = |legend_w: f64| {
+        if chart.has_legend {
+            sx + sw - 10.0 - legend_w - 4.62 - 9.89 - 7.96 - 50.22
+        } else {
+            sx + sw - 50.22
+        }
+    };
+    let mut plot_left = sx + 41.4;
+    let mut axis = (0.0f64, 1.0f64, 1usize);
+    let mut legend_w = 0.0f64;
+    for _ in 0..3 {
+        let plot_right = right_edge(legend_w);
+        let (pw, ph, depth, height) = layout(plot_left, plot_right);
+        let (s, _) = fit(depth, height, pw, ph);
+        let a = project((0.0, 0.0, 0.0), depth, height, s, ph);
+        let b = project((0.0, 1.0, 0.0), depth, height, s, ph);
+        let front = (a.1 - b.1).abs();
+        axis = nice_axis_range(lo, hi, front, 26.5);
+        let step = (axis.1 - axis.0) / axis.2 as f64;
+        let widest = (0..=axis.2)
+            .map(|i| wid(&fmt_axis_value(axis.0 + step * i as f64, step)))
+            .fold(0.0f64, f64::max);
+        plot_left = sx + 6.5 + widest + 16.7;
+        legend_w = (0..axis.2)
+            .map(|i| {
+                let a0 = axis.0 + step * i as f64;
+                wid(&format!("{}-{}", fmt_axis_value(a0, step), fmt_axis_value(a0 + step, step)))
+            })
+            .fold(0.0f64, f64::max);
+    }
+    let (amin, amax, adiv) = axis;
+    let step = (amax - amin) / adiv as f64;
+    let plot_right = right_edge(legend_w);
+    let (pw, ph, depth, height) = layout(plot_left, plot_right);
+    let (s, vbind) = fit(depth, height, pw, ph);
+    let (x0, x1, y0, y1) = extent(depth, height, s, ph);
+    let cx = (plot_left + plot_right) / 2.0;
+    let cy = (plot_top + plot_bot) / 2.0 - if vbind { 0.0 } else { 0.011 * ph };
+    let (tx, ty) = (cx - (x0 + x1) / 2.0, cy - (y0 + y1) / 2.0);
+    if std::env::var("OXI_SURFACE_DEBUG").is_ok() {
+        eprintln!("SURFACE plot {plot_left:.2}..{plot_right:.2} x {plot_top:.2}..{plot_bot:.2} D {depth:.3} H {height:.3} s {s:.2} vbind {vbind} t ({tx:.2},{ty:.2}) axis {amin}..{amax}/{adiv}");
+    }
+    let vnorm = |v: f64| ((v - amin) / (amax - amin)).clamp(0.0, 1.0);
+    // page point (pt) + rotated depth
+    let at = |x: f64, v01: f64, z: f64| {
+        let p = project((x, v01, z), depth, height, s, ph);
+        (tx + p.0, ty + p.1, p.2)
+    };
+    let px = |p: (f64, f64, f64)| POINT {
+        x: (p.0 * scale).round() as i32,
+        y: (p.1 * scale).round() as i32,
+    };
+
+    // ---- walls: gridlines on the side and back walls, floor edges, axis ----
+    let pen = CreatePen(
+        PS_SOLID,
+        ((0.75 * scale).round() as i32).max(1),
+        COLORREF(colorref(0, 0, 0)),
+    );
+    let old_pen = SelectObject(dc, pen);
+    let seg = |a: (f64, f64, f64), b: (f64, f64, f64)| {
+        let (pa, pb) = (px(a), px(b));
+        let _ = MoveToEx(dc, pa.x, pa.y, None);
+        let _ = LineTo(dc, pb.x, pb.y);
+    };
+    for i in 0..=adiv {
+        let v = i as f64 / adiv as f64;
+        seg(at(0.0, v, 0.0), at(0.0, v, 1.0));
+        seg(at(0.0, v, 1.0), at(1.0, v, 1.0));
+    }
+    seg(at(0.0, 0.0, 0.0), at(1.0, 0.0, 0.0));
+    seg(at(1.0, 0.0, 0.0), at(1.0, 0.0, 1.0));
+    seg(at(0.0, 0.0, 0.0), at(0.0, 1.0, 0.0));
+    SelectObject(dc, old_pen);
+    let _ = DeleteObject(pen);
+
+    // ---- the mesh: two triangles per cell, cut into value bands ----
+    let val = |si: usize, ci: usize| -> f64 {
+        chart
+            .series
+            .get(si.min(ns - 1))
+            .and_then(|s| s.values.get(ci))
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let zpos = |si: usize| si as f64 / (ns_box - 1) as f64;
+    let xpos = |ci: usize| ci as f64 / (nc - 1) as f64;
+    // (x, value, z) in data space
+    let mut polys: Vec<(f64, usize, bool, Vec<(f64, f64, f64)>)> = Vec::new();
+    for si in 0..ns_box - 1 {
+        for ci in 0..nc - 1 {
+            let q = [
+                (xpos(ci), val(si, ci), zpos(si)),
+                (xpos(ci + 1), val(si, ci + 1), zpos(si)),
+                (xpos(ci + 1), val(si + 1, ci + 1), zpos(si + 1)),
+                (xpos(ci), val(si + 1, ci), zpos(si + 1)),
+            ];
+            for tri in [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] {
+                // Which side faces the camera: the UP normal (value grows
+                // along +y) turned like the box, against the ray to the eye.
+                let world = |p: (f64, f64, f64)| {
+                    (p.0 - 0.5, (vnorm(p.1) - 0.5) * height, (p.2 - 0.5) * depth)
+                };
+                let (a, b, c) = (world(tri[0]), world(tri[1]), world(tri[2]));
+                let (u, v) = ((b.0 - a.0, b.1 - a.1, b.2 - a.2), (c.0 - a.0, c.1 - a.1, c.2 - a.2));
+                let mut n = (u.1 * v.2 - u.2 * v.1, u.2 * v.0 - u.0 * v.2, u.0 * v.1 - u.1 * v.0);
+                if n.1 < 0.0 {
+                    n = (-n.0, -n.1, -n.2);
+                }
+                let turn = |q: (f64, f64, f64)| {
+                    let (x, z) = (q.0 * ry.cos() + q.2 * ry.sin(), -q.0 * ry.sin() + q.2 * ry.cos());
+                    let (y, z) = (q.1 * rx.cos() - z * rx.sin(), q.1 * rx.sin() + z * rx.cos());
+                    (x, y, z)
+                };
+                let nr = turn(n);
+                let cen = turn(((a.0 + b.0 + c.0) / 3.0, (a.1 + b.1 + c.1) / 3.0, (a.2 + b.2 + c.2) / 3.0));
+                let dist = d_coef * ph / s;
+                let eye = (-cen.0, -cen.1, -dist - cen.2);
+                let top = nr.0 * eye.0 + nr.1 * eye.1 + nr.2 * eye.2 > 0.0;
+                for band in 0..adiv {
+                    let blo = amin + step * band as f64;
+                    let bhi = blo + step;
+                    let mut poly: Vec<(f64, f64, f64)> = tri.to_vec();
+                    for (lim, keep_above) in [(blo, true), (bhi, false)] {
+                        let mut out = Vec::new();
+                        for k in 0..poly.len() {
+                            let p = poly[k];
+                            let q2 = poly[(k + 1) % poly.len()];
+                            let pin = if keep_above { p.1 >= lim } else { p.1 <= lim };
+                            let qin = if keep_above { q2.1 >= lim } else { q2.1 <= lim };
+                            if pin {
+                                out.push(p);
+                            }
+                            if pin != qin && (q2.1 - p.1).abs() > 1e-12 {
+                                let t = (lim - p.1) / (q2.1 - p.1);
+                                out.push((
+                                    p.0 + t * (q2.0 - p.0),
+                                    lim,
+                                    p.2 + t * (q2.2 - p.2),
+                                ));
+                            }
+                        }
+                        poly = out;
+                        if poly.len() < 3 {
+                            break;
+                        }
+                    }
+                    if poly.len() < 3 {
+                        continue;
+                    }
+                    let depth_key = poly
+                        .iter()
+                        .map(|p| at(p.0, vnorm(p.1), p.2).2)
+                        .sum::<f64>()
+                        / poly.len() as f64;
+                    polys.push((depth_key, band, top, poly));
+                }
+            }
+        }
+    }
+    polys.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    for (_, band, top, poly) in &polys {
+        let (r, g, b) = accent(*band);
+        let k = if *top { 0.967 } else { 0.345 };
+        let c = |v: u8| ((v as f64) * k).round().clamp(0.0, 255.0) as u8;
+        let pts: Vec<POINT> = poly.iter().map(|p| px(at(p.0, vnorm(p.1), p.2))).collect();
+        if chart.surface_wireframe {
+            let pen = CreatePen(PS_SOLID, ((0.75 * scale).round() as i32).max(1), COLORREF(colorref(r, g, b)));
+            let old = SelectObject(dc, pen);
+            let _ = Polyline(dc, &[pts.clone(), vec![pts[0]]].concat());
+            SelectObject(dc, old);
+            let _ = DeleteObject(pen);
+        } else {
+            let brush = CreateSolidBrush(COLORREF(colorref(c(r), c(g), c(b))));
+            let old_b = SelectObject(dc, brush);
+            let old_p = SelectObject(dc, GetStockObject(NULL_PEN));
+            let _ = Polygon(dc, &pts);
+            SelectObject(dc, old_p);
+            SelectObject(dc, old_b);
+            let _ = DeleteObject(brush);
+        }
+    }
+
+    // ---- ticks and labels ----
+    let pen = CreatePen(
+        PS_SOLID,
+        ((0.75 * scale).round() as i32).max(1),
+        COLORREF(colorref(0, 0, 0)),
+    );
+    let old_pen = SelectObject(dc, pen);
+    let tick = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let _ = MoveToEx(dc, (x0 * scale).round() as i32, (y0 * scale).round() as i32, None);
+        let _ = LineTo(dc, (x1 * scale).round() as i32, (y1 * scale).round() as i32);
+    };
+    for i in 0..=adiv {
+        let p = at(0.0, i as f64 / adiv as f64, 0.0);
+        tick(p.0, p.1, p.0 - 5.73, p.1);
+        let t = fmt_axis_value(amin + step * i as f64, step);
+        draw_text_baseline(
+            dc,
+            ((p.0 - 16.7 - wid(&t)) * scale).round() as i32,
+            (p.1 + 6.2) as f32,
+            &t,
+            fs,
+            family,
+            None,
+            scale,
+        );
+    }
+    for ci in 0..nc {
+        let p = at(xpos(ci), 0.0, 0.0);
+        tick(p.0, p.1, p.0, p.1 + 5.75);
+        if let Some(name) = chart.categories.get(ci) {
+            draw_text_baseline(
+                dc,
+                ((p.0 - wid(name) / 2.0) * scale).round() as i32,
+                (p.1 + 29.9) as f32,
+                name,
+                fs,
+                family,
+                None,
+                scale,
+            );
+        }
+    }
+    for si in 0..ns_box {
+        let p = at(1.0, 0.0, zpos(si));
+        tick(p.0, p.1, p.0 + 5.69, p.1);
+        if si % 2 == 0 {
+            if let Some(ser) = chart.series.get(si) {
+                // The back tick's label sits closer (8.7..9.6pt over 9
+                // sweep arms); every other one 16.3..17.8pt out.
+                let off = if si == ns_box - 1 { 8.9 } else { 16.7 };
+                draw_text_baseline(
+                    dc,
+                    ((p.0 + off) * scale).round() as i32,
+                    (p.1 + 6.2) as f32,
+                    &ser.name,
+                    fs,
+                    family,
+                    None,
+                    scale,
+                );
+            }
+        }
+    }
+    SelectObject(dc, old_pen);
+    let _ = DeleteObject(pen);
+
+    // ---- band legend (chart_surface P5): highest band first, 27.75 rows ----
+    if chart.has_legend {
+        let rows = adiv;
+        let block = rows as f64 * 27.75;
+        let top = sy + shh / 2.0 - block / 2.0;
+        let label_x0 = sx + sw - 10.0 - legend_w;
+        let swatch_x0 = label_x0 - 4.62 - 9.89;
+        for r in 0..rows {
+            let band = rows - 1 - r;
+            let a0 = amin + step * band as f64;
+            let label = format!("{}-{}", fmt_axis_value(a0, step), fmt_axis_value(a0 + step, step));
+            let sw_y = top + 8.97 + r as f64 * 27.75;
+            let (cr, cg, cb) = accent(band);
+            let brush = CreateSolidBrush(COLORREF(colorref(cr, cg, cb)));
+            let rect = windows::Win32::Foundation::RECT {
+                left: (swatch_x0 * scale).round() as i32,
+                top: (sw_y * scale).round() as i32,
+                right: ((swatch_x0 + 9.89) * scale).round() as i32,
+                bottom: ((sw_y + 9.89) * scale).round() as i32,
+            };
+            let _ = FillRect(dc, &rect, brush);
+            let _ = DeleteObject(brush);
+            draw_text_baseline(
+                dc,
+                (label_x0 * scale).round() as i32,
+                (sw_y + 9.89 + 0.28) as f32,
+                &label,
+                fs,
+                family,
+                None,
+                scale,
+            );
+        }
+    }
+}
+
 /// Value axis for data that may contain NEGATIVE values (both orientations).
 ///
 /// DERIVED from the 8-arm `chart_negative` probe (Word render-truth, 2026-08-10):

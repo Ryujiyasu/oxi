@@ -5368,6 +5368,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
     let mut bubble_scale: Option<f64> = None;
     let mut size_represents: Option<String> = None;
     let mut hi_low_lines = false;
+    let mut surface_wireframe = false;
     let mut up_down_bars = false;
     let mut up_down_gap: Option<f64> = None;
     let mut in_up_down = false;
@@ -5477,6 +5478,12 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     "stockChart" => {
                         chart_type = Some("stock".to_string());
                     }
+                    // <c:surfaceChart> and <c:surface3DChart> render alike in
+                    // PowerPoint (chart_surface P1 vs P3: identical images) --
+                    // both are the 3-D mesh unless view3D says otherwise.
+                    "surfaceChart" | "surface3DChart" => {
+                        chart_type = Some("surface".to_string());
+                    }
                     // <c:upDownBars> is a Start element (its gapWidth is
                     // a child); hiLowLines is self-closing (Empty arm).
                     "upDownBars" => {
@@ -5492,7 +5499,8 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                             || chart_type.as_deref() == Some("scatter")
                             || chart_type.as_deref() == Some("bubble")
                             || chart_type.as_deref() == Some("radar")
-                            || chart_type.as_deref() == Some("stock") =>
+                            || chart_type.as_deref() == Some("stock")
+                            || chart_type.as_deref() == Some("surface") =>
                     {
                         in_ser = true;
                         ser_target = "";
@@ -5667,6 +5675,9 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
                     // black w=0.75 when there is no <c:spPr>).
                     "hiLowLines" => {
                         hi_low_lines = true;
+                    }
+                    "wireframe" => {
+                        surface_wireframe = get_attr(&e, "val").as_deref() == Some("1");
                     }
                     // <c:gapWidth> inside <c:upDownBars> (the bar chart's
                     // own gapWidth is handled by its own path).
@@ -5874,6 +5885,7 @@ fn parse_chart(xml: &str) -> Result<Chart, PptxError> {
         size_represents: size_represents
             .unwrap_or_else(default_chart_size_represents),
         hi_low_lines,
+        surface_wireframe,
         up_down_bars,
         up_down_gap: up_down_gap.unwrap_or_else(default_chart_updown_gap),
         legend_overlay,
