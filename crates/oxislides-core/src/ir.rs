@@ -1063,7 +1063,8 @@ pub struct SlideRun {
     /// `a:rPr/@kern` -- the SMALLEST size, in points, at which the run's pairs
     /// are kerned (`kern="1200"` = 12pt and up; `kern="0"` = never). None when
     /// the run does not say: the level's `defRPr/@kern` decides, and with no
-    /// attribute anywhere PowerPoint kerns (`gen_pptx_kern.py`).
+    /// attribute anywhere PowerPoint does NOT kern (`ppt_defaults` probe with
+    /// every `kern` stripped).
     #[serde(default)]
     pub kern: Option<f32>,
 }
