@@ -7025,10 +7025,7 @@ impl<'a> Runtime<'a> {
             return (packed * count, memory * count, align);
         }
         if declared.type_name.fixed_length.is_some() {
-            let length = match value {
-                Value::String(held) => held.encode_utf16().count() as u64,
-                _ => 0,
-            };
+            let length = value.string_units().map_or(0, |units| units.len() as u64);
             return (length, length * 2, 1);
         }
         if let Value::Record(record) = value {
@@ -7090,13 +7087,16 @@ impl<'a> Runtime<'a> {
             }
         }
         let (_, memory, _) = self.field_layout(declared, value, depth);
-        match value {
-            Value::Record(inner) => self.record_bytes(inner, out, depth + 1),
-            Value::String(held) if declared.type_name.fixed_length.is_some() => {
-                for unit in held.encode_utf16() {
+        if declared.type_name.fixed_length.is_some() {
+            if let Some(units) = value.string_units() {
+                for unit in units.iter() {
                     out.extend_from_slice(&unit.to_le_bytes());
                 }
+                return;
             }
+        }
+        match value {
+            Value::Record(inner) => self.record_bytes(inner, out, depth + 1),
             Value::Byte(n) => out.push(*n),
             Value::Int16(n) => out.extend_from_slice(&n.to_le_bytes()),
             Value::Boolean(state) => out.extend_from_slice(&(if *state { -1i16 } else { 0 }).to_le_bytes()),
@@ -7140,16 +7140,17 @@ impl<'a> Runtime<'a> {
             *at += count;
             Some(slice)
         };
-        let fixed = declared.type_name.fixed_length.is_some();
+        if declared.type_name.fixed_length.is_some() {
+            if let Some(units) = value.string_units().map(|units| units.len()) {
+                if let Some(raw) = take(at, units * 2) {
+                    let read = raw.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+                    *value = Value::from_utf16(read);
+                }
+                return;
+            }
+        }
         match value {
             Value::Record(inner) => self.record_from_bytes(inner, bytes, at, depth + 1),
-            Value::String(held) if fixed => {
-                let units = held.encode_utf16().count();
-                if let Some(raw) = take(at, units * 2) {
-                    let read: Vec<u16> = raw.chunks(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
-                    *held = String::from_utf16_lossy(&read);
-                }
-            }
             Value::Byte(n) => {
                 if let Some(raw) = take(at, 1) {
                     *n = raw[0];
@@ -28148,6 +28149,121 @@ Attribute VB_Name = "TextStream"
     /// line -- and with it every `.field` the block contained.
     ///
     /// Everything below is Excel's answer, `7t|t|3|zero|Bt|z1`.
+    #[test]
+    fn record_layout_and_lset_preserve_fixed_string_utf16() {
+        // Repeated in Excel 16.0.20527.20196: lengths and LSet retain every
+        // UTF-16 code unit, including unpaired surrogates in fixed strings.
+        let source = r#"Attribute VB_Name = "FixedUnicodeLayoutOracle1196"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0. Only numeric results returned.
+Private Type LayoutRecord
+ Lead As Byte
+ Text As String * 3
+ Number As Long
+ Tail As Variant
+End Type
+Public Function Probe(ByVal caseID As Long, ByVal binding As Long) As Variant
+ Dim item As LayoutRecord, result As Variant
+ On Error Resume Next
+ Err.Clear
+ Select Case caseID
+ Case 0
+ Case 1: item.Text = "abc"
+ Case 2: item.Text = ChrW(&HD800)
+ Case 3: item.Text = ChrW(&HDC00)
+ Case 4: item.Text = ChrW(&HD83D) & ChrW(&HDE00)
+ Case 5: item.Text = ChrW(0)
+ Case 6: item.Text = ChrW(&HD800) & "ab"
+ Case 7: item.Text = vbNullString
+ Case 8: item.Text = StrConv(ChrW(&H3042), 128)
+ End Select
+ result = Array(0, Len(item), LenB(item), Len(item.Text), LenB(item.Text), AscW(Mid$(item.Text, 1, 1)), AscW(Mid$(item.Text, 2, 1)), AscW(Mid$(item.Text, 3, 1)))
+ result(0) = Err.Number
+ Probe = result
+End Function
+
+Attribute VB_Name = "FixedUnicodeCopyOracle1198"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0. No external memory access.
+Private Type TextRecord
+ Lead As Byte
+ Text As String * 3
+ Number As Long
+End Type
+Private Type ByteRecord
+ Bytes(0 To 11) As Byte
+End Type
+Public Function Probe(ByVal caseID As Long, ByVal binding As Long) As Variant
+ Dim item As TextRecord, buffer As ByteRecord, result As Variant
+ Dim mode As Long, unit1 As Long, unit2 As Long, unit3 As Long, units As Variant
+ Dim i As Long, payload As String
+ mode = caseID Mod 4
+ unit1 = 97: unit2 = 98: unit3 = 99
+ Select Case mode
+ Case 1: unit1 = &HD800: unit2 = 32: unit3 = 32
+ Case 2: unit1 = &HDC00: unit2 = 32: unit3 = 32
+ Case 3: unit1 = &HD83D: unit2 = &HDE00: unit3 = 32
+ End Select
+ On Error Resume Next
+ Err.Clear
+ If caseID < 4 Then
+  item.Lead = 127: item.Number = &H11223344
+  item.Text = ChrW(unit1) & ChrW(unit2) & ChrW(unit3)
+  LSet buffer = item
+  For i = 0 To 11
+   payload = payload & Right$("0" & Hex$(buffer.Bytes(i)), 2)
+  Next i
+  result = Array(0, payload, Len(item), LenB(item), Len(buffer), LenB(buffer), item.Lead, item.Number)
+ Else
+  units = Array(unit1, unit2, unit3)
+  buffer.Bytes(0) = 127
+  For i = 0 To 2
+   buffer.Bytes(1 + i * 2) = units(i) And &HFF&
+   buffer.Bytes(2 + i * 2) = (units(i) And &HFF00&) / 256
+  Next i
+  buffer.Bytes(8) = &H44: buffer.Bytes(9) = &H33: buffer.Bytes(10) = &H22: buffer.Bytes(11) = &H11
+  LSet item = buffer
+  result = Array(0, Len(item), LenB(item), AscW(Mid$(item.Text, 1, 1)), AscW(Mid$(item.Text, 2, 1)), AscW(Mid$(item.Text, 3, 1)), item.Lead, item.Number)
+ End If
+ result(0) = Err.Number
+ Probe = result
+End Function
+"#;
+        let (module, classes) = crate::parse_project(source).unwrap();
+        let mut runtime = Runtime::new(&module).with_classes(&classes);
+        let checks: &[(&str, &[&str])] = &[
+            ("FixedUnicodeLayoutOracle1196.Probe", &[
+                "0|32|40|3|6|0|0|0",
+                "0|32|40|3|6|97|98|99",
+                "0|32|40|3|6|-10240|32|32",
+                "0|32|40|3|6|-9216|32|32",
+                "0|32|40|3|6|-10179|-8704|32",
+                "0|32|40|3|6|0|32|32",
+                "0|32|40|3|6|-10240|97|98",
+                "0|32|40|3|6|32|32|32",
+                "0|32|40|3|6|32|32|32",
+            ]),
+            ("FixedUnicodeCopyOracle1198.Probe", &[
+                "0|7F6100620063000044332211|8|12|12|12|127|287454020",
+                "0|7F00D8200020000044332211|8|12|12|12|127|287454020",
+                "0|7F00DC200020000044332211|8|12|12|12|127|287454020",
+                "0|7F3DD800DE20000044332211|8|12|12|12|127|287454020",
+                "0|8|12|97|98|99|127|287454020",
+                "0|8|12|-10240|32|32|127|287454020",
+                "0|8|12|-9216|32|32|127|287454020",
+                "0|8|12|-10179|-8704|32|127|287454020",
+            ]),
+        ];
+        for &(procedure, expected_rows) in checks {
+            for (mode, expected) in expected_rows.iter().enumerate() {
+                let value = runtime.call(procedure, vec![Value::Integer(mode as i64), Value::Integer(0)]).unwrap();
+                let Value::Array(array) = value else { panic!("{procedure} mode {mode}: expected array") };
+                let actual = array.values.iter().map(|value| text(value).unwrap()).collect::<Vec<_>>().join("|");
+                assert_eq!(actual, *expected, "{procedure} mode {mode}");
+            }
+        }
+    }
+
     #[test]
     fn a_with_block_can_stand_on_a_record() {
         let source = "Private Type Holder
