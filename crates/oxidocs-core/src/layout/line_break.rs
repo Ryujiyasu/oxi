@@ -3678,6 +3678,15 @@ impl<'a> LineBreaker<'a> {
                     }
                     && !balance_prop_once
                     && style.fit_text.is_none() && !style.ruby_spread
+                    // OXI_BALANCE_FAKEBOLD_SPACE (2026-11-16, default ON, opt-out _DISABLE):
+                    // an emboldened (synthetic-bold) ideographic space keeps its tracking
+                    // once. `_pb_balance_bold_gen.py` (22pt, spacing 20, w 100 / 66): HG丸
+                    // and ＭＳ 明朝 bold «　» 23.04 / 15.48 (= +cs) while 漢 / あ / １ take
+                    // +2cs (24.0 / 16.5); メイリオ (a real bold face) and every non-bold
+                    // arm double the «　» too. blind-J ja/creative__9aa11078 «　　　事典…»
+                    // (HG丸 b w66 sp20): Word 15.48 per space, Oxi 16.53.
+                    && !(ch == '\u{3000}' && style.bold && char_metrics.synthetic_bold_advance > 0.0
+                        && !crate::env_flag!("OXI_BALANCE_FAKEBOLD_SPACE_DISABLE"))
                 {
                     char_width += cs;
                 }
