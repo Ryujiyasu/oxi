@@ -48625,10 +48625,33 @@ fn compilation_outcome(source:&str,language:ErrorLanguage,references:&oxivba_cor
 pub fn compile_spreadsheet_vba(source:&str,options:JsValue) -> Result<JsValue,JsError> {
     let options:VbaCompilationOptions=if options.is_null()||options.is_undefined(){VbaCompilationOptions::default()}
         else{serde_wasm_bindgen::from_value(options).map_err(|error|JsError::new(&error.to_string()))?};
+    let outcome=compile_spreadsheet_project(source,options).map_err(|error|JsError::new(&error))?;
+    serde_wasm_bindgen::to_value(&outcome).map_err(|error|JsError::new(&error.to_string()))
+}
+
+/// Compile source without JavaScript, returning the browser API's JSON outcome.
+/// `options` is a JSON object or `null`, with the same compilation options as
+/// `compile_spreadsheet_vba`. Invalid options return an error; a VBA compile
+/// error returns `compiled: false` with its module, procedure and source line.
+/// This does not execute code or certify that every host operation is supported.
+pub fn compile_spreadsheet_vba_native(source:&str,options:&str) -> Result<String,String> {
+    let shape:serde_json::Value=serde_json::from_str(options)
+        .map_err(|error|format!("invalid VBA compilation options: {error}"))?;
+    if !shape.is_object() && !shape.is_null() {
+        return Err("invalid VBA compilation options: expected an object or null".into());
+    }
+    // Deserialize the original text so duplicate fields are still rejected.
+    let options:Option<VbaCompilationOptions>=serde_json::from_str(options)
+        .map_err(|error|format!("invalid VBA compilation options: {error}"))?;
+    let outcome=compile_spreadsheet_project(source,options.unwrap_or_default())?;
+    serde_json::to_string(&outcome).map_err(|error|error.to_string())
+}
+
+fn compile_spreadsheet_project(source:&str,options:VbaCompilationOptions) -> Result<VbaCompilationOutcome,String> {
     let environment=VbaExecutionOptions {error_language:options.error_language,..VbaExecutionOptions::default()}
-        .error_environment().map_err(|error|JsError::new(&error))?;
+        .error_environment()?;
     let year=options.current_year.unwrap_or_else(this_year_now);
-    if !(100..=9999).contains(&year) {return Err(JsError::new("Invalid VBA compilation year."));}
+    if !(100..=9999).contains(&year) {return Err("Invalid VBA compilation year.".into());}
     let mut references=builtin_compilation_references().clone();
     references.current_year=Some(year);
     references.project_name=options.project_name;
@@ -48636,7 +48659,7 @@ pub fn compile_spreadsheet_vba(source:&str,options:JsValue) -> Result<JsValue,Js
     references.symbols.extend(options.reference_symbols.into_iter().map(|symbol|(symbol.name,symbol.value)));
     references.namespaces.extend(options.reference_namespaces);
     references.document_modules.extend(options.document_modules.into_iter().filter(|document| !document.host_only).map(|document|(document.name,document.base_type)));
-    serde_wasm_bindgen::to_value(&compilation_outcome(source,environment.language,&references)).map_err(|error|JsError::new(&error.to_string()))
+    Ok(compilation_outcome(source,environment.language,&references))
 }
 
 /// A loaded VBA project's storage and host object identities. Keep this in the
