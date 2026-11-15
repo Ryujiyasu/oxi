@@ -624,13 +624,13 @@ impl ArrayValue {
         }
     }
 
-    fn into_enumeration_values(self) -> Vec<Value> {
-        if self.dimensions.len() < 2 || self.values.is_empty()
-            || self.dimensions.iter().try_fold(1usize, |n, d| n.checked_mul(d.length)) != Some(self.values.len()) {
-            return self.values;
-        }
-        let mut values = self.values;
-        (0..values.len()).map(|position| {
+    fn first_subscript_fastest_offsets(&self) -> impl Iterator<Item = usize> + '_ {
+        let reorder = self.dimensions.len() > 1
+            && self.dimensions.iter().try_fold(1usize, |n, d| n.checked_mul(d.length)) == Some(self.values.len());
+        (0..self.values.len()).map(move |position| {
+            if !reorder {
+                return position;
+            }
             let mut remaining = position;
             let mut offset = 0;
             for dimension in &self.dimensions {
@@ -638,8 +638,18 @@ impl ArrayValue {
                 remaining /= dimension.length;
                 offset = offset * dimension.length + subscript;
             }
-            std::mem::replace(&mut values[offset], Value::Empty)
-        }).collect()
+            offset
+        })
+    }
+
+    fn into_enumeration_values(self) -> Vec<Value> {
+        if self.dimensions.len() < 2 || self.values.is_empty()
+            || self.dimensions.iter().try_fold(1usize, |n, d| n.checked_mul(d.length)) != Some(self.values.len()) {
+            return self.values;
+        }
+        let offsets = self.first_subscript_fastest_offsets().collect::<Vec<_>>();
+        let mut values = self.values;
+        offsets.into_iter().map(|offset| std::mem::replace(&mut values[offset], Value::Empty)).collect()
     }
 
     pub fn lower_bound(&self, dimension: usize) -> Option<i64> {
@@ -7080,8 +7090,8 @@ impl<'a> Runtime<'a> {
         if let (Some(bounds), Value::Array(array)) = (&declared.array_bounds, value) {
             if !bounds.is_empty() {
                 let element = crate::ast::VarItem { array_bounds: None, ..declared.clone() };
-                for one in &array.values {
-                    self.field_bytes(&element, one, out, depth);
+                for offset in array.first_subscript_fastest_offsets() {
+                    self.field_bytes(&element, &array.values[offset], out, depth);
                 }
                 return;
             }
@@ -7128,8 +7138,9 @@ impl<'a> Runtime<'a> {
         if let (Some(bounds), Value::Array(array)) = (&declared.array_bounds, &mut *value) {
             if !bounds.is_empty() {
                 let element = crate::ast::VarItem { array_bounds: None, ..declared.clone() };
-                for one in array.values.iter_mut() {
-                    self.field_from_bytes(&element, one, bytes, at, depth);
+                let offsets = array.first_subscript_fastest_offsets().collect::<Vec<_>>();
+                for offset in offsets {
+                    self.field_from_bytes(&element, &mut array.values[offset], bytes, at, depth);
                 }
                 return;
             }
@@ -28149,6 +28160,145 @@ Attribute VB_Name = "TextStream"
     /// line -- and with it every `.field` the block contained.
     ///
     /// Everything below is Excel's answer, `7t|t|3|zero|Bt|z1`.
+    #[test]
+    fn lset_copies_record_arrays_with_the_first_subscript_fastest() {
+        let source = r#"Attribute VB_Name = "ArrayCopyOrderOracle1237"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0. No external memory access.
+Private Type ByteMatrix
+ Lead As Byte
+ Items(-1 To 0, 3 To 5) As Byte
+ Tail As Long
+End Type
+Private Type IntegerMatrix
+ Lead As Byte
+ Items(-1 To 0, 3 To 5) As Integer
+ Tail As Long
+End Type
+Private Type LongCube
+ Lead As Byte
+ Items(-1 To 0, 3 To 4, 7 To 8) As Long
+ Tail As Long
+End Type
+Private Type StringMatrix
+ Lead As Byte
+ Items(-1 To 0, 3 To 4) As String * 2
+ Tail As Long
+End Type
+Private Type ByteVector
+ Lead As Byte
+ Items(-2 To 3) As Byte
+ Tail As Long
+End Type
+Private Type ByteBuffer
+ Bytes(0 To 39) As Byte
+End Type
+Public Function Probe(ByVal mode As Long, ByVal binding As Long) As Variant
+ Dim a As ByteMatrix, b As IntegerMatrix, c As LongCube, d As StringMatrix, e As ByteVector
+ Dim buffer As ByteBuffer, i As Long, j As Long, k As Long, n As Long
+ Dim payload As String, packed As Long, memory As Long, lead As Long, tail As Long, result As Variant
+ On Error Resume Next
+ Err.Clear
+ If mode < 5 Then
+  a.Lead = 127: b.Lead = 127: c.Lead = 127: d.Lead = 127: e.Lead = 127
+  a.Tail = &H11223344: b.Tail = &H11223344: c.Tail = &H11223344: d.Tail = &H11223344: e.Tail = &H11223344
+  n = 0
+  For i = -1 To 0
+   For j = 3 To 5
+    n = n + 1
+    a.Items(i, j) = n: b.Items(i, j) = n * 257
+   Next j
+  Next i
+  n = 0
+  For i = -1 To 0
+   For j = 3 To 4
+    n = n + 1: d.Items(i, j) = ChrW(64 + n) & ChrW(96 + n)
+    For k = 7 To 8
+     c.Items(i, j, k) = (n * 2 + k - 8) * 16843009
+    Next k
+   Next j
+  Next i
+  For i = -2 To 3
+   e.Items(i) = i + 3
+  Next i
+  Select Case mode
+  Case 0: LSet buffer = a: packed = Len(a): memory = LenB(a): lead = a.Lead: tail = a.Tail
+  Case 1: LSet buffer = b: packed = Len(b): memory = LenB(b): lead = b.Lead: tail = b.Tail
+  Case 2: LSet buffer = c: packed = Len(c): memory = LenB(c): lead = c.Lead: tail = c.Tail
+  Case 3: LSet buffer = d: packed = Len(d): memory = LenB(d): lead = d.Lead: tail = d.Tail
+  Case 4: LSet buffer = e: packed = Len(e): memory = LenB(e): lead = e.Lead: tail = e.Tail
+  End Select
+  For i = 0 To 39
+   payload = payload & Right$("0" & Hex$(buffer.Bytes(i)), 2)
+  Next i
+ Else
+  For i = 0 To 39
+   buffer.Bytes(i) = i + 1
+  Next i
+  Select Case mode
+  Case 5
+   LSet a = buffer: packed = Len(a): memory = LenB(a): lead = a.Lead: tail = a.Tail
+   For i = -1 To 0
+    For j = 3 To 5
+     payload = payload & CStr(a.Items(i, j)) & ","
+    Next j
+   Next i
+  Case 6
+   LSet b = buffer: packed = Len(b): memory = LenB(b): lead = b.Lead: tail = b.Tail
+   For i = -1 To 0
+    For j = 3 To 5
+     payload = payload & CStr(b.Items(i, j)) & ","
+    Next j
+   Next i
+  Case 7
+   LSet c = buffer: packed = Len(c): memory = LenB(c): lead = c.Lead: tail = c.Tail
+   For i = -1 To 0
+    For j = 3 To 4
+     For k = 7 To 8
+      payload = payload & CStr(c.Items(i, j, k)) & ","
+     Next k
+    Next j
+   Next i
+  Case 8
+   LSet d = buffer: packed = Len(d): memory = LenB(d): lead = d.Lead: tail = d.Tail
+   For i = -1 To 0
+    For j = 3 To 4
+     payload = payload & CStr(AscW(Mid$(d.Items(i, j), 1, 1))) & ":" & CStr(AscW(Mid$(d.Items(i, j), 2, 1))) & ","
+    Next j
+   Next i
+  Case 9
+   LSet e = buffer: packed = Len(e): memory = LenB(e): lead = e.Lead: tail = e.Tail
+   For i = -2 To 3
+    payload = payload & CStr(e.Items(i)) & ","
+   Next i
+  End Select
+ End If
+ result = Array(Err.Number, payload, packed, memory, Len(buffer), LenB(buffer), lead, tail)
+ Probe = result
+End Function
+"#;
+        let (module, classes) = crate::parse_project(source).unwrap();
+        let mut runtime = Runtime::new(&module).with_classes(&classes);
+        let expected = [
+            "0|7F010402050306004433221100000000000000000000000000000000000000000000000000000000|11|12|40|40|127|287454020",
+            "0|7F000101040402020505030306060000443322110000000000000000000000000000000000000000|17|20|40|40|127|287454020",
+            "0|7F000000010101010505050503030303070707070202020206060606040404040808080844332211|37|40|40|40|127|287454020",
+            "0|7F410061004300630042006200440064000000004433221100000000000000000000000000000000|13|24|40|40|127|287454020",
+            "0|7F010203040506004433221100000000000000000000000000000000000000000000000000000000|11|12|40|40|127|287454020",
+            "0|2,4,6,3,5,7,|11|12|40|40|1|202050057",
+            "0|1027,2055,3083,1541,2569,3597,|17|20|40|40|1|336794129",
+            "0|134678021,404166165,269422093,538910237,202050057,471538201,336794129,606282273,|37|40|40|40|1|673654309",
+            "0|770:1284,2826:3340,1798:2312,3854:4368,|13|24|40|40|1|404166165",
+            "0|2,3,4,5,6,7,|11|12|40|40|1|202050057",
+        ];
+        for (mode, expected) in expected.iter().enumerate() {
+            let value = runtime.call("ArrayCopyOrderOracle1237.Probe", vec![Value::Integer(mode as i64), Value::Integer(0)]).unwrap();
+            let Value::Array(array) = value else { panic!("mode {mode}: expected array") };
+            let actual = array.values.iter().map(|value| text(value).unwrap()).collect::<Vec<_>>().join("|");
+            assert_eq!(actual, *expected, "mode {mode}");
+        }
+    }
+
     #[test]
     fn record_layout_and_lset_preserve_fixed_string_utf16() {
         // Repeated in Excel 16.0.20527.20196: lengths and LSet retain every
