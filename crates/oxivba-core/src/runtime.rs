@@ -23386,8 +23386,8 @@ Private stored As Long
     }
 
     #[test]
-    fn procedure_locals_are_scoped_before_their_declaration_executes() {
-        let value = run(
+    fn procedure_local_declaration_order_matches_native_scope_errors() {
+        let failure = run(
             "Private value As Long\n\
              Private Sub SetModuleValue()\n\
                value = 40\n\
@@ -23409,9 +23409,23 @@ Private stored As Long
             "ProcedureScopeProbe",
             vec![],
         )
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(value, Value::Integer(0));
+        assert_eq!(failure.kind, RuntimeErrorKind::Compile);
+        assert!(failure.message.contains("Duplicate declaration in current scope"));
+
+        // Keep the independent nested-declaration behavior covered: the Dim is
+        // before the read in source order even though its branch is not run.
+        let nested = run(
+            "Public Function NestedDeclaration() As Long\n\
+             If False Then\n\
+               Dim hidden As Long\n\
+             End If\n\
+             NestedDeclaration = hidden\n\
+             End Function\n",
+            "NestedDeclaration", vec![],
+        ).unwrap();
+        assert_eq!(nested, Value::Integer(0));
     }
 
     #[test]

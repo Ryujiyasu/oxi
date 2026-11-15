@@ -31,6 +31,7 @@ pub enum CompileErrorKind {
     ArgumentNotOptional,
     NamedArgumentInParamArray,
     VariableNotDefined,
+    DuplicateDeclaration,
     AmbiguousName,
     MemberNotFound,
     ProcedureNotDefined,
@@ -324,6 +325,8 @@ impl CompileError {
             (CompileErrorKind::VariableNotDefined, ErrorLanguage::Japanese) => {
                 "変数が定義されていません。"
             }
+            (CompileErrorKind::DuplicateDeclaration, ErrorLanguage::English) => "Duplicate declaration in current scope",
+            (CompileErrorKind::DuplicateDeclaration, ErrorLanguage::Japanese) => "同じ適用範囲内で宣言が重複しています。",
             (CompileErrorKind::AmbiguousName, ErrorLanguage::English) => "Ambiguous name detected",
             (CompileErrorKind::AmbiguousName, ErrorLanguage::Japanese) => {
                 "名前が適切ではありません"
@@ -661,6 +664,8 @@ struct Checker<'a> {
     ambiguous_records: BTreeSet<String>,
     enums: BTreeSet<String>,
     later_locals: BTreeSet<String>,
+    declared_locals: BTreeSet<String>,
+    referenced_future_locals: std::cell::RefCell<BTreeSet<String>>,
     with_types: Vec<Type>,
     explicit: bool,
     syntax_lines: BTreeMap<usize, Vec<(&'a Expr, bool)>>,
@@ -719,6 +724,8 @@ impl<'a> Checker<'a> {
             ambiguous_records: BTreeSet::new(),
             enums: BTreeSet::new(),
             later_locals: BTreeSet::new(),
+            declared_locals: BTreeSet::new(),
+            referenced_future_locals: std::cell::RefCell::new(BTreeSet::new()),
             with_types: Vec::new(),
             syntax_lines: BTreeMap::new(),
             checked_syntax_lines: std::cell::RefCell::new(BTreeSet::new()),
@@ -917,6 +924,7 @@ impl<'a> Checker<'a> {
                 .map(|name| checker.declared(name))
                 .unwrap_or(Type::Variant);
             checker.variables.insert(key(&procedure.name), result);
+            checker.declared_locals.insert(key(&procedure.name));
         }
         if let Some((name, _)) = classes
             .iter()
@@ -935,6 +943,7 @@ impl<'a> Checker<'a> {
             }
             checker.fixed_arrays.remove(&key(&param.name));
             checker.variables.insert(key(&param.name), kind);
+            checker.declared_locals.insert(key(&param.name));
         }
         if let Some(procedure) = procedure {
             collect_locals(&procedure.body, &mut checker.later_locals);
@@ -3157,6 +3166,16 @@ impl<'a> Checker<'a> {
         }
         if let Some(name) = bare_name(part) {
             let symbol = key(name);
+            if self.later_locals.contains(&symbol) && !self.declared_locals.contains(&symbol) {
+                self.referenced_future_locals.borrow_mut().insert(symbol.clone());
+                if self.explicit && !self.variables.contains_key(&symbol)
+                    && !self.functions.contains_key(&symbol)
+                    && crate::runtime::builtin_constant(name).is_none()
+                    && !crate::runtime::is_builtin_function(name)
+                {
+                    return Err(self.failure(CompileErrorKind::VariableNotDefined, part.span()));
+                }
+            }
             if !self.own_symbols.contains(&symbol) && !self.later_locals.contains(&symbol) {
                 for (owner, scope) in self.globals.standard_modules.iter().filter(|_|self.report_dependencies) {
                     if scope.items.iter().any(|item| match item {
@@ -3698,6 +3717,9 @@ impl<'a> Checker<'a> {
     fn body(&mut self, body: &[Statement]) -> Result<(), CompileError> {
         for statement in body {
             self.statement(statement)?;
+            if let Statement::Dim(declaration) = statement {
+                self.declared_locals.extend(declaration.items.iter().map(|item| key(&item.name)));
+            }
         }
         Ok(())
     }
@@ -3827,6 +3849,11 @@ impl<'a> Checker<'a> {
             }
             Statement::Dim(declaration) => {
                 for variable in &declaration.items {
+                    if self.referenced_future_locals.borrow().contains(&key(&variable.name))
+                        || self.declared_locals.contains(&key(&variable.name))
+                    {
+                        return Err(self.failure(CompileErrorKind::DuplicateDeclaration, declaration.span));
+                    }
                     if variable.array_bounds.as_ref().is_some_and(|bounds| bounds.len() > 60) {
                         return Err(self.failure(CompileErrorKind::SyntaxError, declaration.span));
                     }
@@ -6357,5 +6384,33 @@ End Function
         }
         assert_eq!(cases.len(), 4);
         assert!(differences.is_empty(), "{} differences: {}", differences.len(), differences.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod native_local_declaration_order_tests {
+    use super::*;
+    include!("../../../tests/fixtures/vba/declaration_order_native.rs");
+
+    #[test]
+    fn local_declaration_order_matches_native_compilation() {
+        // The dependency-free language core checks the exact measured component.
+        // The original chart prelude needs Excel host references and is verified
+        // through the spreadsheet bindings, rather than an empty reference set.
+        for case in CASES {
+            let result = compile_project(case.program);
+            if let Some(kind) = case.native_kind {
+                let failure = result.expect_err(case.id);
+                let expected = match kind {
+                    "VariableNotDefined" => CompileErrorKind::VariableNotDefined,
+                    "DuplicateDeclaration" => CompileErrorKind::DuplicateDeclaration,
+                    _ => panic!("unexpected Native diagnostic"),
+                };
+                assert_eq!(failure.error.kind, expected, "{}", case.id);
+                assert_eq!(failure.error.description(ErrorLanguage::Japanese), case.description.unwrap(), "{}", case.id);
+            } else {
+                assert!(result.is_ok(), "{}: {result:?}", case.id);
+            }
+        }
     }
 }
