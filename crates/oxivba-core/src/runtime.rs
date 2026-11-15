@@ -11,7 +11,7 @@
 //! approximated.
 
 use std::{
-    cell::{Ref, RefCell, RefMut},
+    cell::{Cell, Ref, RefCell, RefMut},
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
 };
@@ -817,6 +817,7 @@ pub struct Runtime<'a> {
     /// Virtual interface addresses for ObjPtr, retained with project storage.
     object_pointers: BTreeMap<(u64, String, Option<String>), i64>,
     bstr_literals: BTreeMap<Vec<u16>,bstr::Allocation>,
+    constant_addresses: BTreeMap<String, i64>,
     /// Handles of reference-counted objects whose last reference is gone,
     /// queued by [`LifeToken`]'s `Drop`.
     due: Rc<RefCell<Vec<u64>>>,
@@ -891,6 +892,7 @@ pub struct ProjectState {
     next_internal_handle: u64,
     object_pointers: BTreeMap<(u64, String, Option<String>), i64>,
     bstr_literals: BTreeMap<Vec<u16>,bstr::Allocation>,
+    constant_addresses: BTreeMap<String, i64>,
     due: Rc<RefCell<Vec<u64>>>,
     random_state: u32,
     random_entropy: u64,
@@ -922,6 +924,8 @@ struct Frame<'b> {
     error_environment: Rc<ErrorEnvironment>,
     values: BTreeMap<String, ValueSlot>,
     constants: BTreeSet<String>,
+    literal_temporaries: Vec<i64>,
+    literal_temporary_index: usize,
     auto_new: BTreeMap<String, String>,
     fixed_strings: BTreeMap<String, usize>,
     /// The type each variable was declared with, so an assignment can
@@ -1022,6 +1026,10 @@ type ValueSlot = Rc<VariableSlot>;
 /// including when the callee exits by an error.
 struct VariableSlot {
     storage: Rc<SlotStorage>,
+    // A ByRef Variant descriptor may refer to typed storage without sharing
+    // the descriptor's own address. Writes still reach the original place.
+    descriptor_address: Option<i64>,
+    _descriptor_owner: Option<ValueSlot>,
     path: Vec<RecordStep>,
     declared: RefCell<Option<String>>,
     // Specific array element types belong to physical storage. A copy into a
@@ -1035,6 +1043,8 @@ struct VariableSlot {
 
 struct SlotStorage {
     value: RefCell<Value>,
+    address: Cell<Option<i64>>,
+    array_addresses: RefCell<BTreeMap<Vec<RecordStep>, (usize, u64, i64)>>,
     strings: RefCell<BTreeMap<Vec<RecordStep>, bstr::Allocation>>,
     locked_arrays: RefCell<BTreeMap<Vec<RecordStep>, usize>>,
     aliases: RefCell<BTreeMap<Vec<RecordStep>, ValueSlot>>,
@@ -1061,10 +1071,14 @@ impl VariableSlot {
         Rc::new(Self {
             storage: Rc::new(SlotStorage {
                 value: RefCell::new(value),
+                address: Cell::new(None),
+                array_addresses: RefCell::new(BTreeMap::new()),
                 strings: RefCell::new(BTreeMap::new()),
                 locked_arrays: RefCell::new(BTreeMap::new()),
                 aliases: RefCell::new(aliases),
             }),
+            descriptor_address: None,
+            _descriptor_owner: None,
             path: Vec::new(),
             declared: RefCell::new(None),
             array_declared: RefCell::new(None),
@@ -1149,6 +1163,8 @@ impl VariableSlot {
         drop(locks);
         Ok(Rc::new(Self {
             storage: slot.storage.clone(),
+            descriptor_address: None,
+            _descriptor_owner: None,
             path,
             declared: RefCell::new(declared),
             array_declared: RefCell::new(None),
@@ -1171,6 +1187,7 @@ impl VariableSlot {
 
     fn write(&self, value: Value) {
         self.storage.strings.borrow_mut().retain(|path,_|!path.starts_with(&self.path));
+        self.storage.array_addresses.borrow_mut().retain(|path,_|!path.starts_with(&self.path));
         if self.path.is_empty() {
             self.storage.aliases.borrow_mut().clear();
         }
@@ -1182,6 +1199,8 @@ impl VariableSlot {
     fn copyback_place(&self) -> ValueSlot {
         Rc::new(Self {
             storage: self.storage.clone(),
+            descriptor_address: self.descriptor_address,
+            _descriptor_owner: self._descriptor_owner.clone(),
             path: self.path.clone(),
             declared: RefCell::new(self.declared.borrow().clone()),
             array_declared: RefCell::new(self.array_declared.borrow().clone()),
@@ -1410,6 +1429,7 @@ impl<'a> Runtime<'a> {
             next_internal_handle: 1_u64 << 63,
             object_pointers: BTreeMap::new(),
             bstr_literals: BTreeMap::new(),
+            constant_addresses: BTreeMap::new(),
             due: Rc::new(RefCell::new(Vec::new())),
             random_state: 327_680,
             random_entropy: 327_680,
@@ -1509,6 +1529,7 @@ impl<'a> Runtime<'a> {
         self.next_internal_handle = state.next_internal_handle;
         self.object_pointers = state.object_pointers;
         self.bstr_literals = state.bstr_literals;
+        self.constant_addresses = state.constant_addresses;
         self.due = state.due;
         if !state.source_was_reset {
             self.random_state = state.random_state;
@@ -1532,6 +1553,7 @@ impl<'a> Runtime<'a> {
             next_internal_handle: self.next_internal_handle,
             object_pointers: self.object_pointers,
             bstr_literals: self.bstr_literals,
+            constant_addresses: self.constant_addresses,
             due: self.due,
             random_state: self.random_state,
             random_entropy: self.random_entropy,
@@ -4597,6 +4619,8 @@ impl<'a> Runtime<'a> {
             error_environment: self.error_environment.clone(),
             values: BTreeMap::new(),
             constants: BTreeSet::new(),
+            literal_temporaries: Vec::new(),
+            literal_temporary_index: 0,
             auto_new: BTreeMap::new(),
             fixed_strings: BTreeMap::new(),
             declared: BTreeMap::new(),
@@ -4622,7 +4646,19 @@ impl<'a> Runtime<'a> {
                 );
             let value = match argument {
                 BoundArgument::Value(value) => { let slot = VariableSlot::new(value); if !param.is_array { slot.set_declared(&param.type_name.name); }else{slot.set_array_declared(&param.type_name.name);} slot },
-                BoundArgument::Reference(value) => value,
+                BoundArgument::Reference(value) => {
+                    if !param.is_array && param.mode == ParamMode::ByRef
+                        && param.type_name.name.eq_ignore_ascii_case("variant")
+                        && value.descriptor_address.is_none()
+                        && value.declared.borrow().as_ref().is_some_and(|kind| !kind.eq_ignore_ascii_case("variant"))
+                    {
+                        let mut descriptor = value.copyback_place();
+                        let view = Rc::get_mut(&mut descriptor).expect("new descriptor");
+                        view.descriptor_address = Some(bstr::reserve_storage(24)?);
+                        view._descriptor_owner = Some(value);
+                        descriptor
+                    } else { value }
+                },
             };
             let narrowed = !param.is_array
                 && (param.mode == ParamMode::ByVal || temporary)
@@ -4906,6 +4942,8 @@ impl<'a> Runtime<'a> {
                 error_environment: self.error_environment.clone(),
                 values: BTreeMap::new(),
                 constants: BTreeSet::new(),
+                literal_temporaries: Vec::new(),
+                literal_temporary_index: 0,
                 auto_new: BTreeMap::new(),
                 fixed_strings: BTreeMap::new(),
                 declared: BTreeMap::new(),
@@ -5096,6 +5134,7 @@ impl<'a> Runtime<'a> {
         statement: &Statement,
         frame: &mut Frame,
     ) -> Result<Flow, RuntimeError> {
+        frame.literal_temporary_index = 0;
         // Keep recursively entered statement dispatch small in native debug
         // builds. Large assignment/call temporaries belong to their own frame,
         // rather than every enclosing If/For/With block on the VBA stack.
@@ -7065,6 +7104,97 @@ impl<'a> Runtime<'a> {
             widest = widest.max(align);
         }
         (packed, widest, offset.div_ceil(widest) * widest)
+    }
+
+    /// The location of a variable's storage, not the String or Object it holds.
+    /// Projected ByRef slots retain their original owner and byte displacement.
+    fn variable_pointer(&self, slot: &ValueSlot, line: u32) -> Result<i64, RuntimeError> {
+        if let Some(address) = slot.descriptor_address { return Ok(address); }
+        let root = slot.storage.value.borrow();
+        let size = match &*root {
+            Value::Record(record) => self.record_layout(record, 0).2.max(24),
+            _ => 24,
+        };
+        let mut address = match slot.storage.address.get() {
+            Some(address) => address,
+            None => {
+                let address = bstr::reserve_storage(size)?;
+                slot.storage.address.set(Some(address));
+                address
+            }
+        };
+        let mut value = &*root;
+        let mut declaration: Option<VarItem> = None;
+        for (position, step) in slot.path.iter().enumerate() {
+            match (step, value) {
+                (RecordStep::Field(name), Value::Record(record)) => {
+                    let definition = self.find_type(&record.type_name).ok_or_else(||
+                        error(RuntimeErrorKind::TypeMismatch, "record storage layout is unavailable", Some(line)))?;
+                    let mut offset = 0u64;
+                    let mut found = None;
+                    for (field, (_, held)) in definition.fields.iter().zip(&record.fields) {
+                        let (_, bytes, align) = self.field_layout(field, held, 0);
+                        offset = offset.div_ceil(align) * align;
+                        if field.name.eq_ignore_ascii_case(name) {
+                            found = Some((offset, field.clone(), held));
+                            break;
+                        }
+                        offset += bytes;
+                    }
+                    let (offset, field, held) = found.ok_or_else(||
+                        error(RuntimeErrorKind::UndefinedVariable, "record field has no storage", Some(line)))?;
+                    address = address.checked_add(offset as i64).ok_or_else(|| error(RuntimeErrorKind::Overflow, "VBA address overflow", Some(line)))?;
+                    declaration = Some(field);
+                    value = held;
+                }
+                (RecordStep::Index(indices), Value::Array(array)) => {
+                    array_offset(array, indices, line)?;
+                    let inline = declaration.as_ref().and_then(|field|field.array_bounds.as_ref())
+                        .is_some_and(|bounds| !bounds.is_empty());
+                    let mut element = declaration.clone().unwrap_or(VarItem {
+                        name: String::new(), array_bounds: None,
+                        type_name: TypeName { name: element_type_name(array.element_default.as_ref()).unwrap_or("Variant").into(), ..TypeName::implicit() },
+                        explicit_type: true, with_events: false, value: None,
+                    });
+                    element.array_bounds = None;
+                    let bytes = if declaration.is_none() {
+                        match array.element_default.as_ref() {
+                            Value::Error(_) => 4,
+                            Value::Decimal(_) => 16,
+                            Value::String(text) if !text.is_empty() => text.encode_utf16().count() as u64 * 2,
+                            _ => self.field_layout(&element, array.element_default.as_ref(), 0).1,
+                        }
+                    } else { self.field_layout(&element, array.element_default.as_ref(), 0).1 };
+                    if !inline {
+                        let size = bytes.checked_mul(array.values.len() as u64).ok_or_else(|| error(RuntimeErrorKind::Overflow, "VBA array storage overflow", Some(line)))?;
+                        let identity = array.values.as_ptr() as usize;
+                        let mut addresses = slot.storage.array_addresses.borrow_mut();
+                        let entry = addresses.entry(slot.path[..position].to_vec()).or_insert((0, 0, 0));
+                        if entry.0 != identity || entry.1 < size {
+                            *entry = (identity, size, bstr::reserve_storage(size)?);
+                        }
+                        address = entry.2;
+                    }
+                    // VBA stores the first dimension contiguously. The IR's
+                    // row-major value index is a separate representation.
+                    let (mut offset, mut stride) = (0u64, 1u64);
+                    for (index, dimension) in indices.iter().zip(&array.dimensions) {
+                        let relative = (*index - dimension.lower_bound) as u64;
+                        offset = relative.checked_mul(stride).and_then(|part|offset.checked_add(part))
+                            .ok_or_else(||error(RuntimeErrorKind::Overflow,"VBA array offset overflow",Some(line)))?;
+                        stride = stride.checked_mul(dimension.length as u64)
+                            .ok_or_else(||error(RuntimeErrorKind::Overflow,"VBA array stride overflow",Some(line)))?;
+                    }
+                    let displacement = offset.checked_mul(bytes).and_then(|bytes|i64::try_from(bytes).ok())
+                        .ok_or_else(||error(RuntimeErrorKind::Overflow,"VBA array address overflow",Some(line)))?;
+                    address = address.checked_add(displacement).ok_or_else(|| error(RuntimeErrorKind::Overflow, "VBA array address overflow", Some(line)))?;
+                    value = &array.values[array_offset(array, indices, line)?];
+                    declaration = Some(element);
+                }
+                _ => return Err(error(RuntimeErrorKind::TypeMismatch, "value has no projected storage", Some(line))),
+            }
+        }
+        Ok(address)
     }
 
     /// A record as its bytes lie in memory, little-endian, the pads and any
@@ -9541,6 +9671,44 @@ impl<'a> Runtime<'a> {
                 if let Expr::Ident(name, _) | Expr::TypedIdent { name, .. } = target.as_ref() {
                     if let Some(answer) = self.storage_size_asked_of(name, args, frame) {
                         return answer;
+                    }
+                    if name.eq_ignore_ascii_case("varptr") && self.lookup_slot(frame, name).is_none() {
+                        let [Argument { value: Some(operand), name: None, .. }] = args.as_slice() else {
+                            return Err(error(RuntimeErrorKind::ArgumentCount, "VarPtr takes one argument", Some(span.line)));
+                        };
+                        if matches!(operand, Expr::Literal(..)) {
+                            // Expression temporaries coexist until the statement
+                            // ends; subsequent statements reuse the scratch place.
+                            let index = frame.literal_temporary_index;
+                            frame.literal_temporary_index += 1;
+                            if index == frame.literal_temporaries.len() {
+                                frame.literal_temporaries.push(bstr::reserve_storage(24)?);
+                            }
+                            return Ok(Value::LongLong(frame.literal_temporaries[index]));
+                        }
+                        if let Some(name) = expr_name(operand).filter(|name| self.is_constant(frame, name)) {
+                            if matches!(self.eval_expr(operand, frame)?, Value::Int16(_) | Value::Integer(_)) {
+                                let local = frame.constants.contains(&key(name));
+                                let identity = format!("{}:{:?}:{}:{}", self.standard_name,
+                                    self.me.as_ref().map(|object| &object.kind),
+                                    if local { frame.procedure_name.as_str() } else { "" }, key(name));
+                                if let Some(address) = self.constant_addresses.get(&identity) {
+                                    return Ok(Value::LongLong(*address));
+                                }
+                                let address = bstr::reserve_storage(24)?;
+                                self.constant_addresses.insert(identity, address);
+                                return Ok(Value::LongLong(address));
+                            }
+                        }
+                        let slot = match self.reference_argument(operand, frame, span.line)? {
+                            BoundArgument::Reference(slot) => {
+                                if self.reference_fixed_width(operand, &slot, frame).is_some() {
+                                    VariableSlot::new(slot.snapshot())
+                                } else { slot }
+                            },
+                            BoundArgument::Value(value) => VariableSlot::new(value),
+                        };
+                        return self.variable_pointer(&slot, span.line).map(Value::LongLong);
                     }
                     if name.eq_ignore_ascii_case("strptr") && self.lookup_slot(frame,name).is_none() {
                         let [Argument {value:Some(operand),name:None,..}]=args.as_slice() else{return Err(error(RuntimeErrorKind::ArgumentCount,"StrPtr takes one argument",Some(span.line)));};
@@ -12728,6 +12896,8 @@ fn empty_frame(error_environment: Rc<ErrorEnvironment>, project_name: String) ->
         error_environment,
         values: BTreeMap::new(),
         constants: BTreeSet::new(),
+        literal_temporaries: Vec::new(),
+        literal_temporary_index: 0,
         auto_new: BTreeMap::new(),
         fixed_strings: BTreeMap::new(),
         declared: BTreeMap::new(),
@@ -13431,6 +13601,7 @@ fn builtin_reads_values(name: &str) -> bool {
             | "cvar"
             | "isobject"
             | "ismissing"
+            | "varptr"
             | "iif"
             | "array"
             | "choose"
@@ -13556,6 +13727,7 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "str"
             | "string"
             | "strptr"
+            | "varptr"
             | "strreverse"
             | "switch"
             | "syd"
@@ -13600,6 +13772,14 @@ pub(crate) fn call_builtin(
     let name = name.to_ascii_lowercase();
     if !is_builtin_function(&name) {
         return None;
+    }
+    // Embedders pass values rather than caller places. Such an argument
+    // occupies a temporary descriptor; source calls bind their actual place.
+    if name == "varptr" {
+        return Some(match args {
+            [_] => bstr::reserve_storage(24).map(Value::LongLong),
+            _ => Err(error(RuntimeErrorKind::ArgumentCount, "VarPtr takes one argument", line)),
+        });
     }
     if let Some(converted) = utf16::byte_array_arguments(&name, args, line) {
         return match converted {
