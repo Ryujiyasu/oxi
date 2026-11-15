@@ -25,7 +25,7 @@ mod vba_source_writer;
 #[cfg(feature = "suite")]
 mod vba_compound;
 #[cfg(feature = "suite")]
-pub use vba_project::{spreadsheet_vba_document_modules, spreadsheet_vba_project_name, spreadsheet_vba_source, save_spreadsheet_vba_source};
+pub use vba_project::{spreadsheet_vba_document_modules, spreadsheet_vba_project_name, spreadsheet_vba_source, save_spreadsheet_vba_source, read_spreadsheet_vba_project_native};
 #[cfg(feature = "suite")]
 mod spreadsheet_vba;
 #[cfg(feature = "suite")]

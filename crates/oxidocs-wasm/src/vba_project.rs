@@ -296,6 +296,25 @@ pub fn spreadsheet_vba_source(
         .map_err(|error| JsError::new(&error))
 }
 
+/// Read source and host bindings without JavaScript or executing macros.
+/// The JSON keys are `source`, `projectName` and `documentModules`. After
+/// removing `source`, the remaining object can be passed as native execution
+/// options. A workbook without VBA has null source and project name.
+pub fn read_spreadsheet_vba_project_native(
+    package: &[u8],
+    source_code_page: Option<u16>,
+) -> Result<String, String> {
+    let source = read_project_source_with_code_page(package, source_code_page)?;
+    let project_name = read_project_name(package, source_code_page)?;
+    let document_modules = read_document_modules(package)?;
+    serde_json::to_string(&serde_json::json!({
+        "source": source,
+        "projectName": project_name,
+        "documentModules": document_modules,
+    }))
+    .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 fn read_project_source(package: &[u8]) -> Result<Option<String>, String> {
     read_project_source_with_code_page(package, None)
