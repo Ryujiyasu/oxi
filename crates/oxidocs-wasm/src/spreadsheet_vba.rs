@@ -32178,6 +32178,9 @@ impl Host for ApplicationHost<'_> {
         self.read(Some(receiver), name, false, |host, receiver|
             host.property_assignment_uses_variant(receiver.expect("native receiver"), name))
     }
+    fn property_assignment_may_preserve_variant(&self, name: &str) -> bool {
+        name.eq_ignore_ascii_case("WindowState")
+    }
 
     fn property_assignment_value(
         &self,
@@ -32694,6 +32697,9 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn automation_invocation_error(&self, receiver: &ObjectRef, name: &str, kind: u8) -> Option<i64> {
+        if self.is_window(receiver) && name.eq_ignore_ascii_case("WindowState") && kind == 8 {
+            return Some(13);
+        }
         if self.is_application(receiver) && (name.eq_ignore_ascii_case("standardfont") || name.eq_ignore_ascii_case("standardfontsize")) {
             return match kind { 1 => Some(1004), 8 => Some(13), _ => None };
         }
@@ -32783,7 +32789,8 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn automation_assignment_error(&self, receiver: &ObjectRef, name: &str, number: i64) -> Option<i64> {
-        (number == 1004 && (((self.range_font(receiver).is_some() || self.condition_id(receiver).is_some_and(|(_, face)| matches!(face, Some(StyleFace::Font)))
+        (number == 1004 && ((self.is_window(receiver) && name.eq_ignore_ascii_case("WindowState"))
+            || ((self.range_font(receiver).is_some() || self.condition_id(receiver).is_some_and(|(_, face)| matches!(face, Some(StyleFace::Font)))
                 || matches!(self.objects.get(host_object_index(receiver.handle)), Some(HostObject::DisplayFont(_))))
                 && name.eq_ignore_ascii_case("size"))
             || (self.range(receiver).is_some() && name.eq_ignore_ascii_case("locked"))
@@ -32887,7 +32894,14 @@ impl Host for WorkbookHost<'_> {
                 || name.eq_ignore_ascii_case("screenupdating") || name.eq_ignore_ascii_case("standardfont") || name.eq_ignore_ascii_case("standardfontsize")))
     }
 
+    fn property_assignment_may_preserve_variant(&self, name: &str) -> bool {
+        name.eq_ignore_ascii_case("WindowState")
+    }
+
     fn property_assignment_value(&self, _receiver: Option<&ObjectRef>, name: &str, value: &Value, by_reference: bool) -> Option<Value> {
+        if name.eq_ignore_ascii_case("WindowState") && _receiver.is_some_and(|receiver| self.is_window(receiver)) {
+            return Some(value.clone());
+        }
         if name.eq_ignore_ascii_case("size") && _receiver.is_some_and(|receiver|self.range_font(receiver).is_some())
             && (matches!(value,Value::Array(_)) || matches!(value,Value::Object(object) if self.range(object).is_some())) {
             return Some(value.clone());
@@ -38597,6 +38611,10 @@ impl Host for WorkbookHost<'_> {
             return Ok(true);
         }
         if self.is_window(receiver) {
+            if name.eq_ignore_ascii_case("WindowState") {
+                self.validate_window_state_argument(&value)?;
+                return Ok(true);
+            }
             if let Some(set) = self.set_view(name, &value)? {
                 return Ok(set);
             }

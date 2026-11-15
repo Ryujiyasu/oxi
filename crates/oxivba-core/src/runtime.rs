@@ -327,6 +327,13 @@ pub trait Host {
         false
     }
 
+    /// Resolve a potentially VARIANT-valued host property before reading an
+    /// RHS object's default member. This hint does not suppress a statically
+    /// declared scalar parameter's conversion.
+    fn property_assignment_may_preserve_variant(&self, _name: &str) -> bool {
+        false
+    }
+
     /// A VARIANT-valued host setter can inspect an object or Nothing without
     /// first reading its default member. Automation also distinguishes a
     /// reference to a variable from a value expression. Return the value the
@@ -5473,6 +5480,15 @@ impl<'a> Runtime<'a> {
                             }
                             host.assignment_call_result(Some(&owner), name)
                         }),
+                    Expr::WithMember(name, _) if self.host.as_deref()
+                        .is_some_and(|host| host.property_assignment_may_preserve_variant(name)) =>
+                    {
+                        match frame.with_objects.last() {
+                            Some(WithSubject::Object { assignment_type: Some(owner), .. }) =>
+                                self.host.as_deref().and_then(|host| host.assignment_call_result(Some(owner), name)),
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 }.filter(|kind| matches!(self.parameter_scalar_name(kind).as_str(),
                     "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double"
@@ -5486,7 +5502,8 @@ impl<'a> Runtime<'a> {
                         if self.source_expression_type(object, frame)
                             .is_none_or(|kind| self.find_type(&kind.name).is_none())
                             && self.source_class_name(object, frame).is_none()
-                            && (self.host.as_deref().is_some_and(|host| host.property_assignment_value(None, name, &value, false).is_some())
+                            && (self.host.as_deref().is_some_and(|host| host.property_assignment_value(None, name, &value, false).is_some()
+                                    || host.property_assignment_may_preserve_variant(name))
                                 || self.assignment_receiver_type(object, frame)
                                     .and_then(|owner| self.host.as_deref()?.assignment_call_result(Some(&owner), name))
                                     .is_some_and(|kind| matches!(self.parameter_scalar_name(&kind).as_str(),
@@ -19473,8 +19490,7 @@ fn argument_count_error(procedure: &Procedure, received: usize, line: Option<u32
 
 fn number(value: &Value) -> Result<f64, String> {
     match value {
-        Value::Utf16(_) | Value::NullString => Err("type mismatch converting String to number".into()),
-        Value::ByteString(_) => bstr_number(value),
+        Value::Utf16(_) | Value::NullString | Value::ByteString(_) | Value::String(_) => bstr_number(value),
         Value::Empty | Value::Boolean(false) => Ok(0.0),
         Value::Boolean(true) => Ok(-1.0),
         Value::Int16(value) => Ok(*value as f64),
@@ -19487,10 +19503,6 @@ fn number(value: &Value) -> Result<f64, String> {
         Value::Decimal(value) => Ok(value.to_f64()),
         Value::Date(value) => Ok(*value),
         Value::Error(value) => Ok(*value as f64),
-        // The same reading IsNumeric makes: measured, `CLng("1,234")` is
-        // 1234, grouping marks and all.
-        Value::String(value) => numeric_text(value)
-            .ok_or_else(|| "type mismatch converting String to number".to_string()),
         Value::Null => Err("invalid use of Null".to_string()),
         Value::Missing => Err("invalid use of Missing".to_string()),
         Value::Nothing => Err("object variable or With block variable not set".to_string()),
