@@ -475,6 +475,17 @@ fn check_with_environment<'a>(
             }
         }
     }
+    for scope in std::iter::once(module)
+        .chain(std::iter::once(globals))
+        .chain(globals.standard_modules.iter().map(|(_, scope)| scope))
+        .chain(classes.values().copied())
+    {
+        if let Some((name, span)) = duplicate_module_variable(scope) {
+            let mut failure = checker.failure(CompileErrorKind::AmbiguousName, span);
+            failure.symbol = Some(name.to_string());
+            return Err(failure);
+        }
+    }
     checker.module_storage_syntax()?;
     if checker.call_references.is_some() {
         checker.module_declaration_types()?;
@@ -579,6 +590,24 @@ fn intrinsic_operator(name: &str) -> bool {
             | "cstr"
             | "cvar"
     )
+}
+
+// The project's flattened items are an analysis view, not a single namespace.
+pub(crate) fn duplicate_module_variable(module: &Module) -> Option<(&str, Span)> {
+    if !module.standard_modules.is_empty() {
+        return None;
+    }
+    let mut names = BTreeSet::new();
+    for item in &module.items {
+        if let ModuleItem::Variables(declaration) = item {
+            for variable in &declaration.items {
+                if !names.insert(key(&variable.name)) {
+                    return Some((&variable.name, declaration.span));
+                }
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn invalid_initial_procedure(module: &Module) -> Option<&Procedure> {
@@ -1147,6 +1176,11 @@ impl<'a> Checker<'a> {
     }
 
     fn module_storage_syntax(&self) -> Result<(), CompileError> {
+        if let Some((name, span)) = duplicate_module_variable(self.module) {
+            let mut failure = self.failure(CompileErrorKind::AmbiguousName, span);
+            failure.symbol = Some(name.to_string());
+            return Err(failure);
+        }
         for item in &self.module.items {
             let variables = match item {
                 ModuleItem::Variables(declaration) => declaration.items.as_slice(),
@@ -6422,5 +6456,55 @@ mod native_local_declaration_order_tests {
                 assert!(result.is_ok(), "{}: {result:?}", case.id);
             }
         }
+    }
+
+    #[test]
+    fn module_variable_collisions_match_native_compilation_and_entry_boundaries() {
+        use crate::runtime::{Runtime, RuntimeErrorKind, Value};
+        for case in MODULE_COLLISION_CASES {
+            let compilation = compile_project(case.program);
+            let (module, classes) = crate::parse_project(case.program).unwrap();
+            let mut runtime = Runtime::new(&module).with_classes(&classes)
+                .with_error_environment(crate::ErrorEnvironment {
+                    language: ErrorLanguage::Japanese,
+                    ..crate::ErrorEnvironment::default()
+                });
+            let execution = runtime.call_macro("DeclarationOrderOracle.Probe", vec![]);
+            if case.native_kind.is_some() {
+                let failure = compilation.expect_err(case.id);
+                assert_eq!(failure.error.kind, CompileErrorKind::AmbiguousName, "{}", case.id);
+                assert_eq!(failure.error.message(ErrorLanguage::Japanese), case.description.unwrap(), "{}", case.id);
+                let failure = execution.expect_err(case.id);
+                assert_eq!(failure.kind, RuntimeErrorKind::Compile, "{}", case.id);
+                assert!(failure.message.ends_with(case.description.unwrap()), "{}: {failure:?}", case.id);
+            } else {
+                assert!(compilation.is_ok(), "{}: {compilation:?}", case.id);
+                let Value::Array(array) = execution.unwrap_or_else(|error| panic!("{}: {error:?}", case.id)) else {
+                    panic!("{}: Native returned an array", case.id);
+                };
+                let (kind, value) = match case.id {
+                    "valid_direct_call" | "private_dim_separate_modules" => ("Long", Value::Integer(0)),
+                    "valid_unused" => ("Integer", Value::Int16(7)),
+                    "private_const_separate_modules" => ("Long", Value::Integer(3)),
+                    "local_shadows_module" | "separate_record_fields" => ("Long", Value::Integer(7)),
+                    _ => panic!("unqualified positive control: {}", case.id),
+                };
+                assert_eq!(array.values, vec![Value::Integer(0), Value::String(String::new()), Value::String(kind.into()), value], "{}", case.id);
+            }
+        }
+        assert_eq!(MODULE_COLLISION_CASES.len(), 22);
+    }
+
+    #[test]
+    fn duplicate_module_storage_keeps_native_macro_lookup_failure() {
+        use crate::runtime::{Runtime, RuntimeErrorKind};
+        for &(id, source) in MODULE_UNAVAILABLE_CASES {
+            let (module, classes) = crate::parse_project(source).unwrap();
+            let error = Runtime::new(&module).with_classes(&classes)
+                .call_macro("DeclarationOrderOracle.Probe", vec![]).expect_err(id);
+            assert_eq!(error.kind, RuntimeErrorKind::Host, "{id}: {error:?}");
+            assert_eq!(error.vba_number, Some(1004), "{id}: {error:?}");
+        }
+        assert_eq!(MODULE_UNAVAILABLE_CASES.len(), 5);
     }
 }

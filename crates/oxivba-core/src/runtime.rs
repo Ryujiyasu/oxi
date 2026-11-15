@@ -3640,7 +3640,9 @@ impl<'a> Runtime<'a> {
         let name = resolved.split_once('.').filter(|(project, _)| project.eq_ignore_ascii_case(&self.project_name))
             .map_or(resolved.as_str(), |(_, name)| name);
         let find = |module: &Module, name: &str| {
-            if crate::compiler::invalid_initial_procedure(module).is_some() {
+            if crate::compiler::invalid_initial_procedure(module).is_some()
+                || crate::compiler::duplicate_module_variable(module).is_some()
+            {
                 return None;
             }
             module.items.iter().find_map(|item| match item {

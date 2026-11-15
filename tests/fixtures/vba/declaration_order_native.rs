@@ -362,3 +362,473 @@ Probe = counter + other
 End Function
 "########, native_kind: None, description: None },
 ];
+
+const MODULE_COLLISION_CASES: &[Case] = &[
+    // Native full-project source SHA256: 13392f82d5debdf5e8dc78278e9e5b52d94040d03bca3d058d2a11b5bd1fa3e1
+    Case { id: "dim_same_application_run", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long, counter As Long
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = Application.Run("DeclarationOrderTarget.GetValue")
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: 5f29999fde465759cc764c225cd409db2dddb53d1d4227f7ebb5f11790be4e2a
+    Case { id: "dim_same_direct_call", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long, counter As Long
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = DeclarationOrderTarget.GetValue
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: f8d99c8ed0cde095f8d3d9657bba5c0eeac7c63c47e2e204a22642f2d647f4bd
+    Case { id: "dim_same_unused", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long, counter As Long
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = 7
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: 5064dcf0a34cee2a71c346f53ffc4551207b0fb3146945ddd7cae5082a3ce006
+    Case { id: "dim_separate_application_run", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long
+Private counter As Long
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = Application.Run("DeclarationOrderTarget.GetValue")
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: b9465e9dc461f9dd8dbf90b89b7439f5148ba8cd0dfefdd85aef8ed11a8f516a
+    Case { id: "dim_separate_direct_call", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long
+Private counter As Long
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = DeclarationOrderTarget.GetValue
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: a250dcec38ad05c99a9df71ca02104758cabc0f55a25b43320b2645524130d7f
+    Case { id: "dim_separate_unused", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long
+Private counter As Long
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = 7
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: 57825c9312f94de593801775c8466ac39c974784a7e3f4c4f04f3ab59cfde6fb
+    Case { id: "const_same_application_run", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private Const counter As Long = 1, counter As Long = 2
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = Application.Run("DeclarationOrderTarget.GetValue")
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: e7adc228802a5b68b4fbc8b536468095dc79ef2bcd034952f6c2b237c81b32c9
+    Case { id: "const_same_direct_call", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private Const counter As Long = 1, counter As Long = 2
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = DeclarationOrderTarget.GetValue
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: 2541aa401838dcf2072a7a0b36e68bf06a6a4c71cb76ffe42a029837e80d8fb5
+    Case { id: "const_same_unused", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private Const counter As Long = 1, counter As Long = 2
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = 7
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: 81459bd82642d99df260815e37f08028b28fc5c5c9886f573f4033529ad4e061
+    Case { id: "const_separate_application_run", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private Const counter As Long = 1
+Private Const counter As Long = 2
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = Application.Run("DeclarationOrderTarget.GetValue")
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: 441a87b67d266d4c54e20c468b5257ad1e7a58784208b4ffd92d16d38abeea5b
+    Case { id: "const_separate_direct_call", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private Const counter As Long = 1
+Private Const counter As Long = 2
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = DeclarationOrderTarget.GetValue
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: 6db218a80d4631512a190831266ff64638118166e2a73a40b7e2aca17d111d38
+    Case { id: "const_separate_unused", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private Const counter As Long = 1
+Private Const counter As Long = 2
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = 7
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: c810e7932bc069266877f0afc5412d7e02d2074a134629ddf97e0380c2586a93
+    Case { id: "var_const_application_run", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long
+Private Const counter As Long = 2
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = Application.Run("DeclarationOrderTarget.GetValue")
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: 167f65a8b4090c430e48e39e3f6e0731a26d02b1b4a774764b5af77b48585d8f
+    Case { id: "var_const_direct_call", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long
+Private Const counter As Long = 2
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = DeclarationOrderTarget.GetValue
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: 6676ed4ad9252741f81318fd955951f730daf79063589143e3cc498925a317d9
+    Case { id: "var_const_unused", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long
+Private Const counter As Long = 2
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = 7
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: counter"########) },
+    // Native full-project source SHA256: b7a4e3314ff0659057b76b053fb2cb7b4a7eb633764e79bd0c23fedf3994f57a
+    Case { id: "valid_direct_call", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = DeclarationOrderTarget.GetValue
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: None, description: None },
+    // Native full-project source SHA256: 84c1aba6d9b51ce2866cbd4dcad3983faa498fbde2c72aeedad6e32a4a315d64
+    Case { id: "valid_unused", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long
+Public Function GetValue() As Variant
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = 7
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: None, description: None },
+    // Native full-project source SHA256: 45b1309da778c646cdd758fa3dce69c91c7de917d706d30e87bda97f18cc8683
+    Case { id: "private_dim_separate_modules", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long
+Public Function GetValue() As Long
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOther"
+Option Explicit
+Private counter As Long
+Public Function GetValue() As Long
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = DeclarationOrderTarget.GetValue + DeclarationOrderOther.GetValue
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: None, description: None },
+    // Native full-project source SHA256: bbac8cc0abac4de393adb61f5f3a694fd8c00f4752cedd618ca0df6004ae0b43
+    Case { id: "private_const_separate_modules", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private Const counter As Long = 1
+Public Function GetValue() As Long
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOther"
+Option Explicit
+Private Const counter As Long = 2
+Public Function GetValue() As Long
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = DeclarationOrderTarget.GetValue + DeclarationOrderOther.GetValue
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: None, description: None },
+    // Native full-project source SHA256: 0b2268dc4c021f2f7cb67cd44fea60cf1537909022d890f34e8712648b0b45c7
+    Case { id: "local_shadows_module", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Private counter As Long
+Public Function Probe() As Variant
+On Error Resume Next
+Dim counter As Long
+counter = 7
+Probe = Array(Err.Number, Err.Source, TypeName(counter), counter)
+End Function
+"########, native_kind: None, description: None },
+    // Native full-project source SHA256: b7b13f9deb854485e48b84bb7fed8ca4158f71c83e28597ef95cd8e3e03fd515
+    Case { id: "separate_record_fields", program: r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Private Type FirstRecord
+counter As Long
+End Type
+Private Type SecondRecord
+counter As Long
+End Type
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Long
+result = 7
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: None, description: None },
+    // Native full-project source SHA256: 9b57743e0497b9c465bc96f42aff13958f78f3b6c87a9db1cfd5a8907c169707
+    Case { id: "casefold_duplicate_module", program: r########"Attribute VB_Name = "DeclarationOrderTarget"
+Option Explicit
+Private counter As Long
+Private COUNTER As Long
+Public Function GetValue() As Long
+GetValue = counter
+End Function
+
+Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+Public Function Probe() As Variant
+On Error Resume Next
+Dim result As Variant
+Err.Clear
+result = 7
+Probe = Array(Err.Number, Err.Source, TypeName(result), result)
+End Function
+"########, native_kind: Some("AmbiguousName"), description: Some(r########"名前が適切ではありません: COUNTER"########) },
+];
+
+const MODULE_UNAVAILABLE_CASES: &[(&str, &str)] = &[
+    // Native full-project source SHA256: 3fd148a25c1d0ad85adbce518e04783cd4b8fafca5d8981d43db289d21719168
+    ("module_dim_duplicate_same_used", r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Private counter As Long, counter As Long
+Public Function Probe() As Variant
+On Error Resume Next
+Probe = counter
+End Function
+"########),
+    // Native full-project source SHA256: dfd04a199803283e5407180063497cf0f8258dc863b0648cd23c4a91d8b5b7dd
+    ("module_dim_duplicate_separate_used", r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Private counter As Long
+Private counter As Long
+Public Function Probe() As Variant
+On Error Resume Next
+Probe = counter
+End Function
+"########),
+    // Native full-project source SHA256: f8aa6902d8b15b4c73a0782f8a7bc73427ff2ac7596bbb13dcddcd430a519cd9
+    ("module_const_duplicate_same_used", r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Private Const counter As Long = 1, counter As Long = 2
+Public Function Probe() As Variant
+On Error Resume Next
+Probe = counter
+End Function
+"########),
+    // Native full-project source SHA256: 72c0d2315e6a32de0bda7503ffd8d5d7c0f583f11e0cf2c1834c452bc19d0ecf
+    ("module_const_duplicate_separate_used", r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Private Const counter As Long = 1
+Private Const counter As Long = 2
+Public Function Probe() As Variant
+On Error Resume Next
+Probe = counter
+End Function
+"########),
+    // Native full-project source SHA256: fab6cf679b76d086234588452d8a70f9c944c224125758959467dc1765d1e1a4
+    ("module_var_and_const_duplicate_used", r########"Attribute VB_Name = "DeclarationOrderOracle"
+Option Explicit
+' Self-authored conformance probe, CC BY-SA 4.0.
+Private counter As Long
+Private Const counter As Long = 2
+Public Function Probe() As Variant
+On Error Resume Next
+Probe = counter
+End Function
+"########),
+];
