@@ -1332,11 +1332,28 @@ fn parse_slide(
     let mut in_chart_graphic = false;
     let mut chart_r_id: Option<String> = None;
 
+    // Depth inside `spPr/a:extLst`. Office writes the fill and line a shape
+    // does NOT show there (`a14:hiddenFill`, `a14:hiddenLine`), so a shape
+    // with `<a:noFill/>` read the hidden fill's colour as its own and was
+    // painted solid (dash probe: 14 outlined shapes filled 156082).
+    let mut sppr_ext: u32 = 0;
+    let s_hiddenext = std::env::var("OXI_HIDDENEXT_DISABLE").is_err();
+
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
                 let name = local_name(e.name().as_ref());
                 _depth += 1;
+                if sppr_ext > 0 {
+                    if name == "extLst" {
+                        sppr_ext += 1;
+                    }
+                    continue;
+                }
+                if s_hiddenext && name == "extLst" && in_sp_pr {
+                    sppr_ext = 1;
+                    continue;
+                }
 
                 match name.as_str() {
                     "bg" => {
@@ -2163,6 +2180,9 @@ fn parse_slide(
             }
             Event::Empty(e) => {
                 let name = local_name(e.name().as_ref());
+                if sppr_ext > 0 {
+                    continue;
+                }
                 match name.as_str() {
                     // A SELF-CLOSING outerShdw is legal (nothing but
                     // attributes); the schema's default colour is black. The
@@ -2831,6 +2851,12 @@ fn parse_slide(
             Event::End(e) => {
                 let name = local_name(e.name().as_ref());
                 _depth -= 1;
+                if sppr_ext > 0 {
+                    if name == "extLst" {
+                        sppr_ext -= 1;
+                    }
+                    continue;
+                }
 
                 match name.as_str() {
                     "bg" => {
@@ -3967,6 +3993,8 @@ fn parse_inherited_shapes(
             .unwrap_or(0.0)
     };
 
+    let mut ig_ext: u32 = 0;
+    let s_hiddenext = std::env::var("OXI_HIDDENEXT_DISABLE").is_err();
     loop {
         let ev = reader.read_event_into(&mut buf);
         let (e, empty) = match &ev {
@@ -3974,6 +4002,13 @@ fn parse_inherited_shapes(
             Ok(Event::Empty(e)) => (Some(e), true),
             Ok(Event::End(e)) => {
                 let name = local_name(e.name().as_ref());
+                if ig_ext > 0 {
+                    if name == "extLst" {
+                        ig_ext -= 1;
+                    }
+                    buf.clear();
+                    continue;
+                }
                 match name.as_str() {
                     "spTree" => in_tree = false,
                     "outerShdw" if in_ig_shdw => {
@@ -4320,6 +4355,15 @@ fn parse_inherited_shapes(
             }
         };
         let name = local_name(e.name().as_ref());
+        // As in the slide walk: what sits in `spPr/a:extLst` is the fill and
+        // line the shape does NOT show.
+        if ig_ext > 0 || (s_hiddenext && name == "extLst" && in_sp_pr) {
+            if !empty && name == "extLst" {
+                ig_ext += 1;
+            }
+            buf.clear();
+            continue;
+        }
 
         if name == "spTree" {
             in_tree = true;

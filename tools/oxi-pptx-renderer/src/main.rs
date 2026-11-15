@@ -897,17 +897,22 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     const K: f32 = 0.552_284_8;
     match prst {
         "ellipse" => {
+            // ECMA-376 starts the ellipse at the LEFT middle and runs
+            // clockwise; a dash pattern begins there (dash probe, PowerPoint
+            // PDF: the first curve of every ellipse is (l,vc) -> (hc,t)).
             let (rx, ry) = (w / 2.0, h / 2.0);
-            let p = map(rx, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
+            let p = map(0.0, ry); let _ = MoveToEx(dc, p.x, p.y, None);
+            bezier(map(0.0, ry - K * ry), map(rx - K * rx, 0.0), map(rx, 0.0));
             bezier(map(rx + K * rx, 0.0), map(w, ry - K * ry), map(w, ry));
             bezier(map(w, ry + K * ry), map(rx + K * rx, h), map(rx, h));
             bezier(map(rx - K * rx, h), map(0.0, ry + K * ry), map(0.0, ry));
-            bezier(map(0.0, ry - K * ry), map(rx - K * rx, 0.0), map(rx, 0.0));
         }
         "roundRect" => {
             let adj = sh.adjustments.get("adj").copied().unwrap_or(16_667.0);
             let r = (w.min(h) * (adj / 100_000.0)).clamp(0.0, w.min(h) / 2.0);
-            let p = map(r, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
+            // ECMA-376: from (l, r) up round the top-left corner, clockwise.
+            let p = map(0.0, r); let _ = MoveToEx(dc, p.x, p.y, None);
+            bezier(map(0.0, r - K * r), map(r - K * r, 0.0), map(r, 0.0));
             line(map(w - r, 0.0));
             bezier(map(w - r + K * r, 0.0), map(w, r - K * r), map(w, r));
             line(map(w, h - r));
@@ -915,7 +920,6 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
             line(map(r, h));
             bezier(map(r - K * r, h), map(0.0, h - r + K * r), map(0.0, h - r));
             line(map(0.0, r));
-            bezier(map(0.0, r - K * r), map(r - K * r, 0.0), map(r, 0.0));
         }
         "homePlate" => {
             let adj = sh.adjustments.get("adj").copied().unwrap_or(50_000.0);
@@ -1552,8 +1556,21 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
     let border_w = sh.border_width.unwrap_or(0.0);
     let border_pen = if border_w > 0.0 {
         let c = sh.border_color.as_deref().and_then(parse_hex_rgb).unwrap_or((0, 0, 0));
-        Some(CreatePen(PS_SOLID, (border_w as f64 * scale).round().max(1.0) as i32,
-            COLORREF(colorref(c.0, c.1, c.2))))
+        // The preset painter (ellipse, roundRect, ...) used a plain solid pen
+        // and drew every dashed preset outline solid (dash probe: all four
+        // dashed ellipses). Same pen as the rect / custGeom outline now.
+        if presetdash_on() {
+            Some(outline_pen(
+                (border_w as f64 * scale).round().max(1.0) as i32,
+                colorref(c.0, c.1, c.2),
+                sh.border_dash.as_deref(),
+                border_w as f64 * scale,
+                None,
+            ))
+        } else {
+            Some(CreatePen(PS_SOLID, (border_w as f64 * scale).round().max(1.0) as i32,
+                COLORREF(colorref(c.0, c.1, c.2))))
+        }
     } else { None };
     let old_pen = if let Some(pen) = border_pen { SelectObject(dc, pen) }
         else { SelectObject(dc, GetStockObject(NULL_PEN)) };
@@ -4482,9 +4499,24 @@ fn outline_pen(
     } else {
         width_px.max(1) as f64
     };
+    // A ROUND cap grows every dash by half a width at each end, and PowerPoint
+    // takes that out of the pattern: each dash loses one width and each gap
+    // gains one (dash probe, PowerPoint PDF at 6pt: dot [1 3] is written
+    // [0 24], sysDot [1 1] is [0 12]), so the caps land where the flat dashes
+    // were instead of running together.
+    let round = rnddash_on() && cap == Some("rnd") && end_cap == PS_ENDCAP_ROUND;
     let style: Vec<u32> = pattern
         .iter()
-        .map(|n| ((f64::from(*n) * unit).round() as u32).max(1))
+        .enumerate()
+        .map(|(i, n)| {
+            let n = f64::from(*n);
+            let n = match (round, i % 2) {
+                (true, 0) => (n - 1.0).max(0.0),
+                (true, _) => n + 1.0,
+                _ => n,
+            };
+            ((n * unit).round() as u32).max(1)
+        })
         .collect();
     let brush = LOGBRUSH {
         lbStyle: BS_SOLID,
@@ -5212,11 +5244,14 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                 // plain, flipH+rot180 and rot=-90 connectors. No connector
                 // in the corpus carries text (0 of 1357), so the box draw
                 // and the text pass below are both skipped.
-                if sh
-                    .shape_type
-                    .as_deref()
-                    .is_some_and(|p| p.contains("Connector"))
-                {
+                // `prst="line"` is the same stroke: it is what PowerPoint's
+                // own line tool writes (as a p:cxnSp, and as a p:sp in older
+                // decks), and drawn as a box it was a rectangle outline -- or
+                // nothing at all for a horizontal one, whose box is 0pt tall
+                // (dash probe: 41 of 41 horizontal lines missing).
+                if sh.shape_type.as_deref().is_some_and(|p| {
+                    p.contains("Connector") || (prstline_on() && p == "line")
+                }) {
                     let bw = sh.border_width.unwrap_or(0.0);
                     if bw > 0.0 {
                         let col = sh
@@ -6739,6 +6774,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // render-truth 2026-08-07: r 115.31 -> 99.53,
                             // circle_top 118.37 -> 134.15, circle_bot
                             // 349.0 -> 333.21, circle_cy unchanged at 233.68.
+                            let (band_top, band_bot) = (circle_top, circle_bot);
                             let has_pie_labels =
                                 chart.has_data_labels && chart.show_val;
                             let pie_labels_outside = has_pie_labels
@@ -6750,9 +6786,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // The circle is bound by whichever of the plot
                             // area's height and width is smaller (in every
                             // measured arm the height binds).
+                            // When the WIDTH binds, the plot keeps the same
+                            // 11pt inset left and right as top and bottom:
+                            // chart_legendwrap_fine s1-s5 (PowerPoint PDF)
+                            // put the ring's left edge at sx+11.0 on every
+                            // width-bound arm, centre unchanged.
+                            let side = if pieside_on() { 11.0 } else { 0.0 };
                             let r = match banded_right {
                                 Some(right) => ((circle_bot - circle_top) / 2.0)
-                                    .min((right - sx) / 2.0),
+                                    .min((right - sx) / 2.0 - side),
                                 None => (circle_bot - circle_top) / 2.0,
                             };
                             let circle_cy = (circle_top + circle_bot) / 2.0;
@@ -7074,37 +7116,46 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // entries (B8, L=5 n=3: renders only two
                                 // swatches, at 127.84 = the n=2 natural block).
                                 let swatch_off = 8.97f64;
-                                let mut n_shown = n_cat;
-                                let mut legend_h =
-                                    n_shown as f64 * row_pitch;
-                                loop {
-                                    let top = circle_cy - legend_h / 2.0;
-                                    if top >= sy - 0.01
-                                        && top + legend_h <= sy + shh + 0.01
-                                    {
-                                        break;
-                                    }
-                                    let last_lines = legend_lines
-                                        .get(n_shown.saturating_sub(1))
-                                        .map(|l| l.len().max(1))
-                                        .unwrap_or(1);
-                                    let tight = (n_shown as f64 - 1.0)
-                                        * row_pitch
-                                        + (last_lines as f64 * 21.76 + 5.99);
-                                    let ttop = circle_cy - tight / 2.0;
-                                    if tight < legend_h
-                                        && ttop >= sy - 0.01
-                                        && ttop + tight <= sy + shh + 0.01
-                                    {
-                                        legend_h = tight;
-                                        break;
-                                    }
-                                    if n_shown <= 1 {
-                                        break;
-                                    }
-                                    n_shown -= 1;
-                                    legend_h = n_shown as f64 * row_pitch;
-                                }
+                                let (n_shown, legend_h, row_tops, legend_lines) =
+                                    if legendfit_on() {
+                                        legend_fit(&legend_lines, n_cat, band_bot - band_top)
+                                    } else {
+                                        let mut n_shown = n_cat;
+                                        let mut legend_h =
+                                            n_shown as f64 * row_pitch;
+                                        loop {
+                                            let top = circle_cy - legend_h / 2.0;
+                                            if top >= sy - 0.01
+                                                && top + legend_h <= sy + shh + 0.01
+                                            {
+                                                break;
+                                            }
+                                            let last_lines = legend_lines
+                                                .get(n_shown.saturating_sub(1))
+                                                .map(|l| l.len().max(1))
+                                                .unwrap_or(1);
+                                            let tight = (n_shown as f64 - 1.0)
+                                                * row_pitch
+                                                + (last_lines as f64 * 21.76 + 5.99);
+                                            let ttop = circle_cy - tight / 2.0;
+                                            if tight < legend_h
+                                                && ttop >= sy - 0.01
+                                                && ttop + tight <= sy + shh + 0.01
+                                            {
+                                                legend_h = tight;
+                                                break;
+                                            }
+                                            if n_shown <= 1 {
+                                                break;
+                                            }
+                                            n_shown -= 1;
+                                            legend_h = n_shown as f64 * row_pitch;
+                                        }
+                                        let tops = (0..n_shown)
+                                            .map(|i| i as f64 * row_pitch)
+                                            .collect::<Vec<f64>>();
+                                        (n_shown, legend_h, tops, legend_lines.clone())
+                                    };
                                 let legend_y0 =
                                     circle_cy - legend_h / 2.0 + swatch_off;
                                 for (ci, name) in chart
@@ -7113,8 +7164,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     .enumerate()
                                     .take(n_shown)
                                 {
-                                    let sw_y =
-                                        legend_y0 + ci as f64 * row_pitch;
+                                    let sw_y = legend_y0 + row_tops[ci];
                                     let col_hex = pres
                                         .theme_colors
                                         .get(&format!("accent{}", ci + 1))
@@ -9730,7 +9780,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // constant so every existing line probe is unchanged.
                         let legend_band = if !chart.has_legend {
                             11.0
-                        } else if has_neg {
+                        } else if has_neg || legendname_on() {
                             let w = chart
                                 .series
                                 .iter()
@@ -10009,6 +10059,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let single_bl = if crowded { 43.8 } else { 28.67 };
                             // two-line wrap: crowded AND the whole label is
                             // wider than its pitch
+                            if crowded && catrot_on() {
+                                draw_text_turned_end(
+                                    mem_dc,
+                                    cat_center + catrot_dx(),
+                                    zero_y + catrot_dy(),
+                                    -45.0,
+                                    name,
+                                    18.0,
+                                    axis_family,
+                                    scale,
+                                );
+                                continue;
+                            }
                             if crowded && lw > pitch {
                                 let chars: Vec<char> = name.chars().collect();
                                 let n = chars.len();
@@ -12490,6 +12553,116 @@ fn draw_line_marker(
             }
         }
     }
+}
+
+/// `OXI_PRESETDASH_DISABLE=1` strokes preset outlines solid again.
+fn presetdash_on() -> bool {
+    std::env::var("OXI_PRESETDASH_DISABLE").is_err()
+}
+
+/// `OXI_RNDDASH_DISABLE=1` keeps a round-capped dash pattern unadjusted.
+fn rnddash_on() -> bool {
+    std::env::var("OXI_RNDDASH_DISABLE").is_err()
+}
+
+/// `OXI_PRSTLINE_DISABLE=1` draws `prst="line"` as a box again.
+fn prstline_on() -> bool {
+    std::env::var("OXI_PRSTLINE_DISABLE").is_err()
+}
+
+/// `OXI_PIESIDE_DISABLE=1` drops the side inset of a width-bound pie.
+fn pieside_on() -> bool {
+    std::env::var("OXI_PIESIDE_DISABLE").is_err()
+}
+
+/// `OXI_LEGENDFIT_DISABLE=1` puts back the frame-bounded legend fit.
+fn legendfit_on() -> bool {
+    std::env::var("OXI_LEGENDFIT_DISABLE").is_err()
+}
+
+/// Which pie / doughnut legend entries PowerPoint shows, and where each row
+/// starts relative to the block top. Returns (entries shown, block height used
+/// for centring, row tops, lines per entry after the line cap).
+///
+/// chart_legendwrap + chart_legendwrap_fine (18 arms, PowerPoint PDF; a first
+/// entry of 3..15 wrapped lines, then two one-line entries):
+///
+/// * the block must fit the plot area's HEIGHT (the circle's band before data
+///   labels shrink it), not the frame: 229.58 fits a 230.63 band, 251.34 does
+///   not; 257.30 fits the 400pt frame's 342.63 band and 344.37 does not.
+/// * a row is `27.75 + (lines-1)*21.76` tall: "natural" rows all take the
+///   tallest shown entry's height; a "tight" row takes its own.
+/// * the candidates, first that fits wins: all rows natural; the last row
+///   tight; one entry fewer, natural; every row tight; then the same again
+///   with one entry fewer.  (Lines 4: last tight.  Lines 5: two natural rows,
+///   the third entry dropped, although all-tight would fit.  Lines 6 and 7:
+///   all tight.  Lines 9: two tight rows.)
+/// * an entry taller than the band keeps the lines that fit and ends its last
+///   one with an ellipsis ('W' x 30 at a 45pt cap: 10 lines, the tenth "WW...").
+fn legend_fit(
+    lines: &[Vec<String>],
+    n_cat: usize,
+    band_h: f64,
+) -> (usize, f64, Vec<f64>, Vec<Vec<String>>) {
+    let row = |l: usize| 27.75 + (l.max(1) as f64 - 1.0) * 21.76;
+    let max_lines = (((band_h - 27.75) / 21.76).floor() as i64 + 1).max(1) as usize;
+    let mut lines: Vec<Vec<String>> = lines.to_vec();
+    for l in lines.iter_mut() {
+        if l.len() > max_lines {
+            l.truncate(max_lines);
+            if let Some(last) = l.last_mut() {
+                last.push('\u{2026}');
+            }
+        }
+    }
+    let n_all = n_cat.min(lines.len()).max(1);
+    let cnt = |i: usize| lines.get(i).map(|l| l.len()).unwrap_or(1);
+    let tallest = |n: usize| (0..n).map(cnt).max().unwrap_or(1);
+    let natural = |n: usize| {
+        let p = row(tallest(n));
+        (n as f64 * p, (0..n).map(|i| i as f64 * p).collect::<Vec<f64>>())
+    };
+    let tight_last = |n: usize| {
+        let p = row(tallest(n));
+        (
+            (n as f64 - 1.0) * p + row(cnt(n - 1)),
+            (0..n).map(|i| i as f64 * p).collect::<Vec<f64>>(),
+        )
+    };
+    let all_tight = |n: usize| {
+        let mut tops = Vec::with_capacity(n);
+        let mut y = 0.0;
+        for i in 0..n {
+            tops.push(y);
+            y += row(cnt(i));
+        }
+        (y, tops)
+    };
+    let fits = |h: f64| h <= band_h + 0.01;
+    let (h, t) = natural(n_all);
+    if fits(h) {
+        return (n_all, h, t, lines);
+    }
+    let mut n = n_all;
+    while n >= 1 {
+        let (h, t) = tight_last(n);
+        if fits(h) {
+            return (n, h, t, lines);
+        }
+        if n > 1 {
+            let (h, t) = natural(n - 1);
+            if fits(h) {
+                return (n - 1, h, t, lines);
+            }
+        }
+        let (h, t) = all_tight(n);
+        if fits(h) {
+            return (n, h, t, lines);
+        }
+        n -= 1;
+    }
+    let (h, t) = natural(1);
+    (1, h, t, lines)
 }
 
 /// The legend's share of the chart width: a label wider than this wraps.
@@ -18553,6 +18726,88 @@ fn draw_text_baseline_wiu(
 }
 
 /// Regular-weight text at a baseline position.
+/// Draw a one-line label turned by `deg` (negative = reading upward to the
+/// right) so that the END of its baseline lands on (`end_x`, `end_y`), in pt.
+///
+/// PowerPoint's crowded category axis (chart_line / chart_line2 / chart_line3,
+/// PowerPoint PDF): when the widest label is wider than its category pitch the
+/// labels are turned -45 degrees and each one ENDS at its category centre --
+/// the ink right edge sits 3.4..3.8pt right of the centre and the ink top
+/// 18.2..19.6pt under the axis for East / West / Midwest / North / South
+/// alike, whatever their length. PowerPoint exports such text as outlines,
+/// which is how the box of every label was read.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn draw_text_turned_end(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    end_x: f64,
+    end_y: f64,
+    deg: f64,
+    text: &str,
+    font_size: f32,
+    family: &str,
+    scale: f64,
+) {
+    use windows::Win32::Graphics::Gdi::*;
+    let w = font_adv::line_hmtx_width_pt(text, font_size, family)
+        .unwrap_or_else(|| text.chars().count() as f32 * font_size * 0.5) as f64;
+    let (sn, cs) = deg.to_radians().sin_cos();
+    let cx = end_x * scale;
+    let cy = end_y * scale;
+    let m = XFORM {
+        eM11: cs as f32,
+        eM12: sn as f32,
+        eM21: -sn as f32,
+        eM22: cs as f32,
+        eDx: (cx - cs * cx + sn * cy) as f32,
+        eDy: (cy - sn * cx - cs * cy) as f32,
+    };
+    unsafe {
+        let old_mode = SetGraphicsMode(dc, GM_ADVANCED);
+        let mut old = XFORM::default();
+        let ok = old_mode != 0
+            && GetWorldTransform(dc, &mut old).as_bool()
+            && SetWorldTransform(dc, &m).as_bool();
+        draw_text_baseline(
+            dc,
+            ((end_x - w) * scale).round() as i32,
+            end_y as f32,
+            text,
+            font_size,
+            family,
+            None,
+            scale,
+        );
+        if ok {
+            let _ = SetWorldTransform(dc, &old);
+        }
+        if old_mode != 0 {
+            SetGraphicsMode(dc, GRAPHICS_MODE(old_mode));
+        }
+    }
+}
+
+/// `OXI_CATROT_DISABLE=1` puts back the two-line wrap of crowded line-chart
+/// category labels.
+/// `OXI_LEGENDNAME_DISABLE=1` puts back the line chart's fixed 103.82pt legend
+/// band (the width "Series 1" gives) for every series name. chart_title_line2
+/// ("Revenue" / "Cost", PowerPoint PDF): the plot ends at the band the
+/// widest NAME gives, 15.65 + 21.29 + w + 10.0, as the signed path already did.
+fn legendname_on() -> bool {
+    std::env::var("OXI_LEGENDNAME_DISABLE").is_err()
+}
+
+fn catrot_on() -> bool {
+    std::env::var("OXI_CATROT_DISABLE").is_err()
+}
+
+fn catrot_dx() -> f64 {
+    std::env::var("OXI_CATROT_DX").ok().and_then(|v| v.parse().ok()).unwrap_or(4.3)
+}
+fn catrot_dy() -> f64 {
+    std::env::var("OXI_CATROT_DY").ok().and_then(|v| v.parse().ok()).unwrap_or(23.6)
+}
+
 #[cfg(windows)]
 fn draw_text_baseline(
     dc: windows::Win32::Graphics::Gdi::HDC,
