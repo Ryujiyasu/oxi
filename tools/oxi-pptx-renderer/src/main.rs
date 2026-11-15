@@ -12828,6 +12828,11 @@ fn bubblepad_on() -> bool {
     std::env::var("OXI_BUBBLEPAD_DISABLE").is_err()
 }
 
+/// `OXI_SURFACE1_DISABLE=1` draws a one-series surface like a two-series one.
+fn surface1_on() -> bool {
+    std::env::var("OXI_SURFACE1_DISABLE").is_err()
+}
+
 /// `OXI_SURFACE_DISABLE=1` leaves surface charts to the generic fallback.
 fn surface_on() -> bool {
     std::env::var("OXI_SURFACE_DISABLE").is_err()
@@ -12899,6 +12904,13 @@ unsafe fn draw_surface_chart(
         return;
     }
     let ns_box = ns.max(2);
+    // ONE series is a degenerate mesh: PowerPoint draws the empty box only --
+    // value axis 0..1.5 by 0.5 whatever the data, depth half a category,
+    // a single category tick at the front-right corner carrying the first
+    // name, one series tick at the back (chart_surface_sweep3 P1-P3: depth
+    // 0.1235 / 0.0798 of the width at 4 / 6 categories, height on the usual
+    // law with ns = 1).
+    let single = ns == 1 && surface1_on();
     let (lo, hi) = chart
         .series
         .iter()
@@ -12929,8 +12941,9 @@ unsafe fn draw_surface_chart(
     let layout = |plot_left: f64, plot_right: f64| {
         let pw = (plot_right - plot_left).max(1.0);
         let ph = (plot_bot - plot_top).max(1.0);
-        let depth = ns_box as f64 / nc as f64;
-        let height = h_coef * (ph / pw) * (((nc + ns_box - 1) / 2) as f64) / nc as f64;
+        let depth = if single { 0.5 / nc as f64 } else { ns_box as f64 / nc as f64 };
+        let ns_h = if single { 1 } else { ns_box };
+        let height = h_coef * (ph / pw) * (((nc + ns_h - 1) / 2) as f64) / nc as f64;
         (pw, ph, depth, height)
     };
     let project = |p: (f64, f64, f64), depth: f64, height: f64, s: f64, ph: f64| {
@@ -13000,7 +13013,7 @@ unsafe fn draw_surface_chart(
         let a = project((0.0, 0.0, 0.0), depth, height, s, ph);
         let b = project((0.0, 1.0, 0.0), depth, height, s, ph);
         let front = (a.1 - b.1).abs();
-        axis = nice_axis_range(lo, hi, front, 26.5);
+        axis = if single { (0.0, 1.5, 3) } else { nice_axis_range(lo, hi, front, 26.5) };
         let step = (axis.1 - axis.0) / axis.2 as f64;
         let widest = (0..=axis.2)
             .map(|i| wid(&fmt_axis_value(axis.0 + step * i as f64, step)))
@@ -13072,7 +13085,7 @@ unsafe fn draw_surface_chart(
     let xpos = |ci: usize| ci as f64 / (nc - 1) as f64;
     // (x, value, z) in data space
     let mut polys: Vec<(f64, usize, bool, Vec<(f64, f64, f64)>)> = Vec::new();
-    for si in 0..ns_box - 1 {
+    for si in 0..if single { 0 } else { ns_box - 1 } {
         for ci in 0..nc - 1 {
             let q = [
                 (xpos(ci), val(si, ci), zpos(si)),
@@ -13193,8 +13206,12 @@ unsafe fn draw_surface_chart(
         );
     }
     for ci in 0..nc {
+        if single && ci + 1 < nc {
+            continue;
+        }
         let p = at(xpos(ci), 0.0, 0.0);
         tick(p.0, p.1, p.0, p.1 + 5.75);
+        let ci = if single { 0 } else { ci };
         if let Some(name) = chart.categories.get(ci) {
             draw_text_baseline(
                 dc,
@@ -13209,13 +13226,17 @@ unsafe fn draw_surface_chart(
         }
     }
     for si in 0..ns_box {
+        if single && si == 0 {
+            continue;
+        }
         let p = at(1.0, 0.0, zpos(si));
         tick(p.0, p.1, p.0 + 5.69, p.1);
-        if si % 2 == 0 {
-            if let Some(ser) = chart.series.get(si) {
+        if single || si % 2 == 0 {
+            let si_label = if single { 0 } else { si };
+            if let Some(ser) = chart.series.get(si_label) {
                 // The back tick's label sits closer (8.7..9.6pt over 9
                 // sweep arms); every other one 16.3..17.8pt out.
-                let off = if si == ns_box - 1 { 8.9 } else { 16.7 };
+                let off = if si == ns_box - 1 && !single { 8.9 } else { 16.7 };
                 draw_text_baseline(
                     dc,
                     ((p.0 + off) * scale).round() as i32,

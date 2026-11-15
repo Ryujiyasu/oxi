@@ -26,7 +26,8 @@ from pptx.util import Emu
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-NAME = "chart_surface_sweep2" if "2" in sys.argv[1:] else "chart_surface_sweep"
+NAME = ("chart_surface_sweep3" if "3" in sys.argv[1:] else
+        "chart_surface_sweep2" if "2" in sys.argv[1:] else "chart_surface_sweep")
 DIR = os.path.abspath(os.path.join("pipeline_data", "pptx_probes", NAME))
 OUT = os.path.join(DIR, NAME + ".pptx")
 PDF = os.path.join(DIR, NAME + ".pdf")
@@ -55,6 +56,12 @@ ARMS = [
 if "2" in sys.argv[1:]:
     ARMS = [(396, 288, nc, 2, 1.0) for nc in (2, 3, 5, 8, 10)] +            [(396, 288, 4, ns, 1.0) for ns in (5, 6)] +            [(396, hh, 4, 4, 1.0) for hh in (200, 350, 400)] +            [(ww, 288, 4, 4, 1.0) for ww in (300, 500)] +            [(396, 288, 2, 2, 1.0), (396, 288, 3, 3, 1.0), (396, 288, 6, 6, 1.0)]
     BASE = BASE + [17.5, 19.9, 21.1, 18.8]
+
+# sweep 3 (`... 3`): one series, and the series-axis label thinning (ns 3..8 at
+# several depths/heights)
+if "3" in sys.argv[1:]:
+    BASE = BASE + [17.5, 19.9, 21.1, 18.8]
+    ARMS = [(396, 288, 4, 1, 1.0), (396, 288, 6, 1, 1.0), (500, 400, 4, 1, 1.0)] +            [(396, 288, 8, ns, 1.0) for ns in (3, 4, 5, 6, 8)] +            [(396, 400, 4, ns, 1.0) for ns in (3, 5, 7)] +            [(600, 288, 4, ns, 1.0) for ns in (3, 5)]
 
 
 def pt(v):
