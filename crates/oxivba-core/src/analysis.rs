@@ -1938,10 +1938,12 @@ fn match_rule(name: &str) -> Option<&'static Rule> {
         let hit = match rule.how {
             Match::Exact => name.eq_ignore_ascii_case(rule.pattern),
             Match::Root => root.eq_ignore_ascii_case(rule.pattern),
-            Match::RootPrefix => {
-                root.len() >= rule.pattern.len()
-                    && root[..rule.pattern.len()].eq_ignore_ascii_case(rule.pattern)
-            }
+            // `get`, not a slice: the pattern's length is a byte count, and it
+            // can fall inside a character of a non-ASCII name (a Japanese
+            // identifier, say), where slicing panics.
+            Match::RootPrefix => root
+                .get(..rule.pattern.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(rule.pattern)),
             Match::Segment => segments(name).any(|s| s.eq_ignore_ascii_case(rule.pattern)),
         };
         if !hit {
@@ -2241,6 +2243,17 @@ mod tests {
         );
         assert_eq!(a.class, Some(Class::C));
         assert!(a.verdict().contains("external process"));
+    }
+
+    #[test]
+    fn a_non_ascii_name_is_matched_without_splitting_a_character() {
+        // A prefix rule's length used to be sliced out of the name as bytes;
+        // in each of these it falls inside a multi-byte character.
+        for name in ["–¾×", "日本語", "集計", "é", "Ｕserform"] {
+            assert!(match_rule(name).is_none(), "{name}");
+            let source = format!("Sub A()\n  Dim x As {name}\nEnd Sub");
+            let _ = analyse_src(&source);
+        }
     }
 
     #[test]
