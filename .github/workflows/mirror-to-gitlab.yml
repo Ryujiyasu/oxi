@@ -1,12 +1,11 @@
 name: Mirror to GitLab
 
-# GitLab Pages serves the site at the URL that has been given out, and that
-# deploy runs from a push to `main` on GitLab (see .gitlab-ci.yml). Work now
-# lands on GitHub, so nothing would reach GitLab on its own and the site would
-# quietly stop being rebuilt while every page still loaded.
+# GitLab Pages serves the site at the URL that has been given out, from the
+# project at gitlab.com/Ryujiyasu/oxi. Work lands on GitHub, so GitHub pushes
+# `main` and the tags across and GitLab keeps no history of its own.
 #
-# So GitHub pushes it. GitLab keeps no history of its own: it is a copy that
-# exists to run the Pages job.
+# The push no longer rebuilds the site: GitHub builds it (site.yml) and
+# triggers the GitLab Pages job, which starts no job on a push.
 #
 # Needs a GitLab project access token with the `write_repository` scope, stored
 # here as the secret GITLAB_MIRROR_TOKEN. The job fails without it rather than
