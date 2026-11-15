@@ -90,6 +90,19 @@ impl Series {
         }
         if self.format.is_empty() { "General" } else { &self.format }
     }
+
+    /// OXI_CHART_AXIS_POINT_FORMAT (2026-11-15, default ON, opt-out _DISABLE): a
+    /// source-linked value axis takes the first cached point's own formatCode, then
+    /// the cache's. `_pb_axfmt_gen.py` (blind-J ja/reports__7a8daf36 chart2, axis
+    /// "0%" linked, cache "0.0%", points "0%"): Word draws 0%..100%; with the axis
+    /// "0.00%" or the cache "0.000%" still 0%; points "0.00%" -> 0.00%; points
+    /// stripped + cache "0.000%" -> 0.000%; unlinked "0.00%" -> 0.00%.
+    fn axis_source_format(&self) -> &str {
+        if crate::env_flag!("OXI_CHART_AXIS_POINT_FORMAT_DISABLE") {
+            return self.format.as_str();
+        }
+        self.format_at(0)
+    }
 }
 
 /// The per-point formatCode overrides of a value cache.
@@ -674,7 +687,7 @@ pub(super) fn from_chart(xml: &str, theme: &ThemeColors, w: f32, h: f32) -> Opti
     match kind {
         "pieChart" | "pie3DChart" | "doughnutChart" => draw_pie(&mut g, first, &all_series, vary, plot, (w, h), &base, xml, theme),
         "scatterChart" => draw_scatter(&mut g, area, &all_series, plot, inner_manual, &base, xml, theme),
-        _ => draw_category(&mut g, area, &plot_nodes, &all_series, plot, inner_manual, &base, xml, theme),
+        _ => draw_category(&mut g, area, &plot_nodes, &all_series, plot, inner_manual, (w, h), &base, xml, theme),
     }
     Some(g)
 }
@@ -726,6 +739,7 @@ fn draw_category(
     sers: &[Series],
     plot: (f32, f32, f32, f32),
     inner_manual: bool,
+    chart_wh: (f32, f32),
     base: &TextStyle,
     xml: &str,
     theme: &ThemeColors,
@@ -768,7 +782,7 @@ fn draw_category(
     let val_ax = axis(area, "valAx");
     let cat_ax = axis(area, "catAx").or_else(|| axis(area, "dateAx"));
     let (min, max, major) = if percent { (0.0, 1.0, 0.1_f64.max(nice_step(0.2))) } else { scale(lo, hi, val_ax) };
-    let fmt = if percent { "0%".to_string() } else { axis_format(val_ax, sers.first().map_or("", |s| s.format.as_str())) };
+    let fmt = if percent { "0%".to_string() } else { axis_format(val_ax, sers.first().map_or("", |s| s.axis_source_format())) };
     let ticks: Vec<f64> = (0..=((max - min) / major).round() as i64).map(|k| min + k as f64 * major).collect();
     let tick_labels: Vec<String> = ticks.iter().map(|t| format_number(*t, &fmt)).collect();
 
@@ -895,13 +909,28 @@ fn draw_category(
                         let st_lbl = st_ser.get(j).unwrap_or(&st_lbl);
                         let lh = line_h(st_lbl);
                         let lw = text_width(&txt, st_lbl.size) + 6.0;
-                        let rr = if stacked {
+                        let mut rr = if stacked {
                             (r.0 + r.2 / 2.0 - lw / 2.0, r.1 + r.3 / 2.0 - lh / 2.0, lw, lh)
                         } else if horizontal {
                             (r.0 + r.2 + 2.0, r.1 + r.3 / 2.0 - lh / 2.0, lw, lh)
                         } else {
                             (r.0 + r.2 / 2.0 - lw / 2.0, r.1 - lh, lw, lh)
                         };
+                        // OXI_CHART_BAR_DLBL_OFFSET (2026-11-16, default ON, opt-out _DISABLE): a
+                        // point's own c:dLbl manualLayout moves its label by (x, y) x the chart
+                        // size from the default place, as the pie labels already do. blind-J
+                        // ja/reports__7a8daf36 chart6 «3.1%» (x +0.024, y -0.167): Word sets it
+                        // above the stacked bar's right end; Oxi drew it over «12.5%».
+                        let pt = ser_nodes.get(j).and_then(|sn| sn.child("dLbls")).and_then(|d| d.children.iter().find(|c| c.name == "dLbl"
+                            && c.child("idx").and_then(|n| n.num("val")).map(|v| v as usize) == Some(i)))
+                            .filter(|_| !crate::env_flag!("OXI_CHART_BAR_DLBL_OFFSET_DISABLE"));
+                        if pt.is_some_and(|d| d.child("delete").and_then(|n| n.attr("val")) == Some("1")) {
+                            continue;
+                        }
+                        if let Some(m) = pt.and_then(|d| d.path(&["layout", "manualLayout"])) {
+                            rr.0 += m.child("x").and_then(|n| n.num("val")).unwrap_or(0.0) as f32 * chart_wh.0;
+                            rr.1 += m.child("y").and_then(|n| n.num("val")).unwrap_or(0.0) as f32 * chart_wh.1;
+                        }
                         label(g, &txt, st_lbl, rr, Alignment::Center);
                     }
                 }
@@ -1004,7 +1033,7 @@ fn draw_scatter(
     let (y0, y1, ym) = scale(ylo, yhi, y_ax);
     let st_x = text_style(x_ax, xml, theme, base);
     let st_y = text_style(y_ax, xml, theme, base);
-    let yfmt = axis_format(y_ax, sers.first().map_or("", |s| s.format.as_str()));
+    let yfmt = axis_format(y_ax, sers.first().map_or("", |s| s.axis_source_format()));
     let xfmt = axis_format(x_ax, "General");
     let yticks: Vec<f64> = (0..=((y1 - y0) / ym).round() as i64).map(|k| y0 + k as f64 * ym).collect();
     let xticks: Vec<f64> = (0..=((x1 - x0) / xm).round() as i64).map(|k| x0 + k as f64 * xm).collect();

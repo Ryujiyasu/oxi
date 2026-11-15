@@ -928,7 +928,7 @@ impl SlideDraw<'_> {
         };
         let lvl = paragraph.lvl;
         let (text, face) = match bullet {
-            SlideBullet::Char { ch, font } => {
+            SlideBullet::Char { ch, font, .. } => {
                 counters.retain(|&l, _| l < lvl);
                 (ch.to_string(), font.clone())
             }
