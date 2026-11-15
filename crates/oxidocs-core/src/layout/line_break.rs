@@ -5712,9 +5712,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                 .copied().is_some_and(kinsoku::is_yakumono_closing)
                                 && following_punctuation.get(1).copied()
                                     .is_some_and(kinsoku::is_yakumono_trigger));
+                    // OXI_COMPCAP_RUBY_N (2026-11-15, default ON, opt-out _DISABLE): a ruby
+                    // base's characters are not counted in the table's n. `_pb_compcap_ruby_gen.py`
+                    // (ＭＳ 明朝 12, n=40, k=2): plain 0.633 cell; 9 / 10 ruby-base characters
+                    // (3x3, 5x2, 10x1 groups) 0.688 / 0.700 / 0.700 = the table at n - those
+                    // characters (group count irrelevant); k=1 0.467 -> 0.517. ja/administrative
+                    // __1fc69a4f p2 L1 (ruby-heavy notice): Word squeezes both 、 3.8 to keep «お».
+                    let s1490_ruby_n = !crate::env_flag!("OXI_COMPCAP_RUBY_N_DISABLE");
                     let s1490_cap = |k: usize, unit: bool| -> i32 {
                         LayoutEngine::modern_punctuation_capacity_tw(
-                            current_line.fragments.iter().map(|f| f.text.chars().count()).sum(),
+                            current_line.fragments.iter()
+                                .filter(|f| !(s1490_ruby_n && f.style.ruby_field))
+                                .map(|f| f.text.chars().count()).sum(),
                             k.saturating_sub(s1490_colons), s1318_one_cell_tw, unit,
                             // OXI_COMPCAP_NOFLOOR (2026-10-23, default ON, opt-out _DISABLE):
                             // a normal character takes the table, not a half-cell floor --
