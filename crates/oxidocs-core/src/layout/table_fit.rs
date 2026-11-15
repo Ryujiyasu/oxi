@@ -14044,8 +14044,44 @@ impl<'a> TableFitLayouter<'a> {
                             // The moved lines were re-based by the split shift and
                             // now sit above the continuation top; slide every
                             // overflow line down so the first one starts there.
-                            let min_ov_y = overflow.iter().filter(|e| is_txt(e)).map(|e| e.y).fold(f32::INFINITY, f32::min);
                             let cont_top = page_top + s817_cont_pad;
+                            // OXI_S1530_PER_CELL (2026-11-15, default ON, opt-out _DISABLE):
+                            // only the cells whose paragraph moved slide down -- every other
+                            // cell's continuation still starts at the top. Sliding the whole
+                            // overflow pushed the untouched columns down by the moved
+                            // paragraph's height: blind-EN educational__0079c94e p12 (row 6,
+                            // a 3-line Tip-sheet paragraph moved off p11) started the Videos
+                            // column two lines low (Illinois State University 140.7 vs Word
+                            // 112.8), its last two lines spilled to p13 and every row from
+                            // CPD7 on started a page early.
+                            let per_cell = !crate::env_flag!("OXI_S1530_PER_CELL_DISABLE");
+                            let mut cols: Vec<Option<usize>> = Vec::new();
+                            if per_cell {
+                                for e in overflow.iter().filter(|e| is_txt(e)) {
+                                    if !cols.contains(&e.cell_col_index) { cols.push(e.cell_col_index); }
+                                }
+                            }
+                            let mut done_per_cell = false;
+                            if per_cell && cols.iter().all(|c| c.is_some()) {
+                                done_per_cell = true;
+                                for c in &cols {
+                                    let m = overflow.iter().filter(|e| is_txt(e) && e.cell_col_index == *c).map(|e| e.y).fold(f32::INFINITY, f32::min);
+                                    if m.is_finite() && m < cont_top - 0.1 {
+                                        let adjust = cont_top - m;
+                                        for e in overflow.iter_mut() {
+                                            if e.cell_col_index == *c && (is_txt(e) || (float_replay.is_some() && e.margin_float)) {
+                                                e.y += adjust;
+                                            }
+                                        }
+                                        if crate::env_flag!("OXI_DBG_SPLIT") {
+                                            eprintln!("[SPLIT-S1530] re-anchored col {:?} +{:.2}", c, adjust);
+                                        }
+                                    }
+                                }
+                            }
+                            let min_ov_y = if done_per_cell { f32::INFINITY } else {
+                                overflow.iter().filter(|e| is_txt(e)).map(|e| e.y).fold(f32::INFINITY, f32::min)
+                            };
                             if min_ov_y.is_finite() && min_ov_y < cont_top - 0.1 {
                                 let adjust = cont_top - min_ov_y;
                                 for e in overflow.iter_mut() {
@@ -14598,6 +14634,57 @@ impl<'a> TableFitLayouter<'a> {
                             .map(|trh| page_top + (trh + self.rowbox2_trh_bw(table, row)).min(content_height))
                     } else {
                         None
+                    };
+                    // OXI_SPLIT_TRAIL_EMPTY (2026-11-15, default ON, opt-out _DISABLE): a
+                    // cell whose last content paragraph ends on this continuation still
+                    // owns its trailing empty paragraphs (S428 gives them no element), so
+                    // the band runs that many lines further. blind-EN educational
+                    // __0079c94e p13: the Tip-sheet cell ends «collection-508-revised-v3.pdf»
+                    // + 2 empty paragraphs; Word draws them (485.5, 499.3) and closes the
+                    // row at 513, so CPD7 starts p14; Oxi closed at 481 and began CPD7 at
+                    // the foot of p13.
+                    let trail_floor: Option<f32> = if crate::env_flag!("OXI_SPLIT_TRAIL_EMPTY_DISABLE") { None } else {
+                        let mut best: Option<f32> = None;
+                        for (ci, cell) in row.cells.iter().enumerate() {
+                            if cell.v_merge.is_some() { continue; }
+                            let paras: Vec<&crate::ir::Paragraph> = cell.blocks.iter().filter_map(|b| match b {
+                                Block::Paragraph(p) => Some(p), _ => None }).collect();
+                            if paras.len() != cell.blocks.len() { continue; }
+                            let trailing = paras.iter().rev().take_while(|p| p.runs.iter().all(|r| r.text.is_empty())).count();
+                            if trailing == 0 || trailing >= paras.len() { continue; }
+                            let last_content = paras.len() - trailing - 1;
+                            // w:hideMark: the end-of-cell mark (the last empty paragraph)
+                            // adds no height (S1311). en/reports__00870bdf p24: [empty,
+                            // content x2, empty, empty] under hideMark -- Word draws one
+                            // trailing blank and starts the next row 14.05 below it.
+                            // `_pb_split_trail_gen.py` (no hideMark): every trailing empty
+                            // counts at its own line height (n0..n3 +13.8 each, sz20 +11.5).
+                            let trailing = if cell.hide_mark { trailing - 1 } else { trailing };
+                            if trailing == 0 { continue; }
+                            let last = elements.iter().filter(|e| e.cell_row_index == Some(row_idx)
+                                && e.cell_ancestor_path.is_empty()
+                                && e.cell_col_index == Some(ci)
+                                && e.cell_paragraph_index == Some(last_content)
+                                && matches!(&e.content, LayoutContent::Text { .. }))
+                                .map(|e| {
+                                    let lh = e.flow_line_height.unwrap_or(e.height);
+                                    (e.y - e.flow_line_offset + lh, lh)
+                                })
+                                .fold(None, |a: Option<(f32, f32)>, b| match a { Some(x) if x.0 >= b.0 => Some(x), _ => Some(b) });
+                            if let Some((bottom, lh)) = last {
+                                let pad = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(row_default_pad_b);
+                                let fl = bottom + lh * trailing as f32 + pad;
+                                best = Some(best.map_or(fl, |b: f32| b.max(fl)));
+                            }
+                        }
+                        best.filter(|fl| *fl > cont_max_y + 0.5)
+                    };
+                    if crate::env_flag!("OXI_DBG_SPLIT") {
+                        eprintln!("[SPLIT-TRAIL] floor={:?} cont_max_y={:.2}", trail_floor, cont_max_y);
+                    }
+                    let s942_floor = match (s942_floor, trail_floor) {
+                        (Some(a), Some(b)) => Some(a.max(b)),
+                        (a, b) => a.or(b),
                     };
                     // The S942 band is drawn as deep as it is reserved: the
                     // continuation's box closes on the floor, not on its content

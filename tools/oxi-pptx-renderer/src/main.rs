@@ -897,17 +897,22 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     const K: f32 = 0.552_284_8;
     match prst {
         "ellipse" => {
+            // ECMA-376 starts the ellipse at the LEFT middle and runs
+            // clockwise; a dash pattern begins there (dash probe, PowerPoint
+            // PDF: the first curve of every ellipse is (l,vc) -> (hc,t)).
             let (rx, ry) = (w / 2.0, h / 2.0);
-            let p = map(rx, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
+            let p = map(0.0, ry); let _ = MoveToEx(dc, p.x, p.y, None);
+            bezier(map(0.0, ry - K * ry), map(rx - K * rx, 0.0), map(rx, 0.0));
             bezier(map(rx + K * rx, 0.0), map(w, ry - K * ry), map(w, ry));
             bezier(map(w, ry + K * ry), map(rx + K * rx, h), map(rx, h));
             bezier(map(rx - K * rx, h), map(0.0, ry + K * ry), map(0.0, ry));
-            bezier(map(0.0, ry - K * ry), map(rx - K * rx, 0.0), map(rx, 0.0));
         }
         "roundRect" => {
             let adj = sh.adjustments.get("adj").copied().unwrap_or(16_667.0);
             let r = (w.min(h) * (adj / 100_000.0)).clamp(0.0, w.min(h) / 2.0);
-            let p = map(r, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
+            // ECMA-376: from (l, r) up round the top-left corner, clockwise.
+            let p = map(0.0, r); let _ = MoveToEx(dc, p.x, p.y, None);
+            bezier(map(0.0, r - K * r), map(r - K * r, 0.0), map(r, 0.0));
             line(map(w - r, 0.0));
             bezier(map(w - r + K * r, 0.0), map(w, r - K * r), map(w, r));
             line(map(w, h - r));
@@ -915,7 +920,6 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
             line(map(r, h));
             bezier(map(r - K * r, h), map(0.0, h - r + K * r), map(0.0, h - r));
             line(map(0.0, r));
-            bezier(map(0.0, r - K * r), map(r - K * r, 0.0), map(r, 0.0));
         }
         "homePlate" => {
             let adj = sh.adjustments.get("adj").copied().unwrap_or(50_000.0);
@@ -1552,8 +1556,21 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
     let border_w = sh.border_width.unwrap_or(0.0);
     let border_pen = if border_w > 0.0 {
         let c = sh.border_color.as_deref().and_then(parse_hex_rgb).unwrap_or((0, 0, 0));
-        Some(CreatePen(PS_SOLID, (border_w as f64 * scale).round().max(1.0) as i32,
-            COLORREF(colorref(c.0, c.1, c.2))))
+        // The preset painter (ellipse, roundRect, ...) used a plain solid pen
+        // and drew every dashed preset outline solid (dash probe: all four
+        // dashed ellipses). Same pen as the rect / custGeom outline now.
+        if presetdash_on() {
+            Some(outline_pen(
+                (border_w as f64 * scale).round().max(1.0) as i32,
+                colorref(c.0, c.1, c.2),
+                sh.border_dash.as_deref(),
+                border_w as f64 * scale,
+                None,
+            ))
+        } else {
+            Some(CreatePen(PS_SOLID, (border_w as f64 * scale).round().max(1.0) as i32,
+                COLORREF(colorref(c.0, c.1, c.2))))
+        }
     } else { None };
     let old_pen = if let Some(pen) = border_pen { SelectObject(dc, pen) }
         else { SelectObject(dc, GetStockObject(NULL_PEN)) };
@@ -4482,9 +4499,24 @@ fn outline_pen(
     } else {
         width_px.max(1) as f64
     };
+    // A ROUND cap grows every dash by half a width at each end, and PowerPoint
+    // takes that out of the pattern: each dash loses one width and each gap
+    // gains one (dash probe, PowerPoint PDF at 6pt: dot [1 3] is written
+    // [0 24], sysDot [1 1] is [0 12]), so the caps land where the flat dashes
+    // were instead of running together.
+    let round = rnddash_on() && cap == Some("rnd") && end_cap == PS_ENDCAP_ROUND;
     let style: Vec<u32> = pattern
         .iter()
-        .map(|n| ((f64::from(*n) * unit).round() as u32).max(1))
+        .enumerate()
+        .map(|(i, n)| {
+            let n = f64::from(*n);
+            let n = match (round, i % 2) {
+                (true, 0) => (n - 1.0).max(0.0),
+                (true, _) => n + 1.0,
+                _ => n,
+            };
+            ((n * unit).round() as u32).max(1)
+        })
         .collect();
     let brush = LOGBRUSH {
         lbStyle: BS_SOLID,
@@ -5212,11 +5244,14 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                 // plain, flipH+rot180 and rot=-90 connectors. No connector
                 // in the corpus carries text (0 of 1357), so the box draw
                 // and the text pass below are both skipped.
-                if sh
-                    .shape_type
-                    .as_deref()
-                    .is_some_and(|p| p.contains("Connector"))
-                {
+                // `prst="line"` is the same stroke: it is what PowerPoint's
+                // own line tool writes (as a p:cxnSp, and as a p:sp in older
+                // decks), and drawn as a box it was a rectangle outline -- or
+                // nothing at all for a horizontal one, whose box is 0pt tall
+                // (dash probe: 41 of 41 horizontal lines missing).
+                if sh.shape_type.as_deref().is_some_and(|p| {
+                    p.contains("Connector") || (prstline_on() && p == "line")
+                }) {
                     let bw = sh.border_width.unwrap_or(0.0);
                     if bw > 0.0 {
                         let col = sh
@@ -6739,6 +6774,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // render-truth 2026-08-07: r 115.31 -> 99.53,
                             // circle_top 118.37 -> 134.15, circle_bot
                             // 349.0 -> 333.21, circle_cy unchanged at 233.68.
+                            let (band_top, band_bot) = (circle_top, circle_bot);
                             let has_pie_labels =
                                 chart.has_data_labels && chart.show_val;
                             let pie_labels_outside = has_pie_labels
@@ -6750,9 +6786,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // The circle is bound by whichever of the plot
                             // area's height and width is smaller (in every
                             // measured arm the height binds).
+                            // When the WIDTH binds, the plot keeps the same
+                            // 11pt inset left and right as top and bottom:
+                            // chart_legendwrap_fine s1-s5 (PowerPoint PDF)
+                            // put the ring's left edge at sx+11.0 on every
+                            // width-bound arm, centre unchanged.
+                            let side = if pieside_on() { 11.0 } else { 0.0 };
                             let r = match banded_right {
                                 Some(right) => ((circle_bot - circle_top) / 2.0)
-                                    .min((right - sx) / 2.0),
+                                    .min((right - sx) / 2.0 - side),
                                 None => (circle_bot - circle_top) / 2.0,
                             };
                             let circle_cy = (circle_top + circle_bot) / 2.0;
@@ -7074,37 +7116,46 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // entries (B8, L=5 n=3: renders only two
                                 // swatches, at 127.84 = the n=2 natural block).
                                 let swatch_off = 8.97f64;
-                                let mut n_shown = n_cat;
-                                let mut legend_h =
-                                    n_shown as f64 * row_pitch;
-                                loop {
-                                    let top = circle_cy - legend_h / 2.0;
-                                    if top >= sy - 0.01
-                                        && top + legend_h <= sy + shh + 0.01
-                                    {
-                                        break;
-                                    }
-                                    let last_lines = legend_lines
-                                        .get(n_shown.saturating_sub(1))
-                                        .map(|l| l.len().max(1))
-                                        .unwrap_or(1);
-                                    let tight = (n_shown as f64 - 1.0)
-                                        * row_pitch
-                                        + (last_lines as f64 * 21.76 + 5.99);
-                                    let ttop = circle_cy - tight / 2.0;
-                                    if tight < legend_h
-                                        && ttop >= sy - 0.01
-                                        && ttop + tight <= sy + shh + 0.01
-                                    {
-                                        legend_h = tight;
-                                        break;
-                                    }
-                                    if n_shown <= 1 {
-                                        break;
-                                    }
-                                    n_shown -= 1;
-                                    legend_h = n_shown as f64 * row_pitch;
-                                }
+                                let (n_shown, legend_h, row_tops, legend_lines) =
+                                    if legendfit_on() {
+                                        legend_fit(&legend_lines, n_cat, band_bot - band_top)
+                                    } else {
+                                        let mut n_shown = n_cat;
+                                        let mut legend_h =
+                                            n_shown as f64 * row_pitch;
+                                        loop {
+                                            let top = circle_cy - legend_h / 2.0;
+                                            if top >= sy - 0.01
+                                                && top + legend_h <= sy + shh + 0.01
+                                            {
+                                                break;
+                                            }
+                                            let last_lines = legend_lines
+                                                .get(n_shown.saturating_sub(1))
+                                                .map(|l| l.len().max(1))
+                                                .unwrap_or(1);
+                                            let tight = (n_shown as f64 - 1.0)
+                                                * row_pitch
+                                                + (last_lines as f64 * 21.76 + 5.99);
+                                            let ttop = circle_cy - tight / 2.0;
+                                            if tight < legend_h
+                                                && ttop >= sy - 0.01
+                                                && ttop + tight <= sy + shh + 0.01
+                                            {
+                                                legend_h = tight;
+                                                break;
+                                            }
+                                            if n_shown <= 1 {
+                                                break;
+                                            }
+                                            n_shown -= 1;
+                                            legend_h = n_shown as f64 * row_pitch;
+                                        }
+                                        let tops = (0..n_shown)
+                                            .map(|i| i as f64 * row_pitch)
+                                            .collect::<Vec<f64>>();
+                                        (n_shown, legend_h, tops, legend_lines.clone())
+                                    };
                                 let legend_y0 =
                                     circle_cy - legend_h / 2.0 + swatch_off;
                                 for (ci, name) in chart
@@ -7113,8 +7164,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     .enumerate()
                                     .take(n_shown)
                                 {
-                                    let sw_y =
-                                        legend_y0 + ci as f64 * row_pitch;
+                                    let sw_y = legend_y0 + row_tops[ci];
                                     let col_hex = pres
                                         .theme_colors
                                         .get(&format!("accent{}", ci + 1))
@@ -7415,7 +7465,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // ---- major gridlines (behind the fills) ----
                         {
                             let grid_pen =
-                                CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                                CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                             let old_pen = SelectObject(mem_dc, grid_pen);
                             let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                             let gl = (plot_left * scale).round() as i32;
@@ -7539,7 +7589,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // ---- axis lines + ticks (on top of the fills) ----
                         {
                             let axis_pen =
-                                CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                                CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                             let old_pen = SelectObject(mem_dc, axis_pen);
                             let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                             let pl = (plot_left * scale).round() as i32;
@@ -7861,6 +7911,25 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // c in [1.04, 1.07); the ~1pt is probably the bubble
                         // outline, and no pure multiple of r_max satisfies both.
                         let pad_pt = (r_max - 1.05).max(0.0);
+                        // PowerPoint's bubble pad is in DATA units, not the
+                        // bubble's points: each axis grows by
+                        // `bubbleScale/600` of the data span (zero included)
+                        // at both ends. chart_bubble_pad (12 arms, PowerPoint
+                        // PDF): Y 21.4 -> 0..30 up to scale 225 and 0..35 from
+                        // 250; X 1..3 -> 0..4 at 200 and -1..5 from 225;
+                        // X 2..4 / 3..5 / 6..8 at 300 -> 0..6 / 0..8 / 0..15;
+                        // and the 600pt-wide and 400pt-tall frames give the
+                        // same axes as the 396x288 one, which no pad in points
+                        // can do. It also reproduces the older U7 arm
+                        // (y -8..12 at 100 -> -15..20).
+                        let pad_frac = scale_pct / 600.0;
+                        let (pad_y_data, pad_x_data) = {
+                            let ys = chart.series.iter().flat_map(|s| s.values.iter().copied());
+                            let (ylo, yhi) = ys.fold((0.0f64, 0.0f64), |(a, b), v| (a.min(v), b.max(v)));
+                            let xs = chart.series.iter().flat_map(|s| s.x_values.iter().copied());
+                            let (xlo, xhi) = xs.fold((0.0f64, 0.0f64), |(a, b), v| (a.min(v), b.max(v)));
+                            (pad_frac * (yhi - ylo), pad_frac * (xhi - xlo))
+                        };
                         // Word sizes the value axis with the ordinary ~5-tick
                         // step (nice_axis_max's rule) and COARSENS it only when
                         // the ticks would crowd below VERT_MIN_SPACING.  The
@@ -7910,7 +7979,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             pick_y(y_min_data, y_max_data, plot_h);
                         for _ in 0..3 {
                             let span = (y_axis - y_min).max(1e-9);
-                            let pad = if plot_h > 0.0 {
+                            let pad = if bubblepad_on() {
+                                pad_y_data
+                            } else if plot_h > 0.0 {
                                 pad_pt * span / plot_h
                             } else {
                                 0.0
@@ -7944,6 +8015,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             .flat_map(|s| s.x_values.iter().copied())
                             .fold(0.0f64, f64::min);
                         let x_has_neg = x_min_data < 0.0;
+                        let mut x_neg = x_has_neg;
                         let (x_lo_real, x_hi_real) = chart
                             .series
                             .iter()
@@ -8027,7 +8099,9 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         };
                         for pass in 0..4 {
                             let pw = (plot_right - plot_left).max(1.0);
-                            let pad = if pass == 0 {
+                            let pad = if bubblepad_on() {
+                                pad_x_data
+                            } else if pass == 0 {
                                 0.0
                             } else {
                                 pad_pt * (x_axis - x_min).max(1e-9) / pw
@@ -8035,11 +8109,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let elo = (x_lo_real - pad).min(0.0);
                             let ehi = (x_hi_real + pad).max(0.0);
                             let (lo, hi, dv) = pick_x(elo, ehi, pw);
-                            x_min = if x_has_neg { lo } else { 0.0 };
+                            // The padded extent may cross zero on its own: the
+                            // axis then runs negative too (chart_bubble_pad P3:
+                            // x 1..3 at scale 225 -> -1..5).
+                            x_neg = x_has_neg || (bubblepad_on() && lo < 0.0);
+                            x_min = if x_neg { lo } else { 0.0 };
                             x_axis = hi;
                             x_div = dv.max(1);
                             let step = (x_axis - x_min) / x_div as f64;
-                            if x_has_neg {
+                            if x_neg {
                                 plot_left = sx
                                     + 11.0
                                     + label_w(&fmt_axis_value(x_min, step)) / 2.0;
@@ -8054,7 +8132,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let val_x =
                             |v: f64| plot_left + ((v - x_min) / x_span) * plot_w;
                         let zero_x = val_x(0.0);
-                        let y_axis_x = if x_has_neg { zero_x } else { plot_left };
+                        let y_axis_x = if x_neg { zero_x } else { plot_left };
                         let x_axis_y = if y_has_neg { zero_y } else { plot_bot };
 
                         let radius = |sz: f64| -> f64 {
@@ -8089,7 +8167,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
 
                         // Horizontal major gridlines, BEFORE the bubbles.
                         let grid_pen =
-                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                            CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                         let old_grid_pen = SelectObject(mem_dc, grid_pen);
                         let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                         let gl = (plot_left * scale).round() as i32;
@@ -8281,7 +8359,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // Axis lines + ticks (each axis rides the OTHER axis'
                         // zero crossing when that axis spans zero).
                         let axis_pen =
-                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                            CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                         let old_axis_pen = SelectObject(mem_dc, axis_pen);
                         let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                         let pl = (plot_left * scale).round() as i32;
@@ -8531,7 +8609,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // Horizontal major gridlines at the value ticks
                         // i=1..=y_steps, BEFORE the series.
                         let grid_pen =
-                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                            CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                         let old_grid_pen = SelectObject(mem_dc, grid_pen);
                         let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                         let gl = (plot_left * scale).round() as i32;
@@ -8749,7 +8827,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // plot_bot, plot top edge, Y ticks 0..=y_steps at
                         // plot_left-5.71, X ticks 0..=x_div at plot_bot+5.71.
                         let axis_pen =
-                            CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                            CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                         let old_axis_pen = SelectObject(mem_dc, axis_pen);
                         let _ = SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
                         let pl = (plot_left * scale).round() as i32;
@@ -9642,6 +9720,17 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 400,
                             );
                         }
+                        } else if chart.chart_type == "surface" && surface_on() {
+                            draw_surface_chart(
+                                mem_dc,
+                                chart,
+                                pres,
+                                sh.x as f64,
+                                sh.y as f64,
+                                sh.width as f64,
+                                sh.height as f64,
+                                scale,
+                            );
                         } else if chart.chart_type == "line" {
                         // Line chart (Word render-truth 2026-08-06, fitz
                         // get_drawings + rawdict on the 7-variant probe
@@ -9730,7 +9819,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // constant so every existing line probe is unchanged.
                         let legend_band = if !chart.has_legend {
                             11.0
-                        } else if has_neg {
+                        } else if has_neg || legendname_on() {
                             let w = chart
                                 .series
                                 .iter()
@@ -9845,7 +9934,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // section below), BEFORE the polyline.
                         let grid_pen = CreatePen(
                             PS_SOLID,
-                            2,
+                            chart_hair_px(scale),
                             COLORREF(colorref(0, 0, 0)),
                         );
                         let old_grid_pen = SelectObject(mem_dc, grid_pen);
@@ -10009,6 +10098,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             let single_bl = if crowded { 43.8 } else { 28.67 };
                             // two-line wrap: crowded AND the whole label is
                             // wider than its pitch
+                            if crowded && catrot_on() {
+                                draw_text_turned_end(
+                                    mem_dc,
+                                    cat_center + catrot_dx(),
+                                    zero_y + catrot_dy(),
+                                    -45.0,
+                                    name,
+                                    18.0,
+                                    axis_family,
+                                    scale,
+                                );
+                                continue;
+                            }
                             if crowded && lw > pitch {
                                 let chars: Vec<char> = name.chars().collect();
                                 let n = chars.len();
@@ -10232,7 +10334,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // edge painted).
                         let axis_pen = CreatePen(
                             PS_SOLID,
-                            2,
+                            chart_hair_px(scale),
                             COLORREF(colorref(0, 0, 0)),
                         );
                         let old_axis_pen = SelectObject(mem_dc, axis_pen);
@@ -10464,7 +10566,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // ---- value-axis gridlines (vertical, behind the bars) ----
                         {
                             let grid_pen =
-                                CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                                CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                             let old_pen = SelectObject(mem_dc, grid_pen);
                             let _ =
                                 SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
@@ -10801,7 +10903,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // ---- axis lines + ticks ----
                         {
                             let axis_pen =
-                                CreatePen(PS_SOLID, 2, COLORREF(colorref(0, 0, 0)));
+                                CreatePen(PS_SOLID, chart_hair_px(scale), COLORREF(colorref(0, 0, 0)));
                             let old_pen = SelectObject(mem_dc, axis_pen);
                             let _ =
                                 SelectObject(mem_dc, GetStockObject(NULL_BRUSH));
@@ -11059,7 +11161,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         if axis_steps > 0 {
                             let grid_pen = CreatePen(
                                 PS_SOLID,
-                                2,
+                                chart_hair_px(scale),
                                 COLORREF(colorref(0, 0, 0)),
                             );
                             let old_grid_pen =
@@ -11695,7 +11797,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         //     CATEGORY BOUNDARIES, not the centres)
                         let axis_pen = CreatePen(
                             PS_SOLID,
-                            2,
+                            chart_hair_px(scale),
                             COLORREF(colorref(0, 0, 0)),
                         );
                         let old_axis_pen = SelectObject(mem_dc, axis_pen);
@@ -12492,6 +12594,116 @@ fn draw_line_marker(
     }
 }
 
+/// `OXI_PRESETDASH_DISABLE=1` strokes preset outlines solid again.
+fn presetdash_on() -> bool {
+    std::env::var("OXI_PRESETDASH_DISABLE").is_err()
+}
+
+/// `OXI_RNDDASH_DISABLE=1` keeps a round-capped dash pattern unadjusted.
+fn rnddash_on() -> bool {
+    std::env::var("OXI_RNDDASH_DISABLE").is_err()
+}
+
+/// `OXI_PRSTLINE_DISABLE=1` draws `prst="line"` as a box again.
+fn prstline_on() -> bool {
+    std::env::var("OXI_PRSTLINE_DISABLE").is_err()
+}
+
+/// `OXI_PIESIDE_DISABLE=1` drops the side inset of a width-bound pie.
+fn pieside_on() -> bool {
+    std::env::var("OXI_PIESIDE_DISABLE").is_err()
+}
+
+/// `OXI_LEGENDFIT_DISABLE=1` puts back the frame-bounded legend fit.
+fn legendfit_on() -> bool {
+    std::env::var("OXI_LEGENDFIT_DISABLE").is_err()
+}
+
+/// Which pie / doughnut legend entries PowerPoint shows, and where each row
+/// starts relative to the block top. Returns (entries shown, block height used
+/// for centring, row tops, lines per entry after the line cap).
+///
+/// chart_legendwrap + chart_legendwrap_fine (18 arms, PowerPoint PDF; a first
+/// entry of 3..15 wrapped lines, then two one-line entries):
+///
+/// * the block must fit the plot area's HEIGHT (the circle's band before data
+///   labels shrink it), not the frame: 229.58 fits a 230.63 band, 251.34 does
+///   not; 257.30 fits the 400pt frame's 342.63 band and 344.37 does not.
+/// * a row is `27.75 + (lines-1)*21.76` tall: "natural" rows all take the
+///   tallest shown entry's height; a "tight" row takes its own.
+/// * the candidates, first that fits wins: all rows natural; the last row
+///   tight; one entry fewer, natural; every row tight; then the same again
+///   with one entry fewer.  (Lines 4: last tight.  Lines 5: two natural rows,
+///   the third entry dropped, although all-tight would fit.  Lines 6 and 7:
+///   all tight.  Lines 9: two tight rows.)
+/// * an entry taller than the band keeps the lines that fit and ends its last
+///   one with an ellipsis ('W' x 30 at a 45pt cap: 10 lines, the tenth "WW...").
+fn legend_fit(
+    lines: &[Vec<String>],
+    n_cat: usize,
+    band_h: f64,
+) -> (usize, f64, Vec<f64>, Vec<Vec<String>>) {
+    let row = |l: usize| 27.75 + (l.max(1) as f64 - 1.0) * 21.76;
+    let max_lines = (((band_h - 27.75) / 21.76).floor() as i64 + 1).max(1) as usize;
+    let mut lines: Vec<Vec<String>> = lines.to_vec();
+    for l in lines.iter_mut() {
+        if l.len() > max_lines {
+            l.truncate(max_lines);
+            if let Some(last) = l.last_mut() {
+                last.push('\u{2026}');
+            }
+        }
+    }
+    let n_all = n_cat.min(lines.len()).max(1);
+    let cnt = |i: usize| lines.get(i).map(|l| l.len()).unwrap_or(1);
+    let tallest = |n: usize| (0..n).map(cnt).max().unwrap_or(1);
+    let natural = |n: usize| {
+        let p = row(tallest(n));
+        (n as f64 * p, (0..n).map(|i| i as f64 * p).collect::<Vec<f64>>())
+    };
+    let tight_last = |n: usize| {
+        let p = row(tallest(n));
+        (
+            (n as f64 - 1.0) * p + row(cnt(n - 1)),
+            (0..n).map(|i| i as f64 * p).collect::<Vec<f64>>(),
+        )
+    };
+    let all_tight = |n: usize| {
+        let mut tops = Vec::with_capacity(n);
+        let mut y = 0.0;
+        for i in 0..n {
+            tops.push(y);
+            y += row(cnt(i));
+        }
+        (y, tops)
+    };
+    let fits = |h: f64| h <= band_h + 0.01;
+    let (h, t) = natural(n_all);
+    if fits(h) {
+        return (n_all, h, t, lines);
+    }
+    let mut n = n_all;
+    while n >= 1 {
+        let (h, t) = tight_last(n);
+        if fits(h) {
+            return (n, h, t, lines);
+        }
+        if n > 1 {
+            let (h, t) = natural(n - 1);
+            if fits(h) {
+                return (n - 1, h, t, lines);
+            }
+        }
+        let (h, t) = all_tight(n);
+        if fits(h) {
+            return (n, h, t, lines);
+        }
+        n -= 1;
+    }
+    let (h, t) = natural(1);
+    (1, h, t, lines)
+}
+
 /// The legend's share of the chart width: a label wider than this wraps.
 ///
 /// DERIVED (chart_legendwrap 2026-08-09): a category label made of one very
@@ -12597,6 +12809,577 @@ fn fmt_axis_value(v: f64, step: f64) -> String {
 /// closes to (56.28, 57.76] over all 19 measured points and 57.0 sits inside;
 /// the model then reproduces 19 of 19 (the earlier headroom-free model with a
 /// 53pt threshold reproduced 15).
+/// A chart's 0.75pt hairline (gridlines, axes, ticks, outlines) in device
+/// pixels. The chart painters used a fixed 2-pixel pen, which at the
+/// renderer's 150dpi x3 supersampling is 0.32pt: PowerPoint's PDF of every
+/// chart probe strokes these 0.75pt black (chart_negative: the gridline
+/// column reads 0 / 118 in PowerPoint's raster, 101 / 223 in Oxi's).
+/// `OXI_CHARTPEN_DISABLE=1` puts the 2-pixel pen back.
+fn chart_hair_px(scale: f64) -> i32 {
+    if std::env::var("OXI_CHARTPEN_DISABLE").is_ok() {
+        2
+    } else {
+        ((0.75 * scale).round() as i32).max(1)
+    }
+}
+
+/// `OXI_BUBBLEPAD_DISABLE=1` restores the bubble axis pad in points.
+fn bubblepad_on() -> bool {
+    std::env::var("OXI_BUBBLEPAD_DISABLE").is_err()
+}
+
+/// Minimum tick spacing on the projected front edge of a surface value axis.
+/// `OXI_SURFSPACE=<pt>` overrides it for measurement.
+fn surf_min_spacing() -> f64 {
+    std::env::var("OXI_SURFSPACE").ok().and_then(|v| v.parse().ok()).unwrap_or(26.5)
+}
+
+/// `OXI_SURFCAM_DISABLE=1` goes back to the fitted surface projection.
+fn surfcam_on() -> bool {
+    std::env::var("OXI_SURFCAM_DISABLE").is_err()
+}
+
+/// `OXI_SURFNEG_DISABLE=1` keeps surface axes on the floor and the headroom.
+fn surfneg_on() -> bool {
+    std::env::var("OXI_SURFNEG_DISABLE").is_err()
+}
+
+/// `OXI_SURFACE1_DISABLE=1` draws a one-series surface like a two-series one.
+fn surface1_on() -> bool {
+    std::env::var("OXI_SURFACE1_DISABLE").is_err()
+}
+
+/// `OXI_SURFACE_DISABLE=1` leaves surface charts to the generic fallback.
+fn surface_on() -> bool {
+    std::env::var("OXI_SURFACE_DISABLE").is_err()
+}
+
+/// A 3-D surface chart (`c:surfaceChart` / `c:surface3DChart`, PowerPoint's
+/// default view: no `c:view3D`).
+///
+/// DERIVED 2026-11-15 from PowerPoint's own PDFs (`chart_surface`, and the
+/// 14 + 15 arm sweeps `chart_surface_sweep` / `_sweep2`,
+/// `tools/metrics/gen_pptx_chart_surface_sweep.py`). PowerPoint exports the
+/// mesh and the walls as an IMAGE and only the ticks and labels as vectors, so
+/// the projection was recovered from the projected tick positions (3 to 6
+/// value ticks, 2 to 10 category ticks, 2 to 6 series ticks per arm):
+///
+/// * the box, in units of the category axis length: width 1, depth
+///   `ns / nc`, height `(plot_h / plot_w) * floor((nc + ns - 1) / 2) / nc`
+///   (the height coefficient fits as 1.0013 over 28 arms);
+/// * turned 19.78 degrees about the vertical, then tilted 13.71 degrees
+///   (fitted globally; PowerPoint's own `rotX 15 / rotY 20` with this camera
+///   model fits worse), seen through a camera `3.599 * plot_h / scale` away;
+/// * scaled uniformly so the projected box spans 96.9% of the plot width,
+///   centred -- unless its height would then pass 97% of the plot height, in
+///   which case that binds -- and set 1.1% of the plot height above centre
+///   (the measured offset runs 0.07%..2.0% and has no law yet).
+///   Residual over the sweeps: under 1pt on most arms, 1.8pt worst.
+/// * the value axis is the shared 1/2/5 search over the projected front edge
+///   with a 26.5pt minimum spacing (5 divisions of 26.36pt are refused,
+///   26.67pt accepted).
+/// * the faces are the theme accents per value band (one band per axis step,
+///   lowest = accent1); a face seen from above is drawn at 0.967 of the accent,
+///   one seen from below at 0.345 (every face of the 3-series probe, whatever
+///   its normal: 0.343..0.347).
+/// * walls: gridlines on the left side wall and the back wall at every value
+///   tick, the floor's front and right edges and the front-left value axis,
+///   0.75pt black. Ticks 5.7pt long, labels Calibri 18pt: value labels end
+///   16.7pt left of the tick point, baseline +6.2; category labels centred,
+///   baseline +29.9; series labels 16.7pt right, baseline +6.2, every other.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw_surface_chart(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    chart: &oxislides_core::ir::Chart,
+    pres: &Presentation,
+    sx: f64,
+    sy: f64,
+    sw: f64,
+    shh: f64,
+    scale: f64,
+) {
+    use windows::Win32::Foundation::{COLORREF, POINT};
+    use windows::Win32::Graphics::Gdi::*;
+
+    let family = "Calibri";
+    let fs = 18.0f32;
+    let wid = |t: &str| {
+        font_adv::line_hmtx_width_pt(t, fs, family)
+            .unwrap_or_else(|| t.chars().count() as f32 * fs * 0.5) as f64
+    };
+    let ns = chart.series.len();
+    let nc = chart
+        .series
+        .iter()
+        .map(|s| s.values.len())
+        .max()
+        .unwrap_or(0)
+        .max(chart.categories.len());
+    if ns == 0 || nc < 2 {
+        return;
+    }
+    let ns_box = ns.max(2);
+    // ONE series is a degenerate mesh: PowerPoint draws the empty box only --
+    // value axis 0..1.5 by 0.5 whatever the data, depth half a category,
+    // a single category tick at the front-right corner carrying the first
+    // name, one series tick at the back (chart_surface_sweep3 P1-P3: depth
+    // 0.1235 / 0.0798 of the width at 4 / 6 categories, height on the usual
+    // law with ns = 1).
+    let single = ns == 1 && surface1_on();
+    let (lo, hi) = chart
+        .series
+        .iter()
+        .flat_map(|s| s.values.iter().copied())
+        .fold((0.0f64, 0.0f64), |(a, b), v| (a.min(v), b.max(v)));
+
+    let accent = |k: usize| -> (u8, u8, u8) {
+        pres.theme_colors
+            .get(&format!("accent{}", k % 6 + 1))
+            .map(|s| s.as_str())
+            .or_else(|| DEFAULT_ACCENT.get(k % 6).copied())
+            .and_then(parse_hex_rgb)
+            .unwrap_or((0x4F, 0x81, 0xBD))
+    };
+
+    // ---- plot area (same frame insets as the 2-D value charts) ----
+    let plot_top = sy
+        + if chart.explicit_title.is_some() {
+            45.69
+        } else {
+            16.0
+        };
+    // With negative data the category labels ride the 0 line, and the band
+    // under the floor goes: plot bottom = frame bottom - 16.1 (8 negative
+    // arms of chart_surface_sweep4: 343.9 in a 360 frame, 455.9 in 472).
+    let plot_bot = sy + shh - if surfneg_on() && lo < 0.0 { 16.1 } else { 40.02 };
+    // S-SURFCAM: PowerPoint's own view (rotX 15, rotY 20) through a camera
+    // whose field of view is perspective/2 = 15 degrees over the plot height
+    // (LibreOffice's import halves c:perspective the same way): the eye sits
+    // (plot_h/2)/tan(7.5deg) = 3.80 plot heights away, aimed at the plot
+    // centre. With the box shifted sideways in view space this reproduces
+    // every tick of 28 sweep arms to 0.04..0.09pt (the fitted 13.71/19.78
+    // model below to 0.5..5pt). OXI_SURFCAM_DISABLE = the fitted model.
+    let cam = surfcam_on();
+    let (rx, ry) = if cam {
+        (-15f64.to_radians(), 20f64.to_radians())
+    } else {
+        (-13.7136f64.to_radians(), 19.7754f64.to_radians())
+    };
+    let (h_coef, d_coef) = if cam { (1.0f64, 3.599f64) } else { (1.0013f64, 3.599f64) };
+    let eye = |ph: f64, s: f64| {
+        if cam {
+            (ph / 2.0) / 7.5f64.to_radians().tan() / s
+        } else {
+            d_coef * ph / s
+        }
+    };
+
+    // The legend lists the bands, highest first (chart_surface P5).
+    let layout = |plot_left: f64, plot_right: f64| {
+        let pw = (plot_right - plot_left).max(1.0);
+        let ph = (plot_bot - plot_top).max(1.0);
+        let depth = if single { 0.5 / nc as f64 } else { ns_box as f64 / nc as f64 };
+        let ns_h = if single { 1 } else { ns_box };
+        let height = h_coef * (ph / pw) * (((nc + ns_h - 1) / 2) as f64) / nc as f64;
+        (pw, ph, depth, height)
+    };
+    // `e` = the box's sideways shift in view space, in points.
+    let project = |p: (f64, f64, f64), depth: f64, height: f64, s: f64, ph: f64, e: (f64, f64)| {
+        let (x, y, z) = (p.0 - 0.5, (p.1 - 0.5) * height, (p.2 - 0.5) * depth);
+        let (x, z) = (x * ry.cos() + z * ry.sin(), -x * ry.sin() + z * ry.cos());
+        let (y, z) = (y * rx.cos() - z * rx.sin(), y * rx.sin() + z * rx.cos());
+        let (x, y) = (x + e.0 / s, y + e.1 / s);
+        let dist = eye(ph, s);
+        let f = dist / (dist + z);
+        (s * x * f, -s * y * f, z)
+    };
+    let corners: Vec<(f64, f64, f64)> = (0..8)
+        .map(|i| ((i & 1) as f64, ((i >> 1) & 1) as f64, ((i >> 2) & 1) as f64))
+        .collect();
+    let extent = |depth: f64, height: f64, s: f64, ph: f64, e: (f64, f64)| {
+        let pts: Vec<(f64, f64, f64)> =
+            corners.iter().map(|&c| project(c, depth, height, s, ph, e)).collect();
+        let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for p in &pts {
+            x0 = x0.min(p.0);
+            x1 = x1.max(p.0);
+            y0 = y0.min(p.1);
+            y1 = y1.max(p.1);
+        }
+        (x0, x1, y0, y1)
+    };
+    // Scale for a target: bisection on the monotone projected extent.
+    // The shift that centres the projected box, found by iteration (the
+    // perspective makes each step move the box a little less than asked).
+    let centre = |depth: f64, height: f64, s: f64, ph: f64| -> (f64, f64) {
+        if !cam {
+            return (0.0, 0.0);
+        }
+        let mut e = (0.0f64, 0.0f64);
+        for _ in 0..30 {
+            let (x0, x1, y0, y1) = extent(depth, height, s, ph, e);
+            e.0 -= (x0 + x1) / 2.0;
+            e.1 += (y0 + y1) / 2.0;
+        }
+        e
+    };
+    let fit = |depth: f64, height: f64, pw: f64, ph: f64| -> (f64, bool) {
+        let (fw, fh) = if cam { (0.9724, 0.9724) } else { (0.969, 0.97) };
+        let solve = |target: f64, horiz: bool| {
+            let (mut a, mut b) = (1.0f64, 20000.0f64);
+            for _ in 0..60 {
+                let m = 0.5 * (a + b);
+                let e = centre(depth, height, m, ph);
+                let (x0, x1, y0, y1) = extent(depth, height, m, ph, e);
+                let ext = if horiz { x1 - x0 } else { y1 - y0 };
+                if ext > target {
+                    b = m;
+                } else {
+                    a = m;
+                }
+            }
+            0.5 * (a + b)
+        };
+        let s_w = solve(fw * pw, true);
+        let e = centre(depth, height, s_w, ph);
+        let (_, _, y0, y1) = extent(depth, height, s_w, ph, e);
+        if y1 - y0 > fh * ph {
+            (solve(fh * ph, false), true)
+        } else {
+            (s_w, false)
+        }
+    };
+
+    // Value axis over the projected front edge; the left inset follows its
+    // widest label, so settle the two together.
+    let right_edge = |legend_w: f64| {
+        if chart.has_legend {
+            sx + sw - 10.0 - legend_w - 4.62 - 9.89 - 7.96 - 50.22
+        } else {
+            sx + sw - 50.22
+        }
+    };
+    let mut plot_left = sx + 41.4;
+    let mut axis = (0.0f64, 1.0f64, 1usize);
+    let mut legend_w = 0.0f64;
+    for _ in 0..3 {
+        let plot_right = right_edge(legend_w);
+        let (pw, ph, depth, height) = layout(plot_left, plot_right);
+        let (s, _) = fit(depth, height, pw, ph);
+        let e = centre(depth, height, s, ph);
+        let a = project((0.0, 0.0, 0.0), depth, height, s, ph, e);
+        let b = project((0.0, 1.0, 0.0), depth, height, s, ph, e);
+        let front = (a.1 - b.1).abs();
+        // No 5% headroom on a surface axis: data down to -29.3 gives -30..0
+        // (chart_surface_sweep4 P9); nice_axis_range adds it, so cancel it.
+        let hr = if surfneg_on() { AXIS_HEADROOM } else { 1.0 };
+        axis = if single {
+            (0.0, 1.5, 3)
+        } else {
+            nice_axis_range(lo / hr, hi / hr, front, surf_min_spacing())
+        };
+        let step = (axis.1 - axis.0) / axis.2 as f64;
+        let widest = (0..=axis.2)
+            .map(|i| wid(&fmt_axis_value(axis.0 + step * i as f64, step)))
+            .fold(0.0f64, f64::max);
+        plot_left = sx + 6.5 + widest + 16.7;
+        legend_w = (0..axis.2)
+            .map(|i| {
+                let a0 = axis.0 + step * i as f64;
+                wid(&format!("{}-{}", fmt_axis_value(a0, step), fmt_axis_value(a0 + step, step)))
+            })
+            .fold(0.0f64, f64::max);
+    }
+    let (amin, amax, adiv) = axis;
+    let step = (amax - amin) / adiv as f64;
+    let plot_right = right_edge(legend_w);
+    let (pw, ph, depth, height) = layout(plot_left, plot_right);
+    let (s, vbind) = fit(depth, height, pw, ph);
+    let mut e_box = centre(depth, height, s, ph);
+    let (x0, x1, y0, y1) = extent(depth, height, s, ph, e_box);
+    let cx = (plot_left + plot_right) / 2.0;
+    let (tx, ty) = if cam {
+        // Above the centred place by
+        //   (free/ph) * (0.12884*pw - 0.10392*s) - 0.14329
+        // (free = plot height the box leaves; s = scale in pt). Fitted on
+        // 343 arms read through PowerPoint's object model (value-axis box,
+        // com_surface_axis_sweep.py place): rms 0.355pt, inside the 1pt
+        // rounding of those boxes. Checked on the 28 PDF arms it never saw:
+        // rms 0.23pt, worst 0.58pt (the old 5*free/(free+45) left ~2pt).
+        let free = (ph - (y1 - y0)).max(0.0);
+        e_box.1 += (free / ph) * (0.12884 * pw - 0.10392 * s) - 0.14329;
+        (cx, (plot_top + plot_bot) / 2.0)
+    } else {
+        let cy = (plot_top + plot_bot) / 2.0 - if vbind { 0.0 } else { 0.011 * ph };
+        (cx - (x0 + x1) / 2.0, cy - (y0 + y1) / 2.0)
+    };
+    if std::env::var("OXI_SURFACE_DEBUG").is_ok() {
+        eprintln!("SURFACE plot {plot_left:.2}..{plot_right:.2} x {plot_top:.2}..{plot_bot:.2} D {depth:.3} H {height:.3} s {s:.2} vbind {vbind} t ({tx:.2},{ty:.2}) axis {amin}..{amax}/{adiv}");
+    }
+    let vnorm = |v: f64| ((v - amin) / (amax - amin)).clamp(0.0, 1.0);
+    // page point (pt) + rotated depth
+    let at = |x: f64, v01: f64, z: f64| {
+        let p = project((x, v01, z), depth, height, s, ph, e_box);
+        (tx + p.0, ty + p.1, p.2)
+    };
+    let px = |p: (f64, f64, f64)| POINT {
+        x: (p.0 * scale).round() as i32,
+        y: (p.1 * scale).round() as i32,
+    };
+
+    // ---- walls: gridlines on the side and back walls, floor edges, axis ----
+    let pen = CreatePen(
+        PS_SOLID,
+        ((0.75 * scale).round() as i32).max(1),
+        COLORREF(colorref(0, 0, 0)),
+    );
+    let old_pen = SelectObject(dc, pen);
+    let seg = |a: (f64, f64, f64), b: (f64, f64, f64)| {
+        let (pa, pb) = (px(a), px(b));
+        let _ = MoveToEx(dc, pa.x, pa.y, None);
+        let _ = LineTo(dc, pb.x, pb.y);
+    };
+    for i in 0..=adiv {
+        let v = i as f64 / adiv as f64;
+        seg(at(0.0, v, 0.0), at(0.0, v, 1.0));
+        seg(at(0.0, v, 1.0), at(1.0, v, 1.0));
+    }
+    seg(at(0.0, 0.0, 0.0), at(1.0, 0.0, 0.0));
+    seg(at(1.0, 0.0, 0.0), at(1.0, 0.0, 1.0));
+    // With negative values the category and series axes run at the value-0
+    // level (chart_surface_sweep4: the Q ticks sit on the 0 tick in all 9
+    // arms, at the top when every value is negative); the floor stays at the
+    // axis minimum.
+    let v_axis = if surfneg_on() && amin < 0.0 { vnorm(0.0f64.min(amax)) } else { 0.0 };
+    if v_axis > 0.0 {
+        seg(at(0.0, v_axis, 0.0), at(1.0, v_axis, 0.0));
+        seg(at(1.0, v_axis, 0.0), at(1.0, v_axis, 1.0));
+    }
+    seg(at(0.0, 0.0, 0.0), at(0.0, 1.0, 0.0));
+    SelectObject(dc, old_pen);
+    let _ = DeleteObject(pen);
+
+    // ---- the mesh: two triangles per cell, cut into value bands ----
+    let val = |si: usize, ci: usize| -> f64 {
+        chart
+            .series
+            .get(si.min(ns - 1))
+            .and_then(|s| s.values.get(ci))
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let zpos = |si: usize| si as f64 / (ns_box - 1) as f64;
+    let xpos = |ci: usize| ci as f64 / (nc - 1) as f64;
+    // (x, value, z) in data space
+    let mut polys: Vec<(f64, usize, bool, Vec<(f64, f64, f64)>)> = Vec::new();
+    for si in 0..if single { 0 } else { ns_box - 1 } {
+        for ci in 0..nc - 1 {
+            let q = [
+                (xpos(ci), val(si, ci), zpos(si)),
+                (xpos(ci + 1), val(si, ci + 1), zpos(si)),
+                (xpos(ci + 1), val(si + 1, ci + 1), zpos(si + 1)),
+                (xpos(ci), val(si + 1, ci), zpos(si + 1)),
+            ];
+            for tri in [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] {
+                // Which side faces the camera: the UP normal (value grows
+                // along +y) turned like the box, against the ray to the eye.
+                let world = |p: (f64, f64, f64)| {
+                    (p.0 - 0.5, (vnorm(p.1) - 0.5) * height, (p.2 - 0.5) * depth)
+                };
+                let (a, b, c) = (world(tri[0]), world(tri[1]), world(tri[2]));
+                let (u, v) = ((b.0 - a.0, b.1 - a.1, b.2 - a.2), (c.0 - a.0, c.1 - a.1, c.2 - a.2));
+                let mut n = (u.1 * v.2 - u.2 * v.1, u.2 * v.0 - u.0 * v.2, u.0 * v.1 - u.1 * v.0);
+                if n.1 < 0.0 {
+                    n = (-n.0, -n.1, -n.2);
+                }
+                let turn = |q: (f64, f64, f64)| {
+                    let (x, z) = (q.0 * ry.cos() + q.2 * ry.sin(), -q.0 * ry.sin() + q.2 * ry.cos());
+                    let (y, z) = (q.1 * rx.cos() - z * rx.sin(), q.1 * rx.sin() + z * rx.cos());
+                    (x, y, z)
+                };
+                let nr = turn(n);
+                let cen = turn(((a.0 + b.0 + c.0) / 3.0, (a.1 + b.1 + c.1) / 3.0, (a.2 + b.2 + c.2) / 3.0));
+                let dist = eye(ph, s);
+                let eye = (-cen.0, -cen.1, -dist - cen.2);
+                let top = nr.0 * eye.0 + nr.1 * eye.1 + nr.2 * eye.2 > 0.0;
+                for band in 0..adiv {
+                    let blo = amin + step * band as f64;
+                    let bhi = blo + step;
+                    let mut poly: Vec<(f64, f64, f64)> = tri.to_vec();
+                    for (lim, keep_above) in [(blo, true), (bhi, false)] {
+                        let mut out = Vec::new();
+                        for k in 0..poly.len() {
+                            let p = poly[k];
+                            let q2 = poly[(k + 1) % poly.len()];
+                            let pin = if keep_above { p.1 >= lim } else { p.1 <= lim };
+                            let qin = if keep_above { q2.1 >= lim } else { q2.1 <= lim };
+                            if pin {
+                                out.push(p);
+                            }
+                            if pin != qin && (q2.1 - p.1).abs() > 1e-12 {
+                                let t = (lim - p.1) / (q2.1 - p.1);
+                                out.push((
+                                    p.0 + t * (q2.0 - p.0),
+                                    lim,
+                                    p.2 + t * (q2.2 - p.2),
+                                ));
+                            }
+                        }
+                        poly = out;
+                        if poly.len() < 3 {
+                            break;
+                        }
+                    }
+                    if poly.len() < 3 {
+                        continue;
+                    }
+                    let depth_key = poly
+                        .iter()
+                        .map(|p| at(p.0, vnorm(p.1), p.2).2)
+                        .sum::<f64>()
+                        / poly.len() as f64;
+                    polys.push((depth_key, band, top, poly));
+                }
+            }
+        }
+    }
+    polys.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    for (_, band, top, poly) in &polys {
+        let (r, g, b) = accent(*band);
+        let k = if *top { 0.967 } else { 0.345 };
+        let c = |v: u8| ((v as f64) * k).round().clamp(0.0, 255.0) as u8;
+        let pts: Vec<POINT> = poly.iter().map(|p| px(at(p.0, vnorm(p.1), p.2))).collect();
+        if chart.surface_wireframe {
+            let pen = CreatePen(PS_SOLID, ((0.75 * scale).round() as i32).max(1), COLORREF(colorref(r, g, b)));
+            let old = SelectObject(dc, pen);
+            let _ = Polyline(dc, &[pts.clone(), vec![pts[0]]].concat());
+            SelectObject(dc, old);
+            let _ = DeleteObject(pen);
+        } else {
+            let brush = CreateSolidBrush(COLORREF(colorref(c(r), c(g), c(b))));
+            let old_b = SelectObject(dc, brush);
+            let old_p = SelectObject(dc, GetStockObject(NULL_PEN));
+            let _ = Polygon(dc, &pts);
+            SelectObject(dc, old_p);
+            SelectObject(dc, old_b);
+            let _ = DeleteObject(brush);
+        }
+    }
+
+    // ---- ticks and labels ----
+    let pen = CreatePen(
+        PS_SOLID,
+        ((0.75 * scale).round() as i32).max(1),
+        COLORREF(colorref(0, 0, 0)),
+    );
+    let old_pen = SelectObject(dc, pen);
+    let tick = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let _ = MoveToEx(dc, (x0 * scale).round() as i32, (y0 * scale).round() as i32, None);
+        let _ = LineTo(dc, (x1 * scale).round() as i32, (y1 * scale).round() as i32);
+    };
+    for i in 0..=adiv {
+        let p = at(0.0, i as f64 / adiv as f64, 0.0);
+        tick(p.0, p.1, p.0 - 5.73, p.1);
+        let v = amin + step * i as f64;
+        // the top of an all-negative axis is -0.0, which prints "-0"
+        let v = if v.abs() < step * 1e-9 { 0.0 } else { v };
+        let t = fmt_axis_value(v, step);
+        draw_text_baseline(
+            dc,
+            ((p.0 - 16.7 - wid(&t)) * scale).round() as i32,
+            (p.1 + 6.2) as f32,
+            &t,
+            fs,
+            family,
+            None,
+            scale,
+        );
+    }
+    for ci in 0..nc {
+        if single && ci + 1 < nc {
+            continue;
+        }
+        let p = at(xpos(ci), v_axis, 0.0);
+        tick(p.0, p.1, p.0, p.1 + 5.75);
+        let ci = if single { 0 } else { ci };
+        if let Some(name) = chart.categories.get(ci) {
+            draw_text_baseline(
+                dc,
+                ((p.0 - wid(name) / 2.0) * scale).round() as i32,
+                (p.1 + 29.9) as f32,
+                name,
+                fs,
+                family,
+                None,
+                scale,
+            );
+        }
+    }
+    for si in 0..ns_box {
+        if single && si == 0 {
+            continue;
+        }
+        let p = at(1.0, v_axis, zpos(si));
+        tick(p.0, p.1, p.0 + 5.69, p.1);
+        if single || si % 2 == 0 {
+            let si_label = if single { 0 } else { si };
+            if let Some(ser) = chart.series.get(si_label) {
+                // The back tick's label sits closer (8.7..9.6pt over 9
+                // sweep arms); every other one 16.3..17.8pt out.
+                let off = if si == ns_box - 1 && !single { 8.9 } else { 16.7 };
+                draw_text_baseline(
+                    dc,
+                    ((p.0 + off) * scale).round() as i32,
+                    (p.1 + 6.2) as f32,
+                    &ser.name,
+                    fs,
+                    family,
+                    None,
+                    scale,
+                );
+            }
+        }
+    }
+    SelectObject(dc, old_pen);
+    let _ = DeleteObject(pen);
+
+    // ---- band legend (chart_surface P5): highest band first, 27.75 rows ----
+    if chart.has_legend {
+        let rows = adiv;
+        let block = rows as f64 * 27.75;
+        let top = sy + shh / 2.0 - block / 2.0;
+        let label_x0 = sx + sw - 10.0 - legend_w;
+        let swatch_x0 = label_x0 - 4.62 - 9.89;
+        for r in 0..rows {
+            let band = rows - 1 - r;
+            let a0 = amin + step * band as f64;
+            let label = format!("{}-{}", fmt_axis_value(a0, step), fmt_axis_value(a0 + step, step));
+            let sw_y = top + 8.97 + r as f64 * 27.75;
+            let (cr, cg, cb) = accent(band);
+            let brush = CreateSolidBrush(COLORREF(colorref(cr, cg, cb)));
+            let rect = windows::Win32::Foundation::RECT {
+                left: (swatch_x0 * scale).round() as i32,
+                top: (sw_y * scale).round() as i32,
+                right: ((swatch_x0 + 9.89) * scale).round() as i32,
+                bottom: ((sw_y + 9.89) * scale).round() as i32,
+            };
+            let _ = FillRect(dc, &rect, brush);
+            let _ = DeleteObject(brush);
+            draw_text_baseline(
+                dc,
+                (label_x0 * scale).round() as i32,
+                (sw_y + 9.89 + 0.28) as f32,
+                &label,
+                fs,
+                family,
+                None,
+                scale,
+            );
+        }
+    }
+}
+
 /// Value axis for data that may contain NEGATIVE values (both orientations).
 ///
 /// DERIVED from the 8-arm `chart_negative` probe (Word render-truth, 2026-08-10):
@@ -18553,6 +19336,88 @@ fn draw_text_baseline_wiu(
 }
 
 /// Regular-weight text at a baseline position.
+/// Draw a one-line label turned by `deg` (negative = reading upward to the
+/// right) so that the END of its baseline lands on (`end_x`, `end_y`), in pt.
+///
+/// PowerPoint's crowded category axis (chart_line / chart_line2 / chart_line3,
+/// PowerPoint PDF): when the widest label is wider than its category pitch the
+/// labels are turned -45 degrees and each one ENDS at its category centre --
+/// the ink right edge sits 3.4..3.8pt right of the centre and the ink top
+/// 18.2..19.6pt under the axis for East / West / Midwest / North / South
+/// alike, whatever their length. PowerPoint exports such text as outlines,
+/// which is how the box of every label was read.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn draw_text_turned_end(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    end_x: f64,
+    end_y: f64,
+    deg: f64,
+    text: &str,
+    font_size: f32,
+    family: &str,
+    scale: f64,
+) {
+    use windows::Win32::Graphics::Gdi::*;
+    let w = font_adv::line_hmtx_width_pt(text, font_size, family)
+        .unwrap_or_else(|| text.chars().count() as f32 * font_size * 0.5) as f64;
+    let (sn, cs) = deg.to_radians().sin_cos();
+    let cx = end_x * scale;
+    let cy = end_y * scale;
+    let m = XFORM {
+        eM11: cs as f32,
+        eM12: sn as f32,
+        eM21: -sn as f32,
+        eM22: cs as f32,
+        eDx: (cx - cs * cx + sn * cy) as f32,
+        eDy: (cy - sn * cx - cs * cy) as f32,
+    };
+    unsafe {
+        let old_mode = SetGraphicsMode(dc, GM_ADVANCED);
+        let mut old = XFORM::default();
+        let ok = old_mode != 0
+            && GetWorldTransform(dc, &mut old).as_bool()
+            && SetWorldTransform(dc, &m).as_bool();
+        draw_text_baseline(
+            dc,
+            ((end_x - w) * scale).round() as i32,
+            end_y as f32,
+            text,
+            font_size,
+            family,
+            None,
+            scale,
+        );
+        if ok {
+            let _ = SetWorldTransform(dc, &old);
+        }
+        if old_mode != 0 {
+            SetGraphicsMode(dc, GRAPHICS_MODE(old_mode));
+        }
+    }
+}
+
+/// `OXI_CATROT_DISABLE=1` puts back the two-line wrap of crowded line-chart
+/// category labels.
+/// `OXI_LEGENDNAME_DISABLE=1` puts back the line chart's fixed 103.82pt legend
+/// band (the width "Series 1" gives) for every series name. chart_title_line2
+/// ("Revenue" / "Cost", PowerPoint PDF): the plot ends at the band the
+/// widest NAME gives, 15.65 + 21.29 + w + 10.0, as the signed path already did.
+fn legendname_on() -> bool {
+    std::env::var("OXI_LEGENDNAME_DISABLE").is_err()
+}
+
+fn catrot_on() -> bool {
+    std::env::var("OXI_CATROT_DISABLE").is_err()
+}
+
+fn catrot_dx() -> f64 {
+    std::env::var("OXI_CATROT_DX").ok().and_then(|v| v.parse().ok()).unwrap_or(4.3)
+}
+fn catrot_dy() -> f64 {
+    std::env::var("OXI_CATROT_DY").ok().and_then(|v| v.parse().ok()).unwrap_or(23.6)
+}
+
 #[cfg(windows)]
 fn draw_text_baseline(
     dc: windows::Win32::Graphics::Gdi::HDC,

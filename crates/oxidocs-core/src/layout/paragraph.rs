@@ -6959,7 +6959,18 @@ impl<'a> ParagraphLayouter<'a> {
 
             let is_soft_break_line =
                 self.do_not_expand_shift_return && line.break_type == LineBreakType::SoftBreak;
-            let should_justify = !in_textbox
+            // OXI_TXBX_JUSTIFY (2026-11-15, default ON, opt-out _DISABLE): a text box's
+            // jc=both paragraph is justified (and its 約物 squeezed) like the body. Word PDF
+            // ja/administrative__1fc69a4f p2 (a newsletter of text boxes): every justified
+            // line ends on the box's inner edge, and «…懇談会を開催» halves （ and ） to
+            // keep the ruby field; Oxi left every box line ragged (a09b0c9b had turned the
+            // body justify off in boxes for clipped overflow text).
+            // A box with its own char grid stays out: the slack's grid term charges the
+            // grid extra against the line (golden 29dc6e89 p6, 9pt in a 9.255 grid box:
+            // slack -91 squeezed a line Word draws natural).
+            let txbx_ok = !in_textbox
+                || (!crate::env_flag!("OXI_TXBX_JUSTIFY_DISABLE") && effective_char_pitch.is_none());
+            let should_justify = txbx_ok
                 && !is_soft_break_line
                 && ((para.alignment == Alignment::Justify && !is_last_line)
                     || para.alignment == Alignment::Distribute);
@@ -6971,7 +6982,7 @@ impl<'a> ParagraphLayouter<'a> {
             // cell, reports__7a8268ce p1 「…いたします。御多用の折、…致します。」
             // ）8.52 。8.64 、8.64; Oxi left them natural and ran 2-4pt past the edge.
             let last_fit = !should_justify
-                && !in_textbox
+                && txbx_ok
                 && !is_soft_break_line
                 && self.compress_punctuation
                 && para.alignment == Alignment::Justify
@@ -7262,7 +7273,7 @@ impl<'a> ParagraphLayouter<'a> {
                 // 2026-04-20 fix: Skip chars whose fragment.width is ALREADY smaller than
                 // natural (indicates break_into_lines already compressed them — applying
                 // Phase 1 again would DOUBLE-compress, crushing 「」 to w=0pt).
-                if slack < 0.0 && !in_textbox && !s472_render {
+                if slack < 0.0 && txbx_ok && !s472_render {
                     for (fi, frag) in line.fragments.iter().enumerate() {
                         for ch in frag.text.chars() {
                             if kinsoku::is_cjk_compressible(ch) {
@@ -7353,7 +7364,7 @@ impl<'a> ParagraphLayouter<'a> {
                 // but at render Word restores 、 toward natural when slack allows.
                 // Safe because: only fires when slack > 0, only de-compresses
                 // (never over-extends).
-                if slack > 0.5 && !in_textbox && !s472_render {
+                if slack > 0.5 && txbx_ok && !s472_render {
                     let mut compressed: Vec<(usize, f32, f32)> = Vec::new();
                     for (fi, frag) in line.fragments.iter().enumerate() {
                         for ch in frag.text.chars() {

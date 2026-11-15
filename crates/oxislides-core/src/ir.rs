@@ -673,6 +673,10 @@ pub struct Chart {
     /// mapping, black w=0.75, drawn UNDER the up/down bars.
     #[serde(default)]
     pub hi_low_lines: bool,
+    /// c:surfaceChart / c:surface3DChart `c:wireframe@val`: the mesh is drawn
+    /// as band-coloured edges only, without filled faces.
+    #[serde(default)]
+    pub surface_wireframe: bool,
     /// c:stockChart/c:upDownBars — when present Word draws a box between
     /// the FIRST and LAST series' values (open..close). Measured on
     /// chart_stock K6/K7: white #F9F9F9 when the last value is above the
