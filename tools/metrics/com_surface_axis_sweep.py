@@ -29,6 +29,12 @@ OUT = os.path.join(DIR, "com_surface_axis.pptx")
 BASE = [19.2, 21.4, 16.7, 22.0, 18.1, 20.3, 17.5, 19.9, 21.1, 18.8]
 ARMS = [(w, h, nc, ns) for (w, h) in ((396, 288), (300, 240), (560, 360))
         for nc in range(2, 11) for ns in range(2, 11)]
+# `place`: the vertical-placement grid (sizes x depth), read for the axis boxes
+if "place" in sys.argv[1:]:
+    ARMS = [(w, h, nc, ns) for (w, h) in ((300, 200), (300, 300), (400, 250), (400, 350),
+                                         (500, 300), (600, 250), (600, 400))
+            for nc in range(2, 9) for ns in range(2, 9)]
+    OUT = OUT.replace("com_surface_axis.pptx", "com_surface_place.pptx")
 
 
 def pt(v):
@@ -93,7 +99,11 @@ def read():
             c = sh.Chart
             a3, a2 = c.Axes(3), c.Axes(2)
             pa = c.PlotArea
-            rows.append(dict(w=w, h=h, nc=nc, ns=ns, k=a3.TickLabelSpacing, major=a2.MajorUnit,
+            boxes = {}
+            for ai in (1, 2, 3):
+                ax = c.Axes(ai)
+                boxes["ax%d" % ai] = (ax.Left, ax.Top, ax.Width, ax.Height)
+            rows.append(dict(w=w, h=h, nc=nc, ns=ns, k=a3.TickLabelSpacing, major=a2.MajorUnit, **boxes,
                              vmin=a2.MinimumScale, vmax=a2.MaximumScale,
                              in_top=pa.InsideTop, in_h=pa.InsideHeight,
                              in_left=pa.InsideLeft, in_w=pa.InsideWidth))
@@ -105,5 +115,6 @@ if __name__ == "__main__":
     build()
     surgery()
     rows = read()
-    json.dump(rows, open(os.path.join(DIR, "rows.json"), "w"), indent=0)
+    name = "rows_place.json" if "place" in sys.argv[1:] else "rows.json"
+    json.dump(rows, open(os.path.join(DIR, name), "w"), indent=0)
     print("arms", len(rows))

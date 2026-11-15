@@ -13100,11 +13100,15 @@ unsafe fn draw_surface_chart(
     let (x0, x1, y0, y1) = extent(depth, height, s, ph, e_box);
     let cx = (plot_left + plot_right) / 2.0;
     let (tx, ty) = if cam {
-        // Above the centred place by 5*free/(free+45) of the free height
-        // (0.4..5.3pt over the arms; the law behind it is not derived and
-        // leaves up to ~2pt).
+        // Above the centred place by
+        //   (free/ph) * (0.12884*pw - 0.10392*s) - 0.14329
+        // (free = plot height the box leaves; s = scale in pt). Fitted on
+        // 343 arms read through PowerPoint's object model (value-axis box,
+        // com_surface_axis_sweep.py place): rms 0.355pt, inside the 1pt
+        // rounding of those boxes. Checked on the 28 PDF arms it never saw:
+        // rms 0.23pt, worst 0.58pt (the old 5*free/(free+45) left ~2pt).
         let free = (ph - (y1 - y0)).max(0.0);
-        e_box.1 += 5.0 * free / (free + 45.0);
+        e_box.1 += (free / ph) * (0.12884 * pw - 0.10392 * s) - 0.14329;
         (cx, (plot_top + plot_bot) / 2.0)
     } else {
         let cy = (plot_top + plot_bot) / 2.0 - if vbind { 0.0 } else { 0.011 * ph };
