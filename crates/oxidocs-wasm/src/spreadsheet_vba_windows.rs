@@ -198,6 +198,73 @@ impl WorkbookHost<'_> {
         }
     }
 
+    pub(super) fn validate_window_state_argument(&self, value: &Value) -> Result<(), String> {
+        let mut pending = vec![(value, false)];
+        let mut object_operand = false;
+        while let Some((operand, array_element)) = pending.pop() {
+            match operand {
+                Value::Array(array) => {
+                    let Some(first) = array.values.first() else {
+                        return Err(host_error(13, "WindowState cannot convert an empty array"));
+                    };
+                    let nested = matches!(first, Value::Array(_));
+                    if array.values.iter().any(|item| matches!(item, Value::Array(_)) != nested) {
+                        return Err(host_error(13, "WindowState requires a rectangular array"));
+                    }
+                    if let Value::Array(first) = first {
+                        if array.values.iter().any(|item| match item {
+                            Value::Array(item) => !first.dimensions.iter().map(|dimension| dimension.length)
+                                .eq(item.dimensions.iter().map(|dimension| dimension.length)),
+                            _ => true,
+                        }) {
+                            return Err(host_error(13, "WindowState requires matching array dimensions"));
+                        }
+                    }
+                    pending.extend(array.values.iter().rev().map(|item| (item, true)));
+                }
+                Value::Null if array_element => return Err(host_error(13, "WindowState cannot convert an array Null")),
+                Value::Nothing => return Err(host_error(5, "WindowState requires an Excel scalar")),
+                Value::Date(serial) if *serial < 0.0 => return Err(host_error(5, "WindowState cannot convert a negative date")),
+                Value::Error(code) if spreadsheet_error_text_exact(*code).is_none() =>
+                    return Err(host_error(13, "WindowState cannot convert this error value")),
+                Value::Object(_) | Value::Record(_) => object_operand = true,
+                _ => {}
+            }
+        }
+        if object_operand { return Err(self.scalar_set_error("Window", "WindowState")); }
+        let scalar = Self::protection_scalar(value)?;
+        let number = if let Value::Currency(units) = scalar {
+            let magnitude = units.unsigned_abs();
+            let cents = magnitude / 100 + u64::from(magnitude % 100 >= 50);
+            Some((cents as f64 / 100.0) * if *units < 0 { -1.0 } else { 1.0 })
+        } else if scalar.is_string() {
+            scalar.padded_string_units().and_then(|units| {
+                let end = units.iter().position(|unit| *unit == 0).unwrap_or(units.len());
+                String::from_utf16(&units[..end]).ok()
+            }).and_then(|text| text.trim_matches(' ').parse::<f64>().ok())
+        } else {
+            Self::legacy_assignment_number(value)
+                .map_err(|number| if number == 1004 {
+                    self.scalar_set_error("Window", "WindowState")
+                } else { host_error(number, "WindowState cannot convert this operand") })?
+        };
+        let number = number.filter(|number| number.is_finite())
+            .ok_or_else(|| self.scalar_set_error("Window", "WindowState"))?;
+        let enum_operand = matches!(value, Value::Int16(_) | Value::Integer(_) | Value::LongLong(_)
+            | Value::Byte(_) | Value::Single(_) | Value::Double(_) | Value::Decimal(_));
+        let internal = if enum_operand {
+            match number { -4140.0 => 1.0, -4137.0 => 2.0, -4143.0 => 3.0, _ => number }
+        } else { number };
+        // Compare the endpoints directly: adding the margin before floor
+        // would collapse adjacent Double operands at the upper boundary.
+        let margin = 2049.0 / 8589934592.0;
+        if ((1.0 - margin)..(4.0 - margin)).contains(&internal) {
+            Ok(())
+        } else {
+            Err(self.scalar_set_error("Window", "WindowState"))
+        }
+    }
+
     pub(super) fn frame_caption(&self) -> Value {
         self.window_caption.clone().unwrap_or_else(|| {
             let mut caption = self.file_name.clone().unwrap_or_else(|| "Book1".into());
@@ -385,6 +452,10 @@ mod tests {
     use super::*;
 
     fn native_group(index: usize) {
+        native_group_fields(index, None);
+    }
+
+    fn native_group_fields(index: usize, compared_fields: Option<usize>) {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/vba/window_collections_native.json")).unwrap();
         let group = &fixture["groups"][index];
@@ -416,15 +487,21 @@ mod tests {
                     folders: vec![r"C:\work".into()], ..Default::default()
                 }),
             };
+            let mut args = vec![Value::Integer(mode), Value::Integer(binding)];
+            if let Some(bits) = case["input_operand_bits"].as_str() {
+                args.push(Value::Double(f64::from_bits(u64::from_str_radix(bits, 16).unwrap())));
+            }
             let outcome = execute_workbook_action_in_session(
                 oxicells_core::parse_xlsx_preserving_values(&carrier).unwrap(),
-                group["program"].as_str().unwrap(), Some("Probe"),
-                vec![Value::Integer(mode), Value::Integer(binding)], 0, context, &mut None).unwrap();
+                group["program"].as_str().unwrap(), Some(group["procedure"].as_str().unwrap_or("Probe")),
+                args, 0, context, &mut None).unwrap();
             if let Some(error) = outcome.error {
                 failures.push(format!("mode={mode}, binding={binding}: {}", serde_json::to_value(error).unwrap()));
                 continue;
             }
-            assert!(!outcome.workbook_changed, "{} mode={mode}, binding={binding}: caller unchanged", group["id"]);
+            if !group["mutates_caller_inputs"].as_bool().unwrap_or(false) {
+                assert!(!outcome.workbook_changed, "{} mode={mode}, binding={binding}: caller unchanged", group["id"]);
+            }
             assert!(outcome.files.is_empty() && outcome.deleted_files.is_empty(),
                 "{} mode={mode}, binding={binding}: probe writes no files", group["id"]);
             let result = serde_json::to_value(outcome.result).unwrap();
@@ -432,7 +509,21 @@ mod tests {
             let expected = case["expected"].as_array().unwrap();
             assert_eq!(actual.len(), fields.len());
             assert_eq!(expected.len(), fields.len());
-            for (at, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            let compared_fields = if binding >= 8 { fields.len() }
+                else { compared_fields.unwrap_or(fields.len()) };
+            assert!(compared_fields <= fields.len());
+            for (at, (actual, expected)) in actual.iter().zip(expected).enumerate()
+                .filter(|(at, _)| *at < compared_fields || *at > 7) {
+                if at == 8 {
+                    if let Some(bits) = case["expected_operand_bits"].as_str() {
+                        let actual = actual["value"].as_f64().expect("numeric operand").to_bits();
+                        let expected = u64::from_str_radix(bits, 16).unwrap();
+                        if actual != expected {
+                            failures.push(format!("mode={mode}, binding={binding}, operand bits: {actual:016x} != {expected:016x}"));
+                        }
+                        continue;
+                    }
+                }
                 let mut value = actual["value"].clone();
                 if group["id"] == "property_types" && at < 39 && at % 3 == 0
                     && case["expected"][at + 1] == 10 && actual["type"] == "error" {
@@ -485,5 +576,55 @@ mod tests {
     #[test]
     fn explicit_window_new_window_matches_native() {
         native_group(6);
+    }
+
+    #[test]
+    fn window_state_assignment_errors_match_native() {
+        native_group_fields(7, Some(7));
+    }
+
+    #[test]
+    fn window_state_assignment_error_boundaries_match_native() {
+        native_group_fields(8, Some(7));
+    }
+
+    #[test]
+    fn window_state_assignment_contexts_match_native() {
+        native_group_fields(9, Some(7));
+    }
+
+    #[test]
+    fn window_state_conversion_controls_match_native() {
+        native_group_fields(10, Some(7));
+    }
+
+    #[test]
+    fn window_state_numeric_rounding_match_native() {
+        native_group_fields(11, Some(7));
+    }
+
+    #[test]
+    fn window_state_numeric_thresholds_match_native() {
+        native_group_fields(12, Some(7));
+    }
+
+    #[test]
+    fn window_state_numeric_boundaries_match_native() {
+        native_group_fields(13, Some(7));
+    }
+
+    #[test]
+    fn window_state_enum_boundaries_match_native() {
+        native_group_fields(14, Some(7));
+    }
+
+    #[test]
+    fn window_state_operand_precision_match_native() {
+        native_group_fields(15, Some(7));
+    }
+
+    #[test]
+    fn window_state_binary_boundaries_match_native() {
+        native_group_fields(16, Some(7));
     }
 }
