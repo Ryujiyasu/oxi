@@ -6,7 +6,7 @@
 //! native pointers. Empty allocated BSTRs and null BSTRs remain distinct.
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
-static NEXT: AtomicU64 = AtomicU64::new(0x2000_0000);
+static NEXT: AtomicU64 = AtomicU64::new(0x1_2000_0000);
 #[derive(Clone)]
 pub(super) struct Allocation {
     pub(super) pointer: i64,
