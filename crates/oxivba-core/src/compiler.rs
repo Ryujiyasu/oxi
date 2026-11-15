@@ -1458,6 +1458,37 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn implicit_storage_declaration(&self, expr: &Expr, name: &str) -> Option<TypeName> {
+        if self.explicit || self.variables.contains_key(name) || self.functions.contains_key(name)
+            || self.constants.contains(name) || self.later_locals.contains(name)
+            || self.known_symbols.is_some_and(|symbols| symbols.contains_key(name))
+            || self.known_namespaces.is_some_and(|namespaces| namespaces.contains(name))
+            || self.project_name.eq_ignore_ascii_case(name)
+            || self.standard_module_key(name).is_some() || self.source_class_key(name).is_some()
+            || self.implicit_document_member(name).is_some() || self.reference_function(expr).is_some()
+            || crate::runtime::is_builtin_function(name) || crate::runtime::builtin_constant(name).is_some()
+        {
+            return None;
+        }
+        if let Expr::TypedIdent { suffix, .. } = expr {
+            let name = match suffix {
+                '%' => "Integer", '&' => "Long", '^' => "LongLong", '!' => "Single",
+                '#' => "Double", '@' => "Currency", '$' => "String", _ => return None,
+            };
+            return Some(TypeName { name: name.into(), suffix: Some(*suffix), ..TypeName::implicit() });
+        }
+        if self.infer(expr) != Type::Unknown {
+            return None;
+        }
+        let first = name.chars().next()?.to_ascii_uppercase();
+        let name = self.module.items.iter().filter_map(|item| match item {
+            ModuleItem::DefType(declaration) if declaration.ranges.iter().any(|range|
+                range.start <= first && first <= range.end) => Some(declaration.type_name.clone()),
+            _ => None,
+        }).next_back().unwrap_or_else(|| "Variant".into());
+        Some(TypeName { name, ..TypeName::implicit() })
+    }
+
     fn storage_declaration(&self, expr: &Expr) -> Option<TypeName> {
         let record_field = |kind: Type, name: &str| {
             let Type::Record(record) = kind else { return None };
@@ -1474,6 +1505,7 @@ impl<'a> Checker<'a> {
                     return None;
                 }
                 self.variable_storage.get(&name).cloned()
+                    .or_else(|| self.implicit_storage_declaration(expr, &name))
             }
             Expr::Member { object, name, .. } | Expr::Bang { object, name, .. } => {
                 record_field(self.infer(object), name)
@@ -6643,6 +6675,54 @@ End Function
                 let (module, classes) = crate::parse_project(&source).unwrap();
                 let mut runtime = crate::Runtime::new(&module).with_classes(&classes);
                 let value = runtime.call("ByRefScalarOracle1299.Probe", vec![Value::Integer(0), Value::Integer(0)]).unwrap();
+                let Value::Array(array) = value else { panic!("case {case}: expected array") };
+                let actual = array.values.iter().map(|value| match value {
+                    Value::Byte(n) => n.to_string(),
+                    Value::Int16(n) => n.to_string(),
+                    Value::Integer(n) | Value::LongLong(n) => n.to_string(),
+                    Value::String(text) => text.clone(),
+                    other => panic!("case {case}: unexpected field {other:?}"),
+                }).collect::<Vec<_>>().join("|");
+                assert_eq!(actual, *expected, "case {case}");
+            }
+        }
+    }
+
+    #[test]
+    fn implicit_scalar_byref_arguments_use_native_storage_types() {
+        let cases = [
+            ("", "value", "CLng(11)", "BumpLong(value)", true, ""),
+            ("", "value", "CLng(11)", "BumpLong((value))", false, "0|12|3|11|Long|3|2|ran"),
+            ("DefLng V\n", "value", "CLng(11)", "BumpLong(value)", false, "0|12|3|12|Long|3|2|ran"),
+            ("DefInt V\n", "value", "CInt(11)", "BumpLong(value)", true, ""),
+            ("", "value&", "CLng(11)", "BumpLong(value&)", false, "0|12|3|12|Long|3|2|ran"),
+            ("", "value%", "CInt(11)", "BumpLong(value%)", true, ""),
+        ];
+        for (case, (preamble, target, initial, call, rejected, expected)) in cases.iter().enumerate() {
+            let source = format!(r#"Attribute VB_Name = "ByRefImplicitOracle1361"
+{preamble}' Self-authored conformance probe, CC BY-SA 4.0.
+Private Function BumpLong(ByRef value As Long) As Long
+ value = value + 1: BumpLong = value
+End Function
+Public Function Probe(ByVal mode As Long, ByVal binding As Long) As Variant
+ Dim returned As Long
+ {target} = {initial}
+ On Error Resume Next
+ Err.Clear
+ returned = {call}
+ Probe = Array(Err.Number, returned, VarType({target}), CStr({target}), TypeName({target}), VarType(returned), Len(CStr({target})), "ran")
+End Function
+
+"#);
+            let compiled = compile_project(&source);
+            if *rejected {
+                let failure = compiled.expect_err(&format!("Native implicit case {case} must fail compilation"));
+                assert_eq!(failure.error.kind, CompileErrorKind::ByRefArgumentTypeMismatch, "case {case}");
+            } else {
+                compiled.unwrap();
+                let (module, classes) = crate::parse_project(&source).unwrap();
+                let mut runtime = crate::Runtime::new(&module).with_classes(&classes);
+                let value = runtime.call("ByRefImplicitOracle1361.Probe", vec![Value::Integer(0), Value::Integer(0)]).unwrap();
                 let Value::Array(array) = value else { panic!("case {case}: expected array") };
                 let actual = array.values.iter().map(|value| match value {
                     Value::Byte(n) => n.to_string(),
