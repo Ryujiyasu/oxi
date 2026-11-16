@@ -538,6 +538,7 @@ dependencies = [
  "serde_json",
  "subsetter",
  "tiny-skia",
+ "zip",
 ]
 
 [[package]]

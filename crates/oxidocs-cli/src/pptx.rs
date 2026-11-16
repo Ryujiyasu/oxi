@@ -1215,7 +1215,7 @@ fn finish(pages: Vec<(f64, f64, Vec<Item>)>, faces: &Faces) -> PdfDocument {
     if !missing.is_empty() {
         let list: Vec<&str> = missing.iter().map(String::as_str).collect();
         eprintln!(
-            "Warning: no font file for {} - drawn with a stand-in face and will not match PowerPoint",
+            "Warning: no font file for {} - drawn with a stand-in face and may differ from the source",
             list.join(", ")
         );
     }
@@ -1397,4 +1397,41 @@ mod tests {
         let (_, unsupported) = pages(&pres);
         assert!(unsupported.iter().any(|u| u.kind.contains("gradient")), "{unsupported:?}");
     }
+}
+// Text placement shared with the spreadsheet PDF path. Font lookup and
+// subsetting stay in one place so Japanese fallback fonts are embedded too.
+#[derive(Default)]
+pub(super) struct TextPages {
+    faces: Faces,
+    pages: Vec<(f64, f64, Vec<Item>)>,
+}
+
+impl TextPages {
+    pub fn page(&mut self, width: f64, height: f64) {
+        self.pages.push((width, height, Vec::new()));
+    }
+    pub fn element(&mut self, element: ContentElement) {
+        self.pages.last_mut().unwrap().2.push(Item::Element(element));
+    }
+    pub fn width(&self, text: &str, family: &str, size: f64, bold: bool, italic: bool) -> f64 {
+        text.chars().map(|ch| self.faces.face_for(family, bold, italic, ch)
+            .map_or(0.5, |(_, advance)| f64::from(advance)) * size).sum()
+    }
+    pub fn text(&mut self, text: &str, family: &str, size: f64, bold: bool, italic: bool, x: f64, y: f64, color: Color) {
+        let mut pen = x;
+        let mut open: Option<Glyphs> = None;
+        for ch in text.chars() {
+            let Some((face, advance)) = self.faces.face_for(family, bold, italic, ch) else { continue };
+            if let Some(run) = open.as_mut().filter(|run| run.face.key == face.key) {
+                run.text.push(ch);
+            } else {
+                if let Some(run) = open.take() { self.pages.last_mut().unwrap().2.push(Item::Glyphs(run)); }
+                open = Some(Glyphs { face, x: pen as f32, y: y as f32, text: ch.to_string(),
+                    size: size as f32, color, fake_bold: false, fake_italic: false });
+            }
+            pen += f64::from(advance) * size;
+        }
+        if let Some(run) = open { self.pages.last_mut().unwrap().2.push(Item::Glyphs(run)); }
+    }
+    pub fn finish(self) -> PdfDocument { finish(self.pages, &self.faces) }
 }
