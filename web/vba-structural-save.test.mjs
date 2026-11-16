@@ -2204,9 +2204,7 @@ let nativeConversionObservations = 0;
                     return value.value;
                 });
                 const conversionControl = diagnostic && item.binding >= 8;
-                const comparedFields = diagnostic && !conversionControl ? 7 : group.fields.length;
-                assert.deepEqual(actual.slice(0, comparedFields), item.expected.slice(0, comparedFields), label);
-                if (diagnostic) assert.deepEqual(actual.slice(8), item.expected.slice(8), label + ' operand');
+                assert.deepEqual(actual, item.expected, label);
                 if (item.expected_operand_bits) {
                     const encoded = Buffer.alloc(8);
                     encoded.writeDoubleBE(actual[8]);

@@ -613,19 +613,85 @@ fn native_save_as_converts_the_package_and_keeps_the_live_project() {
 
 #[test]
 fn native_window_collection_calls_preserve_complete_excel_observations() {
-    // Exercise the public options decoder as well as execution. The native
-    // observations include Japanese Err descriptions and a host help-file path;
-    // replaying them with the API's English defaults would change the input.
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/vba/window_collections_native.json"
-    ))
-    .unwrap();
+    let fixture = native_window_fixture();
     let group = fixture["groups"]
         .as_array()
         .unwrap()
         .iter()
         .find(|group| group["id"] == "binding_and_coercion")
         .unwrap();
+    assert_eq!(group["fields"].as_array().unwrap().len(), 20);
+    assert_eq!(group["cases"].as_array().unwrap().len(), 112);
+    replay_native_window_group(group);
+}
+
+#[test]
+fn native_window_lifecycle_and_state_assignments_preserve_complete_excel_observations() {
+    let fixture = native_window_fixture();
+    let groups = fixture["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 17);
+    assert_eq!(
+        groups
+            .iter()
+            .map(|group| group["cases"].as_array().unwrap().len())
+            .sum::<usize>(),
+        2688
+    );
+    for group in groups
+        .iter()
+        .filter(|group| group["id"] != "binding_and_coercion")
+    {
+        replay_native_window_group(group);
+    }
+}
+
+fn native_window_fixture() -> serde_json::Value {
+    serde_json::from_str(include_str!(
+        "../../../tests/fixtures/vba/window_collections_native.json"
+    ))
+    .unwrap()
+}
+
+#[test]
+fn native_json_preserves_double_bits() {
+    let source = concat!(
+        "Attribute VB_Name = \"NativeFloatBoundary\"\n",
+        "Public Function Probe() As Double\n",
+        " Probe = 0.9999997615814208984375\nEnd Function\n"
+    );
+    let mut session = SpreadsheetVbaSession::default();
+    let outcome = session
+        .run_native(
+            workbook(),
+            NativeVbaCall::new(source, "NativeFloatBoundary.Probe", vec![], 46_000.0, 1),
+        )
+        .unwrap();
+    let expected = 0x3fef_ffff_8000_0000;
+    let Value::Double(raw) = outcome.result() else {
+        panic!("expected a Double result");
+    };
+    assert_eq!(raw.to_bits(), expected, "VBA literal before JSON");
+    for wire in [outcome.to_json().unwrap(), outcome.to_typed_json().unwrap()] {
+        let decoded: serde_json::Value = serde_json::from_str(&wire).unwrap();
+        assert_eq!(
+            decoded["result"]["value"].as_f64().unwrap().to_bits(),
+            expected,
+            "outgoing JSON must retain the raw VBA Double"
+        );
+    }
+    let arguments = session
+        .decode_native_arguments(r#"[{"type":"double","value":0.9999997615814209}]"#)
+        .unwrap();
+    let Value::Double(decoded) = arguments[0] else {
+        panic!("expected a Double argument");
+    };
+    assert_eq!(decoded.to_bits(), expected, "incoming JSON Double");
+}
+
+fn replay_native_window_group(group: &serde_json::Value) {
+    // Exercise the public options decoder as well as execution. The native
+    // observations include Japanese Err descriptions and a host help-file path;
+    // replaying them with the API's English defaults would change the input.
     let hex = group["carrier_bytes_hex"].as_str().unwrap();
     let carrier: Vec<u8> = (0..hex.len())
         .step_by(2)
@@ -649,8 +715,6 @@ fn native_window_collection_calls_preserve_complete_excel_observations() {
     let workbook = oxicells_core::parse_xlsx_preserving_values(&carrier).unwrap();
     let fields = group["fields"].as_array().unwrap();
     let cases = group["cases"].as_array().unwrap();
-    assert_eq!(fields.len(), 20);
-    assert_eq!(cases.len(), 112);
     for reverse in [false, true] {
         for position in 0..cases.len() {
             let case = &cases[if reverse {
@@ -660,11 +724,20 @@ fn native_window_collection_calls_preserve_complete_excel_observations() {
             }];
             let mode = case["mode"].as_i64().unwrap();
             let binding = case["binding"].as_i64().unwrap();
-            let context = format!("reverse={reverse}, mode={mode}, binding={binding}");
+            let context = format!(
+                "{} reverse={reverse}, mode={mode}, binding={binding}",
+                group["id"]
+            );
+            let mut args = vec![Value::Integer(mode), Value::Integer(binding)];
+            if let Some(bits) = case["input_operand_bits"].as_str() {
+                args.push(Value::Double(f64::from_bits(
+                    u64::from_str_radix(bits, 16).unwrap(),
+                )));
+            }
             let mut call = NativeVbaCall::new(
                 group["program"].as_str().unwrap(),
                 group["procedure"].as_str().unwrap_or("Probe"),
-                vec![Value::Integer(mode), Value::Integer(binding)],
+                args,
                 46_000.0,
                 1,
             );
@@ -680,7 +753,9 @@ fn native_window_collection_calls_preserve_complete_excel_observations() {
                 "{context}: {}",
                 details["error"]
             );
-            assert_eq!(details["workbook_changed"], false, "{context}");
+            if !group["mutates_caller_inputs"].as_bool().unwrap_or(false) {
+                assert_eq!(details["workbook_changed"], false, "{context}");
+            }
             // Empty file lists are omitted by the public outcome serializer.
             assert!(details.get("files").is_none(), "{context}");
             assert!(details.get("deleted_files").is_none(), "{context}");
@@ -688,8 +763,35 @@ fn native_window_collection_calls_preserve_complete_excel_observations() {
             let expected = case["expected"].as_array().unwrap();
             assert_eq!(actual.len(), fields.len(), "{context}");
             assert_eq!(expected.len(), fields.len(), "{context}");
-            for ((field, actual), expected) in fields.iter().zip(actual).zip(expected) {
-                assert_eq!(&actual["value"], expected, "{context}, field={field}");
+            for (at, ((field, actual), expected)) in
+                fields.iter().zip(actual).zip(expected).enumerate()
+            {
+                if at == 8 {
+                    if let Some(bits) = case["expected_operand_bits"].as_str() {
+                        assert_eq!(
+                            actual["value"].as_f64().unwrap().to_bits(),
+                            u64::from_str_radix(bits, 16).unwrap(),
+                            "{context}, field={field}: exact operand bits"
+                        );
+                        continue;
+                    }
+                }
+                let mut value = actual["value"].clone();
+                if group["id"] == "property_types"
+                    && at < 39
+                    && at % 3 == 0
+                    && case["expected"][at + 1] == 10
+                    && actual["type"] == "error"
+                {
+                    // Native COM captures VT_ERROR as a signed SCODE; the
+                    // public API carries its VBA error number. Compare the
+                    // exact mapping while retaining the native fixture value.
+                    let code = value.as_u64().unwrap();
+                    assert!(code <= u64::from(u16::MAX));
+                    value =
+                        serde_json::Value::from(i64::from((0x800a_0000_u32 | code as u32) as i32));
+                }
+                assert_eq!(&value, expected, "{context}, field={field}");
             }
         }
     }

@@ -167,6 +167,21 @@ class NativeWorkbook(unittest.TestCase):
                 self.wb.run("PythonBridge.Echo", value)
         self.assertEqual(self.wb.run("PythonBridge.Step", 3), 5)
 
+    def test_finite_double_bits_survive_json_in_both_directions(self):
+        for encoded in ["3fefffff7fffffff", "3fefffff80000000", "3fefffff80000001",
+                        "400fffff80000000", "bfefffff80000000", "8000000000000000"]:
+            with self.subTest(bits=encoded):
+                payload = bytes.fromhex(encoded)
+                value = struct.unpack(">d", payload)[0]
+                signed = int.from_bytes(payload, "big", signed=True)
+                # LongLong responses use exact decimal strings on the wire,
+                # isolating incoming floating-point conversion from outgoing.
+                self.assertEqual(self.wb.run("PythonBridge.DoubleBits", value),
+                                 ox.LongLong(signed))
+                # Send an exact integer to isolate outgoing numeric conversion.
+                result = self.wb.run("PythonBridge.FromBits", ox.LongLong(signed))
+                self.assertEqual(struct.pack(">d", result), payload)
+
     def test_nonfinite_values_preserve_bits(self):
         value = struct.unpack(">d", bytes.fromhex("7ff8000000000001"))[0]
         actual = self.wb.run("PythonBridge.Echo", value)
