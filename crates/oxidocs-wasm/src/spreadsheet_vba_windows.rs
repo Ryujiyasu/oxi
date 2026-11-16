@@ -157,7 +157,7 @@ impl WorkbookHost<'_> {
         }
     }
 
-    fn new_window(&mut self, source: Option<usize>) -> Value {
+    fn new_window(&mut self, source: Option<usize>, state: i64) -> Value {
         if let Some(id) = source { self.load_window(id); }
         let sheet = self.active_sheet;
         if source.is_none() {
@@ -179,7 +179,7 @@ impl WorkbookHost<'_> {
         view.panes.fill((0, 0));
         view.caption = None;
         let id = self.window_frames.frames.len();
-        self.window_frames.frames.push(WindowFrame { open: true, state: -4137, view: Some(view) });
+        self.window_frames.frames.push(WindowFrame { open: true, state, view: Some(view) });
         self.load_window(id);
         self.window_frames.active = id;
         self.object(HostObject::Window(id))
@@ -296,6 +296,21 @@ impl WorkbookHost<'_> {
 }
 
 impl WorkbookApplication<'_> {
+    fn active_window_display_state(&self) -> Option<i64> {
+        if self.closed.contains(&self.active) { return None; }
+        let host = self.hosts.get(&self.active)?;
+        let id = host.window_frames.active;
+        host.window_is_open(id).then(|| host.window_frames.frames[id].state)
+    }
+
+    fn next_display_window(&self, excluded: (u64, usize)) -> Option<(u64, usize)> {
+        self.window_z_order.iter().rev().copied().find(|(owner, id)| {
+            (*owner, *id) != excluded && !self.closed.contains(owner)
+                && self.hosts.get(owner).is_some_and(|host|
+                    host.window_is_open(*id) && host.window_frames.frames[*id].state != -4140)
+        })
+    }
+
     fn reported_window_state(&self, owner: u64, id: usize) -> i64 {
         let host = &self.hosts[&owner];
         let state = host.window_frames.frames[id].state;
@@ -380,11 +395,7 @@ impl ApplicationHost<'_> {
         if requested != -4140 {
             application.activate_frame(owner, id);
         } else if was_active {
-            let next = application.window_z_order.iter().rev().copied().find(|(next_owner, next_id)| {
-                (*next_owner, *next_id) != (owner, id) && !application.closed.contains(next_owner)
-                    && application.hosts.get(next_owner).is_some_and(|host|
-                        host.window_is_open(*next_id) && host.window_frames.frames[*next_id].state != -4140)
-            });
+            let next = application.next_display_window((owner, id));
             if let Some((next_owner, next_id)) = next { application.activate_frame(next_owner, next_id); }
         }
         Some(Ok(true))
@@ -409,6 +420,11 @@ impl ApplicationHost<'_> {
         }
         if global && name.eq_ignore_ascii_case("Visible") && args.is_empty() {
             return Some(Ok(Some(Value::Boolean(application.window_application_visible()))));
+        }
+        if global && name.eq_ignore_ascii_case("WindowState") && args.is_empty() {
+            if let Some(state) = application.active_window_display_state() {
+                return Some(Ok(Some(Value::Integer(state))));
+            }
         }
         let property = name.eq_ignore_ascii_case("Windows") && (global || book.is_some());
         if property || scope.is_some() {
@@ -445,7 +461,23 @@ impl ApplicationHost<'_> {
                 } else { "Workbook.NewWindow takes no arguments" })));
             }
             application.ensure_application_owner(owner);
-            let result = application.hosts.get_mut(&owner).expect("NewWindow owner").new_window(source);
+            let primary = source.is_none().then(|| {
+                *application.hosts[&owner].window_frames.open_ids().last()
+                    .expect("NewWindow has a source frame")
+            }).filter(|id| application.hosts[&owner].window_frames.frames[*id].state != -4140);
+            let state = primary.map(|id| application.hosts[&owner].window_frames.frames[id].state)
+                .or_else(|| application.active_window_display_state()).unwrap_or(-4137);
+            // Workbook.NewWindow uses the primary frame for display-state
+            // inheritance and return focus. Its sheet/view copy remains
+            // independent of that display history. Window.NewWindow keeps
+            // the previous foreground frame as the return target.
+            if application.window_application_visible() {
+                if let Some(id) = primary {
+                    application.window_z_order.retain(|held| *held != (owner, id));
+                    application.window_z_order.push((owner, id));
+                }
+            }
+            let result = application.hosts.get_mut(&owner).expect("NewWindow owner").new_window(source, state);
             let id = application.hosts[&owner].window_frames.active;
             application.window_z_order.push((owner, id));
             application.window_enumeration_available = true;
@@ -505,6 +537,11 @@ impl ApplicationHost<'_> {
                     if host.window_frames.open_ids().len() == 1 { return application.close_workbook(owner, &args, files).map(Some); }
                     let closing_active = host.window_frames.active == id;
                     host.close_window_frame(id);
+                    if active_owner && closing_active {
+                        if let Some((next_owner, next_id)) = application.next_display_window((owner, id)) {
+                            application.activate_frame(next_owner, next_id);
+                        }
+                    }
                     if hidden && active_owner && closing_active { application.window_enumeration_available = false; }
                     Ok(Some(Value::Empty))
                 }));

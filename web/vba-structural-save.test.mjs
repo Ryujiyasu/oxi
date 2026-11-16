@@ -2164,6 +2164,8 @@ let nativeConversionObservations = 0;
         ['window_state_enum_boundaries', 128], ['window_state_operand_precision', 54],
         ['window_state_binary_boundaries', 68],
         ['window_frame_display_transitions', 6], ['window_cross_book_display_transitions', 4],
+        ['window_creation_close_display_histories', 12],
+        ['window_creation_from_inactive_source', 4], ['window_creation_from_minimized_source', 4],
     ]);
     const diagnosticGroups = new Set(['window_state_assignment_errors',
         'window_state_assignment_error_boundaries', 'window_state_assignment_contexts',
@@ -2227,10 +2229,10 @@ let nativeConversionObservations = 0;
             }
         }
     }
-    assert.equal(nativeWindowObservations, 476);
+    assert.equal(nativeWindowObservations, 516);
     assert.equal(nativeWindowStateErrorObservations, 4812);
     assert.equal(nativeConversionObservations, 108);
 }
 
 assert.deepEqual(failures, [], 'Excel saves validation and inherited row/column formatting');
-console.log(JSON.stringify({passed: true, native_window_conditions: 238, native_window_route_observations: nativeWindowObservations, native_window_state_error_conditions: 2406, native_numeric_conversion_conditions: 54, native_numeric_conversion_route_observations: nativeConversionObservations, native_window_state_error_route_observations: nativeWindowStateErrorObservations, native_sheet_collection_conditions: 93, native_sheet_binding_profile_conditions: 60, native_selected_sheet_add_conditions: 144, native_chart_anchor_boundary_conditions: 48, native_sheet_additional_route_observations: nativeSheetAddObservations, native_worksheet_add_count_conditions: 31, native_worksheet_add_count_route_observations: 62, native_iconset_variant_cases: 20, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));
+console.log(JSON.stringify({passed: true, native_window_conditions: 258, native_window_route_observations: nativeWindowObservations, native_window_state_error_conditions: 2406, native_numeric_conversion_conditions: 54, native_numeric_conversion_route_observations: nativeConversionObservations, native_window_state_error_route_observations: nativeWindowStateErrorObservations, native_sheet_collection_conditions: 93, native_sheet_binding_profile_conditions: 60, native_selected_sheet_add_conditions: 144, native_chart_anchor_boundary_conditions: 48, native_sheet_additional_route_observations: nativeSheetAddObservations, native_worksheet_add_count_conditions: 31, native_worksheet_add_count_route_observations: 62, native_iconset_variant_cases: 20, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));
