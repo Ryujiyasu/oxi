@@ -322,7 +322,10 @@ class Workbook:
         with self._lock:
             if self._closed: raise OxiCellsError("workbook session is closed")
             self._sequence += 1
-            local = (_datetime.datetime.now() - _datetime.datetime(1899, 12, 30)).total_seconds() / 86400
+            now = _datetime.datetime.now()
+            days = (now.date() - _datetime.date(1899, 12, 30)).days
+            fraction = (now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1_000_000) / 86400
+            local = days + (-fraction if days < 0 else fraction)
             request = {"id": self._sequence, "op": operation, "currentTime": local, **fields}
             data = json.dumps(request, ensure_ascii=True, allow_nan=False)
             try:

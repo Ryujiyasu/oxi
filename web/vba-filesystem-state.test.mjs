@@ -232,4 +232,24 @@ try{globalThis.Worker=BrowserWorker;directoryEntryControls=await validateDirecto
 finally{runner.closeVbaProject();globalThis.Worker=originalWorker;}
 assert(directoryEntryControls.passed);
 
-console.log(JSON.stringify({directory_entry_validation_cases:directoryEntryControls.validations,directory_entry_worker_calls:directoryEntryControls.worker_calls,file_date_validation_cases:modificationDateControls.validation.length,file_date_worker_calls:modificationDateControls.observations.length,native_steps:fixture.cases.length,expected_end_terminations:1,invalid_snapshots:invalidStates.length,direct_session_worker:true,caller_snapshot_isolation:true,passed:true}));
+
+const savedClockDate=globalThis.Date;
+let nativeClockCases=0;
+try {
+ const clockSource='Public Function ClockParts() As Variant\n ClockParts=Array(CDbl(Now),CDbl(Time),TypeName(Now),VarType(Now),TypeName(Timer),VarType(Timer))\nEnd Function';
+ const clocks=[
+  [5,34,2,46343.23196759259,20042/86400], [6,11,16,46343.25782407408,22276/86400],
+  [6,57,32,46343.2899537037,0.2899537037037037], [6,57,33,46343.28996527778,0.28996527777777775],
+  [6,57,34,46343.289976851855,0.28997685185185185], [6,57,37,46343.29001157408,0.2900115740740741],
+  [6,57,38,46343.29002314815,0.29002314814814817], [6,57,39,46343.290034722224,0.2900347222222222],
+ ];
+ for(const [hour,minute,second,now,time]of clocks)for(const millisecond of [0,123,999]) {
+  const epoch=new savedClockDate(2026,10,17,hour,minute,second,millisecond).getTime();
+  globalThis.Date=class extends savedClockDate {constructor(...args){super(...(args.length?args:[epoch]));}static now(){return epoch;}};
+  const out=wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsheet(bytes),clockSource,'ClockParts',[],0,'clock.xlsm',{});
+  assert.equal(out.error,undefined);
+  assert.deepEqual(out.result.value.values.map(x=>x.value),[now,time,'Date',7,'Single',4]);nativeClockCases++;
+ }
+}finally{globalThis.Date=savedClockDate;}
+
+console.log(JSON.stringify({native_clock_cases:nativeClockCases,directory_entry_validation_cases:directoryEntryControls.validations,directory_entry_worker_calls:directoryEntryControls.worker_calls,file_date_validation_cases:modificationDateControls.validation.length,file_date_worker_calls:modificationDateControls.observations.length,native_steps:fixture.cases.length,expected_end_terminations:1,invalid_snapshots:invalidStates.length,direct_session_worker:true,caller_snapshot_isolation:true,passed:true}));

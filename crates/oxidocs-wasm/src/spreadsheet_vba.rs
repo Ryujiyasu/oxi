@@ -45752,6 +45752,15 @@ fn typed_from_text(written: &str) -> CellValue {
     typed_from_written(written, this_year_now()).0
 }
 
+// Keep the whole day separate: adding the epoch after dividing a Unix
+// timestamp can change a whole-second DATE by one floating-point bit.
+fn local_clock_serial(local_millis: f64) -> f64 {
+    let unix_days = (local_millis / 86_400_000.0).floor();
+    let days = unix_days + 25_569.0;
+    let fraction = (local_millis - unix_days * 86_400_000.0) / 86_400_000.0;
+    days + if days < 0.0 { -fraction } else { fraction }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn this_year_now() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -49648,7 +49657,7 @@ fn prepare_spreadsheet_vba(
         js_sys::Date::now().to_bits() ^ js_sys::Math::random().to_bits().rotate_left(17);
     let browser_now = js_sys::Date::new_0();
     let local_millis = browser_now.get_time() - browser_now.get_timezone_offset() * 60_000.0;
-    let current_time = local_millis / 86_400_000.0 + 25_569.0;
+    let current_time = local_clock_serial(local_millis);
     execute_workbook_invocation(workbook, source, VbaInvocation { procedure, args, action }, active_sheet,
         VbaRunContext { environment, host_ansi_code_page, project_name, file_name, random_seed, current_time, application_state, source_edits, document_modules, file_context, file_system_state }, session)
         .map_err(|error| JsError::new(&error))
@@ -109571,6 +109580,21 @@ End Function
     }
 
 
+
+    #[test]
+    fn local_clock_serial_keeps_native_whole_second_date_bits() {
+        for (days, seconds, expected) in [
+            (46343_i64, 20042_i64, 46343.23196759259),
+            (46343, 22276, 46343.25782407408),
+            (46343, 25052, 46343.2899537037),
+            (-1, 43445, -1.5028356481481482),
+            (-657434, 1, -657434.0000115741),
+            (2958465, 86399, 2958465.999988426),
+        ] {
+            let millis = ((days - 25569) * 86_400_000 + seconds * 1000) as f64;
+            assert_eq!(local_clock_serial(millis), expected);
+        }
+    }
 
     #[test]
     fn filedatetime_directory_entries_survive_source_reset_and_atomic_snapshot_validation() {

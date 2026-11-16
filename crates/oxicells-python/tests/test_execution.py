@@ -127,6 +127,13 @@ class NativeWorkbook(unittest.TestCase):
         self.wb = ox.open(self.fixture, timeout=60)
         self.addCleanup(self.wb.close)
 
+    def test_clock_parts_are_native_whole_seconds_without_losing_timer_type(self):
+        answer = self.wb.run("PythonBridge.ClockParts")
+        self.assertIsInstance(answer, ox.Array)
+        self.assertEqual(answer.values[0], answer.values[1])
+        self.assertEqual(answer.values[2], answer.values[3])
+        self.assertEqual(answer.values[4:], ("Date", 7, "Single", 4))
+
     def test_state_and_compile_do_not_run_auto_open(self):
         self.assertTrue(self.wb.has_macros)
         self.assertNotEqual(self.wb.run("PythonBridge.ReadCell"), 999)
