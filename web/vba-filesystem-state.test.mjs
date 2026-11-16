@@ -233,6 +233,20 @@ finally{runner.closeVbaProject();globalThis.Worker=originalWorker;}
 assert(directoryEntryControls.passed);
 
 
+const liveClockDate=globalThis.Date;
+try {
+ let epoch=new liveClockDate(2026,10,17,12,0,0).getTime();
+ globalThis.Date=class extends liveClockDate {
+  constructor(...args){super(...(args.length?args:[epoch]));if(!args.length)epoch+=2000;}
+  static now(){return epoch;}
+ };
+ const source='Public Function ClockProgress() As Variant\n ClockProgress=Array(Timer,Timer,VarType(Timer))\nEnd Function';
+ const out=wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsheet(bytes),source,'ClockProgress',[],0,'clock.xlsm',{});
+ assert.equal(out.error,undefined);
+ const values=out.result.value.values.map(x=>x.value);
+ assert.equal(values[1]-values[0],2);assert.equal(values[2],4);
+}finally{globalThis.Date=liveClockDate;}
+
 const savedClockDate=globalThis.Date;
 let nativeClockCases=0;
 try {

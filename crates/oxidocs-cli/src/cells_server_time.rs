@@ -6,6 +6,51 @@
 
 use std::fs::Metadata;
 
+/// Keep timezone and wall-clock policy in the native host. The caller can
+/// instead use the fixed native entrypoint for deterministic replay.
+pub(super) fn live_clock() -> Result<oxivba_core::clock::Clock, String> {
+    let initial = current_time()?;
+    Ok(oxivba_core::clock::Clock::new(move || current_time().unwrap_or(initial)))
+}
+
+fn clock_date(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64, millis: i64) -> Result<f64, String> {
+    let date = local_date(year, month, day, 0, 0, 0)?;
+    let fraction = (hour * 3600 + minute * 60 + second) as f64 + millis as f64 / 1000.0;
+    Ok(date + if date < 0.0 { -fraction / 86400.0 } else { fraction / 86400.0 })
+}
+
+#[cfg(windows)]
+fn current_time() -> Result<f64, String> {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    let mut local: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    // GetLocalTime writes this initialized, exclusively owned POD record.
+    unsafe { GetLocalTime(&mut local) };
+    clock_date(i64::from(local.wYear), i64::from(local.wMonth), i64::from(local.wDay),
+        i64::from(local.wHour), i64::from(local.wMinute), i64::from(local.wSecond), i64::from(local.wMilliseconds))
+}
+
+#[cfg(unix)]
+fn current_time() -> Result<f64, String> {
+    let mut stamp: libc::timespec = unsafe { std::mem::zeroed() };
+    // Both output records are owned by this call. CLOCK_REALTIME follows the
+    // host wall clock; localtime_r applies its current timezone rules.
+    if unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut stamp) } != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let mut local: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&stamp.tv_sec, &mut local) }.is_null() {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    clock_date(i64::from(local.tm_year) + 1900, i64::from(local.tm_mon) + 1, i64::from(local.tm_mday),
+        i64::from(local.tm_hour), i64::from(local.tm_min), i64::from(local.tm_sec), stamp.tv_nsec as i64 / 1_000_000)
+}
+
+#[cfg(not(any(windows, unix)))]
+fn current_time() -> Result<f64, String> {
+    Err("local host clocks are unavailable on this platform".into())
+}
+
 fn local_date(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) -> Result<f64, String> {
     if !(100..=9999).contains(&year) || !(1..=12).contains(&month) || !(1..=31).contains(&day)
         || !(0..=23).contains(&hour) || !(0..=59).contains(&minute) || !(0..=59).contains(&second) {

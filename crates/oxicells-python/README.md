@@ -70,6 +70,8 @@ Defaults remain English error descriptions, an empty HelpFile and the engine's d
 
 Unexpected engine exits include the exit code and a bounded tail of engine stderr in `OxiCellsError`, so startup failures and panics retain their diagnostic text.
 
+The default `clock_mode="live"` reads the engine host's local clock during a macro: `Timer`, `Now`, `Date` and `Time` can advance while it runs. For deterministic replay, `clock_mode="fixed"` keeps the Python host's timestamp fixed for each individual call. `Timer` remains a VBA Single in both modes.
+
 ## Values and objects
 
 Python integers use VBA Long or LongLong according to their range. `Byte`, `Integer`, `Long`, `LongLong`, `Single`, `Date` (OLE date serial) and `Currency` wrappers allow explicit subtypes. Python `decimal.Decimal` values retain their exact 96-bit VBA Decimal representation within its supported range and scale. `EMPTY`, `MISSING`, `NOTHING`, `NULL_STRING` and Python `None` (VBA Null) are distinct.
@@ -150,3 +152,5 @@ with oxicells.open("受領ファイル.xlsm", error_language="ja-JP",
 既定値は英語のエラー説明、空の HelpFile、エンジン既定の ANSI コードページ（1252）です。保存された VBA ソースを読む `source_code_page` とは別の指定です。比較先の Excel 環境に合わせて設定してください。Python を動かす環境からの自動推定はしません。
 
 エンジンが異常終了したときは、終了コードと長さを制限した stderr の末尾を `OxiCellsError` に含めます。起動失敗や panic の原因を Python 側でも確認できます。
+
+既定の `clock_mode="live"` では、マクロの実行中にもエンジンを動かすホストのローカル時計を読み、`Timer`・`Now`・`Date`・`Time` を更新します。再現試験用の `clock_mode="fixed"` では、呼び出しごとに Python から渡す時刻を、その呼び出しの間は固定します。どちらのモードでも `Timer` の VBA 型は Single です。

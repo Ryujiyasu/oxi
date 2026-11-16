@@ -244,7 +244,12 @@ class Workbook:
     def __init__(self, path: os.PathLike[str] | str, *, binary: Optional[str] = None,
                  source_code_page: Optional[int] = None, timeout: Optional[float] = None,
                  error_language: Optional[str] = None, vba_help_file: Optional[str] = None,
-                 host_ansi_code_page: Optional[int] = None) -> None:
+                 host_ansi_code_page: Optional[int] = None, clock_mode: str = "live") -> None:
+        if not isinstance(clock_mode, str):
+            raise TypeError("clock_mode must be a string")
+        if clock_mode not in {"live", "fixed"}:
+            raise ValueError("clock_mode must be live or fixed")
+        self._clock_mode = clock_mode
         environment: dict[str, Any] = {}
         if error_language is not None:
             if not isinstance(error_language, str):
@@ -327,6 +332,7 @@ class Workbook:
             fraction = (now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1_000_000) / 86400
             local = days + (-fraction if days < 0 else fraction)
             request = {"id": self._sequence, "op": operation, "currentTime": local, **fields}
+            if self._clock_mode == "fixed": request["clockMode"] = "fixed"
             data = json.dumps(request, ensure_ascii=True, allow_nan=False)
             try:
                 assert self._process.stdin is not None

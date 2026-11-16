@@ -842,6 +842,7 @@ pub struct Runtime<'a> {
     worksheet_callback_key: Option<u64>,
     pending_callback_body: Option<(u64, usize, usize)> ,
     current_time: f64,
+    clock: Option<crate::clock::Clock>,
     project_name: String,
     error_environment: Rc<ErrorEnvironment>,
     project_ended: bool,
@@ -1453,6 +1454,7 @@ impl<'a> Runtime<'a> {
             worksheet_callback_key: None,
             pending_callback_body: None,
             current_time,
+            clock: None,
             project_name: "VBAProject".to_string(),
             error_environment: Rc::new(ErrorEnvironment::default()),
             project_ended: false,
@@ -1478,6 +1480,7 @@ impl<'a> Runtime<'a> {
     pub fn replace_file_system(&mut self, mut files: crate::files::Files) -> crate::files::Files {
         files.select_project(self.project_identity);
         files.set_current_time(self.current_time);
+        files.set_clock(self.clock.clone());
         std::mem::replace(&mut self.files, files)
     }
 
@@ -1542,6 +1545,7 @@ impl<'a> Runtime<'a> {
         self.put_state(state.module);
         self.files = state.files;
         self.files.set_current_time(self.current_time);
+        self.files.set_clock(self.clock.clone());
         self.temp_names = state.temp_names;
         self.internal_objects = state.internal_objects;
         self.next_internal_handle = state.next_internal_handle;
@@ -3520,13 +3524,26 @@ impl<'a> Runtime<'a> {
         self
     }
 
-    /// Supplies the current local date and time as an OLE Automation serial.
+    /// Supplies a fixed local OLE date, disabling any advancing clock.
     pub fn with_current_time(mut self, serial: f64) -> Self {
         if serial.is_finite() {
             self.current_time = serial;
+            self.clock = None;
             self.files.set_current_time(serial);
         }
         self
+    }
+
+    /// Read local time from the host throughout execution. A provider is
+    /// separate from project storage and is shared with virtual file dates.
+    pub fn with_clock(mut self, clock: crate::clock::Clock) -> Self {
+        self.files.set_clock(Some(clock.clone()));
+        self.clock = Some(clock);
+        self
+    }
+
+    fn clock_time(&self) -> f64 {
+        self.clock.as_ref().map_or(self.current_time, crate::clock::Clock::now)
     }
 
     pub fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -4001,6 +4018,7 @@ impl<'a> Runtime<'a> {
     fn install_object_heap(&mut self,heap:ApplicationHeap<'a>){
         self.files=heap.files;self.files.select_project(self.project_identity);
         self.files.set_current_time(self.current_time);
+        self.files.set_clock(self.clock.clone());
         self.internal_objects=heap.objects;self.next_internal_handle=heap.next;
         self.object_pointers=heap.pointers;self.bstr_literals=heap.literals;
         self.due=heap.due;self.object_projects=heap.object_projects;self.projects=heap.projects;self.project_loader=heap.project_loader;
@@ -7760,7 +7778,7 @@ impl<'a> Runtime<'a> {
     /// clock `Now` reads, so a runtime given a fixed time parses those dates
     /// against that time and not against the wall.
     fn this_year(&self) -> i64 {
-        serial_date_parts(self.current_time)
+        serial_date_parts(self.clock_time())
             .map(|parts| parts.year)
             .unwrap_or(1900)
     }
@@ -11269,15 +11287,16 @@ impl<'a> Runtime<'a> {
         // Timer is the odd one out: seconds since midnight rather than a
         // moment, and asked of Excel `VarType(Timer)` is 4, a Single, where
         // Now, Date and Time are all 7.
+        let current_time = self.clock_time();
         Ok(match name.to_ascii_lowercase().as_str() {
-            "now" => Value::Date(crate::files::whole_second_date(self.current_time)),
-            "date" => Value::Date(self.current_time.trunc()),
+            "now" => Value::Date(crate::files::whole_second_date(current_time)),
+            "date" => Value::Date(current_time.trunc()),
             "time" => {
-                let now = crate::files::whole_second_date(self.current_time);
+                let now = crate::files::whole_second_date(current_time);
                 let seconds = (now.abs().fract() * 86_400.0).round();
                 Value::Date(seconds / 86_400.0)
             },
-            "timer" => Value::Single((self.current_time.abs().fract() * 86_400.0) as f32),
+            "timer" => Value::Single((current_time.abs().fract() * 86_400.0) as f32),
             _ => unreachable!(),
         })
     }
@@ -21969,6 +21988,47 @@ End Function
             let Value::Array(answer) = runtime.call("Probe", vec![Value::Integer(mode)]).unwrap() else { panic!("array required"); };
             assert_eq!(answer.values, [Value::Integer(number), Value::Boolean(mode == 0), Value::Boolean(mode == 1)], "mode {mode}");
         }
+    }
+
+    #[test]
+    fn host_clock_advances_inside_a_procedure_and_fixed_time_disables_it() {
+        let source = "Public Function Probe() As Variant\n Probe=Array(Timer,Timer,VarType(Timer))\nEnd Function";
+        let (module, _) = crate::parser::parse_project(source).unwrap();
+        let reads = Rc::new(std::cell::Cell::new(0));
+        let sampled = reads.clone();
+        let clock = crate::clock::Clock::new(move || {
+            let count = sampled.get(); sampled.set(count + 1);
+            if count == 0 { 46343.5 } else { 46343.5 + 2.0 / 86400.0 }
+        });
+        let mut runtime = Runtime::new(&module).with_clock(clock.clone());
+        let Value::Array(value) = runtime.call("Probe", vec![]).unwrap() else { panic!("array required"); };
+        assert_eq!(value.values, [Value::Single(43200.0), Value::Single(43202.0), Value::Integer(4)]);
+        let mut fixed = Runtime::new(&module).with_clock(clock).with_current_time(-1.5);
+        let Value::Array(value) = fixed.call("Probe", vec![]).unwrap() else { panic!("array required"); };
+        assert_eq!(value.values, [Value::Single(43200.0), Value::Single(43200.0), Value::Integer(4)]);
+    }
+
+    #[test]
+    fn host_clock_is_shared_with_files_when_pending_writes_are_closed() {
+        let source = r#"
+Public Sub Start()
+ Open "C:\work\clock.bin" For Output As #1
+ Print #1, "ABC"
+End Sub
+Public Function Finish() As Variant
+ Close #1
+ Finish=Array(Now,FileDateTime("C:\work\clock.bin"),VarType(FileDateTime("C:\work\clock.bin")))
+End Function
+"#;
+        let (module, _) = crate::parser::parse_project(source).unwrap();
+        let moment = Rc::new(std::cell::Cell::new(46343.5));
+        let sample = moment.clone();
+        let mut runtime = Runtime::new(&module).with_clock(crate::clock::Clock::new(move || sample.get()));
+        runtime.file_system_mut().mount_folder(r"C:\work").unwrap();
+        runtime.call("Start", vec![]).unwrap();
+        moment.set(46344.75);
+        let Value::Array(value) = runtime.call("Finish", vec![]).unwrap() else { panic!("array required"); };
+        assert_eq!(value.values, [Value::Date(46344.75), Value::Date(46344.75), Value::Integer(7)]);
     }
 
     #[test]

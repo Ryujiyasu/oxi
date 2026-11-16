@@ -82,6 +82,15 @@ fn clock(request: &Value) -> Result<f64, String> {
         .ok_or_else(|| "currentTime must be a finite local OLE date serial".into())
 }
 
+fn advancing_clock(request: &Value) -> Result<bool, String> {
+    match request.get("clockMode") {
+        None => Ok(true),
+        Some(Value::String(mode)) if mode == "live" => Ok(true),
+        Some(Value::String(mode)) if mode == "fixed" => Ok(false),
+        _ => Err("clockMode must be live or fixed".into()),
+    }
+}
+
 fn execution_environment(request: &Value) -> Result<Value, String> {
     let mut options = json!({});
     if let Some(language) = request.get("errorLanguage").filter(|v| !v.is_null()) {
@@ -278,10 +287,11 @@ impl OpenBook {
     fn open(request: &Value) -> Result<(Self, Value), String> {
         fields(
             request,
-            &["id", "op", "path", "sourceCodePage", "seed", "currentTime",
+            &["id", "op", "path", "sourceCodePage", "seed", "currentTime", "clockMode",
               "errorLanguage", "vbaHelpFile", "hostAnsiCodePage"],
         )?;
         clock(request)?;
+        advancing_clock(request)?;
         let environment = execution_environment(request)?;
         let path = Path::new(text(request, "path")?);
         let mut input = fs::File::open(path).map_err(|e| e.to_string())?;
@@ -363,12 +373,14 @@ impl OpenBook {
                 "references",
                 "path",
                 "currentTime",
+                "clockMode",
             ],
         )?;
         let current_time = clock(request)?;
+        let clock_live = advancing_clock(request)?;
         let operation = text(request, "op")?;
         if operation == "inspect" {
-            fields(request, &["id", "op", "currentTime"])?;
+            fields(request, &["id", "op", "currentTime", "clockMode"])?;
             return Ok(inspect_source(&self.source));
         }
         let args_json = request
@@ -462,8 +474,10 @@ impl OpenBook {
         if !self.loaded {
             call.file_name = Some(self.initial_name.clone());
         }
+        let host_clock = if clock_live { Some(host_time::live_clock()?) } else { None };
         let book = self.book.take().ok_or("workbook session is unavailable")?;
-        let outcome = self.session.run_native(book, call).map_err(|error| {
+
+        let outcome = self.session.run_native_with_clock(book, call, host_clock).map_err(|error| {
             if !self.source.is_ascii() && oxivba_core::parse_project(&self.source).is_err() {
                 parse_error_message(&error, &self.source)
             } else {

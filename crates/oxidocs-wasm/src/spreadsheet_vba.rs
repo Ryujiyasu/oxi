@@ -45761,6 +45761,17 @@ fn local_clock_serial(local_millis: f64) -> f64 {
     days + if days < 0.0 { -fraction } else { fraction }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn browser_clock() -> Option<oxivba_core::clock::Clock> {
+    Some(oxivba_core::clock::Clock::new(|| {
+        let now = js_sys::Date::new_0();
+        local_clock_serial(now.get_time() - now.get_timezone_offset() * 60_000.0)
+    }))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn browser_clock() -> Option<oxivba_core::clock::Clock> { None }
+
 #[cfg(not(target_arch = "wasm32"))]
 fn this_year_now() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -48017,6 +48028,7 @@ struct VbaRunContext {
     file_name: Option<String>,
     random_seed: u64,
     current_time: f64,
+    clock: Option<oxivba_core::clock::Clock>,
     application_state: Option<VbaApplicationState>,
     source_edits: Option<Vec<oxivba_core::SourceEdit>>,
     document_modules: Option<Vec<VbaDocumentModule>>,
@@ -48334,6 +48346,7 @@ fn application_runtime_error(message: impl Into<String>) -> oxivba_core::Runtime
 struct ApplicationExecutionContext {
     environment: ErrorEnvironment,
     current_time: f64,
+    clock: Option<oxivba_core::clock::Clock>,
     random_seed: u64,
     constants: std::sync::Arc<BTreeMap<String, i64>>,
 }
@@ -48376,6 +48389,7 @@ fn loaded_application_runtime<'code>(
         .with_current_time(context.current_time)
         .with_random_seed(context.random_seed)
         .with_reference_constants(context.constants.clone());
+    if let Some(clock) = context.clock.clone() { runtime = runtime.with_clock(clock); }
     runtime.set_application_project_identity(owner)?;
     runtime.prepare_worksheet_functions();
     runtime.with_document_objects(bindings, references)
@@ -48956,7 +48970,13 @@ impl SpreadsheetVbaSession {
         values.iter().map(|value|decode_native_value(value,references)).collect()
     }
 
-    pub fn run_native(&mut self, mut workbook: Workbook, call: NativeVbaCall<'_>) -> Result<NativeVbaOutcome,String> {
+    pub fn run_native(&mut self, workbook: Workbook, call: NativeVbaCall<'_>) -> Result<NativeVbaOutcome,String> {
+        self.run_native_with_clock(workbook, call, None)
+    }
+
+    /// Supply an advancing local clock, shared by every workbook in the call.
+    /// The original native entrypoint keeps its explicit, fixed input time.
+    pub fn run_native_with_clock(&mut self, mut workbook: Workbook, call: NativeVbaCall<'_>, clock: Option<oxivba_core::clock::Clock>) -> Result<NativeVbaOutcome,String> {
         let NativeVbaCall { source, action, args, active_sheet, file_name, options, current_time, random_seed } = call;
         if !current_time.is_finite() { return Err("invalid VBA current time: expected a finite OLE date serial".into()); }
         let shape:serde_json::Value=serde_json::from_str(options)
@@ -48998,7 +49018,7 @@ impl SpreadsheetVbaSession {
         let host_ansi_code_page=options.host_ansi_code_page.map(AnsiCodePage::from_id).transpose()?;
         if let Some(language)=options.worksheet_dbcs_language { workbook.calculation.dbcs_language=Some(language); }
         let environment=options.error_environment()?;
-        let context=VbaRunContext { environment,host_ansi_code_page,project_name,file_name,random_seed,current_time,
+        let context=VbaRunContext { environment,host_ansi_code_page,project_name,file_name,random_seed,current_time,clock,
             application_state,source_edits,document_modules,file_context,file_system_state };
         let mut result=Value::Empty;
         let outcome=execute_workbook_invocation_capturing(workbook,loaded_source.as_deref().unwrap_or(source),
@@ -49658,8 +49678,9 @@ fn prepare_spreadsheet_vba(
     let browser_now = js_sys::Date::new_0();
     let local_millis = browser_now.get_time() - browser_now.get_timezone_offset() * 60_000.0;
     let current_time = local_clock_serial(local_millis);
+    let clock = browser_clock();
     execute_workbook_invocation(workbook, source, VbaInvocation { procedure, args, action }, active_sheet,
-        VbaRunContext { environment, host_ansi_code_page, project_name, file_name, random_seed, current_time, application_state, source_edits, document_modules, file_context, file_system_state }, session)
+        VbaRunContext { environment, host_ansi_code_page, project_name, file_name, random_seed, current_time, clock, application_state, source_edits, document_modules, file_context, file_system_state }, session)
         .map_err(|error| JsError::new(&error))
 }
 
@@ -50154,6 +50175,7 @@ fn execute_workbook_invocation_capturing(
         let factory_context = ApplicationExecutionContext {
             environment: context.environment.clone(),
             current_time: context.current_time,
+            clock: context.clock.clone(),
             random_seed: context.random_seed,
             constants: constants.clone(),
         };
@@ -50169,6 +50191,7 @@ fn execute_workbook_invocation_capturing(
             .with_current_time(context.current_time)
             .with_reference_constants(constants);
         runtime.set_application_project_identity(code_owner).map_err(|error| error.to_string())?;
+        if let Some(clock) = context.clock.clone() { runtime = runtime.with_clock(clock); }
         if let Some(state) = project_state.take() { runtime = runtime.with_project_state(state); }
         runtime=runtime.with_document_objects(bindings,references).map_err(|error|error.to_string())?;
         runtime.set_application_project_loader(&mut loader).map_err(|error| error.to_string())?;
@@ -109582,6 +109605,25 @@ End Function
 
 
     #[test]
+    fn native_clock_updates_during_execution_without_leaking_into_fixed_calls() {
+        let source = "Public Function Probe() As Variant\n Probe=Array(Timer,Timer,VarType(Timer))\nEnd Function";
+        let ticks = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+        let next = ticks.clone();
+        let clock = oxivba_core::clock::Clock::new(move || {
+            let count = next.get(); next.set(count + 1);
+            46343.5 + f64::from(count) / 86400.0
+        });
+        let mut session = SpreadsheetVbaSession::new();
+        let live = session.run_native_with_clock(workbook(), NativeVbaCall::new(source, "Probe", vec![], 46343.5, 1), Some(clock)).unwrap();
+        let Value::Array(values) = live.result() else { panic!("array required"); };
+        let [Value::Single(first), Value::Single(last), Value::Integer(4)] = values.values.as_slice() else { panic!("Single Timer required"); };
+        assert!(last > first);
+        let fixed = session.run_native(workbook(), NativeVbaCall::new(source, "Probe", vec![], 46343.5, 1)).unwrap();
+        let Value::Array(values) = fixed.result() else { panic!("array required"); };
+        assert_eq!(values.values, [Value::Single(43200.0), Value::Single(43200.0), Value::Integer(4)]);
+    }
+
+    #[test]
     fn local_clock_serial_keeps_native_whole_second_date_bits() {
         for (days, seconds, expected) in [
             (46343_i64, 20042_i64, 46343.23196759259),
@@ -109758,6 +109800,7 @@ End Sub
             host_ansi_code_page: None,
             project_name: "VBAProject".to_string(), file_name: None,
             random_seed: 1, current_time: 46000.0,
+            clock: None,
             application_state: None,
             source_edits: None,
             document_modules: None,

@@ -174,6 +174,7 @@ pub struct Files {
     modified: BTreeMap<String, f64>,
     directory_entries: BTreeMap<String, f64>,
     current_time: f64,
+    clock: Option<crate::clock::Clock>,
     pending_writes: std::collections::BTreeSet<(u64, i64)>,
 }
 
@@ -186,7 +187,7 @@ impl Default for Files {
             attributes: BTreeMap::new(),
             volume_labels: BTreeMap::new(),
             record_locks: Vec::new(),
-            modified: BTreeMap::new(), directory_entries: BTreeMap::new(), current_time: 0.0, pending_writes: Default::default(),
+            modified: BTreeMap::new(), directory_entries: BTreeMap::new(), current_time: 0.0, clock: None, pending_writes: Default::default(),
             cursors: BTreeMap::new(),
         }
     }
@@ -293,7 +294,8 @@ impl Files {
         self.folders=folders;
         self.contents=contents;
         self.attributes=attributes;
-        self.modified=self.contents.keys().chain(self.folders.iter()).map(|key|(key.clone(),self.current_time)).collect();
+        let current_time=self.current_time();
+        self.modified=self.contents.keys().chain(self.folders.iter()).map(|key|(key.clone(),current_time)).collect();
         self.pending_writes.clear();
         self.directory_entries.clear();
         self.open.clear();
@@ -455,7 +457,16 @@ impl Files {
 
     /// Supply the host's local OLE clock for newly created or closed files.
     pub fn set_current_time(&mut self, serial: f64) {
-        if serial.is_finite() { self.current_time = whole_second_date(serial); }
+        if serial.is_finite() { self.current_time = whole_second_date(serial); self.clock = None; }
+    }
+
+    /// Select the same advancing host clock used by the interpreter.
+    pub fn set_clock(&mut self, clock: Option<crate::clock::Clock>) {
+        self.clock = clock;
+    }
+
+    fn current_time(&self) -> f64 {
+        whole_second_date(self.clock.as_ref().map_or(self.current_time, crate::clock::Clock::now))
     }
 
     /// Local modification times are separate host facts, like volume labels.
@@ -484,7 +495,8 @@ impl Files {
         let mut next = self.clone();
         next.modified.clear();
         let paths: Vec<_> = next.contents.keys().chain(next.folders.iter()).cloned().collect();
-        for key in paths { next.modified.insert(key, next.current_time); }
+        let current_time=next.current_time();
+        for key in paths { next.modified.insert(key, current_time); }
         let mut seen = std::collections::BTreeSet::new();
         for (path, serial) in facts {
             let key = next.normalize_snapshot_path(path)?.to_lowercase().trim_end_matches('\\').to_string();
@@ -517,7 +529,7 @@ impl Files {
             let parent = key.rsplit_once('\\').map_or("", |(parent, _)| parent);
             return Err(if self.folder_exists(parent) { FileError::NotFound } else { FileError::PathNotFound });
         }
-        Ok(self.directory_entries.get(&key).or_else(|| self.modified.get(&key)).copied().unwrap_or(self.current_time))
+        Ok(self.directory_entries.get(&key).or_else(|| self.modified.get(&key)).copied().unwrap_or_else(|| self.current_time()))
     }
 
     /// Physical directory dates and the entry returned by FileDateTime can
@@ -550,9 +562,10 @@ impl Files {
     fn parent_changed(&mut self, path: &str, publish: bool) {
         if let Some((parent, _)) = path.rsplit_once('\\') {
             if self.folder_exists(parent) {
-                let previous = self.modified.insert(parent.into(), self.current_time).unwrap_or(self.current_time);
+                let current_time=self.current_time();
+                let previous = self.modified.insert(parent.into(), current_time).unwrap_or(current_time);
                 if publish { self.directory_entries.remove(parent); }
-                else if previous != self.current_time { self.directory_entries.entry(parent.into()).or_insert(previous); }
+                else if previous != current_time { self.directory_entries.entry(parent.into()).or_insert(previous); }
             }
         }
     }
@@ -573,7 +586,7 @@ impl Files {
         self.query_attributes(path)?;
         self.publish_parent_entry(&self.key(path));
         let key = self.key(path);
-        Ok(self.modified.get(key.trim_end_matches('\\')).copied().unwrap_or(self.current_time))
+        Ok(self.modified.get(key.trim_end_matches('\\')).copied().unwrap_or_else(|| self.current_time()))
     }
 
     fn mark_handle_written(&mut self, number: i64, path: &str, nonempty: bool) {
@@ -583,7 +596,7 @@ impl Files {
 
     fn close_key(&mut self, key: (u64, i64)) {
         if let Some(handle) = self.open.remove(&key) {
-            if self.pending_writes.remove(&key) { self.modified.insert(handle.path, self.current_time); }
+            if self.pending_writes.remove(&key) { let current_time=self.current_time(); self.modified.insert(handle.path, current_time); }
         }
         self.cursors.remove(&key);
     }
@@ -641,7 +654,7 @@ impl Files {
         }
         if !self.contents.contains_key(&name) { self.parent_changed(&name, false); }
         self.mark_written(&name);
-        self.modified.insert(name.clone(),self.current_time);
+        let current_time=self.current_time(); self.modified.insert(name.clone(),current_time);
         self.contents.insert(name, (self.absolute_path(path.trim()), bytes));
         Ok(())
     }
@@ -733,7 +746,7 @@ impl Files {
             OpenMode::Input => {}
         }
         if newly_created { self.parent_changed(&name, false); }
-        if newly_created || mode==OpenMode::Output { self.modified.insert(name.clone(),self.current_time); }
+        if newly_created || mode==OpenMode::Output { let current_time=self.current_time(); self.modified.insert(name.clone(),current_time); }
         let column = match mode {
             OpenMode::Append => {
                 let bytes = &self.contents[&name].1;
@@ -771,7 +784,7 @@ impl Files {
             }
         }
         if newly_created { self.parent_changed(&name, false); }
-        if newly_created || mode==OpenMode::Output { self.modified.insert(name.clone(),self.current_time); }
+        if newly_created || mode==OpenMode::Output { let current_time=self.current_time(); self.modified.insert(name.clone(),current_time); }
         let column = if mode == OpenMode::Append {
             let bytes = &self.contents[&name].1;
             let start = bytes.iter().rposition(|byte| matches!(*byte, b'\r' | b'\n')).map_or(0, |at| at + 1);
@@ -819,7 +832,8 @@ impl Files {
             let parent=key.rfind('\\').ok_or(FileError::InvalidArgument)?;
             key.truncate(parent);
         }
-        for folder in &folders { self.modified.entry(folder.clone()).or_insert(self.current_time); }
+        let current_time=self.current_time();
+        for folder in &folders { self.modified.entry(folder.clone()).or_insert(current_time); }
         self.folders.extend(folders);
         Ok(())
     }
@@ -835,7 +849,7 @@ impl Files {
         let parent=folder.rsplit_once('\\').map(|(parent,_)|parent).ok_or(FileError::PathNotFound)?;
         if !self.folder_exists(&format!("{parent}\\")) {return Err(FileError::PathNotFound);}
         self.parent_changed(&folder, false);
-        self.modified.insert(folder.clone(),self.current_time);
+        let current_time=self.current_time(); self.modified.insert(folder.clone(),current_time);
         self.folders.insert(folder);
         Ok(())
     }
@@ -1585,7 +1599,7 @@ impl Files {
         let attributes=if fso {self.attributes(source)? | 32}else{32};
         if !self.contents.contains_key(&key) { self.parent_changed(&key, publish_parent); }
         self.attributes.insert(key.clone(),attributes);
-        let modified=self.modified.get(&source_key).copied().unwrap_or(self.current_time);
+        let modified=self.modified.get(&source_key).copied().unwrap_or_else(|| self.current_time());
         self.modified.insert(key.clone(),modified);
         self.contents.insert(key, (self.absolute_path(destination.trim()), bytes));
         Ok(())
@@ -1643,7 +1657,7 @@ impl Files {
         let same_parent = old.rsplit_once('\\').map(|(parent, _)| parent) == key.rsplit_once('\\').map(|(parent, _)| parent);
         self.parent_changed(&old, fso || same_parent);
         self.parent_changed(&key, true);
-        let modified=self.modified.remove(&old).unwrap_or(self.current_time);
+        let modified=self.modified.remove(&old).unwrap_or_else(|| self.current_time());
         self.modified.insert(key.clone(),modified);
         self.attributes.remove(&old);
         self.attributes.insert(key.clone(),attributes);

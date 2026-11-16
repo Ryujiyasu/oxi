@@ -44,7 +44,7 @@ tiny-skia = { version = "0.11", default-features = false, features = ["std", "si
 mimalloc = { version = "0.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Time"] }
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Time", "Win32_System_SystemInformation"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

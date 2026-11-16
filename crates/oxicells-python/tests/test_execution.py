@@ -106,6 +106,8 @@ class EngineDiagnostics(unittest.TestCase):
 class ExecutionEnvironmentValidation(unittest.TestCase):
     def test_invalid_environment_fails_before_starting_an_engine(self):
         for options, error in [
+            ({"clock_mode": False}, TypeError),
+            ({"clock_mode": "unsupported"}, ValueError),
             ({"error_language": 932}, TypeError),
             ({"error_language": "fr-FR"}, ValueError),
             ({"error_language": ""}, ValueError),
@@ -126,6 +128,17 @@ class NativeWorkbook(unittest.TestCase):
         self.fixture = Path(os.environ["OXICELLS_TEST_FIXTURE"])
         self.wb = ox.open(self.fixture, timeout=60)
         self.addCleanup(self.wb.close)
+
+    def test_timer_advances_while_a_macro_is_running(self):
+        value = self.wb.run("PythonBridge.ClockProgress").values
+        self.assertGreater((value[1] - value[0]) % 86400, 0)
+        self.assertEqual(value[2:], ("Single", 4))
+
+    def test_fixed_clock_mode_is_explicit_and_preserves_replay(self):
+        with ox.open(self.fixture, clock_mode="fixed", timeout=60) as book:
+            value = book.run("PythonBridge.ClockProgress").values
+        self.assertEqual(value[0], value[1])
+        self.assertEqual(value[2:], ("Single", 4))
 
     def test_clock_parts_are_native_whole_seconds_without_losing_timer_type(self):
         answer = self.wb.run("PythonBridge.ClockParts")

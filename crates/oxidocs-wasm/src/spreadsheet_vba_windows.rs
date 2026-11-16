@@ -919,6 +919,7 @@ mod tests {
                     help_file: group["help_file"].as_str().unwrap().into() },
                 host_ansi_code_page: None, project_name: "VBAProject".into(),
                 file_name: Some(file_name.into()), random_seed: 1, current_time: 46000.0,
+                clock: None,
                 application_state: Some(VbaApplicationState {
                     visible: Some(group["initial_application_visible"].as_bool().unwrap_or(false)),
                     enable_events: false, display_alerts: false,
