@@ -62,6 +62,22 @@ pub struct Handle {
 }
 
 #[derive(Debug, Clone)]
+struct RecordRead {
+    start: usize,
+    logical_start: usize,
+    offset: usize,
+    length: usize,
+    span: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FileCursor {
+    physical: usize,
+    read_eof: bool,
+    record: Option<RecordRead>,
+}
+
+#[derive(Debug, Clone)]
 struct RecordLock {
     owner: (u64, i64),
     path: String,
@@ -78,10 +94,14 @@ pub enum FileError {
     BadNumber = 52,
     /// 53, File not found.
     NotFound = 53,
+    /// 54, Bad file mode.
+    BadMode = 54,
     /// 55, File already open.
     AlreadyOpen = 55,
     /// 58, File already exists.
     AlreadyExists = 58,
+    /// 59, Bad record length.
+    BadRecordLength = 59,
     /// 62, Input past end of file.
     PastEnd = 62,
     /// 63, Bad record number.
@@ -94,6 +114,8 @@ pub enum FileError {
     PathFileAccess = 75,
     /// 76, Path not found.
     PathNotFound = 76,
+    /// 458, Variable uses an Automation type not supported in Visual Basic.
+    UnsupportedType = 458,
 }
 
 impl FileError {
@@ -106,6 +128,9 @@ impl FileError {
             FileError::InvalidArgument => "Invalid procedure call or argument",
             FileError::BadNumber => "Bad file name or number",
             FileError::NotFound => "File not found",
+            FileError::BadMode => "Bad file mode",
+            FileError::BadRecordLength => "Bad record length",
+            FileError::UnsupportedType => "Variable uses an Automation type not supported in Visual Basic",
             FileError::AlreadyOpen => "File already open",
             FileError::AlreadyExists => "File already exists",
             FileError::PastEnd => "Input past end of file",
@@ -124,6 +149,7 @@ pub struct Files {
     contents: BTreeMap<String, (String, Vec<u8>)>,
     open: BTreeMap<(u64, i64), Handle>,
     project_scope: u64,
+    cursors: BTreeMap<(u64, i64), FileCursor>,
     /// Stream IDs are not reused while old TextStream references can exist.
     next_stream_number: i64,
     /// What `Dir` with no arguments goes on to answer.
@@ -146,6 +172,7 @@ impl Default for Files {
             attributes: BTreeMap::new(),
             volume_labels: BTreeMap::new(),
             record_locks: Vec::new(),
+            cursors: BTreeMap::new(),
         }
     }
 }
@@ -241,6 +268,7 @@ impl Files {
         self.contents=contents;
         self.attributes=attributes;
         self.open.clear();
+        self.cursors.clear();
         self.record_locks.clear();
         self.listings.clear();
         Ok(())
@@ -544,6 +572,7 @@ impl Files {
             _ => 0,
         };
         self.open.insert(channel_key(self.project_scope, number), Handle { path: name, mode, position: 0, column,can_read,can_write,share_read,share_write });
+        self.cursors.insert(channel_key(self.project_scope, number), FileCursor::default());
         Ok(())
     }
 
@@ -734,10 +763,12 @@ impl Files {
     pub fn close(&mut self, numbers: &[i64]) {
         if numbers.is_empty() {
             self.open.clear();
+            self.cursors.clear();
             self.record_locks.clear();
         } else {
             for number in numbers {
                 self.open.remove(&channel_key(self.project_scope, *number));
+                self.cursors.remove(&channel_key(self.project_scope, *number));
             }
             self.record_locks.retain(|held|!numbers.iter().any(|number| held.owner == channel_key(self.project_scope, *number)));
         }
@@ -755,6 +786,7 @@ impl Files {
         if numbers.is_empty() {
             let project = self.project_scope;
             self.open.retain(|(owner, number), _| *owner != project || !(1..=511).contains(number));
+            self.cursors.retain(|(owner, number), _| *owner != project || !(1..=511).contains(number));
             self.record_locks.retain(|held| held.owner.0 != project || !(1..=511).contains(&held.owner.1));
         } else {
             self.close(numbers);
@@ -765,8 +797,15 @@ impl Files {
         self.open.get(&channel_key(self.project_scope, number)).ok_or(FileError::BadNumber)
     }
 
-    pub(crate) fn restore_byte_position(&mut self, number: i64, path: &str, position: usize) {
-        if let Some(handle)=self.open.get_mut(&channel_key(self.project_scope, number)).filter(|handle|handle.path==path) {handle.position=position;}
+    pub(crate) fn cursor_snapshot(&self, number: i64) -> Option<FileCursor> {
+        self.cursors.get(&channel_key(self.project_scope, number)).cloned()
+    }
+
+    pub(crate) fn restore_byte_position(&mut self, number: i64, path: &str, position: usize, cursor: Option<FileCursor>) {
+        if let Some(handle) = self.open.get_mut(&channel_key(self.project_scope, number)).filter(|handle| handle.path == path) {
+            handle.position = position;
+            if let Some(cursor) = cursor { self.cursors.insert(channel_key(self.project_scope, number), cursor); }
+        }
     }
 
     pub fn lock_records(&mut self, number: i64, start: Option<i64>, end: Option<i64>, unlock: bool) -> Result<(),FileError> {
@@ -789,7 +828,8 @@ impl Files {
 
     fn check_record_access(&self, number: i64, handle: &Handle, count: usize) -> Result<(),FileError> {
         let count=match handle.mode {OpenMode::Random(length)=>count.max(length),_=>count};
-        let start=handle.position as u64;let end=start.saturating_add(count as u64);
+        let start=self.cursors.get(&channel_key(self.project_scope, number)).map_or(handle.position, |cursor| cursor.physical) as u64;
+        let end=start.saturating_add(count as u64);
         if count!=0 && self.record_locks.iter().any(|held|held.path==handle.path && held.owner!=channel_key(self.project_scope, number) && held.start<end && start<held.end) {
             Err(FileError::PermissionDenied)
         } else {Ok(())}
@@ -811,6 +851,42 @@ impl Files {
         let path=handle.path.clone();
         self.mark_written(&path);
         Ok(())
+    }
+
+    pub(crate) fn write_sequential(&mut self, number: i64, text: &str, bytes: &[u8]) -> Result<(), FileError> {
+        let handle = self.handle(number)?;
+        if !(1..=511).contains(&number) { return Err(FileError::BadNumber); }
+        if !matches!(handle.mode, OpenMode::Output | OpenMode::Append) { return Err(FileError::BadMode); }
+        if !handle.can_write { return Err(FileError::PathFileAccess); }
+        let key = channel_key(self.project_scope, number);
+        let handle = self.open.get_mut(&key).expect("checked handle");
+        let cursor = self.cursors.get_mut(&key).ok_or(FileError::BadNumber)?;
+        let file = self.contents.get_mut(&handle.path).ok_or(FileError::BadNumber)?;
+        let start = if handle.mode == OpenMode::Append { file.1.len() } else { cursor.physical };
+        let end = start.checked_add(bytes.len()).ok_or(FileError::BadRecordNumber)?;
+        let logical = handle.position.checked_add(bytes.len()).ok_or(FileError::BadRecordNumber)?;
+        if file.1.len() < end { file.1.resize(end, 0); }
+        file.1[start..end].copy_from_slice(bytes);
+        handle.position = logical;
+        cursor.physical = end;
+        match text.rfind('\n') {
+            Some(at) => handle.column = text[at + 1..].chars().count(),
+            None => handle.column += text.chars().count(),
+        }
+        let path = handle.path.clone();
+        self.mark_written(&path);
+        Ok(())
+    }
+
+    pub(crate) fn vba_eof(&self, number: i64) -> Result<bool, FileError> {
+        if !(1..=511).contains(&number) { return Err(FileError::BadNumber); }
+        let handle = self.handle(number)?;
+        match handle.mode {
+            OpenMode::Input => self.at_end(number),
+            OpenMode::Output | OpenMode::Append => Ok(true),
+            OpenMode::Binary | OpenMode::Random(_) => self.cursors.get(&channel_key(self.project_scope, number))
+                .map(|cursor| cursor.read_eof).ok_or(FileError::BadNumber),
+        }
     }
 
     pub fn column(&self, number: i64) -> Result<usize, FileError> {
@@ -863,6 +939,11 @@ impl Files {
             OpenMode::Random(length) => (position as usize - 1) * length,
             _ => position as usize - 1,
         };
+        if let Some(cursor) = self.cursors.get_mut(&channel_key(self.project_scope, number)) {
+            cursor.physical = handle.position;
+            cursor.read_eof = false;
+            cursor.record = None;
+        }
         Ok(())
     }
 
@@ -878,52 +959,91 @@ impl Files {
     /// noughts across any gap) to take them.
     pub fn put(&mut self, number: i64, bytes: &[u8]) -> Result<(), FileError> {
         let handle = self.handle(number)?;
-        if !matches!(handle.mode, OpenMode::Binary | OpenMode::Random(_)) {
-            return Err(FileError::BadNumber);
-        }
-        if !handle.can_write {return Err(FileError::PathFileAccess);}
-        self.check_record_access(number,handle,bytes.len())?;
-        let handle=self.open.get_mut(&channel_key(self.project_scope, number)).expect("checked handle");
+        if !(1..=511).contains(&number) { return Err(FileError::BadNumber); }
+        if !matches!(handle.mode, OpenMode::Binary | OpenMode::Random(_)) { return Err(FileError::BadMode); }
+        if !handle.can_write { return Err(FileError::PathFileAccess); }
+        if matches!(handle.mode, OpenMode::Random(length) if bytes.len() > length) { return Err(FileError::BadRecordLength); }
+        self.check_record_access(number, handle, bytes.len())?;
+        let key = channel_key(self.project_scope, number);
+        let handle = self.open.get_mut(&key).expect("checked handle");
+        let cursor = self.cursors.get_mut(&key).ok_or(FileError::BadNumber)?;
         let file = self.contents.get_mut(&handle.path).ok_or(FileError::BadNumber)?;
-        let end = handle.position + bytes.len();
-        if file.1.len() < end {
-            file.1.resize(end, 0);
-        }
-        file.1[handle.position..end].copy_from_slice(bytes);
-        handle.position = end;
-        let path=handle.path.clone();
+        let start = cursor.physical;
+        let end = start.checked_add(bytes.len()).ok_or(FileError::BadRecordNumber)?;
+        let logical = handle.position.checked_add(bytes.len()).ok_or(FileError::BadRecordNumber)?;
+        if file.1.len() < end { file.1.resize(end, 0); }
+        file.1[start..end].copy_from_slice(bytes);
+        cursor.physical = end;
+        cursor.record = None;
+        handle.position = logical;
+        let path = handle.path.clone();
         self.mark_written(&path);
         Ok(())
     }
 
-    /// After a whole `Get` or `Put` in a random file, the next record: one
-    /// read or written short still takes its whole length.
+    /// Complete one random record. Short reads advance its logical record
+    /// counter while the underlying stream advances only by bytes available.
     pub fn finish_record(&mut self, number: i64) {
-        if let Some(handle) = self.open.get_mut(&channel_key(self.project_scope, number)) {
+        let key = channel_key(self.project_scope, number);
+        if let (Some(handle), Some(cursor)) = (self.open.get_mut(&key), self.cursors.get_mut(&key)) {
             if let OpenMode::Random(length) = handle.mode {
-                let length = length.max(1);
-                handle.position = handle.position.div_ceil(length) * length;
+                if let Some(record) = cursor.record.take() {
+                    let available = self.contents.get(&handle.path).map_or(0, |file| file.1.len()).saturating_sub(record.start);
+                    cursor.physical = record.start.saturating_add(available.min(record.span));
+                    handle.position = record.logical_start.saturating_add(record.length);
+                } else {
+                    let length = length.max(1);
+                    handle.position = handle.position.div_ceil(length).saturating_mul(length);
+                    cursor.physical = handle.position;
+                }
             }
         }
     }
 
-    /// `Get`: so many bytes from the current position, noughts past the end.
-    pub fn get(&mut self, number: i64, count: usize) -> Result<Vec<u8>, FileError> {
-        let handle = self.handle(number)?;
-        if !matches!(handle.mode, OpenMode::Binary | OpenMode::Random(_)) {
-            return Err(FileError::BadNumber);
+    pub(crate) fn abort_get_record(&mut self, number: i64) {
+        let key = channel_key(self.project_scope, number);
+        if let (Some(handle), Some(cursor)) = (self.open.get_mut(&key), self.cursors.get_mut(&key)) {
+            if let Some(record) = cursor.record.take() { handle.position = record.logical_start; }
         }
-        if !handle.can_read {return Err(FileError::PathFileAccess);}
-        self.check_record_access(number,handle,count)?;
-        let handle=self.open.get_mut(&channel_key(self.project_scope, number)).expect("checked handle");
+    }
+
+    pub fn get(&mut self, number: i64, count: usize) -> Result<Vec<u8>, FileError> {
+        self.get_bytes(number, count)
+    }
+
+    fn get_bytes(&mut self, number: i64, count: usize) -> Result<Vec<u8>, FileError> {
+        let handle = self.handle(number)?;
+        if !(1..=511).contains(&number) { return Err(FileError::BadNumber); }
+        if !matches!(handle.mode, OpenMode::Binary | OpenMode::Random(_)) { return Err(FileError::BadMode); }
+        if !handle.can_read { return Err(FileError::PathFileAccess); }
+        let random = match handle.mode { OpenMode::Random(length) => Some(length.max(1)), _ => None };
+        self.check_record_access(number, handle, random.unwrap_or(count))?;
+        let key = channel_key(self.project_scope, number);
+        let handle = self.open.get_mut(&key).expect("checked handle");
+        let cursor = self.cursors.get_mut(&key).ok_or(FileError::BadNumber)?;
         let file = self.contents.get(&handle.path).map(|file| file.1.as_slice()).unwrap_or(&[]);
         let mut read = vec![0u8; count];
-        for (index, slot) in read.iter_mut().enumerate() {
-            if let Some(byte) = file.get(handle.position + index) {
-                *slot = *byte;
+        if let Some(length) = random {
+            let record = cursor.record.get_or_insert_with(|| RecordRead {
+                start: cursor.physical, logical_start: handle.position, offset: 0, length, span: length,
+            });
+            cursor.read_eof = file.len().saturating_sub(record.start) < record.span;
+            let end = record.offset.checked_add(count).ok_or(FileError::BadRecordLength)?;
+            if end > record.length { return Err(FileError::BadRecordLength); }
+            record.span = record.span.max(end);
+            cursor.read_eof = file.len().saturating_sub(record.start) < record.span;
+            for (index, slot) in read.iter_mut().enumerate() {
+                if let Some(byte) = record.start.checked_add(record.offset).and_then(|at| at.checked_add(index)).and_then(|at| file.get(at)) { *slot = *byte; }
             }
+            record.offset = end;
+            handle.position = record.logical_start.saturating_add(end);
+        } else {
+            let available = file.len().saturating_sub(cursor.physical).min(count);
+            if available != 0 { read[..available].copy_from_slice(&file[cursor.physical..cursor.physical + available]); }
+            cursor.physical = cursor.physical.saturating_add(available);
+            handle.position = handle.position.checked_add(count).ok_or(FileError::BadRecordNumber)?;
+            if count != 0 { cursor.read_eof = available < count; }
         }
-        handle.position += count;
         Ok(read)
     }
 
