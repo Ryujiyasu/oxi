@@ -43,6 +43,8 @@ function copyFileSystemState(state) {
             ? state.volumes.map(entry => entry && typeof entry === 'object' && !Array.isArray(entry) ? {...entry} : entry) : state.volumes} : {}),
         ...(Object.hasOwn(state, 'modifiedTimes') ? {modifiedTimes: Array.isArray(state.modifiedTimes)
             ? state.modifiedTimes.map(entry => entry && typeof entry === 'object' && !Array.isArray(entry) ? {...entry} : entry) : state.modifiedTimes} : {}),
+        ...(Object.hasOwn(state, 'directoryEntryTimes') ? {directoryEntryTimes: Array.isArray(state.directoryEntryTimes)
+            ? state.directoryEntryTimes.map(entry => entry && typeof entry === 'object' && !Array.isArray(entry) ? {...entry} : entry) : state.directoryEntryTimes} : {}),
         ...(Object.hasOwn(state, 'attributes') ? {attributes: Array.isArray(state.attributes)
             ? state.attributes.map(entry => entry && typeof entry === 'object' && !Array.isArray(entry) ? {...entry} : entry) : state.attributes} : {}),
         files: Array.isArray(state.files) ? state.files.map(file => file && typeof file === 'object' && !Array.isArray(file)

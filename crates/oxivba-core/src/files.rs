@@ -172,6 +172,7 @@ pub struct Files {
     volume_labels: BTreeMap<String,String>,
     record_locks: Vec<RecordLock>,
     modified: BTreeMap<String, f64>,
+    directory_entries: BTreeMap<String, f64>,
     current_time: f64,
     pending_writes: std::collections::BTreeSet<(u64, i64)>,
 }
@@ -185,7 +186,7 @@ impl Default for Files {
             attributes: BTreeMap::new(),
             volume_labels: BTreeMap::new(),
             record_locks: Vec::new(),
-            modified: BTreeMap::new(), current_time: 0.0, pending_writes: Default::default(),
+            modified: BTreeMap::new(), directory_entries: BTreeMap::new(), current_time: 0.0, pending_writes: Default::default(),
             cursors: BTreeMap::new(),
         }
     }
@@ -229,7 +230,7 @@ impl Files {
         self.contents.is_empty() && self.open.is_empty() && self.listings.is_empty()
             && self.folders.is_empty() && self.attributes.is_empty()
             && self.volume_labels.is_empty() && self.record_locks.is_empty()
-            && self.modified.is_empty() && self.pending_writes.is_empty()
+            && self.modified.is_empty() && self.directory_entries.is_empty() && self.pending_writes.is_empty()
             && self.next_stream_number==1000 && self.current_drive=='C'
             && self.drive_directories.len()==1
             && self.drive_directories.get(&'C').is_some_and(|path|path=="C:\\")
@@ -294,6 +295,7 @@ impl Files {
         self.attributes=attributes;
         self.modified=self.contents.keys().chain(self.folders.iter()).map(|key|(key.clone(),self.current_time)).collect();
         self.pending_writes.clear();
+        self.directory_entries.clear();
         self.open.clear();
         self.cursors.clear();
         self.record_locks.clear();
@@ -363,6 +365,7 @@ impl Files {
         if path.is_empty() { return Err(FileError::PathNotFound); }
         let path = self.absolute_path(path);
         if !self.folder_exists(&path) { return Err(FileError::PathNotFound); }
+        self.directory_entries.remove(path.to_lowercase().trim_end_matches('\\'));
         if path.as_bytes().get(1) == Some(&b':') {
             let drive = char::from(path.as_bytes()[0]).to_ascii_uppercase();
             self.drive_directories.insert(drive, path);
@@ -471,6 +474,7 @@ impl Files {
         let path = self.normalize_snapshot_path(path)?;
         let key = path.to_lowercase().trim_end_matches('\\').to_string();
         if !self.contents.contains_key(&key) && !self.folder_exists(&path) { return Err(FileError::InvalidArgument); }
+        self.directory_entries.remove(&key);
         self.modified.insert(key, whole_second_date(serial));
         Ok(())
     }
@@ -488,11 +492,12 @@ impl Files {
             next.set_modified_time(path, *serial)?;
         }
         self.modified = next.modified;
+        self.directory_entries.clear();
         Ok(())
     }
 
     /// FileDateTime uses the local last-write time and native pathname errors.
-    pub fn date_modified(&self, path: &str) -> Result<f64, FileError> {
+    pub fn date_modified(&mut self, path: &str) -> Result<f64, FileError> {
         let path = path.split('\0').next().unwrap_or_default();
         if path.trim_end_matches(' ').is_empty() { return Err(FileError::NotFound); }
         if path.contains(['*', '?']) { return Err(FileError::BadNumber); }
@@ -507,11 +512,68 @@ impl Files {
         if path.ends_with(['\\', '/']) {
             return Err(if self.contents.contains_key(&key) { FileError::InvalidArgument } else { FileError::NotFound });
         }
+        self.publish_parent_entry(&key);
         if !self.contents.contains_key(&key) && !self.folder_exists(&key) {
             let parent = key.rsplit_once('\\').map_or("", |(parent, _)| parent);
             return Err(if self.folder_exists(parent) { FileError::NotFound } else { FileError::PathNotFound });
         }
-        Ok(self.modified.get(&key).copied().unwrap_or(self.current_time))
+        Ok(self.directory_entries.get(&key).or_else(|| self.modified.get(&key)).copied().unwrap_or(self.current_time))
+    }
+
+    /// Physical directory dates and the entry returned by FileDateTime can
+    /// differ until a metadata query refreshes that entry.
+    pub fn directory_entry_facts(&self) -> Vec<(String, f64)> {
+        self.directory_entries.iter().map(|(path, value)| {
+            let path = if path.len() == 2 && path.ends_with(':') { format!("{path}\\") } else { path.clone() };
+            (path, *value)
+        }).collect()
+    }
+
+    pub fn restore_directory_entry_facts(&mut self, facts: &[(String, f64)]) -> Result<(), FileError> {
+        let mut entries = BTreeMap::new();
+        for (path, value) in facts {
+            let path = self.normalize_snapshot_path(path)?.to_lowercase().trim_end_matches('\\').to_string();
+            if !value.is_finite() || !(*value > -657435.0 && *value < 2958466.0)
+                || !self.folder_exists(&path) || self.contents.contains_key(&path)
+                || entries.insert(path, whole_second_date(*value)).is_some() {
+                return Err(FileError::InvalidArgument);
+            }
+        }
+        self.directory_entries = entries;
+        Ok(())
+    }
+
+    fn publish_parent_entry(&mut self, path: &str) {
+        if let Some((parent, _)) = path.rsplit_once('\\') { self.directory_entries.remove(parent); }
+    }
+
+    fn parent_changed(&mut self, path: &str, publish: bool) {
+        if let Some((parent, _)) = path.rsplit_once('\\') {
+            if self.folder_exists(parent) {
+                let previous = self.modified.insert(parent.into(), self.current_time).unwrap_or(self.current_time);
+                if publish { self.directory_entries.remove(parent); }
+                else if previous != self.current_time { self.directory_entries.entry(parent.into()).or_insert(previous); }
+            }
+        }
+    }
+
+    /// GetAttr refreshes a directory's entry without changing its physical time.
+    pub fn query_attributes(&mut self, path: &str) -> Result<i64, FileError> {
+        let value = self.attributes(path)?;
+        if value & 16 != 0 { self.directory_entries.remove(self.key(path).trim_end_matches('\\')); }
+        Ok(value)
+    }
+
+    pub fn query_length(&mut self, path: &str) -> Result<usize, FileError> {
+        self.publish_parent_entry(&self.key(path));
+        self.length(path)
+    }
+
+    pub fn fresh_modified_time(&mut self, path: &str) -> Result<f64, FileError> {
+        self.query_attributes(path)?;
+        self.publish_parent_entry(&self.key(path));
+        let key = self.key(path);
+        Ok(self.modified.get(key.trim_end_matches('\\')).copied().unwrap_or(self.current_time))
     }
 
     fn mark_handle_written(&mut self, number: i64, path: &str, nonempty: bool) {
@@ -577,6 +639,7 @@ impl Files {
                 return Err(FileError::PathNotFound);
             }
         }
+        if !self.contents.contains_key(&name) { self.parent_changed(&name, false); }
         self.mark_written(&name);
         self.modified.insert(name.clone(),self.current_time);
         self.contents.insert(name, (self.absolute_path(path.trim()), bytes));
@@ -669,6 +732,7 @@ impl Files {
             }
             OpenMode::Input => {}
         }
+        if newly_created { self.parent_changed(&name, false); }
         if newly_created || mode==OpenMode::Output { self.modified.insert(name.clone(),self.current_time); }
         let column = match mode {
             OpenMode::Append => {
@@ -706,6 +770,7 @@ impl Files {
                 self.contents.entry(name.clone()).or_insert_with(|| (path, Vec::new()));
             }
         }
+        if newly_created { self.parent_changed(&name, false); }
         if newly_created || mode==OpenMode::Output { self.modified.insert(name.clone(),self.current_time); }
         let column = if mode == OpenMode::Append {
             let bytes = &self.contents[&name].1;
@@ -769,6 +834,7 @@ impl Files {
         }
         let parent=folder.rsplit_once('\\').map(|(parent,_)|parent).ok_or(FileError::PathNotFound)?;
         if !self.folder_exists(&format!("{parent}\\")) {return Err(FileError::PathNotFound);}
+        self.parent_changed(&folder, false);
         self.modified.insert(folder.clone(),self.current_time);
         self.folders.insert(folder);
         Ok(())
@@ -795,6 +861,8 @@ impl Files {
         self.folders.remove(&folder);
         self.attributes.remove(&folder);
         self.modified.remove(&folder);
+        self.directory_entries.remove(&folder);
+        self.parent_changed(&folder, false);
         Ok(())
     }
 
@@ -818,6 +886,7 @@ impl Files {
                 self.contents.remove(&path);
                 self.attributes.remove(&path);
                 self.modified.remove(&path);
+                self.parent_changed(&path, true);
             }
         }
         let cwd=self.key(&self.current_directory(None)?).trim_end_matches('\\').to_string();
@@ -826,6 +895,8 @@ impl Files {
         self.folders.remove(folder);
         self.attributes.remove(folder);
         self.modified.remove(folder);
+        self.directory_entries.remove(folder);
+        self.parent_changed(folder, true);
         Ok(())
     }
 
@@ -1412,6 +1483,57 @@ impl Files {
             self.contents.remove(&full);
             self.attributes.remove(&full);
             self.modified.remove(&full);
+            self.parent_changed(&full, true);
+        }
+        Ok(())
+    }
+
+    /// FSO folder copying retains completed entries when a later copy fails.
+    pub fn copy_folder(&mut self, source: &str, destination: &str, overwrite: bool) -> Result<(), FileError> {
+        if source.is_empty() || destination.is_empty() { return Err(FileError::InvalidArgument); }
+        if source.ends_with(['\\', '/']) { return Err(FileError::PathNotFound); }
+        if destination.contains(['*', '?']) { return Err(FileError::InvalidArgument); }
+        let source = self.key(source);
+        let wildcard = source.contains(['*', '?']);
+        let sources = if wildcard {
+            let (parent, pattern) = source.rsplit_once('\\').ok_or(FileError::PathNotFound)?;
+            if parent.contains(['*', '?']) { return Err(FileError::PathNotFound); }
+            self.child_folders(parent).into_iter().filter(|path| matches_pattern(file_name(path), pattern)).collect::<Vec<_>>()
+        } else if self.folder_exists(&source) && !self.contents.contains_key(&source) { vec![source] }
+        else { return Err(FileError::PathNotFound); };
+        if sources.is_empty() { return Err(FileError::PathNotFound); }
+        let container = wildcard || destination.ends_with(['\\', '/']);
+        if container && !self.folder_exists(destination) { return Err(FileError::PathNotFound); }
+        for source in sources {
+            let target = if container { format!("{}\\{}", destination.trim_end_matches(['\\', '/']), file_name(&source)) }
+                else { destination.into() };
+            let target_key = self.key(&target);
+            if self.contents.contains_key(&target_key) || !overwrite && self.folder_exists(&target_key) { return Err(FileError::AlreadyExists); }
+            if source == target_key { continue; }
+            if target_key.starts_with(&format!("{source}\\")) { return Err(FileError::PermissionDenied); }
+            self.copy_directory_tree(&source, &target, overwrite)?;
+            self.publish_parent_entry(self.key(destination).trim_end_matches('\\'));
+        }
+        Ok(())
+    }
+
+    fn copy_directory_tree(&mut self, source: &str, destination: &str, overwrite: bool) -> Result<(), FileError> {
+        let target = self.key(destination);
+        if self.contents.contains_key(&target) { return Err(FileError::AlreadyExists); }
+        if !self.folder_exists(&target) {
+            let attributes = self.attributes(source)?;
+            self.make_folder(destination)?;
+            self.attributes.insert(target.clone(), attributes);
+            // CopyFolder leaves nested directory entries cached until queried.
+        } else if !overwrite { return Err(FileError::AlreadyExists); }
+        let mut entries: BTreeMap<String, bool> = self.child_folders(source).into_iter().map(|path| (path, true)).collect();
+        for (key, (path, _)) in &self.contents {
+            if key.rsplit_once('\\').is_some_and(|(parent, _)| parent == source) { entries.insert(path.clone(), false); }
+        }
+        for (path, folder) in entries {
+            let target = format!("{}\\{}", destination.trim_end_matches(['\\', '/']), file_name(&path));
+            if folder { self.copy_directory_tree(&path, &target, overwrite)?; }
+            else { self.copy_one(&path, &target, true, overwrite, false)?; }
         }
         Ok(())
     }
@@ -1433,16 +1555,16 @@ impl Files {
         if folder_target && !self.folder_exists(destination) {return Err(FileError::PathNotFound);}
         for source in sources {
             let destination=if folder_target {format!("{}\\{}",destination.trim_end_matches(['\\','/']),file_name(&source))} else {destination.to_string()};
-            self.copy_one(&source,&destination,true,overwrite)?;
+            self.copy_one(&source,&destination,true,overwrite,true)?;
         }
         Ok(())
     }
 
     fn copy_with_options(&mut self, source: &str, destination: &str, fso: bool) -> Result<(), FileError> {
-        self.copy_one(source,destination,fso,true)
+        self.copy_one(source,destination,fso,true,fso)
     }
 
-    fn copy_one(&mut self, source: &str, destination: &str, fso: bool, overwrite: bool) -> Result<(), FileError> {
+    fn copy_one(&mut self, source: &str, destination: &str, fso: bool, overwrite: bool, publish_parent: bool) -> Result<(), FileError> {
         let bytes = self.contents.get(&self.key(source)).ok_or(FileError::NotFound)?.1.clone();
         let key=self.key(destination);
         let source_key=self.key(source);
@@ -1460,6 +1582,7 @@ impl Files {
         if self.folder_exists(&format!("{key}\\")) {return Err(if fso {FileError::PermissionDenied}else{FileError::PathFileAccess});}
         if self.is_read_only_key(&key) {return Err(if fso {FileError::PermissionDenied}else{FileError::PathFileAccess});}
         let attributes=if fso {self.attributes(source)? | 32}else{32};
+        if !self.contents.contains_key(&key) { self.parent_changed(&key, publish_parent); }
         self.attributes.insert(key.clone(),attributes);
         let modified=self.modified.get(&source_key).copied().unwrap_or(self.current_time);
         self.modified.insert(key.clone(),modified);
@@ -1516,6 +1639,9 @@ impl Files {
         }
         if self.folder_exists(&format!("{key}\\")) {return Err(FileError::PermissionDenied);}
         let (_, bytes) = self.contents.remove(&old).ok_or(FileError::NotFound)?;
+        let same_parent = old.rsplit_once('\\').map(|(parent, _)| parent) == key.rsplit_once('\\').map(|(parent, _)| parent);
+        self.parent_changed(&old, fso || same_parent);
+        self.parent_changed(&key, true);
         let modified=self.modified.remove(&old).unwrap_or(self.current_time);
         self.modified.insert(key.clone(),modified);
         self.attributes.remove(&old);
@@ -1527,6 +1653,109 @@ impl Files {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn copy_folder_matches_native_target_and_overwrite_rules() {
+        let mut files = Files::default();
+        files.mount_folder(r"C:\work\source\branch").unwrap();
+        files.mount_folder(r"C:\work\existing").unwrap();
+        files.replace_bytes(r"C:\work\source\data.bin", b"ABC".to_vec()).unwrap();
+        files.replace_bytes(r"C:\work\source\branch\child.bin", b"DEF".to_vec()).unwrap();
+        files.set_modified_time(r"C:\work\source\data.bin", 43890.50283564815).unwrap();
+        files.set_modified_time(r"C:\work", 43890.50283564815).unwrap();
+        files.set_current_time(47485.89925925926);
+        files.copy_folder(r"C:\work\source", r"C:\work\target", true).unwrap();
+        assert_eq!(files.bytes(r"C:\work\target\branch\child.bin"), Ok(b"DEF".as_slice()));
+        assert_eq!(files.date_modified(r"C:\work\target\data.bin"), Ok(43890.50283564815));
+        assert_eq!(files.date_modified(r"C:\work"), Ok(47485.89925925926));
+        assert_eq!(files.copy_folder(r"C:\work\source", r"C:\work\existing", false), Err(FileError::AlreadyExists));
+        assert!(!files.exists(r"C:\work\existing\data.bin"));
+        files.copy_folder(r"C:\work\source", r"C:\work\source", true).unwrap();
+        assert_eq!(files.copy_folder(r"C:\work\source\", r"C:\work\another", true), Err(FileError::PathNotFound));
+        files.copy_folder(r"C:\work\s*", r"C:\work\existing\", false).unwrap();
+        assert_eq!(files.bytes(r"C:\work\existing\source\data.bin"), Ok(b"ABC".as_slice()));
+    }
+
+    fn directory_date_fixture() -> Files {
+        let mut files = Files::default();
+        files.mount_folder(r"C:\work\branch").unwrap();
+        files.replace_bytes(r"C:\work\data.bin", b"ABC".to_vec()).unwrap();
+        files.replace_bytes(r"C:\work\branch\child.bin", b"DEF".to_vec()).unwrap();
+        for path in [r"C:\work", r"C:\work\branch", r"C:\work\data.bin", r"C:\work\branch\child.bin"] {
+            files.set_modified_time(path, 43890.50283564815).unwrap();
+        }
+        files.set_current_time(47485.89925925926);
+        files.open(r"C:\work\new.bin", OpenMode::Output, 1).unwrap();
+        files.close(&[1]);
+        files
+    }
+
+    #[test]
+    fn directory_dates_retain_native_entry_values_until_a_refreshing_query() {
+        let old = 43890.50283564815;
+        let current = 47485.89925925926;
+        for query in 0..9 {
+            let mut files = directory_date_fixture();
+            for _ in 0..3 { assert_eq!(files.date_modified(r"C:\work"), Ok(old)); }
+            assert_eq!(files.modified_facts().iter().find(|(path, _)| path == r"c:\work").unwrap().1, current);
+            files.set_current_time(current + 10.0);
+            match query {
+                0 => { files.query_attributes(r"C:\work").unwrap(); }
+                1 => { files.date_modified(r"C:\work\data.bin").unwrap(); }
+                2 => { assert_eq!(files.date_modified(r"C:\work\missing.bin"), Err(FileError::NotFound)); }
+                3 => { files.query_length(r"C:\work\data.bin").unwrap(); }
+                4 => { files.change_directory(r"C:\work").unwrap(); }
+                5 => { assert_eq!(files.fresh_modified_time(r"C:\work"), Ok(current)); }
+                6 => { files.query_attributes(r"C:\work\data.bin").unwrap(); }
+                7 => { files.dir(Some(r"C:\work\*")); }
+                8 => { files.date_modified(r"C:\work\branch\child.bin").unwrap(); }
+                _ => unreachable!(),
+            }
+            assert_eq!(files.date_modified(r"C:\work"), Ok(if query < 6 { current } else { old }), "query {query}");
+        }
+    }
+
+    #[test]
+    fn directory_entry_snapshots_keep_absolute_drive_roots() {
+        let mut files = Files::default();
+        files.mount_folder(r"C:\").unwrap();
+        files.set_modified_time(r"C:\", 43890.50283564815).unwrap();
+        files.set_current_time(47485.89925925926);
+        files.open(r"C:\new.bin", OpenMode::Output, 1).unwrap();
+        files.close(&[1]);
+        let entries = files.directory_entry_facts();
+        assert_eq!(entries, vec![(r"c:\".into(), 43890.50283564815)]);
+        let mut next = Files::default();
+        next.restore_closed_snapshot(&files.closed_snapshot()).unwrap();
+        next.restore_modified_facts(&files.modified_facts()).unwrap();
+        next.restore_directory_entry_facts(&entries).unwrap();
+        assert_eq!(next.fresh_modified_time(r"C:\"), Ok(47485.89925925926));
+    }
+
+    #[test]
+    fn directory_entry_snapshots_preserve_cached_and_physical_dates_atomically() {
+        let files = directory_date_fixture();
+        let closed = files.closed_snapshot();
+        let modified = files.modified_facts();
+        let entries = files.directory_entry_facts();
+        assert!(!entries.is_empty());
+        let mut restored = Files::default();
+        restored.restore_closed_snapshot(&closed).unwrap();
+        restored.restore_modified_facts(&modified).unwrap();
+        restored.restore_directory_entry_facts(&entries).unwrap();
+        assert_eq!(restored.date_modified(r"C:\work"), Ok(43890.50283564815));
+        for facts in [vec![(r"C:\work\data.bin".into(), 1.0)], vec![(r"C:\absent".into(), 1.0)],
+            vec![(r"C:\work".into(), f64::NAN)], vec![(r"C:\work".into(), -657435.0)],
+            vec![(r"C:\work".into(), 2958466.0)],
+            vec![(r"C:\work".into(), 1.0), ("c:/WORK".into(), 2.0)]] {
+            assert_eq!(restored.restore_directory_entry_facts(&facts), Err(FileError::InvalidArgument));
+            assert_eq!(restored.directory_entry_facts(), entries);
+            assert_eq!(restored.modified_facts(), modified);
+        }
+        restored.query_attributes(r"C:\work").unwrap();
+        assert_eq!(restored.date_modified(r"C:\work"), Ok(47485.89925925926));
+    }
+
 
     #[test]
     fn modification_dates_preserve_whole_seconds_across_the_date_range() {
