@@ -1,6 +1,10 @@
 # OxiCells Python: workbook VBA
 
-An experimental Python API for running **supported VBA** with Oxi's native engine, without Microsoft Excel. This package is under development and has not been released to PyPI. Complete Excel VBA compatibility has not been established.
+An experimental Python API for running **supported VBA** with Oxi's native engine, without Microsoft Excel. This package is an alpha release. Complete Excel VBA compatibility has not been established.
+
+```sh
+pip install oxicells
+```
 
 ```python
 import oxicells
