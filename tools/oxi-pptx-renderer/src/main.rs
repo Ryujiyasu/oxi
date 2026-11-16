@@ -891,6 +891,12 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
         {
             p
         }
+        Some(
+            p @ ("leftRightArrow" | "leftArrow" | "upArrow" | "downArrow" | "mathMultiply"
+                | "donut" | "hexagon" | "flowChartProcess" | "flowChartConnector"
+                | "flowChartDocument" | "flowChartMagneticDisk" | "can" | "leftBrace"
+                | "rightBrace" | "wedgeRoundRectCallout"),
+        ) if preset2_on() => p,
         _ => return false,
     };
     let w = sh.width.max(0.0);
@@ -910,6 +916,14 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     };
     let line = |p: POINT| { let _ = LineTo(dc, p.x, p.y); };
     let bezier = |c1: POINT, c2: POINT, end: POINT| { let _ = PolyBezierTo(dc, &[c1, c2, end]); };
+    let poly = |pts: &[(f32, f32)]| {
+        let p = map(pts[0].0, pts[0].1);
+        let _ = MoveToEx(dc, p.x, p.y, None);
+        for &(x, y) in &pts[1..] {
+            line(map(x, y));
+        }
+    };
+    let mut open_path = false;
     let _ = BeginPath(dc);
     const K: f32 = 0.552_284_8;
     match prst {
@@ -1241,6 +1255,214 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
             }
             line(map(rx + dxp, ry + dyp));
         }
+        // ECMA-376 presetShapeDefinitions, transcribed. 252cbc8c s69 draws its
+        // database cylinders (can), x marks (mathMultiply) and double arrows
+        // (leftRightArrow) with these; 68ffbed2 / 640d6e4e the braces and
+        // flow-chart shapes. Before, all of them filled their box.
+        // wedgeRectCallout with its corners rounded by adj3 (ECMA: radius
+        // ss * adj3 / 100000, default 16667); the tail is spliced exactly as
+        // the square one splices it. 640d6e4e / 252cbc8c, 11 balloons.
+        "wedgeRoundRectCallout" => {
+            let a1 = sh.adjustments.get("adj1").copied().unwrap_or(-20_833.0) / 100_000.0;
+            let a2 = sh.adjustments.get("adj2").copied().unwrap_or(62_500.0) / 100_000.0;
+            let a3 = sh.adjustments.get("adj3").copied().unwrap_or(16_667.0) / 100_000.0;
+            let r = (w.min(h) * a3).clamp(0.0, w.min(h) / 2.0);
+            let (dx_pos, dy_pos) = (a1 * w, a2 * h);
+            let (tx, ty) = (w / 2.0 + dx_pos, h / 2.0 + dy_pos);
+            let inside = tx >= 0.0 && tx <= w && ty >= 0.0 && ty <= h;
+            let horizontal = dy_pos.abs() > (dx_pos * h / w.max(1e-6)).abs();
+            let g = |positive: bool| if positive { (7.0, 10.0) } else { (2.0, 5.0) };
+            let (g1, g2) = if horizontal { g(dx_pos > 0.0) } else { g(dy_pos > 0.0) };
+            let (b1, b2) = if horizontal {
+                (w * g1 / 12.0, w * g2 / 12.0)
+            } else {
+                (h * g1 / 12.0, h * g2 / 12.0)
+            };
+            let mut pts: Vec<(f32, f32)> = Vec::new();
+            let arc = |pts: &mut Vec<(f32, f32)>, cx: f32, cy: f32, a0: f32| {
+                for i in 0..=8 {
+                    let t = (a0 + 90.0 * i as f32 / 8.0).to_radians();
+                    pts.push((cx + r * t.cos(), cy + r * t.sin()));
+                }
+            };
+            arc(&mut pts, r, r, 180.0);
+            if !inside && horizontal && dy_pos <= 0.0 {
+                pts.push((b1, 0.0));
+                pts.push((tx, ty));
+                pts.push((b2, 0.0));
+            }
+            arc(&mut pts, w - r, r, 270.0);
+            if !inside && !horizontal && dx_pos > 0.0 {
+                pts.push((w, b1));
+                pts.push((tx, ty));
+                pts.push((w, b2));
+            }
+            arc(&mut pts, w - r, h - r, 0.0);
+            if !inside && horizontal && dy_pos > 0.0 {
+                pts.push((b2, h));
+                pts.push((tx, ty));
+                pts.push((b1, h));
+            }
+            arc(&mut pts, r, h - r, 90.0);
+            if !inside && !horizontal && dx_pos <= 0.0 {
+                pts.push((0.0, b2));
+                pts.push((tx, ty));
+                pts.push((0.0, b1));
+            }
+            poly(&pts);
+        }
+        "leftRightArrow" | "leftArrow" | "upArrow" | "downArrow" => {
+            let ss = w.min(h);
+            let a1 = sh.adjustments.get("adj1").copied().unwrap_or(50_000.0).clamp(0.0, 100_000.0);
+            let long = if matches!(prst, "upArrow" | "downArrow") { h } else { w };
+            let max2 = if prst == "leftRightArrow" { 50_000.0 } else { 100_000.0 } * long / ss;
+            let a2 = sh.adjustments.get("adj2").copied().unwrap_or(50_000.0).clamp(0.0, max2);
+            let head = ss * a2 / 100_000.0;
+            let pts: Vec<(f32, f32)> = match prst {
+                "leftRightArrow" => {
+                    let dy = h * a1 / 200_000.0;
+                    let (y1, y2) = (h / 2.0 - dy, h / 2.0 + dy);
+                    let (x2, x3) = (head, w - head);
+                    vec![(0.0, h / 2.0), (x2, 0.0), (x2, y1), (x3, y1), (x3, 0.0), (w, h / 2.0),
+                         (x3, h), (x3, y2), (x2, y2), (x2, h)]
+                }
+                "leftArrow" => {
+                    let dy = h * a1 / 200_000.0;
+                    let (y1, y2) = (h / 2.0 - dy, h / 2.0 + dy);
+                    vec![(0.0, h / 2.0), (head, 0.0), (head, y1), (w, y1), (w, y2), (head, y2), (head, h)]
+                }
+                "upArrow" => {
+                    let dx = w * a1 / 200_000.0;
+                    let (x1, x2) = (w / 2.0 - dx, w / 2.0 + dx);
+                    vec![(w / 2.0, 0.0), (w, head), (x2, head), (x2, h), (x1, h), (x1, head), (0.0, head)]
+                }
+                _ => {
+                    let dx = w * a1 / 200_000.0;
+                    let (x1, x2) = (w / 2.0 - dx, w / 2.0 + dx);
+                    let y1 = h - head;
+                    vec![(0.0, y1), (x1, y1), (x1, 0.0), (x2, 0.0), (x2, y1), (w, y1), (w / 2.0, h)]
+                }
+            };
+            poly(&pts);
+        }
+        "mathMultiply" => {
+            let ss = w.min(h);
+            let a1 = sh.adjustments.get("adj1").copied().unwrap_or(23_520.0).clamp(0.0, 51_965.0);
+            let th = ss * a1 / 100_000.0;
+            let a = h.atan2(w);
+            let (sa, ca, ta) = (a.sin(), a.cos(), a.tan());
+            let dl = (w * w + h * h).sqrt();
+            let rw = dl * 51_965.0 / 100_000.0;
+            let lm = dl - rw;
+            let (xm, ym) = (ca * lm / 2.0, sa * lm / 2.0);
+            let (dxam, dyam) = (sa * th / 2.0, ca * th / 2.0);
+            let (xa, ya) = (xm - dxam, ym + dyam);
+            let (xb, yb) = (xm + dxam, ym - dyam);
+            let xbc = w / 2.0 - xb;
+            let yc = xbc * ta + yb;
+            let xd = w - xb;
+            let xe = w - xa;
+            let xfe = (h / 2.0 - ya) / ta;
+            let xf = xe - xfe;
+            let xl = xa + xfe;
+            let (yg, yh, yi) = (h - ya, h - yb, h - yc);
+            poly(&[(xa, ya), (xb, yb), (w / 2.0, yc), (xd, yb), (xe, ya), (xf, h / 2.0),
+                   (xe, yg), (xd, yh), (w / 2.0, yi), (xb, yh), (xa, yg), (xl, h / 2.0)]);
+        }
+        "hexagon" => {
+            let ss = w.min(h);
+            let max = 50_000.0 * w / ss;
+            let a = sh.adjustments.get("adj").copied().unwrap_or(25_000.0).clamp(0.0, max);
+            let vf = sh.adjustments.get("vf").copied().unwrap_or(115_470.0) / 100_000.0;
+            let x1 = ss * a / 100_000.0;
+            let dy1 = h / 2.0 * vf * 60f32.to_radians().sin();
+            let (y1, y2) = (h / 2.0 - dy1, h / 2.0 + dy1);
+            poly(&[(0.0, h / 2.0), (x1, y1), (w - x1, y1), (w, h / 2.0), (w - x1, y2), (x1, y2)]);
+        }
+        "flowChartProcess" => {
+            poly(&[(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]);
+        }
+        "flowChartConnector" | "donut" => {
+            let ell = |cx: f32, cy: f32, rx: f32, ry: f32, rev: bool| {
+                let n = 96;
+                for i in 0..=n {
+                    let t = std::f32::consts::TAU * i as f32 / n as f32 * if rev { -1.0 } else { 1.0 };
+                    let q = map(cx - rx * t.cos(), cy - ry * t.sin());
+                    if i == 0 { let _ = MoveToEx(dc, q.x, q.y, None); } else { line(q); }
+                }
+            };
+            ell(w / 2.0, h / 2.0, w / 2.0, h / 2.0, false);
+            if prst == "donut" {
+                let _ = CloseFigure(dc);
+                let ss = w.min(h);
+                let a = sh.adjustments.get("adj").copied().unwrap_or(25_000.0).clamp(0.0, 50_000.0);
+                let dr = ss * a / 100_000.0;
+                ell(w / 2.0, h / 2.0, (w / 2.0 - dr).max(0.0), (h / 2.0 - dr).max(0.0), true);
+            }
+        }
+        "flowChartDocument" => {
+            let (sx, sy) = (w / 21_600.0, h / 21_600.0);
+            let p = map(0.0, 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
+            line(map(w, 0.0));
+            line(map(w, 17_322.0 * sy));
+            bezier(map(10_800.0 * sx, 17_322.0 * sy), map(10_800.0 * sx, 23_922.0 * sy), map(0.0, 20_172.0 * sy));
+        }
+        "can" | "flowChartMagneticDisk" => {
+            let y1 = if prst == "can" {
+                let ss = w.min(h);
+                let max = 50_000.0 * h / ss;
+                let a = sh.adjustments.get("adj").copied().unwrap_or(25_000.0).clamp(0.0, max);
+                ss * a / 200_000.0
+            } else {
+                h / 6.0
+            };
+            let (rx, n) = (w / 2.0, 48);
+            // Top: the upper half of the lid ellipse, left to right.
+            let p = map(0.0, y1); let _ = MoveToEx(dc, p.x, p.y, None);
+            for i in 1..=n {
+                let t = std::f32::consts::PI * i as f32 / n as f32;
+                line(map(rx - rx * t.cos(), y1 - y1 * t.sin()));
+            }
+            line(map(w, h - y1));
+            // Bottom: the lower half of the base ellipse, right to left.
+            for i in 1..=n {
+                let t = std::f32::consts::PI * i as f32 / n as f32;
+                line(map(rx + rx * t.cos(), h - y1 + y1 * t.sin()));
+            }
+        }
+        "leftBrace" | "rightBrace" => {
+            // Stroked open: no closing edge (the fill is `none` on every corpus copy).
+            open_path = true;
+            let ss = w.min(h);
+            let a2 = sh.adjustments.get("adj2").copied().unwrap_or(50_000.0).clamp(0.0, 100_000.0);
+            let q3 = (100_000.0 - a2).min(a2) / 2.0;
+            let max1 = q3 * h / ss;
+            let a1 = sh.adjustments.get("adj1").copied().unwrap_or(8_333.0).clamp(0.0, max1);
+            let y1 = ss * a1 / 100_000.0;
+            let y3 = h * a2 / 100_000.0;
+            let (rx, n) = (w / 2.0, 24);
+            // Quarter arcs of an (rx, y1) ellipse; `xf` mirrors for the left brace.
+            let xf = |x: f32| if prst == "leftBrace" { w - x } else { x };
+            let quarter = |cx: f32, cy: f32, a0: f32| {
+                for i in 1..=n {
+                    let t = (a0 + 90.0 * i as f32 / n as f32).to_radians();
+                    line(map(xf(cx + rx * t.cos()), cy + y1 * t.sin()));
+                }
+            };
+            let quarter_rev = |cx: f32, cy: f32, a0: f32| {
+                for i in 1..=n {
+                    let t = (a0 - 90.0 * i as f32 / n as f32).to_radians();
+                    line(map(xf(cx + rx * t.cos()), cy + y1 * t.sin()));
+                }
+            };
+            let p = map(xf(0.0), 0.0); let _ = MoveToEx(dc, p.x, p.y, None);
+            quarter(0.0, y1, 270.0); // (l,t) -> (hc, y1)
+            line(map(xf(rx), y3 - y1));
+            quarter_rev(w, y3 - y1, 180.0); // -> (r, y3)
+            quarter_rev(w, y3 + y1, 270.0); // -> (hc, y3 + y1)
+            line(map(xf(rx), h - y1));
+            quarter(0.0, h - y1, 0.0); // -> (l, b)
+        }
         "teardrop" => {
             // Default adj=100000: an ellipse whose upper-right quadrant is
             // pulled to the box corner. This is every corpus override too.
@@ -1254,8 +1476,366 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
         }
         _ => unreachable!(),
     }
-    let _ = CloseFigure(dc);
+    if !open_path {
+        let _ = CloseFigure(dc);
+    }
     let _ = EndPath(dc);
+    true
+}
+
+/// A cell paragraph's marker and indents (S-CELLRICH): (first-line x, later
+/// lines' x, marker x, marker (text, face, size, colour)), in points from the
+/// cell's inner left. None when the paragraph needs none of it.
+#[cfg(windows)]
+fn cell_rich_geom(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    p: &oxislides_core::ir::SlideParagraph,
+    fs: f32,
+    family: &str,
+    scale: f64,
+) -> Option<(f32, f32, f32, Option<(String, String, f32, Option<String>)>)> {
+    let rich = cellrich_on()
+        && (matches!(p.bullet, SlideBullet::Char { .. })
+            || p.mar_l.unwrap_or(0.0) != 0.0
+            || p.indent.unwrap_or(0.0) != 0.0
+            || p.runs.iter().any(|r| {
+                r.color != p.runs[0].color
+                    || r.underline != p.runs[0].underline
+                    || r.bold != p.runs[0].bold
+            }));
+    if !rich {
+        return None;
+    }
+    let mar_l = p.mar_l.unwrap_or(0.0);
+    let indent = p.indent.unwrap_or(0.0);
+    let marker_x = (mar_l + indent).max(0.0);
+    let (marker, mw) = match &p.bullet {
+        SlideBullet::Char { ch, font, color, size_pct } => {
+            let mfs = fs * size_pct.unwrap_or(1.0);
+            let mfam = font.clone().unwrap_or_else(|| family.to_string());
+            let mw = (measure_text_width(dc, &ch.to_string(), mfs, &mfam, false, scale, 0.0) / scale) as f32;
+            (Some((ch.to_string(), mfam, mfs, color.clone())), Some(mw))
+        }
+        _ => (None, None),
+    };
+    let first_x = match mw {
+        Some(mw) if indent < 0.0 => mar_l.max(marker_x + mw),
+        Some(mw) => marker_x + mw,
+        None => marker_x,
+    };
+    Some((first_x, mar_l, marker_x, marker))
+}
+
+/// A cell paragraph's spcBef (not on the first) and spcAft (not on the last),
+/// in points, unless OXI_CELLSPC_DISABLE=1.
+fn cell_para_space(p: &oxislides_core::ir::SlideParagraph, fs: f32, first: bool, last: bool) -> f32 {
+    if std::env::var("OXI_CELLSPC_DISABLE").is_ok() {
+        return 0.0;
+    }
+    let before = if first {
+        0.0
+    } else {
+        p.space_before.or_else(|| p.space_before_pct.map(|x| x * fs * 1.2)).unwrap_or(0.0)
+    };
+    let after = if last {
+        0.0
+    } else {
+        p.space_after.or_else(|| p.space_after_pct.map(|x| x * fs * 1.2)).unwrap_or(0.0)
+    };
+    before + after
+}
+
+/// curvedConnector2/3 are drawn as their curves unless OXI_CURVCONN_DISABLE=1.
+fn curvconn_on() -> bool {
+    std::env::var("OXI_CURVCONN_DISABLE").is_err()
+}
+
+/// Unfilled shapes and tables cast shadows unless OXI_SHADOWLN_DISABLE=1.
+fn shadowln_on() -> bool {
+    std::env::var("OXI_SHADOWLN_DISABLE").is_err()
+}
+
+/// Table-cell paragraphs keep run styles, indents and bullets unless
+/// OXI_CELLRICH_DISABLE=1.
+fn cellrich_on() -> bool {
+    std::env::var("OXI_CELLRICH_DISABLE").is_err()
+}
+
+/// The ECMA presets added for 252cbc8c / 68ffbed2 / 640d6e4e are drawn unless
+/// OXI_PRESET2_DISABLE=1 (then they fill their box, as before).
+fn preset2_on() -> bool {
+    std::env::var("OXI_PRESET2_DISABLE").is_err()
+}
+
+/// `vert="eaVert"` text is set in columns unless OXI_EAVERT_DISABLE=1.
+fn eavert_on() -> bool {
+    std::env::var("OXI_EAVERT_DISABLE").is_err()
+}
+
+/// A character set upright in vertical text (kana, kanji, full-width forms,
+/// CJK punctuation); everything else turns 90 degrees clockwise.
+fn vert_upright(c: char) -> bool {
+    matches!(c as u32,
+        0x3000..=0x30FB | 0x30FD..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF
+        | 0xF900..=0xFAFF | 0xFE10..=0xFE4F | 0xFF01..=0xFF5E | 0xFFE0..=0xFFE6
+        | 0x2460..=0x24FF | 0x25A0..=0x25FF | 0x2600..=0x26FF | 0x3200..=0x33FF)
+        && !matches!(c, '\u{301C}' | '\u{FF5E}' | '\u{FF0D}' | '\u{FF1D}')
+}
+
+/// Characters whose vertical glyph is the horizontal one turned (the long
+/// vowel mark, dashes, waves): drawn rotated about their em centre.
+fn vert_turned_fullwidth(c: char) -> bool {
+    matches!(c, '\u{30FC}' | '\u{301C}' | '\u{FF5E}' | '\u{FF0D}' | '\u{2015}' | '\u{2500}' | '\u{FF1D}')
+}
+
+/// The Unicode vertical presentation form PowerPoint's `vert` glyph matches.
+fn vert_form(c: char) -> char {
+    match c {
+        '\u{3001}' => '\u{FE11}',
+        '\u{3002}' => '\u{FE12}',
+        '\u{FF0C}' => '\u{FE10}',
+        '\u{FF08}' => '\u{FE35}',
+        '\u{FF09}' => '\u{FE36}',
+        '\u{FF5B}' => '\u{FE37}',
+        '\u{FF5D}' => '\u{FE38}',
+        '\u{3014}' => '\u{FE39}',
+        '\u{3015}' => '\u{FE3A}',
+        '\u{3010}' => '\u{FE3B}',
+        '\u{3011}' => '\u{FE3C}',
+        '\u{300A}' => '\u{FE3D}',
+        '\u{300B}' => '\u{FE3E}',
+        '\u{3008}' => '\u{FE3F}',
+        '\u{3009}' => '\u{FE40}',
+        '\u{300C}' => '\u{FE41}',
+        '\u{300D}' => '\u{FE42}',
+        '\u{300E}' => '\u{FE43}',
+        '\u{300F}' => '\u{FE44}',
+        '\u{2026}' => '\u{FE19}',
+        '\u{2025}' => '\u{FE30}',
+        c => c,
+    }
+}
+
+/// `vert="eaVert"`: columns right to left (`gen_pptx_eavert.py`, PowerPoint
+/// COM + PDF, Meiryo / MS Gothic / Yu Gothic):
+///
+///   * insets stay physical; the first column's right edge is the inner
+///     right, each column is one line (1.2 x size x lnSpc) wide;
+///   * an upright character advances 1 em; its em box is centred at
+///     `R - (L + (A + D - 1) * fs) / 2` across and its horizontal baseline
+///     sits `A * fs` below the cell top (A / D = win ascent / descent, em);
+///   * Latin turns 90 degrees clockwise, advances its own width, baseline at
+///     `R - ((L - (A + D) * fs) / 2 + A * fs)`;
+///   * algn runs ALONG the column (l top, ctr centred, r bottom), anchor
+///     ACROSS it (t right, ctr centred, b left); a column wraps at the inner
+///     height.
+#[cfg(windows)]
+unsafe fn draw_vertical_text(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    pres: &Presentation,
+    sh: &Shape,
+    paragraphs: &[oxislides_core::ir::SlideParagraph],
+    scale: f64,
+) -> bool {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::core::PCWSTR;
+
+    struct Item {
+        ch: char,
+        fs: f32,
+        family: String,
+        bold: bool,
+        color: (u8, u8, u8),
+        adv: f32,
+        kind: u8, // 0 upright, 1 latin turned, 2 full-width turned
+    }
+    struct Col {
+        items: Vec<Item>,
+        line: f32,
+        algn: SlideAlignment,
+    }
+    let master: &[MasterStyleLevel] = match sh.ph_type.as_deref() {
+        Some("title") | Some("ctrTitle") => &pres.master_styles.title,
+        Some(_) => &pres.master_styles.body,
+        None => &pres.master_styles.other,
+    };
+    let make_font = |family: &str, fs_px: i32, bold: bool, esc: i32| -> HFONT {
+        let (face, weight, _it) = styled_face(family, bold, false);
+        let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+        CreateFontW(
+            -fs_px.max(1),
+            0,
+            esc,
+            esc,
+            weight,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            PCWSTR(wide.as_ptr()),
+        )
+    };
+    // (A, D) in em for a face, from a 1000px instance.
+    let metrics = |family: &str, bold: bool| -> (f32, f32) {
+        let f = make_font(family, 1000, bold, 0);
+        let old = SelectObject(dc, f);
+        let mut tm = TEXTMETRICW::default();
+        let ok = GetTextMetricsW(dc, &mut tm).as_bool();
+        SelectObject(dc, old);
+        let _ = DeleteObject(f);
+        if ok && tm.tmAscent > 0 {
+            (tm.tmAscent as f32 / 1000.0, tm.tmDescent as f32 / 1000.0)
+        } else {
+            (0.88, 0.12)
+        }
+    };
+    let width_pt = |family: &str, bold: bool, fs: f32, c: char| -> f32 {
+        let f = make_font(family, (fs as f64 * scale * 8.0).round() as i32, bold, 0);
+        let old = SelectObject(dc, f);
+        let mut buf = [0u16; 2];
+        let w16 = c.encode_utf16(&mut buf);
+        let mut sz = windows::Win32::Foundation::SIZE::default();
+        let _ = GetTextExtentPoint32W(dc, w16, &mut sz);
+        SelectObject(dc, old);
+        let _ = DeleteObject(f);
+        (sz.cx as f64 / (scale * 8.0)) as f32
+    };
+
+    let inner_l = sh.x + sh.l_ins;
+    let inner_r = sh.x + sh.width - sh.r_ins;
+    let inner_t = sh.y + sh.t_ins;
+    let col_len = (sh.height - sh.t_ins - sh.b_ins).max(1.0);
+    let mut cols: Vec<Col> = Vec::new();
+    for para in paragraphs {
+        let m = oxislides_core::layout::resolve_level(master, &sh.ph_levels, para.lvl);
+        let algn = para.alignment.or(m.algn).unwrap_or(SlideAlignment::Left);
+        let n = para.line_spacing.or(m.line_spacing).unwrap_or(1.0);
+        let pfam = paragraph_family(pres, sh, para, &sh.ph_levels[..], master);
+        let new_col = |fs: f32| Col { items: Vec::new(), line: 1.2 * fs * n, algn };
+        let empty_fs = para.end_para_size.or(m.font_size).unwrap_or(18.0);
+        let mut col = new_col(empty_fs);
+        let mut used = 0.0f32;
+        let mut first = true;
+        for run in &para.runs {
+            let fs = run.font_size.or(m.font_size).unwrap_or(18.0);
+            let family = effective_family(dc, run.font_family.as_deref().unwrap_or(&pfam));
+            let bold = run.bold.or(m.bold).unwrap_or(false);
+            let color = run
+                .color
+                .as_deref()
+                .or(m.color.as_deref())
+                .and_then(parse_hex_rgb)
+                .unwrap_or((0, 0, 0));
+            for ch in run.text.chars() {
+                if ch == '\n' || ch == '\r' || ch == '\u{000B}' {
+                    cols.push(std::mem::replace(&mut col, new_col(fs)));
+                    used = 0.0;
+                    continue;
+                }
+                let kind = if vert_turned_fullwidth(ch) {
+                    2
+                } else if vert_upright(ch) {
+                    0
+                } else {
+                    1
+                };
+                let adv = if kind == 1 { width_pt(&family, bold, fs, ch) } else { fs };
+                if used + adv > col_len + 0.01 && !col.items.is_empty() {
+                    cols.push(std::mem::replace(&mut col, new_col(fs)));
+                    used = 0.0;
+                }
+                if first || col.items.is_empty() {
+                    col.line = 1.2 * fs * n;
+                }
+                col.line = col.line.max(1.2 * fs * n);
+                first = false;
+                used += adv;
+                col.items.push(Item { ch, fs, family: family.clone(), bold, color, adv, kind });
+            }
+        }
+        cols.push(col);
+    }
+    if cols.is_empty() {
+        return false;
+    }
+    let total_w: f32 = cols.iter().map(|c| c.line).sum();
+    let mut right = match sh.anchor.as_deref() {
+        Some("ctr") => inner_r - ((inner_r - inner_l) - total_w) / 2.0,
+        Some("b") => inner_l + total_w,
+        _ => inner_r,
+    };
+    let old_align = SetTextAlign(dc, TA_BASELINE | TA_LEFT);
+    let old_bk = SetBkMode(dc, TRANSPARENT);
+    let mut mcache: std::collections::HashMap<(String, bool), (f32, f32)> = Default::default();
+    for col in &cols {
+        let l = col.line;
+        let used: f32 = col.items.iter().map(|i| i.adv).sum();
+        let mut y = inner_t
+            + match col.algn {
+                SlideAlignment::Center => (col_len - used) / 2.0,
+                SlideAlignment::Right => col_len - used,
+                _ => 0.0,
+            };
+        for it in &col.items {
+            let (a, d) = *mcache
+                .entry((it.family.clone(), it.bold))
+                .or_insert_with(|| metrics(&it.family, it.bold));
+            let fs = it.fs;
+            let fs_px = (fs as f64 * scale).round() as i32;
+            let _ = SetTextColor(dc, COLORREF(colorref(it.color.0, it.color.1, it.color.2)));
+            let centre = right - (l + (a + d - 1.0) * fs) / 2.0;
+            match it.kind {
+                0 => {
+                    let ch = vert_form(it.ch);
+                    let f = make_font(&it.family, fs_px, it.bold, 0);
+                    let old = SelectObject(dc, f);
+                    let w = width_pt(&it.family, it.bold, fs, ch);
+                    let mut buf = [0u16; 2];
+                    let w16 = ch.encode_utf16(&mut buf);
+                    let px = ((centre - w / 2.0) as f64 * scale).round() as i32;
+                    let py = ((y + a * fs) as f64 * scale).round() as i32;
+                    let _ = TextOutW(dc, px, py, w16);
+                    SelectObject(dc, old);
+                    let _ = DeleteObject(f);
+                }
+                _ => {
+                    // Turned 90 degrees clockwise: the advance runs down, the
+                    // glyph's ascent points right.
+                    let base_x = if it.kind == 1 {
+                        right - ((l - (a + d) * fs) / 2.0 + a * fs)
+                    } else {
+                        // a full-width turned mark keeps its em box on the
+                        // upright one's centre (ideographic centre ~0.38 em
+                        // above the baseline)
+                        centre - 0.38 * fs
+                    };
+                    let f = make_font(&it.family, fs_px, it.bold, 2700);
+                    let old = SelectObject(dc, f);
+                    let mut buf = [0u16; 2];
+                    let w16 = it.ch.encode_utf16(&mut buf);
+                    let w = if it.kind == 2 { width_pt(&it.family, it.bold, fs, it.ch) } else { it.adv };
+                    // A turned full-width mark sits where the upright cell's em box
+                    // does, which the A * fs baseline moves (A - 0.88) em down:
+                    // Meiryo's ー ink 81.1..97.4 in a 75.3 cell, MS Gothic's centred.
+                    let y0 = if it.kind == 2 { y + (fs - w) / 2.0 + (a - 0.88) * fs } else { y };
+                    let px = (base_x as f64 * scale).round() as i32;
+                    let py = (y0 as f64 * scale).round() as i32;
+                    let _ = TextOutW(dc, px, py, w16);
+                    SelectObject(dc, old);
+                    let _ = DeleteObject(f);
+                }
+            }
+            y += it.adv;
+        }
+        right -= l;
+    }
+    SetTextAlign(dc, TEXT_ALIGN_OPTIONS(old_align));
+    SetBkMode(dc, BACKGROUND_MODE(old_bk as u32));
     true
 }
 
@@ -1885,6 +2465,44 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
         return false;
     }
     let _ = StrokeAndFillPath(dc);
+    // `can` / `flowChartMagneticDisk` paint the lid as a second, LIGHTENED
+    // ellipse (`path fill="lighten"`) and stroke its front edge.
+    if preset2_on() && matches!(sh.shape_type.as_deref(), Some("can") | Some("flowChartMagneticDisk")) {
+        let (w, h) = (sh.width.max(0.0), sh.height.max(0.0));
+        let y1 = if sh.shape_type.as_deref() == Some("can") {
+            let ss = w.min(h);
+            let a = sh.adjustments.get("adj").copied().unwrap_or(25_000.0).clamp(0.0, 50_000.0 * h / ss.max(1e-6));
+            ss * a / 200_000.0
+        } else {
+            h / 6.0
+        };
+        let lid = sh.fill_color.as_deref().and_then(parse_hex_rgb).map(|(r, g, b)| {
+            let l = |c: u8| (c as f32 + (255.0 - c as f32) * 0.4).round() as u8;
+            CreateSolidBrush(COLORREF(colorref(l(r), l(g), l(b))))
+        });
+        let ob = lid.map(|b| SelectObject(dc, b));
+        let _ = BeginPath(dc);
+        let n = 64;
+        for i in 0..=n {
+            let t = std::f32::consts::TAU * i as f32 / n as f32;
+            let (lx, ly) = (w / 2.0 - w / 2.0 * t.cos(), y1 - y1 * t.sin());
+            let (sn, cs) = sh.rotation.to_radians().sin_cos();
+            let (dx, dy) = (
+                if sh.flip_h { w - lx } else { lx } - w / 2.0,
+                if sh.flip_v { h - ly } else { ly } - h / 2.0,
+            );
+            let px = ((sh.x + w / 2.0 + dx * cs - dy * sn) as f64 * scale).round() as i32;
+            let py = ((sh.y + h / 2.0 + dx * sn + dy * cs) as f64 * scale).round() as i32;
+            if i == 0 { let _ = MoveToEx(dc, px, py, None); } else { let _ = LineTo(dc, px, py); }
+        }
+        let _ = CloseFigure(dc);
+        let _ = EndPath(dc);
+        if lid.is_some() { let _ = StrokeAndFillPath(dc); } else { let _ = StrokePath(dc); }
+        if let (Some(b), Some(o)) = (lid, ob) {
+            SelectObject(dc, o);
+            let _ = DeleteObject(b);
+        }
+    }
 
     SelectObject(dc, old_pen); SelectObject(dc, old_brush);
     if let Some(pen) = border_pen { let _ = DeleteObject(pen); }
@@ -1970,7 +2588,20 @@ unsafe fn paint_shape_shadow(
         || drawable_geometry(sh)
             .map(|g| g.paths.iter().any(|p| !p.fill_none))
             .unwrap_or(false);
-    if !has_fill {
+    // S-SHADOWLN: an UNFILLED shape casts the shadow of its outline (252cbc8c
+    // s96's noFill round rectangles), and a TABLE the shadow of its filled
+    // cells' box (the same slide's category tables).
+    let table_box = shadowln_on()
+        && matches!(&sh.content, oxislides_core::ir::ShapeContent::Table { table }
+            if table.rows.iter().flatten().any(|c| c.fill_color.is_some()));
+    let outline_only = shadowln_on()
+        && !has_fill
+        && !table_box
+        && sh.border_width.unwrap_or(0.0) > 0.0
+        && sh.border_color.is_some()
+        && sh.custom_geometry.is_none()
+        && matches!(&sh.content, oxislides_core::ir::ShapeContent::AutoShape { .. } | oxislides_core::ir::ShapeContent::TextBox { .. });
+    if !has_fill && !table_box && !outline_only {
         return;
     }
     let Some((cr, cg, cb)) = parse_hex_rgb(&shadow.color) else {
@@ -2004,7 +2635,31 @@ unsafe fn paint_shape_shadow(
     let old_pen = SelectObject(mask_dc, GetStockObject(NULL_PEN));
     let old_mode = SetPolyFillMode(mask_dc, ALTERNATE);
     let mut drew = false;
-    if let Some(geom) = drawable_geometry(sh) {
+    if outline_only {
+        let pw = (f64::from(sh.border_width.unwrap_or(0.75)) * scale).round().max(1.0) as i32;
+        let pen = CreatePen(PS_SOLID, pw, COLORREF(0x00FF_FFFF));
+        let op = SelectObject(mask_dc, pen);
+        let _ = BeginPath(mask_dc);
+        if !emit_shape_path(mask_dc, sh, scale) {
+            let _ = BeginPath(mask_dc);
+            let (l, t) = ((f64::from(sh.x) * scale).round() as i32, (f64::from(sh.y) * scale).round() as i32);
+            let (r, b) = (
+                (f64::from(sh.x + sh.width) * scale).round() as i32,
+                (f64::from(sh.y + sh.height) * scale).round() as i32,
+            );
+            let _ = MoveToEx(mask_dc, l, t, None);
+            let _ = LineTo(mask_dc, r, t);
+            let _ = LineTo(mask_dc, r, b);
+            let _ = LineTo(mask_dc, l, b);
+            let _ = CloseFigure(mask_dc);
+            let _ = EndPath(mask_dc);
+        }
+        let _ = StrokePath(mask_dc);
+        SelectObject(mask_dc, op);
+        let _ = DeleteObject(pen);
+        drew = true;
+    }
+    if let Some(geom) = drawable_geometry(sh).filter(|_| !outline_only) {
         for path in &geom.paths {
             if path.commands.is_empty() || path.fill_none {
                 continue;
@@ -2016,7 +2671,7 @@ unsafe fn paint_shape_shadow(
             drew = true;
         }
     }
-    if !drew {
+    if !drew && !table_box {
         let _ = BeginPath(mask_dc);
         if emit_shape_path(mask_dc, sh, scale) {
             let _ = EndPath(mask_dc);
@@ -5381,6 +6036,40 @@ unsafe fn draw_line_end(
     // reach half a diameter past. The pointed kinds put their TIP on the end
     // and their back a whole `along` behind it (d15's triangle: tip 36.780 =
     // the declared endpoint, back 40.780 = 4.000 later, base spanning 4.000).
+    // "arrow": an OPEN V, stroked at the line's own width, mitred at the tip, round capped
+    // (252cbc8c's flow diagrams; dev has none). Same tip-on-end and the same
+    // along / across extents as the filled triangle. OXI_LINEARROW_DISABLE.
+    if end.kind == "arrow" && std::env::var("OXI_LINEARROW_DISABLE").is_err() {
+        let pw = (lw_pt * scale).round().max(1.0) as u32;
+        let brush = LOGBRUSH {
+            lbStyle: BS_SOLID,
+            lbColor: COLORREF(colorref(rgb.0, rgb.1, rgb.2)),
+            lbHatch: 0,
+        };
+        let pen = ExtCreatePen(
+            PEN_STYLE(PS_GEOMETRIC.0 | PS_SOLID.0 | PS_ENDCAP_ROUND.0 | PS_JOIN_MITER.0),
+            pw,
+            &brush,
+            None,
+        );
+        let old = SelectObject(dc, pen);
+        // Read off gen_pptx_lineend.py's arrow slide (PowerPoint PDF): the
+        // stroke's CENTRELINE arm runs `al` units back and `ha` units out, and
+        // the OUTER tip of the mitred V sits on the endpoint, so the vertex is
+        // (lw/2)/sin(half-angle) inside it. al by len: sm 2.11 / med 3.157 /
+        // lg 4.69; ha by w: sm 1.45 / med 1.973 / lg 2.74 (lw >= 3, where the
+        // unit is the line width; within ~5% below it).
+        let u = line_end_unit(lw_pt) * scale;
+        let al = u * match end.len.as_str() { "sm" => 2.11, "lg" => 4.69, _ => 3.157 };
+        let ha = u * match end.w.as_str() { "sm" => 1.45, "lg" => 2.74, _ => 1.973 };
+        let sin_t = ha / (al * al + ha * ha).sqrt();
+        let inset = (lw_pt * scale / 2.0) / sin_t.max(1e-6);
+        let pts = [at(-inset - al, ha), at(-inset, 0.0), at(-inset - al, -ha)];
+        let _ = Polyline(dc, &pts);
+        SelectObject(dc, old);
+        let _ = DeleteObject(pen);
+        return;
+    }
     let pts: Vec<POINT> = match end.kind.as_str() {
         "oval" => (0..48)
             .map(|i| {
@@ -5616,6 +6305,44 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     map(sh.x + lx, sh.y + ly)
                                 })
                                 .collect()
+                        } else if curvconn_on()
+                            && matches!(
+                                sh.shape_type.as_deref(),
+                                Some("curvedConnector2") | Some("curvedConnector3")
+                            )
+                        {
+                            // ECMA presetShapeDefinitions: curvedConnector2 is one
+                            // cubic (l,t)-(hc,t)-(r,vc)-(r,b); curvedConnector3 two,
+                            // through (x2, vc) with x2 = w * adj1. Flattened to 32
+                            // segments per cubic and drawn like the elbow.
+                            let (w, h) = (sh.width, sh.height);
+                            let cubics: Vec<[(f32, f32); 4]> =
+                                if sh.shape_type.as_deref() == Some("curvedConnector2") {
+                                    vec![[(0.0, 0.0), (w / 2.0, 0.0), (w, h / 2.0), (w, h)]]
+                                } else {
+                                    let a = sh.adjustments.get("adj1").copied().unwrap_or(50_000.0) / 100_000.0;
+                                    let x2 = w * a;
+                                    vec![
+                                        [(0.0, 0.0), (x2 / 2.0, 0.0), (x2, h / 4.0), (x2, h / 2.0)],
+                                        [(x2, h / 2.0), (x2, h * 0.75), ((w + x2) / 2.0, h), (w, h)],
+                                    ]
+                                };
+                            let mut pts: Vec<(i32, i32)> = Vec::new();
+                            for (ci, c) in cubics.iter().enumerate() {
+                                for k in 0..=32 {
+                                    if ci > 0 && k == 0 {
+                                        continue;
+                                    }
+                                    let t = k as f32 / 32.0;
+                                    let u = 1.0 - t;
+                                    let bx = u * u * u * c[0].0 + 3.0 * u * u * t * c[1].0 + 3.0 * u * t * t * c[2].0 + t * t * t * c[3].0;
+                                    let by = u * u * u * c[0].1 + 3.0 * u * u * t * c[1].1 + 3.0 * u * t * t * c[2].1 + t * t * t * c[3].1;
+                                    let lx = if sh.flip_h { w - bx } else { bx };
+                                    let ly = if sh.flip_v { h - by } else { by };
+                                    pts.push(map(sh.x + lx, sh.y + ly));
+                                }
+                            }
+                            pts
                         } else {
                             Vec::new()
                         };
@@ -5636,7 +6363,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 Some(sh.line_cap.as_deref().unwrap_or("flat")),
                             );
                             let old_pen = SelectObject(dc, pen);
-                            if elbow.len() == 4 {
+                            if elbow.len() >= 4 {
                                 let _ = MoveToEx(dc, elbow[0].0, elbow[0].1, None);
                                 for pt in &elbow[1..] {
                                     let _ = LineTo(dc, pt.0, pt.1);
@@ -5651,8 +6378,29 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 let lw = f64::from(bw);
                                 // A decoration points along the segment it sits
                                 // on, which for an elbow is the first / last one.
-                                let (ha, hb, ta, tb) = if elbow.len() == 4 {
-                                    (elbow[0], elbow[1], elbow[3], elbow[2])
+                                let (ha, hb, ta, tb) = if elbow.len() > 4 {
+                                    // A curve's decoration points along the chord to
+                                    // the path point one head length (~3 line widths)
+                                    // back, not along the last flattened segment.
+                                    let reach = (3.0 * lw * scale).max(2.0);
+                                    let back = |pts: &mut dyn Iterator<Item = &(i32, i32)>, from: (i32, i32)| {
+                                        let mut last = from;
+                                        for &p in pts {
+                                            last = p;
+                                            let d = (((p.0 - from.0) as f64).powi(2) + ((p.1 - from.1) as f64).powi(2)).sqrt();
+                                            if d >= reach {
+                                                break;
+                                            }
+                                        }
+                                        last
+                                    };
+                                    let n = elbow.len();
+                                    let hb = back(&mut elbow.iter().skip(1), elbow[0]);
+                                    let tb = back(&mut elbow.iter().rev().skip(1), elbow[n - 1]);
+                                    (elbow[0], hb, elbow[n - 1], tb)
+                                } else if elbow.len() == 4 {
+                                    let n = elbow.len();
+                                    (elbow[0], elbow[1], elbow[n - 1], elbow[n - 2])
                                 } else {
                                     ((ax, ay), (bx, by), (bx, by), (ax, ay))
                                 };
@@ -5886,6 +6634,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         //
                         // WordArt takes its own path above and stays upright;
                         // no corpus `prstTxWarp` shape is turned.
+                        if eavert_on()
+                            && sh.text_vert.as_deref() == Some("eaVert")
+                            && sh.rotation.abs() < 0.01
+                            && draw_vertical_text(mem_dc, pres, sh, paragraphs, scale)
+                        {
+                            continue;
+                        }
                         let turned_text = begin_turned_text(mem_dc, sh, paragraphs, scale);
                         let (geom_l, geom_r, geom_t, _geom_b) = geom_text_inset(sh);
                         let left_x =
@@ -6628,11 +7383,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // block look short and pushes the text down by
                                 // half of every line it forgot.
                                 let cell_inner_pt = (right - left).max(1) as f64 / scale;
+                                let n_tot = cell.paragraphs.len();
                                 let mut total: f64 = cell
                                     .paragraphs
                                     .iter()
-                                    .map(|p| {
+                                    .enumerate()
+                                    .map(|(pi_t, p)| {
                                         let (fs, adv) = line_h(p);
+                                        let spc = cell_para_space(p, fs, pi_t == 0, pi_t + 1 == n_tot) as f64
+                                            * scale;
                                         let mut n = 1usize;
                                         if cellwrap_on() && cellblock_on() {
                                             let body: String =
@@ -6646,11 +7405,18 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                 );
                                                 let bold = para_is_bold(&p.runs, false);
                                                 set_para_hang(p, None);
+                                                let (w0, w1) = match cell_rich_geom(mem_dc, p, fs, &family, scale) {
+                                                    Some((fx, ml, _, _)) => (
+                                                        (cell_inner_pt as f32 - fx).max(1.0),
+                                                        (cell_inner_pt as f32 - ml).max(1.0),
+                                                    ),
+                                                    None => (cell_inner_pt as f32, cell_inner_pt as f32),
+                                                };
                                                 n = gdi_wrap_lines(
                                                     mem_dc,
                                                     &body,
-                                                    cell_inner_pt as f32,
-                                                    cell_inner_pt as f32,
+                                                    w0,
+                                                    w1,
                                                     scale,
                                                     fs,
                                                     &family,
@@ -6664,7 +7430,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                 .max(1);
                                             }
                                         }
-                                        adv * n as f64
+                                        adv * n as f64 + spc
                                     })
                                     .sum();
                                 // A stack of lines is one pitch TALLER than the
@@ -6729,10 +7495,17 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     }
                                     _ => inner_top,
                                 };
-                                for p in &cell.paragraphs {
+                                let n_paras = cell.paragraphs.len();
+                                // The previous paragraph's spcAft lands at the top of the
+                                // next one, so every `continue` below keeps it.
+                                let mut pending_after = 0.0f32;
+                                for (pi_c, p) in cell.paragraphs.iter().enumerate() {
                                     let (fs, advance) = line_h(p);
                                     let text: String =
                                         p.runs.iter().map(|r| r.text.as_str()).collect();
+                                    let sp_before = cell_para_space(p, fs, pi_c == 0, true);
+                                    cursor_y += ((pending_after + sp_before) as f64 * scale).round() as i32;
+                                    pending_after = cell_para_space(p, fs, true, pi_c + 1 == n_paras);
                                     if text.trim().is_empty() {
                                         cursor_y += advance.round() as i32;
                                         continue;
@@ -6754,6 +7527,91 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         let inner_pt =
                                             (right - left).max(1) as f64 / scale;
                                         set_para_hang(p, None);
+                                        // S-CELLRICH: a cell paragraph is a text frame paragraph:
+                                        // its runs keep their own colour / weight / underline,
+                                        // `marL` / `indent` move its lines and a `buChar` draws a
+                                        // marker. 252cbc8c s103's cells carry Wingdings arrows and
+                                        // red underlined runs that came out plain black.
+                                        if let Some((first_x, mar_l, marker_x, marker)) =
+                                            cell_rich_geom(mem_dc, p, fs, &family, scale)
+                                        {
+                                            let lines = gdi_wrap_lines(
+                                                mem_dc,
+                                                &text,
+                                                (inner_pt as f32 - first_x).max(1.0),
+                                                (inner_pt as f32 - mar_l).max(1.0),
+                                                scale,
+                                                fs,
+                                                &family,
+                                                bold,
+                                                false,
+                                                Some((&p.runs[..], 0)),
+                                                bold,
+                                                None,
+                                            );
+                                            let mut off = 0usize;
+                                            for (li, line) in lines.iter().enumerate() {
+                                                let base_pt = cursor_y as f32 / scale as f32
+                                                    + first_baseline_off(&family, fs, lnspc_multiple(fs, p));
+                                                let x_pt = if li == 0 { first_x } else { mar_l };
+                                                if li == 0 {
+                                                    if let Some((mt, mfam, mfs, mc)) = &marker {
+                                                        let mc_hex = mc.as_deref().and_then(|c| {
+                                                            if c.len() == 6 && c.chars().all(|h| h.is_ascii_hexdigit()) {
+                                                                Some(c.to_string())
+                                                            } else {
+                                                                pres.theme_colors.get(c).cloned()
+                                                            }
+                                                        });
+                                                        draw_text_baseline(
+                                                            mem_dc,
+                                                            left + (marker_x as f64 * scale).round() as i32,
+                                                            base_pt,
+                                                            mt,
+                                                            *mfs,
+                                                            mfam,
+                                                            mc_hex.as_deref().or(color.as_deref()),
+                                                            scale,
+                                                        );
+                                                    }
+                                                }
+                                                let shown = line.trim_end_matches('\n');
+                                                let lw = measure_text_width(
+                                                    mem_dc, shown.trim_end(), fs, &family, bold, scale, para_spc(&p.runs),
+                                                );
+                                                let lx = left
+                                                    + (x_pt as f64 * scale).round() as i32
+                                                    + match p.alignment {
+                                                        Some(SlideAlignment::Center) => {
+                                                            (((right - left) as f64 - x_pt as f64 * scale - lw) / 2.0)
+                                                                .round() as i32
+                                                        }
+                                                        Some(SlideAlignment::Right) => {
+                                                            ((right - left) as f64 - x_pt as f64 * scale - lw).round()
+                                                                as i32
+                                                        }
+                                                        _ => 0,
+                                                    };
+                                                draw_line_runs(
+                                                    mem_dc,
+                                                    lx,
+                                                    base_pt,
+                                                    shown,
+                                                    off,
+                                                    &p.runs,
+                                                    &family,
+                                                    fs,
+                                                    color.as_deref(),
+                                                    None,
+                                                    false,
+                                                    bold && p.runs.iter().all(|r| r.bold.is_none()),
+                                                    scale,
+                                                );
+                                                off += line.chars().count();
+                                                cursor_y += advance.round() as i32;
+                                            }
+                                            continue;
+                                        }
                                         let lines = gdi_wrap_lines(
                                             mem_dc,
                                             &text,
@@ -12313,6 +13171,33 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         match decoded {
                             Ok(dyn_img) => {
                                 let mut rgba = dyn_img.to_rgba8();
+                                // `a:clrChange` then `a:duotone`, in the order
+                                // PowerPoint applies them (252cbc8c s69: a black
+                                // backdrop made transparent, the grey figure
+                                // tinted per copy).
+                                if let Some((from, to, ta)) = &sh.image_clr_change {
+                                    if let (Some(f), Some(t)) = (parse_hex_rgb(from), parse_hex_rgb(to)) {
+                                        let ta = (ta * 255.0).round().clamp(0.0, 255.0) as u8;
+                                        for p in rgba.pixels_mut() {
+                                            if (p[0], p[1], p[2]) == f && p[3] > 0 {
+                                                *p = image::Rgba([t.0, t.1, t.2, ((p[3] as u16 * ta as u16) / 255) as u8]);
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some((c1, c2)) = &sh.image_duotone {
+                                    if let (Some(a1), Some(a2)) = (parse_hex_rgb(c1), parse_hex_rgb(c2)) {
+                                        for p in rgba.pixels_mut() {
+                                            let lum = (p[0] as u32 * 76 + p[1] as u32 * 151 + p[2] as u32 * 29) >> 8;
+                                            let mix = |x: u8, y: u8| -> u8 {
+                                                ((x as u32 * (255 - lum) + y as u32 * lum) / 255) as u8
+                                            };
+                                            p[0] = mix(a1.0, a2.0);
+                                            p[1] = mix(a1.1, a2.1);
+                                            p[2] = mix(a1.2, a2.2);
+                                        }
+                                    }
+                                }
                                 // `a:alphaModFix/@amt` scales the WHOLE
                                 // picture's opacity (d32's title map is a city
                                 // plan at 7%: a dark texture in PowerPoint, a
@@ -18849,7 +19734,22 @@ fn layout_paragraph_baselines(
     let bullet = if matches!(para.bullet, SlideBullet::Inherit) {
         m.bullet
     } else {
-        para.bullet.clone()
+        // A paragraph that restates buChar but not buClr keeps the LEVEL's
+        // bullet colour (252cbc8c s59: its own Wingdings square under the
+        // master lvl2 buClr 00B0F0 is cyan in PowerPoint, black here).
+        // OXI_BUCLRINH_DISABLE.
+        match (&para.bullet, &m.bullet) {
+            (
+                SlideBullet::Char { ch, font, color: None, size_pct },
+                SlideBullet::Char { color: Some(lc), .. },
+            ) if std::env::var("OXI_BUCLRINH_DISABLE").is_err() => SlideBullet::Char {
+                ch: *ch,
+                font: font.clone(),
+                color: Some(lc.clone()),
+                size_pct: *size_pct,
+            },
+            _ => para.bullet.clone(),
+        }
     };
 
     // The first paragraph's space is DROPPED unless the shape asks to keep it

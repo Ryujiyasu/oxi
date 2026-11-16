@@ -488,6 +488,11 @@ fn def_tab_attr(e: &quick_xml::events::BytesStart) -> Option<f32> {
     get_attr(e, "defTabSz").and_then(|v| v.parse::<f32>().ok()).map(emu_to_pt)
 }
 
+/// `a:blip` clrChange / duotone are kept unless OXI_BLIPFX_DISABLE=1.
+fn blipfx_on() -> bool {
+    std::env::var("OXI_BLIPFX_DISABLE").is_err()
+}
+
 /// `OXI_HANGLVL_DISABLE=1`: no level `hangingPunct`, and absent = off.
 pub fn hanglvl_off() -> bool {
     std::env::var("OXI_HANGLVL_DISABLE").is_ok()
@@ -1313,6 +1318,14 @@ fn parse_slide(
     let mut shape_src_rect: Option<(f32, f32, f32, f32)> = None;
     let mut shape_rot_with_shape = true;
     let mut shape_image_alpha: Option<f32> = None;
+    // a:blip colour effects: 0 none, 1 clrFrom, 2 clrTo, 3 duotone.
+    let mut blip_ctx = 0u8;
+    let mut blip_from: Option<String> = None;
+    let mut blip_to: Option<String> = None;
+    let mut blip_to_alpha = 1.0f32;
+    let mut blip_duo: Vec<String> = Vec::new();
+    let mut shape_clr_change: Option<(String, String, f32)> = None;
+    let mut shape_duotone: Option<(String, String)> = None;
     // a:gradFill on the shape itself (same ramp model as the background).
     let s_shapegrad = std::env::var("OXI_SHAPEGRAD_DISABLE").is_err();
     // `<a:lin>` / `<a:fillToRect>` inside a shape gradient are read from the
@@ -1382,6 +1395,7 @@ fn parse_slide(
     let mut shape_anchor: Option<String> = None;
     let mut shape_wrap = true;
     let mut shape_spc_first_last = false;
+    let mut shape_text_vert: Option<String> = None;
     // `a:bodyPr/a:normAutofit` (fontScale, lnSpcReduction) of the open shape.
     let mut shape_autofit: Option<(f32, f32)> = None;
     // `spPr/a:ln/a:noFill` of the open shape: an outline the shape turns OFF.
@@ -1622,6 +1636,9 @@ fn parse_slide(
                         shape_src_rect = None;
                         shape_rot_with_shape = true;
                         shape_image_alpha = None;
+                        shape_clr_change = None;
+                        shape_duotone = None;
+                        blip_ctx = 0;
                         sg_in = false;
                         sg_in_gs = false;
                         sg_in_path = false;
@@ -2108,6 +2125,26 @@ fn parse_slide(
                             shape_rot_with_shape = false;
                         }
                     }
+                    "clrFrom" if in_shape && shape_is_image => blip_ctx = 1,
+                    "clrTo" if in_shape && shape_is_image => blip_ctx = 2,
+                    "duotone" if in_shape && shape_is_image => {
+                        blip_ctx = 3;
+                        blip_duo.clear();
+                    }
+                    "srgbClr" if blip_ctx != 0 => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            match blip_ctx {
+                                1 => blip_from = Some(v),
+                                2 => blip_to = Some(v),
+                                _ => blip_duo.push(v),
+                            }
+                        }
+                    }
+                    "alpha" if blip_ctx == 2 => {
+                        if let Some(a) = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                            blip_to_alpha = a / 100000.0;
+                        }
+                    }
                     // <a:alphaModFix amt=".."/> is self-closing, so it arrives
                     // in the Empty arm; both arms carry the handler because a
                     // producer may write either form.
@@ -2220,6 +2257,9 @@ fn parse_slide(
                         // settled what it does.
                         if let Some(v) = get_attr(&e, "spcFirstLastPara") {
                             shape_spc_first_last = v == "1" || v == "true";
+                        }
+                        if let Some(v) = get_attr(&e, "vert") {
+                            shape_text_vert = (v != "horz").then_some(v);
                         }
                     }
                     "pPr" if in_paragraph => {
@@ -2873,6 +2913,26 @@ fn parse_slide(
                             }
                         }
                     }
+                    "clrFrom" if in_shape && shape_is_image => blip_ctx = 1,
+                    "clrTo" if in_shape && shape_is_image => blip_ctx = 2,
+                    "duotone" if in_shape && shape_is_image => {
+                        blip_ctx = 3;
+                        blip_duo.clear();
+                    }
+                    "srgbClr" if blip_ctx != 0 => {
+                        if let Some(v) = get_attr(&e, "val") {
+                            match blip_ctx {
+                                1 => blip_from = Some(v),
+                                2 => blip_to = Some(v),
+                                _ => blip_duo.push(v),
+                            }
+                        }
+                    }
+                    "alpha" if blip_ctx == 2 => {
+                        if let Some(a) = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                            blip_to_alpha = a / 100000.0;
+                        }
+                    }
                     // <a:alphaModFix amt=".."/> is self-closing, so it arrives
                     // in the Empty arm; both arms carry the handler because a
                     // producer may write either form.
@@ -3030,6 +3090,9 @@ fn parse_slide(
                         // settled what it does.
                         if let Some(v) = get_attr(&e, "spcFirstLastPara") {
                             shape_spc_first_last = v == "1" || v == "true";
+                        }
+                        if let Some(v) = get_attr(&e, "vert") {
+                            shape_text_vert = (v != "horz").then_some(v);
                         }
                     }
                     "pPr" if in_paragraph => {
@@ -3197,6 +3260,21 @@ fn parse_slide(
                 }
 
                 match name.as_str() {
+                    "clrFrom" | "clrTo" if blip_ctx == 1 || blip_ctx == 2 => {
+                        if name == "clrTo" {
+                            if let (Some(f), Some(t)) = (blip_from.take(), blip_to.take()) {
+                                shape_clr_change = Some((f, t, blip_to_alpha));
+                            }
+                            blip_to_alpha = 1.0;
+                        }
+                        blip_ctx = 0;
+                    }
+                    "duotone" if blip_ctx == 3 => {
+                        if blip_duo.len() >= 2 {
+                            shape_duotone = Some((blip_duo[0].clone(), blip_duo[1].clone()));
+                        }
+                        blip_ctx = 0;
+                    }
                     "bg" => {
                         in_bg = false;
                     }
@@ -3560,11 +3638,14 @@ fn parse_slide(
                                 &mut shape_spc_first_last,
                                 false,
                             ),
+                            text_vert: shape_text_vert.take(),
                             text_warp: shape_text_warp.take(),
                             src_rect: shape_src_rect.take(),
                             fill_rect: shape_fill_rect.take(),
                             rot_with_shape: shape_rot_with_shape,
                             image_alpha: shape_image_alpha,
+                            image_clr_change: if blipfx_on() { shape_clr_change.take() } else { None },
+                            image_duotone: if blipfx_on() { shape_duotone.take() } else { None },
                             gradient: if sg_stops.len() >= 2 {
                                 Some(SlideGradient {
                                     stops: std::mem::take(&mut sg_stops),
@@ -3720,6 +3801,7 @@ fn parse_slide(
                             top_level: true,
                             wrap_text: true,
                             spc_first_last_para: false,
+                            text_vert: None,
                             text_warp: None,
                             x: shape_x,
                             y: shape_y,
@@ -3760,6 +3842,8 @@ fn parse_slide(
                             fill_rect: shape_fill_rect.take(),
                             rot_with_shape: shape_rot_with_shape,
                             image_alpha: shape_image_alpha,
+                            image_clr_change: if blipfx_on() { shape_clr_change.take() } else { None },
+                            image_duotone: if blipfx_on() { shape_duotone.take() } else { None },
                             custom_geometry: take_custom_geometry(
                                 &mut cg_paths,
                                 &mut cg_unsupported,
@@ -4600,6 +4684,7 @@ fn parse_inherited_shapes(
                                         // wrap="none".
                                         wrap_text: true,
                             spc_first_last_para: false,
+                            text_vert: None,
                                         text_warp: None,
                                         x,
                                         y,
@@ -4648,6 +4733,8 @@ fn parse_inherited_shapes(
                                         fill_rect,
                                         rot_with_shape: true,
                                         image_alpha: ig_img_alpha.take(),
+                                        image_clr_change: None,
+                                        image_duotone: None,
                                         gradient: if gr_stops.len() >= 2 {
                                             Some(SlideGradient {
                                                 stops: std::mem::take(&mut gr_stops),
@@ -5842,6 +5929,23 @@ fn lookup_ph_insets(
                     *slot = Some(v);
                     break 'k;
                 }
+            }
+        }
+        // A master carries ONE placeholder per type, and a slide placeholder of
+        // that type inherits it whatever its idx says (the 4294967295 sentinel
+        // included) -- the same rule `lookup_ph_levels_in(any_idx)` applies to
+        // the list styles. 252cbc8c s88: master body lIns=rIns=0, the slide's
+        // `<p:ph idx="4294967295"/>` got the 7.2pt defaults and its lines broke
+        // 14.4pt early. OXI_PHINSANY_DISABLE.
+        if slot.is_none() && std::env::var("OXI_PHINSANY_DISABLE").is_err() {
+            let ty = ph_type.map(|t| match t.as_str() { "ctrTitle" => "title".to_string(), "obj" => "body".to_string(), _ => t.clone() })
+                .unwrap_or_else(|| "body".to_string());
+            if let Some(v) = master
+                .iter()
+                .filter(|(k, _)| k.0.as_deref() == Some(ty.as_str()))
+                .find_map(|(_, a)| a[i])
+            {
+                *slot = Some(v);
             }
         }
     }

@@ -457,6 +457,9 @@ pub struct Shape {
     /// lower, d16 declares 6pt and draws 6.065pt lower.
     #[serde(default)]
     pub spc_first_last_para: bool,
+    /// `a:bodyPr/@vert` when it is not `horz` (e.g. `eaVert`).
+    #[serde(default)]
+    pub text_vert: Option<String>,
     /// `a:bodyPr/a:prstTxWarp/@prst` — WordArt text fitting. On an AUTOSHAPE
     /// PowerPoint stretches the text's ink box onto the shape box exactly; on
     /// a plain text box it changes nothing.
@@ -484,6 +487,13 @@ pub struct Shape {
     /// ignored.
     #[serde(default)]
     pub image_alpha: Option<f32>,
+    /// `a:blip/a:clrChange`: (from, to, to-alpha) -- pixels of `from` become
+    /// `to` at that opacity ("set transparent colour").
+    #[serde(default)]
+    pub image_clr_change: Option<(String, String, f32)>,
+    /// `a:blip/a:duotone`: the two colours luminance is mapped between.
+    #[serde(default)]
+    pub image_duotone: Option<(String, String)>,
     /// The text styles of the LAYOUT placeholder this shape inherits from
     /// (`a:lstStyle` on the layout's matching `p:sp`), indexed by outline
     /// level. This sits BETWEEN the run's own properties and the master
