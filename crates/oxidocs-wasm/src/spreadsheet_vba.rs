@@ -38612,7 +38612,7 @@ impl Host for WorkbookHost<'_> {
         }
         if self.is_window(receiver) {
             if name.eq_ignore_ascii_case("WindowState") {
-                self.validate_window_state_argument(&value)?;
+                self.set_window_state(&value)?;
                 return Ok(true);
             }
             if let Some(set) = self.set_view(name, &value)? {

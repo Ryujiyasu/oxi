@@ -198,7 +198,7 @@ impl WorkbookHost<'_> {
         }
     }
 
-    pub(super) fn validate_window_state_argument(&self, value: &Value) -> Result<(), String> {
+    fn requested_window_state(&self, value: &Value) -> Result<i64, String> {
         let mut pending = vec![(value, false)];
         let mut object_operand = false;
         while let Some((operand, array_element)) = pending.pop() {
@@ -258,11 +258,24 @@ impl WorkbookHost<'_> {
         // Compare the endpoints directly: adding the margin before floor
         // would collapse adjacent Double operands at the upper boundary.
         let margin = 2049.0 / 8589934592.0;
-        if ((1.0 - margin)..(4.0 - margin)).contains(&internal) {
-            Ok(())
-        } else {
-            Err(self.scalar_set_error("Window", "WindowState"))
+        if !((1.0 - margin)..(4.0 - margin)).contains(&internal) {
+            return Err(self.scalar_set_error("Window", "WindowState"));
         }
+        // Apply the near-integer tolerance when selecting the requested enum.
+        // Direct comparisons retain adjacent Double operands at the boundaries.
+        Ok(if internal < 2.0 - margin { -4140 }
+            else if internal < 3.0 - margin { -4137 }
+            else { -4143 })
+    }
+
+    pub(super) fn set_window_state(&mut self, value: &Value) -> Result<(), String> {
+        let requested = self.requested_window_state(value)?;
+        // One open frame has a direct state transition. Multiple frames also
+        // need the deferred activation/event model, which remains incomplete.
+        if self.window_frames.frames.iter().filter(|frame| frame.open).count() == 1 {
+            self.window_frames.frames[self.window_frames.loaded].state = requested;
+        }
+        Ok(())
     }
 
     pub(super) fn frame_caption(&self) -> Value {
@@ -452,10 +465,6 @@ mod tests {
     use super::*;
 
     fn native_group(index: usize) {
-        native_group_fields(index, None);
-    }
-
-    fn native_group_fields(index: usize, compared_fields: Option<usize>) {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/vba/window_collections_native.json")).unwrap();
         let group = &fixture["groups"][index];
@@ -509,11 +518,7 @@ mod tests {
             let expected = case["expected"].as_array().unwrap();
             assert_eq!(actual.len(), fields.len());
             assert_eq!(expected.len(), fields.len());
-            let compared_fields = if binding >= 8 { fields.len() }
-                else { compared_fields.unwrap_or(fields.len()) };
-            assert!(compared_fields <= fields.len());
-            for (at, (actual, expected)) in actual.iter().zip(expected).enumerate()
-                .filter(|(at, _)| *at < compared_fields || *at > 7) {
+            for (at, (actual, expected)) in actual.iter().zip(expected).enumerate() {
                 if at == 8 {
                     if let Some(bits) = case["expected_operand_bits"].as_str() {
                         let actual = actual["value"].as_f64().expect("numeric operand").to_bits();
@@ -580,51 +585,51 @@ mod tests {
 
     #[test]
     fn window_state_assignment_errors_match_native() {
-        native_group_fields(7, Some(7));
+        native_group(7);
     }
 
     #[test]
     fn window_state_assignment_error_boundaries_match_native() {
-        native_group_fields(8, Some(7));
+        native_group(8);
     }
 
     #[test]
     fn window_state_assignment_contexts_match_native() {
-        native_group_fields(9, Some(7));
+        native_group(9);
     }
 
     #[test]
     fn window_state_conversion_controls_match_native() {
-        native_group_fields(10, Some(7));
+        native_group(10);
     }
 
     #[test]
     fn window_state_numeric_rounding_match_native() {
-        native_group_fields(11, Some(7));
+        native_group(11);
     }
 
     #[test]
     fn window_state_numeric_thresholds_match_native() {
-        native_group_fields(12, Some(7));
+        native_group(12);
     }
 
     #[test]
     fn window_state_numeric_boundaries_match_native() {
-        native_group_fields(13, Some(7));
+        native_group(13);
     }
 
     #[test]
     fn window_state_enum_boundaries_match_native() {
-        native_group_fields(14, Some(7));
+        native_group(14);
     }
 
     #[test]
     fn window_state_operand_precision_match_native() {
-        native_group_fields(15, Some(7));
+        native_group(15);
     }
 
     #[test]
     fn window_state_binary_boundaries_match_native() {
-        native_group_fields(16, Some(7));
+        native_group(16);
     }
 }

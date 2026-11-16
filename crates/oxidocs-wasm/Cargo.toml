@@ -41,7 +41,8 @@ getrandom = { version = "0.2.17", features = ["js"], optional = true }
 default = []
 # Full-suite bindings (spreadsheet/presentation/generic-PDF/hanko) used by the
 # in-repo web editor; the published npm package is the default docs-only build.
-suite = ["dep:oxicells-core", "dep:oxicells-calc", "dep:oxivba-core", "dep:oxislides-core", "dep:oxihanko", "dep:oxidocs-common", "dep:ovba", "dep:codepage", "dep:quick-xml", "dep:cfb", "dep:uuid", "dep:zip", "dep:typed-arena", "dep:sha2", "dep:getrandom"]
+# VBA JSON arguments and results must retain every finite Double bit.
+suite = ["dep:oxicells-core", "dep:oxicells-calc", "dep:oxivba-core", "dep:oxislides-core", "dep:oxihanko", "dep:oxidocs-common", "dep:ovba", "dep:codepage", "dep:quick-xml", "dep:cfb", "dep:uuid", "dep:zip", "dep:typed-arena", "dep:sha2", "dep:getrandom", "serde_json/float_roundtrip"]
 oxidocs-common = ["dep:oxidocs-common"]
 ovba = ["dep:ovba"]
 # Leave the ~34 MB per-face metric catalog out of the module; the page fetches
