@@ -32411,6 +32411,7 @@ impl Host for ApplicationHost<'_> {
         self.write(None, "", true, |host, _receiver| host.finish_execution())
     }
     fn set_prepared(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if let Some(result) = self.windows_set(receiver, name, &value) { return result; }
         let font=self.style_font_write_receiver(receiver)?;
         let receiver=font.as_ref().unwrap_or(receiver);
         let sources = self.external_formula_sources_for_input(receiver, name, &value);
@@ -32422,6 +32423,7 @@ impl Host for ApplicationHost<'_> {
         })
     }
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
+        if let Some(result) = self.windows_set(receiver, name, &value) { return result; }
         let font=self.style_font_write_receiver(receiver)?;
         let receiver=font.as_ref().unwrap_or(receiver);
         let sources = self.external_formula_sources_for_input(receiver, name, &value);
@@ -32439,6 +32441,9 @@ impl Host for ApplicationHost<'_> {
         _args: &[Value],
         _value: Value,
     ) -> Result<bool, String> {
+        if _args.is_empty() {
+            if let Some(result) = self.windows_set(_receiver, _name, &_value) { return result; }
+        }
         let sources = self.external_formula_sources_for_input(_receiver, _name, &_value);
         self.write(Some(_receiver), _name, false, |host, receiver| {
             let previous = std::mem::replace(&mut host.external_formula_sources, sources);
@@ -36544,7 +36549,7 @@ impl Host for WorkbookHost<'_> {
             // A window is open at its full size, in the normal view, with the
             // headings shown: measured on a fresh one.
             if name.eq_ignore_ascii_case("windowstate") {
-                return Ok(Some(Value::Integer(-4137)));
+                return Ok(Some(Value::Integer(self.loaded_window_state())));
             }
             if name.eq_ignore_ascii_case("view") {
                 return Ok(Some(Value::Integer(1)));
