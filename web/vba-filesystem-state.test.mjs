@@ -167,4 +167,69 @@ try{globalThis.Worker=BrowserWorker;modificationDateControls=await validateBridg
 finally{runner.closeVbaProject();globalThis.Worker=originalWorker;}
 assert(modificationDateControls.passed);
 
-console.log(JSON.stringify({file_date_validation_cases:modificationDateControls.validation.length,file_date_worker_calls:modificationDateControls.observations.length,native_steps:fixture.cases.length,expected_end_terminations:1,invalid_snapshots:invalidStates.length,direct_session_worker:true,caller_snapshot_isolation:true,passed:true}));
+
+async function validateDirectoryEntries(w, bytes) {
+ const source=`Attribute VB_Name = "DirectoryDates"
+Public Function Probe(ByVal mode As Long) As Variant
+ Dim stamp As Variant, attributes As Long
+ On Error Resume Next
+ If mode=1 Then
+  Open "C:\\work\\new.bin" For Output As #1
+  Close #1
+ ElseIf mode=2 Then
+  attributes=GetAttr("C:\\work")
+ End If
+ stamp=FileDateTime("C:\\work")
+ Probe=Array(Err.Number,TypeName(stamp),VarType(stamp),CDbl(stamp))
+End Function
+`;
+ const old=43890.50283564815;
+ const context={packageBytes:bytes,fullName:'C:\\work\\dates.xlsm',folders:['C:\\work'],
+  files:[{path:'C:\\work\\data.bin',bytes:new Uint8Array([65,66,67])}],modifiedTimes:[{path:'C:\\work',value:old}]};
+ const options={fileContext:context,errorLanguage:'ja-JP'};
+ const decode=out=>out.result.value.values.map(x=>x.value);
+ const expected=value=>[0,'Date',7,value];
+ let workbook=w.parse_spreadsheet(bytes);
+ const run=async (mode,extra={})=>{
+  const out=await runner.runVbaInWorker(workbook,source,'DirectoryDates.Probe',[mode],0,'dates.xlsm',{...options,...extra},bytes);
+  assert.equal(out.error,undefined);workbook=out.workbook;return out;
+ };
+ const key=path=>path.replaceAll('/','\\').toLowerCase().replace(/\\+$/,'');
+ runner.closeVbaProject();
+ try {
+  let out=await run(1,{fileSystemState:{folders:[],files:[],mountedFolders:[],mountedFiles:[]}});assert.deepEqual(decode(out),expected(old));
+  const physical=out.file_system_state.modifiedTimes.find(x=>key(x.path)==='c:\\work').value;
+  assert.notEqual(physical,old,'new child updates the physical folder date');
+  const snapshot=structuredClone(out.file_system_state);
+  const entry=out.file_system_state.directoryEntryTimes.find(x=>key(x.path)==='c:\\work');
+  assert.equal(entry.value,old,'FileDateTime retains the unrefreshed directory entry');
+  entry.value=physical;
+  assert(runner.closeVbaProject());
+  out=await run(0);assert.deepEqual(decode(out),expected(old),'caller mutation cannot refresh the cached snapshot on Worker restart');
+  const session=new w.SpreadsheetVbaSession();
+  let validations=0;
+  try {
+   const invoke=(state)=>session.run(workbook,source,'DirectoryDates.Probe',[0],0,'dates.xlsm',{...options,...(state?{fileSystemState:state}:{})});
+   assert.deepEqual(decode(invoke(snapshot)),expected(old));
+   const invalid=[null,0,{},[null],[{path:'C:\\work',value:NaN}],[{path:'C:\\work',value:Infinity}],
+    [{path:'C:\\work',value:true}],[{path:'C:\\work',value:'43890'}],[{path:'C:\\work'}],
+    [{path:'C:\\work',value:old,unknown:1}], [{path:'C:\\work',value:-657435}],[{path:'C:\\work',value:2958466}],
+    [{path:'C:\\work',value:old},{path:'c:/WORK',value:old}],
+    [{path:'C:\\work\\absent',value:old}],[{path:'C:\\work\\data.bin',value:old}]];
+   for(const facts of invalid) {
+    assert.throws(()=>invoke({...snapshot,directoryEntryTimes:facts}),/invalid VBA|directoryEntryTimes/i);
+    assert.deepEqual(decode(invoke()),expected(old),'rejected directory metadata leaves the live state intact');validations++;
+   }
+  } finally {session.free();}
+  out=await run(2);assert.deepEqual(decode(out),expected(physical),'GetAttr publishes the saved physical time');
+  assert(runner.closeVbaProject());
+  out=await run(0);assert.deepEqual(decode(out),expected(physical),'refreshed time persists through another Worker restart');
+  return {validations,worker_calls:4,passed:true};
+ } finally {runner.closeVbaProject();}
+}
+let directoryEntryControls;
+try{globalThis.Worker=BrowserWorker;directoryEntryControls=await validateDirectoryEntries(wasm,bytes);}
+finally{runner.closeVbaProject();globalThis.Worker=originalWorker;}
+assert(directoryEntryControls.passed);
+
+console.log(JSON.stringify({directory_entry_validation_cases:directoryEntryControls.validations,directory_entry_worker_calls:directoryEntryControls.worker_calls,file_date_validation_cases:modificationDateControls.validation.length,file_date_worker_calls:modificationDateControls.observations.length,native_steps:fixture.cases.length,expected_end_terminations:1,invalid_snapshots:invalidStates.length,direct_session_worker:true,caller_snapshot_isolation:true,passed:true}));

@@ -109573,6 +109573,63 @@ End Function
 
 
     #[test]
+    fn filedatetime_directory_entries_survive_source_reset_and_atomic_snapshot_validation() {
+        let source = r#"
+Public Function Probe(ByVal mode As Long) As Date
+ If mode=1 Then
+  Open "C:\work\new.bin" For Output As #1
+  Close #1
+ ElseIf mode=2 Then
+  Dim attributes As Long
+  attributes=GetAttr("C:\work")
+ End If
+ Probe=FileDateTime("C:\work")
+End Function
+"#;
+        let old = 43890.50283564815;
+        let current = 47485.89925925926;
+        let context = || {
+            let mut context = failure_context();
+            context.current_time = current;
+            context.file_context = Some(file_io::FileContext { folders:vec![r"C:\work".into()],
+                modified_times:vec![file_io::FileModifiedTime {path:r"C:\work".into(),value:old}], ..Default::default() });
+            context
+        };
+        let mut session = None;
+        let created = execute_workbook_action_in_session(workbook(),source,Some("Probe"),vec![Value::Integer(1)],0,context(),&mut session).unwrap();
+        assert!(created.error.is_none());
+        assert_eq!(serde_json::to_value(&created.result).unwrap()["value"], old);
+        let snapshot = serde_json::to_value(&created.file_system_state).unwrap();
+        assert!(snapshot["directoryEntryTimes"].as_array().unwrap().iter().any(|entry| entry["path"] == r"c:\work" && entry["value"] == old));
+        assert!(snapshot["modifiedTimes"].as_array().unwrap().iter().any(|entry| entry["path"] == r"c:\work" && entry["value"] == current));
+        let mut replacement = None;
+        let mut restored = context();
+        restored.current_time = current + 10.0;
+        restored.file_system_state = Some(serde_json::from_value(snapshot.clone()).unwrap());
+        let edited = format!("{source}\n' Preserve directory metadata across a new session.\n");
+        let read = execute_workbook_action_in_session(created.workbook.clone(),&edited,Some("Probe"),vec![Value::Integer(0)],0,restored,&mut replacement).unwrap();
+        assert!(read.error.is_none());
+        assert_eq!(serde_json::to_value(&read.result).unwrap()["value"], old);
+        for entries in [serde_json::json!([{"path":"C:\\work\\new.bin","value":old}]),
+            serde_json::json!([{"path":"C:\\absent","value":old}]),
+            serde_json::json!([{"path":"C:\\work","value":-657435.0}]),
+            serde_json::json!([{"path":"C:\\work","value":2958466.0}]),
+            serde_json::json!([{"path":"C:\\work","value":old},{"path":"c:/WORK","value":old}])] {
+            let mut invalid = snapshot.clone();
+            invalid["directoryEntryTimes"] = entries;
+            let mut incoming = context();
+            incoming.file_system_state = Some(serde_json::from_value(invalid).unwrap());
+            assert!(execute_workbook_action_in_session(read.workbook.clone(),&edited,Some("Probe"),vec![Value::Integer(0)],0,incoming,&mut replacement).is_err());
+            let valid = execute_workbook_action_in_session(read.workbook.clone(),&edited,Some("Probe"),vec![Value::Integer(0)],0,context(),&mut replacement).unwrap();
+            assert!(valid.error.is_none());
+            assert_eq!(serde_json::to_value(&valid.result).unwrap()["value"], old);
+        }
+        let refreshed = execute_workbook_action_in_session(read.workbook,&edited,Some("Probe"),vec![Value::Integer(2)],0,context(),&mut replacement).unwrap();
+        assert!(refreshed.error.is_none());
+        assert_eq!(serde_json::to_value(&refreshed.result).unwrap()["value"], current);
+    }
+
+    #[test]
     fn filedatetime_host_metadata_survives_repeated_mounts_snapshots_and_source_reset() {
         let source=r#"
 Attribute VB_Name = "FileDates"

@@ -6397,7 +6397,7 @@ impl<'a> Runtime<'a> {
                 .map(Value::Integer),
             ("filelen", [path]) => text(path)
                 .map_err(mismatch)
-                .and_then(|path| self.files.length(&path).map_err(failure))
+                .and_then(|path| self.files.query_length(&path).map_err(failure))
                 .map(|length| Value::Integer(length as i64)),
             ("filedatetime", [path]) => {
                 if *path==Value::Null { Err(invalid_null(Some(line))) }
@@ -6408,7 +6408,7 @@ impl<'a> Runtime<'a> {
             ("filedatetime", _) => Err(error(RuntimeErrorKind::ArgumentCount,"FileDateTime requires one pathname",Some(line))),
             ("getattr", [path]) => {
                 if *path==Value::Null {Err(invalid_null(Some(line)))}
-                else {text(path).map_err(mismatch).and_then(|path|self.files.attributes(&path).map_err(failure)).map(Value::Integer)}
+                else {text(path).map_err(mismatch).and_then(|path|self.files.query_attributes(&path).map_err(failure)).map(Value::Integer)}
             },
             ("getattr", _) => Err(error(RuntimeErrorKind::ArgumentCount,"GetAttr requires one pathname",Some(line))),
             ("dir" | "dir$", args) => self.dir_function(args,line),
@@ -12192,7 +12192,9 @@ impl<'a> Runtime<'a> {
                 if !self.files.folder_exists(&path) {
                     return Err(file_failure(crate::files::FileError::PathNotFound, line));
                 }
-                self.fso_object("Folder", InternalObject::FolderItem(path.trim_end_matches(['\\', '/']).to_string()))
+                self.files.query_attributes(&path).map_err(failure)?;
+                let root = path.len() == 3 && path.as_bytes().get(1) == Some(&b':');
+                self.fso_object("Folder", InternalObject::FolderItem(if root { path } else { path.trim_end_matches(['\\', '/']).to_string() }))
             }
             "getabsolutepathname" => Value::String(self.files.absolute_path(&text_at(0)?)),
             // Measured: twelve characters ending .tmp, as rad4E3F1.tmp.
@@ -12200,12 +12202,17 @@ impl<'a> Runtime<'a> {
                 self.temp_names += 1;
                 Value::String(format!("rad{:05X}.tmp", (self.temp_names * 7919) & 0xFFFFF))
             }
-            "folderexists" => Value::Boolean(self.files.folder_exists(&text_at(0)?)),
+            "folderexists" => {
+                let path = text_at(0)?;
+                let exists = self.files.folder_exists(&path);
+                if exists { self.files.query_attributes(&path).map_err(failure)?; }
+                Value::Boolean(exists)
+            },
             "deletefile" => {
                 self.files.delete_files(&text_at(0)?,flag_at(1,false)).map_err(failure)?;
                 Value::Empty
             }
-            "copyfile" => {
+            "copyfile" | "copyfolder" => {
                 if !(2..=3).contains(&args.len()) {return Err(error(RuntimeErrorKind::ArgumentCount,"CopyFile accepts Source, Destination and optional Overwrite",Some(line)));}
                 let path_at=|index:usize|->Result<String,RuntimeError> {
                     match &args[index] {
@@ -12219,7 +12226,8 @@ impl<'a> Runtime<'a> {
                     Some(Value::Null|Value::Error(_))=>return Err(error(RuntimeErrorKind::TypeMismatch,"CopyFile Overwrite cannot be coerced to Boolean",Some(line))),
                     Some(value)=>truthy(value).map_err(|message|error(RuntimeErrorKind::TypeMismatch,message,Some(line)))?,
                 };
-                self.files.copy_fso_with_overwrite(&source,&destination,overwrite).map_err(failure)?;
+                if name.eq_ignore_ascii_case("copyfolder") { self.files.copy_folder(&source,&destination,overwrite).map_err(failure)?; }
+                else { self.files.copy_fso_with_overwrite(&source,&destination,overwrite).map_err(failure)?; }
                 Value::Empty
             }
             "movefile" => {
@@ -12290,10 +12298,14 @@ impl<'a> Runtime<'a> {
     fn file_item_call(&mut self, path: &str, name: &str, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
         let parent = path.rsplit_once(['\\', '/']).map_or(String::new(), |(parent, _)| parent.to_string());
         Ok(match name.to_ascii_lowercase().as_str() {
-            "name" => Value::String(path.rsplit(['\\', '/']).next().unwrap_or(path).to_string()),
+            "name" => {
+                self.files.query_length(path).map_err(|failure|file_failure(failure,line))?;
+                Value::String(path.rsplit(['\\', '/']).next().unwrap_or(path).to_string())
+            },
             "path" | "_default" => Value::String(path.to_string()),
-            "size" => Value::Integer(self.files.length(path).map_err(|failure| file_failure(failure, line))? as i64),
-            "attributes" => Value::Integer(self.files.attributes(path).map_err(|failure|file_failure(failure,line))?),
+            "size" => Value::Integer(self.files.query_length(path).map_err(|failure| file_failure(failure, line))? as i64),
+            "attributes" => Value::Integer(self.files.query_attributes(path).map_err(|failure|file_failure(failure,line))?),
+            "datelastmodified" => Value::Date(self.files.fresh_modified_time(path).map_err(|failure|file_failure(failure,line))?),
             "parentfolder" => self.fso_object("Folder", InternalObject::FolderItem(parent)),
             "delete" => {
                 self.files.delete_files(path,Self::fso_delete_force(args,line)?).map_err(|failure| file_failure(failure, line))?;
@@ -12309,7 +12321,8 @@ impl<'a> Runtime<'a> {
             "name" => Value::String(path.rsplit(['\\', '/']).next().unwrap_or(path).to_string()),
             "path" | "_default" => Value::String(path.to_string()),
             "files" => self.fso_object("Files", InternalObject::FileList(path.to_string())),
-            "attributes" => Value::Integer(self.files.attributes(path).map_err(|failure|file_failure(failure,line))?),
+            "attributes" => Value::Integer(self.files.query_attributes(path).map_err(|failure|file_failure(failure,line))?),
+            "datelastmodified" => Value::Date(self.files.fresh_modified_time(path).map_err(|failure|file_failure(failure,line))?),
             "parentfolder" => {
                 let parent = path.rsplit_once(['\\', '/']).map_or(String::new(), |(parent, _)| parent.to_string());
                 self.fso_object("Folder", InternalObject::FolderItem(parent))

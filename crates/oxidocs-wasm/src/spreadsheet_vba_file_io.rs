@@ -43,6 +43,8 @@ pub(super) struct FileSystemState {
     volumes: Vec<VolumeInfo>,
     #[serde(default)]
     modified_times: Vec<FileModifiedTime>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    directory_entry_times: Vec<FileModifiedTime>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -982,7 +984,8 @@ impl WorkbookFiles {
             mounted_folders:self.mounted_folders.iter().cloned().collect(),mounted_files:self.mounted_files.iter().cloned().collect(),
             attributes:state.attributes.into_iter().map(|(path,value)|FileAttributes {path,value}).collect(),
             volumes:self.files.volume_facts().into_iter().map(|(root,label)|VolumeInfo {root,label}).collect(),
-            modified_times:self.files.modified_facts().into_iter().map(|(path,value)|FileModifiedTime {path,value}).collect()}
+            modified_times:self.files.modified_facts().into_iter().map(|(path,value)|FileModifiedTime {path,value}).collect(),
+            directory_entry_times:self.files.directory_entry_facts().into_iter().map(|(path,value)|FileModifiedTime {path,value}).collect()}
     }
 
     pub(super) fn restore(&mut self, state: &FileSystemState) -> Result<(), String> {
@@ -995,6 +998,8 @@ impl WorkbookFiles {
             .map_err(|error|format!("invalid VBA fileSystemState volumes: {}",error.description()))?;
         next.restore_modified_facts(&state.modified_times.iter().map(|entry|(entry.path.clone(),entry.value)).collect::<Vec<_>>())
             .map_err(|error|format!("invalid VBA fileSystemState modifiedTimes: {}",error.description()))?;
+        next.restore_directory_entry_facts(&state.directory_entry_times.iter().map(|entry|(entry.path.clone(),entry.value)).collect::<Vec<_>>())
+            .map_err(|error|format!("invalid VBA fileSystemState directoryEntryTimes: {}",error.description()))?;
         let keys=|paths:&[String]| -> Result<BTreeSet<String>,String> {
             let mut keys=BTreeSet::new();
             for path in paths {
@@ -2379,8 +2384,8 @@ impl WorkbookFiles {
 }
 
 
-fn validate_modified_times_js(owner: &JsValue) -> Result<(), JsError> {
-    let entries=js_sys::Reflect::get(owner,&JsValue::from_str("modifiedTimes"))
+fn validate_modified_times_js(owner: &JsValue, field: &str) -> Result<(), JsError> {
+    let entries=js_sys::Reflect::get(owner,&JsValue::from_str(field))
         .map_err(|_|JsError::new("invalid VBA modifiedTimes"))?;
     if entries.is_undefined() {return Ok(());}
     if !js_sys::Array::is_array(&entries) {return Err(JsError::new("invalid VBA modifiedTimes: expected an array"));}
@@ -2421,7 +2426,7 @@ pub(super) fn validate_context_js(options: &JsValue) -> Result<(), JsError> {
             return Err(JsError::new(&format!("invalid VBA fileContext {key}")));
         }
     }
-    validate_modified_times_js(&context)?;
+    validate_modified_times_js(&context, "modifiedTimes")?;
     let files = js_sys::Reflect::get(&context, &JsValue::from_str("files"))
         .map_err(|_| JsError::new("invalid VBA fileContext files"))?;
     if files.is_null() || files.is_undefined() { return Ok(()); }
@@ -2441,9 +2446,10 @@ pub(super) fn validate_snapshot_js(options: &JsValue) -> Result<(), JsError> {
     if state.is_null() || state.is_undefined() {return Ok(());}
     if !state.is_object() || js_sys::Array::is_array(&state) {return Err(JsError::new("invalid VBA fileSystemState: expected an object"));}
     for key in js_sys::Object::keys(&js_sys::Object::from(state.clone())).iter() {
-        if !matches!(key.as_string().as_deref(),Some("folders"|"files"|"mountedFolders"|"mountedFiles"|"attributes"|"volumes"|"modifiedTimes")) {return Err(JsError::new("invalid VBA fileSystemState field"));}
+        if !matches!(key.as_string().as_deref(),Some("folders"|"files"|"mountedFolders"|"mountedFiles"|"attributes"|"volumes"|"modifiedTimes"|"directoryEntryTimes")) {return Err(JsError::new("invalid VBA fileSystemState field"));}
     }
-    validate_modified_times_js(&state)?;
+    validate_modified_times_js(&state, "modifiedTimes")?;
+    validate_modified_times_js(&state, "directoryEntryTimes")?;
     let volumes=js_sys::Reflect::get(&state,&JsValue::from_str("volumes")).map_err(|_|JsError::new("invalid VBA fileSystemState volumes"))?;
     if !volumes.is_undefined() {
         if !js_sys::Array::is_array(&volumes) {return Err(JsError::new("invalid VBA fileSystemState volumes: expected an array"));}
