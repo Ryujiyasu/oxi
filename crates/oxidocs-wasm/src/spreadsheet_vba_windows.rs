@@ -19,6 +19,9 @@ pub(super) struct WindowFrames {
     pub(super) active: usize,
     loaded: usize,
     frames: Vec<WindowFrame>,
+    restored_order: Vec<usize>,
+    package_order: Vec<usize>,
+    restored_captions: bool,
 }
 
 struct WindowFrame {
@@ -29,17 +32,23 @@ struct WindowFrame {
 }
 
 #[derive(Clone)]
-struct WindowView {
-    active_sheet: usize,
-    selection: CellRange,
-    active_cell: CellAddress,
-    cell_selection_areas: std::collections::HashMap<usize, Vec<CellRange>>,
-    selections: std::collections::HashMap<usize, (CellRange, CellAddress)>,
-    views: std::collections::HashMap<usize, View>,
-    selected_group: Option<usize>,
+pub(super) struct WindowView {
+    pub(super) active_sheet: usize,
+    pub(super) selection: CellRange,
+    pub(super) active_cell: CellAddress,
+    pub(super) cell_selection_areas: std::collections::HashMap<usize, Vec<CellRange>>,
+    pub(super) selections: std::collections::HashMap<usize, (CellRange, CellAddress)>,
+    pub(super) views: std::collections::HashMap<usize, View>,
+    pub(super) selected_group: Option<usize>,
     shape_selection: Vec<u64>,
     caption: Option<Value>,
-    panes: Vec<(u32, u32)>,
+    pub(super) panes: Vec<(u32, u32)>,
+}
+
+pub(super) struct SavedWindowView {
+    pub(super) source: Option<usize>,
+    pub(super) state: i64,
+    pub(super) view: WindowView,
 }
 
 impl Default for WindowFrames {
@@ -48,6 +57,9 @@ impl Default for WindowFrames {
             content_changed: false,
             active: 0,
             loaded: 0,
+            restored_order: Vec::new(),
+            package_order: vec![0],
+            restored_captions: false,
             frames: vec![WindowFrame { creation_caption: None, open: true, state: -4137, view: None }],
         }
     }
@@ -55,6 +67,11 @@ impl Default for WindowFrames {
 
 impl WindowFrames {
     pub(super) fn open_ids(&self) -> Vec<usize> {
+        if !self.restored_order.is_empty() {
+            return (self.restored_order.len()..self.frames.len()).rev()
+                .chain(self.restored_order.iter().copied())
+                .filter(|id| self.frames[*id].open).collect();
+        }
         self.frames.iter().enumerate().rev()
             .filter_map(|(id, frame)| frame.open.then_some(id)).collect()
     }
@@ -118,6 +135,180 @@ impl WindowView {
 }
 
 impl WorkbookHost<'_> {
+    pub(super) fn package_sheet_order(&self, count: usize) -> Vec<Option<usize>> {
+        let has_origins = self.workbook.sheets.iter().any(|sheet|sheet.origin_id.is_some());
+        (0..count).map(|original| {
+            if has_origins {
+                self.workbook.sheets.iter().position(|sheet|sheet.origin_id == Some(original as u32))
+            } else { (original < self.workbook.sheets.len()).then_some(original) }
+        }).collect()
+    }
+
+    pub(super) fn saved_window_views(&self) -> Vec<SavedWindowView> {
+        self.window_frames.frames.iter().enumerate().filter(|(_, frame)|frame.open).map(|(id,frame)| {
+            SavedWindowView {
+                source: self.window_frames.package_order.iter().position(|previous|*previous == id),
+                state: frame.state,
+                view: if id == self.window_frames.loaded {WindowView::take_from(self)}
+                    else {frame.view.as_ref().expect("parked saved view").clone()},
+            }
+        }).collect()
+    }
+
+    pub(super) fn remember_saved_window_views(&mut self) {
+        self.window_frames.package_order = self.window_frames.frames.iter().enumerate()
+            .filter_map(|(id,frame)|frame.open.then_some(id)).collect();
+    }
+
+    /// Restore independent saved views before the workbook enters the VBA
+    /// application. Sheet parts are already resolved through relationships.
+    pub(super) fn restore_saved_window_views(
+        &mut self,
+        workbook_xml: &str,
+        parts: &[(usize, String, String)],
+        use_saved_active_sheet: bool,
+    ) -> Result<bool, String> {
+        use quick_xml::events::Event;
+        use oxidocs_common::xml_utils::get_attr;
+        let mut reader = quick_xml::NsReader::from_str(workbook_xml);
+        let mut path = Vec::<(Vec<u8>, bool)>::new();
+        let mut windows = Vec::new();
+        loop {
+            let event = reader.read_event().map_err(|error| error.to_string())?;
+            match &event {
+                Event::Start(element) | Event::Empty(element) => {
+                    let standard = matches!(reader.resolve_element(element.name()).0,
+                        quick_xml::name::ResolveResult::Bound(ns) if matches!(ns.as_ref(),
+                            b"http://schemas.openxmlformats.org/spreadsheetml/2006/main" |
+                            b"http://purl.oclc.org/ooxml/spreadsheetml/main"));
+                    let local = element.local_name().as_ref().to_vec();
+                    if standard && path.iter().all(|(_, valid)| *valid)
+                        && path.len() == 2 && path[0].0 == b"workbook"
+                        && path[1].0 == b"bookViews" && local == b"workbookView" {
+                        windows.push(element.clone().into_owned());
+                    }
+                    if matches!(event, Event::Start(_)) { path.push((local, standard)); }
+                }
+                Event::End(_) => { path.pop(); }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        if windows.is_empty() { return Ok(false); }
+        let original_count = parts.iter().map(|(sheet,_,_)|*sheet).max().map_or(0,|sheet|sheet+1);
+        let sheet_order = self.package_sheet_order(original_count);
+        let caller_panes:Vec<_> = self.workbook.sheets.iter().map(|sheet|(sheet.frozen_rows,sheet.frozen_cols)).collect();
+        let initial_state = self.window_frames.frames[self.window_frames.loaded].state;
+        let mut frames = Vec::with_capacity(windows.len());
+        let boolean = |element: &quick_xml::events::BytesStart<'_>, name: &str, default: bool| {
+            get_attr(element, name).map_or(default, |value| matches!(value.as_str(), "1" | "true"))
+        };
+        for (id, attributes) in windows.iter().enumerate() {
+            let mut view = WindowView::take_from(self);
+            view.active_sheet = get_attr(attributes, "activeTab").map(|value| value.parse::<usize>())
+                .transpose().map_err(|error| error.to_string())?.unwrap_or(0);
+            view.active_sheet = sheet_order.get(view.active_sheet).copied().flatten().unwrap_or(0);
+            view.selection = CellRange::single(CellAddress { sheet: view.active_sheet, row: 1, column: 0 });
+            view.active_cell = view.selection.first();
+            view.selections.clear();
+            view.cell_selection_areas.clear();
+            view.views.clear();
+            view.panes.fill((0, 0));
+            view.selected_group = None;
+            view.shape_selection.clear();
+            view.caption = None;
+            let mut selected_sheets = Vec::new();
+            for (original_sheet, _, xml) in parts {
+                let Some(sheet) = sheet_order.get(*original_sheet).and_then(|sheet|sheet.as_ref()) else { continue; };
+                let parsed = file_io::CellSelectionXml::read_for_view(xml, id)?;
+                let mut display = View::default();
+                if let Some((_, element, _)) = &parsed.tab_view {
+                    if let Some(zoom) = get_attr(element, "zoomScale") {
+                        let zoom = zoom.parse::<f64>().map_err(|error| error.to_string())?;
+                        if zoom.is_finite() && zoom > 0.0 { display.zoom = zoom; }
+                    }
+                    display.gridlines = boolean(element, "showGridLines", true);
+                    display.headings = boolean(element, "showRowColHeaders", true);
+                    display.formulas = boolean(element, "showFormulas", false);
+                    display.zeros = boolean(element, "showZeros", true);
+                    if let Some(top_left) = get_attr(element, "topLeftCell") {
+                        let (column, row) = parse_a1_reference(&top_left)?;
+                        display.scroll_row = row;
+                        display.scroll_column = column + 1;
+                    }
+                }
+                if parsed.tab_selected() { selected_sheets.push(*sheet); }
+                if let Some(pane) = &parsed.pane_attributes {
+                    if get_attr(pane, "state").is_some_and(|state| matches!(state.as_str(), "frozen" | "frozenSplit")) {
+                        let count = |name: &str| -> Result<u32, String> {
+                            let value = get_attr(pane, name).map(|value| value.parse::<f64>())
+                                .transpose().map_err(|error| error.to_string())?.unwrap_or(0.0);
+                            if !value.is_finite() || value < 0.0 || value > u32::MAX as f64 {
+                                return Err("Invalid saved frozen pane count".into());
+                            }
+                            Ok(value as u32)
+                        };
+                        view.panes[*sheet] = (count("ySplit")?, count("xSplit")?);
+                    }
+                    if let Some(top_left) = get_attr(pane, "topLeftCell") {
+                        let (column, row) = parse_a1_reference(&top_left)?;
+                        display.scroll_row = row;
+                        display.scroll_column = column + 1;
+                    }
+                }
+                view.views.insert(*sheet, display);
+                let mut areas = Vec::new();
+                let selected = parsed.selected().map(|(_, element)| element);
+                if let Some(sqref) = selected.and_then(|element| get_attr(element, "sqref")) {
+                    for reference in sqref.split_whitespace() {
+                        let ((column, row), (end_column, end_row)) = parse_range_reference(reference)?;
+                        areas.push(CellRange { sheet: *sheet, start_row: row, start_column: column, end_row, end_column });
+                    }
+                }
+                let first = areas.first().copied().unwrap_or_else(||
+                    CellRange::single(CellAddress { sheet: *sheet, row: 1, column: 0 }));
+                let active = selected.and_then(|element| get_attr(element, "activeCell"))
+                    .map(|reference| parse_a1_reference(&reference)).transpose()?
+                    .map(|(column, row)| CellAddress { sheet: *sheet, row, column }).unwrap_or_else(|| first.first());
+                if *sheet == view.active_sheet { view.selection = first; view.active_cell = active; }
+                else { view.selections.insert(*sheet, (first, active)); }
+                if areas.len() > 1 { view.cell_selection_areas.insert(*sheet, areas); }
+            }
+            if selected_sheets.len() > 1 && selected_sheets.contains(&view.active_sheet) {
+                view.selected_group = Some(self.sheet_groups.len());
+                self.sheet_groups.push(selected_sheets);
+            }
+            frames.push(WindowFrame { creation_caption: None, open: true,
+                state: if boolean(attributes, "minimized", false) { -4140 } else { initial_state },
+                view: Some(view) });
+        }
+        let restored_captions = frames.len() > 1;
+        let tail = frames.len().saturating_sub(2);
+        let order: Vec<_> = (tail..frames.len()).chain((0..tail).rev()).collect();
+        let active = order[0];
+        let mut current = frames[active].view.take().expect("restored window has a view");
+        if !use_saved_active_sheet && self.active_sheet != current.active_sheet {
+            current.selections.insert(current.active_sheet,(current.selection,current.active_cell));
+            current.active_sheet = self.active_sheet;
+            let home = CellRange::single(CellAddress {sheet:self.active_sheet,row:1,column:0});
+            let (selection,active_cell) = current.selections.remove(&self.active_sheet).unwrap_or((home,home.first()));
+            current.selection = selection;
+            current.active_cell = active_cell;
+            current.selected_group = None;
+            self.file_io.sheet_selection_changed = true;
+        }
+        if !use_saved_active_sheet {
+            for (sheet,pane) in caller_panes.into_iter().enumerate() {
+                if !sheet_order.contains(&Some(sheet)) { current.panes[sheet] = pane; }
+            }
+        }
+        current.install(self);
+        self.window_frames = WindowFrames { content_changed: false, active, loaded: active,
+            package_order: (0..frames.len()).collect(), frames, restored_order: order, restored_captions };
+        Ok(true)
+    }
+
+
     pub(super) fn window_id(&self, object: &ObjectRef) -> Option<usize> {
         match self.objects.get(host_object_index(object.handle)) {
             Some(HostObject::Window(id)) => Some(*id),
@@ -326,7 +517,7 @@ impl WorkbookHost<'_> {
             let mut caption = self.file_name.clone().unwrap_or_else(|| "Book1".into());
             if self.window_frames.open_ids().len() > 1 {
                 if let Some(number) = self.window_frames.number(self.window_frames.loaded) {
-                    caption.push(':');
+                    caption.push_str(if self.window_frames.restored_captions { "  -  " } else { ":" });
                     caption.push_str(&number.to_string());
                 }
             }

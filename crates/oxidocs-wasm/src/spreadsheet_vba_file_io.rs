@@ -146,24 +146,31 @@ fn omit_saved_phonetic_default_attributes(xml: &str) -> Result<Vec<u8>, String> 
 
 /// Byte spans of the first workbook window's cell selection. Other windows,
 /// panes, extensions and unknown XML stay byte-for-byte unchanged on export.
-struct CellSelectionXml {
+pub(super) struct CellSelectionXml {
+    workbook_view: usize,
+    pane_span: Option<std::ops::Range<usize>>,
     insertion: std::ops::Range<usize>,
     before: String,
     after: String,
     prefix: String,
     pane: Option<String>,
-    tab_view: Option<(std::ops::Range<usize>, quick_xml::events::BytesStart<'static>, bool)>,
+    pub(super) tab_view: Option<(std::ops::Range<usize>, quick_xml::events::BytesStart<'static>, bool)>,
+    pub(super) pane_attributes: Option<quick_xml::events::BytesStart<'static>>,
     elements: Vec<(std::ops::Range<usize>, quick_xml::events::BytesStart<'static>)>,
 }
 
 impl CellSelectionXml {
     fn read(xml: &str) -> Result<Self, String> {
+        Self::read_for_view(xml, 0)
+    }
+
+    pub(super) fn read_for_view(xml: &str, workbook_view: usize) -> Result<Self, String> {
         use quick_xml::events::Event;
         use oxidocs_common::xml_utils::get_attr;
         let mut reader = quick_xml::NsReader::from_str(xml);
         let mut path = Vec::<(Vec<u8>, bool)>::new();
-        let mut result = Self { insertion: 0..0, before: String::new(), after: String::new(),
-            prefix: String::new(), pane: None, tab_view: None, elements: Vec::new() };
+        let mut result = Self { workbook_view, pane_span: None, insertion: 0..0, before: String::new(), after: String::new(),
+            prefix: String::new(), pane: None, tab_view: None, pane_attributes: None, elements: Vec::new() };
         let (mut root_prefix, mut views, mut view, mut in_view, mut pending) =
             (String::new(), false, false, false, None);
         let mut root_insertion = None;
@@ -212,7 +219,7 @@ impl CellSelectionXml {
                     }
                     if proper_path && path.len() == 2 && matches!(path[0].0.as_slice(), b"worksheet" | b"chartsheet" | b"macrosheet")
                         && path[1].0 == b"sheetViews" && local == b"sheetView" && !view
-                        && get_attr(element, "workbookViewId").is_none_or(|id| id == "0") {
+                        && get_attr(element, "workbookViewId").map_or(workbook_view == 0, |id| id.parse::<usize>().ok() == Some(workbook_view)) {
                         view = true;
                         result.tab_view = Some((start..end, element.clone().into_owned(), matches!(event, Event::Empty(_))));
                         result.prefix = prefix;
@@ -227,7 +234,11 @@ impl CellSelectionXml {
                         }
                     }
                     if proper_path && in_view && path.len() == 3 {
-                        if local == b"pane" { result.pane = get_attr(element, "activePane"); }
+                        if local == b"pane" {
+                            result.pane = get_attr(element, "activePane");
+                            result.pane_attributes = Some(element.clone().into_owned());
+                            result.pane_span = Some(start..end);
+                        }
                         if local == b"selection" {
                             let index = result.elements.len();
                             result.elements.push((start..end, element.clone().into_owned()));
@@ -237,6 +248,9 @@ impl CellSelectionXml {
                     if matches!(event, Event::Start(_)) { path.push((local, standard)); }
                 }
                 Event::End(_) => {
+                    if in_view && path.len() == 4 && path.last().is_some_and(|(name, _)| name == b"pane") {
+                        if let Some(span) = &mut result.pane_span { span.end = end; }
+                    }
                     if in_view && path.len() == 4 && path.last().is_some_and(|(name, _)| name == b"selection") {
                         if let Some(index) = pending.take() { result.elements[index].0.end = end; }
                     }
@@ -255,20 +269,20 @@ impl CellSelectionXml {
             }
         }
         if !view {
-            result.before.push_str(&format!("<{}sheetView workbookViewId=\"0\">", result.prefix));
+            result.before.push_str(&format!("<{}sheetView workbookViewId=\"{workbook_view}\">", result.prefix));
             result.after = format!("</{}sheetView>{}", result.prefix, result.after);
         }
         if !views {
             let at = root_insertion.ok_or("Missing worksheet root")?;
             result.insertion = at..at;
             result.prefix = root_prefix;
-            result.before = format!("<{0}sheetViews{1}><{0}sheetView workbookViewId=\"0\">", result.prefix, root_views_namespace);
+            result.before = format!("<{0}sheetViews{1}><{0}sheetView workbookViewId=\"{workbook_view}\">", result.prefix, root_views_namespace);
             result.after = format!("</{0}sheetView></{0}sheetViews>", result.prefix);
         }
         Ok(result)
     }
 
-    fn tab_selected(&self) -> bool {
+    pub(super) fn tab_selected(&self) -> bool {
         use oxidocs_common::xml_utils::get_attr;
         self.tab_view.as_ref().and_then(|(_, element, _)| get_attr(element, "tabSelected"))
             .is_some_and(|value| matches!(value.as_str(), "1" | "true"))
@@ -296,7 +310,7 @@ impl CellSelectionXml {
             self.after.as_bytes(), xml[self.insertion.end..].as_bytes()].concat())
     }
 
-    fn selected(&self) -> Option<&(std::ops::Range<usize>, quick_xml::events::BytesStart<'static>)> {
+    pub(super) fn selected(&self) -> Option<&(std::ops::Range<usize>, quick_xml::events::BytesStart<'static>)> {
         use oxidocs_common::xml_utils::get_attr;
         self.elements.iter().find(|(_, element)| get_attr(element, "pane") == self.pane)
             .or_else(|| self.elements.first())
@@ -354,6 +368,258 @@ impl CellSelectionXml {
             self.insertion.clone()
         };
         Ok([xml[..span.start].as_bytes(), replacement.as_slice(), xml[span.end..].as_bytes()].concat())
+    }
+}
+
+
+/// Direct workbook/sheet view elements, retaining unrelated package markup.
+struct WindowViewElementsXml {
+    entries: Vec<(usize, std::ops::Range<usize>)>,
+    insertion: std::ops::Range<usize>,
+    prefix: String,
+    before: String,
+    after: String,
+}
+
+impl WindowViewElementsXml {
+    fn read(xml: &str, workbook: bool) -> Result<Self, String> {
+        use quick_xml::events::Event;
+        use oxidocs_common::xml_utils::get_attr;
+        let container = if workbook { b"bookViews".as_slice() } else { b"sheetViews".as_slice() };
+        let child = if workbook { b"workbookView".as_slice() } else { b"sheetView".as_slice() };
+        let mut reader = quick_xml::NsReader::from_str(xml);
+        let mut path = Vec::<(Vec<u8>, bool)>::new();
+        let mut result = Self { entries: Vec::new(), insertion: 0..0, prefix: String::new(), before: String::new(), after: String::new() };
+        let (mut has_container, mut root_insertion, mut pending) = (false, None, None);
+        loop {
+            let start = xml_byte_position(xml, reader.buffer_position());
+            let event = reader.read_event().map_err(|error| error.to_string())?;
+            let end = xml_byte_position(xml, reader.buffer_position());
+            match &event {
+                Event::Start(element) | Event::Empty(element) => {
+                    let local = element.local_name().as_ref().to_vec();
+                    let standard = matches!(reader.resolve_element(element.name()).0,
+                        quick_xml::name::ResolveResult::Bound(ns) if matches!(ns.as_ref(),
+                            b"http://schemas.openxmlformats.org/spreadsheetml/2006/main" |
+                            b"http://purl.oclc.org/ooxml/spreadsheetml/main") ||
+                            path.is_empty() && local == b"macrosheet" &&
+                            ns.as_ref() == b"http://schemas.microsoft.com/office/excel/2006/main");
+                    let name = String::from_utf8(element.name().as_ref().to_vec()).map_err(|error| error.to_string())?;
+                    let prefix = name.rsplit_once(':').map_or(String::new(), |(prefix, _)| format!("{prefix}:"));
+                    let proper = standard && path.iter().all(|(_, valid)| *valid);
+                    if path.is_empty() && proper { result.prefix = prefix.clone(); }
+                    if proper && path.len() == 1 {
+                        let previous = if workbook { matches!(local.as_slice(), b"fileVersion" | b"fileSharing" | b"workbookPr" | b"workbookProtection") }
+                            else { matches!(local.as_slice(), b"sheetPr" | b"dimension") };
+                        if !previous && root_insertion.is_none() { root_insertion = Some(start); }
+                        if local == container && !has_container {
+                            has_container = true;
+                            result.prefix = prefix;
+                            if matches!(event, Event::Empty(_)) {
+                                result.insertion = start..end;
+                                result.before = format!("{}>", xml[start..end].trim_end().trim_end_matches("/>"));
+                                result.after = format!("</{name}>");
+                            }
+                        }
+                    }
+                    if proper && path.len() == 2 && path[1].0 == container && local == child {
+                        let id = if workbook { result.entries.len() } else {
+                            get_attr(element, "workbookViewId").map(|id| id.parse::<usize>())
+                                .transpose().map_err(|error| error.to_string())?.unwrap_or(0)
+                        };
+                        result.entries.push((id, start..end));
+                        if matches!(event, Event::Start(_)) { pending = Some(result.entries.len() - 1); }
+                    }
+                    if matches!(event, Event::Start(_)) { path.push((local, standard)); }
+                }
+                Event::End(_) => {
+                    if path.iter().all(|(_, standard)| *standard) {
+                        if path.len() == 3 && path[1].0 == container && path[2].0 == child {
+                            if let Some(index) = pending.take() { result.entries[index].1.end = end; }
+                        }
+                        if path.len() == 2 && path[1].0 == container { result.insertion = start..start; }
+                        if path.len() == 1 && root_insertion.is_none() { root_insertion = Some(start); }
+                    }
+                    path.pop();
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        if !has_container {
+            let at = root_insertion.ok_or("Missing workbook or sheet root")?;
+            result.insertion = at..at;
+            if workbook {
+                result.before = format!("<{}bookViews>", result.prefix);
+                result.after = format!("</{}bookViews>", result.prefix);
+            } else {
+                // CellSelectionXml also handles the Excel macro-sheet root's
+                // separate namespace, including a missing sheetViews element.
+                let selection = CellSelectionXml::read(xml)?;
+                result.prefix = selection.prefix.clone();
+                let suffix = format!("<{}sheetView workbookViewId=\"0\">", result.prefix);
+                result.before = selection.before.strip_suffix(&suffix).ok_or("Missing view insertion")?.to_string();
+                let prefix = format!("</{}sheetView>", result.prefix);
+                result.after = selection.after.strip_prefix(&prefix).ok_or("Missing view insertion")?.to_string();
+            }
+        }
+        Ok(result)
+    }
+
+    fn entry(&self, xml: &str, id: Option<usize>) -> Option<String> {
+        let id = id?;
+        self.entries.iter().find(|(index, _)| *index == id).map(|(_, span)| xml[span.clone()].to_string())
+    }
+
+    fn write(&self, xml: &str, entries: &[String]) -> Result<String, String> {
+        if self.entries.len() == entries.len() && self.entries.iter().zip(entries).all(|((_, span), next)| &xml[span.clone()] == next) {
+            return Ok(xml.to_string());
+        }
+        let joined = entries.concat();
+        if self.entries.is_empty() {
+            return Ok(format!("{}{}{}{}{}", &xml[..self.insertion.start], self.before, joined, self.after, &xml[self.insertion.end..]));
+        }
+        let mut result = xml.to_string();
+        for (index, (_, span)) in self.entries.iter().enumerate().rev() {
+            result.replace_range(span.clone(), if index == 0 { &joined } else { "" });
+        }
+        Ok(result)
+    }
+}
+
+/// Edit one start tag only when its logical attributes actually change.
+/// Other view markup and no-op exports keep their original byte spelling.
+fn saved_view_attributes(xml: &str, attributes: &[(&str, String, Option<&str>)]) -> Result<String, String> {
+    use quick_xml::events::{BytesStart, Event};
+    use oxidocs_common::xml_utils::get_attr;
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let event = reader.read_event().map_err(|error| error.to_string())?;
+    let (original, empty) = match event { Event::Start(element) => (element, false), Event::Empty(element) => (element, true), _ => return Err("Missing saved view element".into()) };
+    if attributes.iter().all(|(name, value, default)| {
+        get_attr(&original, name).as_deref().or(*default).is_some_and(|current| {
+            let current = if matches!(*name, "minimized" | "showGridLines" | "showRowColHeaders" | "showFormulas" | "showZeros") {
+                match current { "true" => "1", "false" => "0", other => other }
+            } else { current };
+            current == value
+        })
+    }) {
+        return Ok(xml.to_string());
+    }
+    let mut element = BytesStart::new(String::from_utf8(original.name().as_ref().to_vec()).map_err(|error| error.to_string())?);
+    for attr in original.attributes() {
+        let attr = attr.map_err(|error| error.to_string())?;
+        if !attributes.iter().any(|(name, _, _)| attr.key.as_ref() == name.as_bytes()) { element.push_attribute(attr); }
+    }
+    for (name, value, default) in attributes {
+        if get_attr(&original, name).is_some() || *default != Some(value.as_str()) { element.push_attribute((*name, value.as_str())); }
+    }
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    writer.write_event(if empty { Event::Empty(element) } else { Event::Start(element) }).map_err(|error| error.to_string())?;
+    let mut next = String::from_utf8(writer.into_inner()).map_err(|error| error.to_string())?;
+    next.push_str(&xml[xml_byte_position(xml, reader.buffer_position())..]);
+    Ok(next)
+}
+
+
+impl CellSelectionXml {
+    fn write_display(&self, xml: &str, display: View, frozen: (u32, u32)) -> Result<String, String> {
+        use oxidocs_common::xml_utils::get_attr;
+        let mut xml = xml.to_string();
+        let top_left = format!("{}{}", oxicells_core::editor::col_to_letter(display.scroll_column.saturating_sub(1)), display.scroll_row);
+        if let Some((span, _, _)) = &self.tab_view {
+            let mut attributes = vec![
+                ("zoomScale", display.zoom.to_string(), Some("100")),
+                ("showGridLines", u8::from(display.gridlines).to_string(), Some("1")),
+                ("showRowColHeaders", u8::from(display.headings).to_string(), Some("1")),
+                ("showFormulas", u8::from(display.formulas).to_string(), Some("0")),
+                ("showZeros", u8::from(display.zeros).to_string(), Some("1")),
+            ];
+            if frozen == (0, 0) { attributes.push(("topLeftCell", top_left.clone(), Some("A1"))); }
+            let next = saved_view_attributes(&xml[span.clone()], &attributes)?;
+            xml.replace_range(span.clone(), &next);
+        }
+        let parsed = Self::read_for_view(&xml, self.workbook_view)?;
+        let pane = if frozen != (0, 0) {
+            let active_pane = if frozen.0 == 0 { "topRight" } else if frozen.1 == 0 { "bottomLeft" } else { "bottomRight" };
+            let attributes = [
+                ("xSplit", frozen.1.to_string(), Some("0")),
+                ("ySplit", frozen.0.to_string(), Some("0")),
+                ("topLeftCell", top_left, Some("A1")),
+                ("activePane", active_pane.to_string(), Some("topLeft")),
+                ("state", "frozen".into(), Some("split")),
+            ];
+            let original = parsed.pane_span.as_ref().map(|span| xml[span.clone()].to_string())
+                .unwrap_or_else(||format!("<{}pane/>", parsed.prefix));
+            Some(saved_view_attributes(&original, &attributes)?)
+        } else if parsed.pane_attributes.as_ref().and_then(|pane|get_attr(pane,"state"))
+            .is_some_and(|state|matches!(state.as_str(),"frozen"|"frozenSplit")) { Some(String::new()) }
+        else { None };
+        if let Some(pane) = pane {
+            if let Some(span) = &parsed.pane_span { xml.replace_range(span.clone(), &pane); }
+            else if let Some((span, element, empty)) = &parsed.tab_view {
+                if *empty {
+                    let name = String::from_utf8(element.name().as_ref().to_vec()).map_err(|error|error.to_string())?;
+                    let next = format!("{}>{pane}</{name}>",xml[span.clone()].trim_end_matches("/>"));
+                    xml.replace_range(span.clone(),&next);
+                } else { xml.insert_str(span.end,&pane); }
+            }
+        }
+        Ok(xml)
+    }
+}
+
+
+#[cfg(test)]
+mod saved_window_xml_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_boolean_spellings_keep_noop_bytes() {
+        let xml = r#"<sheetView workbookViewId="0" showGridLines="true" showZeros="false"/>"#;
+        assert_eq!(saved_view_attributes(xml,&[("showGridLines","1".into(),Some("1")),
+            ("showZeros","0".into(),Some("1"))]).unwrap(),xml);
+    }
+
+
+    #[test]
+    fn remapping_views_retains_foreign_markup_and_unselected_window_bytes() {
+        let xml = r#"<worksheet xmlns="http://purl.oclc.org/ooxml/spreadsheetml/main" xmlns:x="urn:opaque"><sheetViews><sheetView workbookViewId="0"><selection sqref="B2" activeCell="B2"/></sheetView><x:sheetView workbookViewId="9" x:opaque="kept"/><sheetView workbookViewId="1" zoomScale="120"><selection sqref="C3" activeCell="C3"/></sheetView></sheetViews><sheetData/><extLst><x:item>日本語</x:item></extLst></worksheet>"#;
+        let parsed = WindowViewElementsXml::read(xml,false).unwrap();
+        assert_eq!(parsed.entries.len(),2);
+        let held = parsed.entry(xml,Some(1)).unwrap();
+        let changed = saved_view_attributes(&held,&[("workbookViewId","0".into(),None)]).unwrap();
+        let next = parsed.write(xml,&[changed]).unwrap();
+        assert!(next.contains(r#"<x:sheetView workbookViewId="9" x:opaque="kept"/>"#));
+        assert!(next.contains("<sheetData/><extLst><x:item>日本語</x:item></extLst>"));
+        assert!(!next.contains("B2"));
+        assert_eq!(CellSelectionXml::read(&next).unwrap().tab_view.unwrap().1.attributes().filter_map(Result::ok)
+            .find(|attr|attr.key.as_ref()==b"zoomScale").unwrap().value.as_ref(),b"120");
+    }
+
+    #[test]
+    fn no_op_frozen_view_keeps_all_bytes_and_updates_only_its_display() {
+        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x="urn:opaque"><sheetViews><sheetView workbookViewId="0" zoomScale="75"><selection activeCell="D4" sqref="D4"/></sheetView><sheetView workbookViewId="1" zoomScale="120" showGridLines="0"><pane xSplit="1" ySplit="1" topLeftCell="B2" activePane="bottomRight" state="frozen"/><selection pane="bottomRight" activeCell="C3" sqref="C3"/><extLst><x:item x:value="kept"/></extLst></sheetView></sheetViews><sheetData/></worksheet>"#;
+        let view = View {zoom:120.0,gridlines:false,scroll_row:2,scroll_column:2,..View::default()};
+        assert_eq!(CellSelectionXml::read_for_view(xml,1).unwrap().write_display(xml,view,(1,1)).unwrap(),xml);
+        let next = CellSelectionXml::read_for_view(xml,1).unwrap().write_display(xml,View {zoom:125.0,scroll_row:4,scroll_column:5,..view},(1,1)).unwrap();
+        let before = WindowViewElementsXml::read(xml,false).unwrap();
+        let after = WindowViewElementsXml::read(&next,false).unwrap();
+        assert_eq!(before.entry(xml,Some(0)),after.entry(&next,Some(0)));
+        assert!(next.contains(r#"<extLst><x:item x:value="kept"/></extLst>"#));
+        let selected = CellSelectionXml::read_for_view(&next,1).unwrap();
+        assert_eq!(oxidocs_common::xml_utils::get_attr(&selected.selected().unwrap().1,"sqref").as_deref(),Some("C3"));
+        assert_eq!(oxidocs_common::xml_utils::get_attr(selected.pane_attributes.as_ref().unwrap(),"topLeftCell").as_deref(),Some("E4"));
+    }
+
+    #[test]
+    fn missing_macro_views_and_utf8_bom_keep_their_namespaces() {
+        let xml = "\u{feff}<xm:macrosheet xmlns:xm=\"http://schemas.microsoft.com/office/excel/2006/main\" xmlns:m=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><m:sheetData/></xm:macrosheet>";
+        let parsed = WindowViewElementsXml::read(xml,false).unwrap();
+        let next = parsed.write(xml,&[r#"<sheetView workbookViewId="0"/>"#.into(),r#"<sheetView workbookViewId="1"/>"#.into()]).unwrap();
+        assert!(next.starts_with('\u{feff}'));
+        assert!(next.contains(r#"<sheetViews xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#));
+        assert_eq!(WindowViewElementsXml::read(&next,false).unwrap().entries.len(),2);
+        assert!(next.contains("<m:sheetData/>"));
     }
 }
 
@@ -2721,6 +2987,7 @@ impl WorkbookHost<'_> {
         self.file_io.full_name = Some(normalized.clone());
         self.file_name = Some(normalized.rsplit('\\').next().unwrap_or(&normalized).to_string());
         self.file_io.package = Some(files.bytes(&normalized).map_err(|error| error.description().to_string())?.to_vec());
+        self.remember_saved_window_views();
         let saved_drawing_source=self.file_io.package.as_ref()
             .and_then(|bytes|oxicells_core::parse_xlsx(bytes).ok());
         if let Some(saved)=saved_drawing_source.as_ref() { self.rebase_saved_drawing_sources(saved); self.workbook.external_books=saved.external_books.clone(); }
@@ -2835,13 +3102,23 @@ impl WorkbookHost<'_> {
     }
 
 
-    pub(super) fn restore_package_cell_selections(&mut self) -> Result<(), String> {
+    pub(super) fn restore_package_cell_selections(&mut self, use_saved_active_sheet: bool) -> Result<(), String> {
         use oxidocs_common::xml_utils::get_attr;
         let Some(package) = self.file_io.package.as_ref() else { return Ok(()); };
         let stored_active = WorkbookFiles::package_active_sheet(package, self.workbook.sheets.len())?;
         let parts = WorkbookFiles::selection_parts(package)?;
+        let workbook_xml = {
+            let mut archive = oxidocs_common::archive::OoxmlArchive::new(package)
+                .map_err(|error| error.to_string())?;
+            archive.read_part("xl/workbook.xml").map_err(|error| error.to_string())?
+        };
+        if self.restore_saved_window_views(&workbook_xml, &parts, use_saved_active_sheet)? { return Ok(()); }
+        let original_count = parts.iter().map(|(sheet,_,_)|*sheet).max().map_or(0,|sheet|sheet+1);
+        let sheet_order = self.package_sheet_order(original_count);
+        let stored_active = sheet_order.get(stored_active).copied().flatten().unwrap_or(0);
         let mut selected_sheets = Vec::new();
-        for (sheet, _, xml) in parts {
+        for (original_sheet, _, xml) in parts {
+            let Some(sheet) = sheet_order.get(original_sheet).copied().flatten() else { continue; };
             let parsed = CellSelectionXml::read(&xml)?;
             if parsed.tab_selected() { selected_sheets.push(sheet); }
             let Some((_, selected)) = parsed.selected() else { continue; };
@@ -2870,6 +3147,69 @@ impl WorkbookHost<'_> {
     }
 
     fn package_with_cell_selections(&self, package: &[u8]) -> Result<Vec<u8>, String> {
+        let views = self.saved_window_views();
+        let mut archive = oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error|error.to_string())?;
+        let workbook_xml = archive.read_part("xl/workbook.xml").map_err(|error|error.to_string())?;
+        let elements = WindowViewElementsXml::read(&workbook_xml, true)?;
+        // An implicit single window needs no new package parts for a no-op.
+        if views.len() == 1 && elements.entries.is_empty() && views[0].state != -4140
+            && views[0].view.panes.iter().all(|pane| *pane == (0,0))
+            && views[0].view.views.values().all(|view| view.zoom == 100.0 && view.gridlines && view.headings
+                && !view.formulas && view.zeros && view.scroll_row == 1 && view.scroll_column == 1) {
+            return self.package_with_cell_selections_legacy(package);
+        }
+        let mut replacements = BTreeMap::new();
+        let mut entries = Vec::new();
+        for window in &views {
+            let original = elements.entry(&workbook_xml, window.source)
+                .unwrap_or_else(||format!("<{}workbookView/>",elements.prefix));
+            entries.push(saved_view_attributes(&original,&[
+                ("activeTab",window.view.active_sheet.to_string(),Some("0")),
+                ("minimized",u8::from(window.state == -4140).to_string(),Some("0")),
+            ])?);
+        }
+        let next = elements.write(&workbook_xml,&entries)?;
+        if next != workbook_xml { replacements.insert("xl/workbook.xml".into(),next.into_bytes()); }
+        for (sheet,target,xml) in WorkbookFiles::selection_parts(package)? {
+            let collection = WindowViewElementsXml::read(&xml,false)?;
+            let mut entries = Vec::new();
+            for (id,window) in views.iter().enumerate() {
+                let original = collection.entry(&xml,window.source)
+                    .unwrap_or_else(||format!("<{}sheetView workbookViewId=\"{id}\"/>",collection.prefix));
+                let entry = saved_view_attributes(&original,&[("workbookViewId",id.to_string(),None)])?;
+                // Isolate this view without losing its inherited namespaces.
+                // Other windows may temporarily have the same remapped ID.
+                let mut single = collection.write(&xml,&[entry])?;
+                let selected_sheets = window.view.selected_group.and_then(|group|self.sheet_groups.get(group))
+                    .filter(|sheets|sheets.contains(&window.view.active_sheet));
+                if self.file_io.sheet_selection_changed || window.source.is_none() {
+                    let selected = selected_sheets.map_or(sheet == window.view.active_sheet,|sheets|sheets.contains(&sheet));
+                    single = String::from_utf8(CellSelectionXml::read_for_view(&single,id)?.write_tab_selected(&single,selected)?)
+                        .map_err(|error|error.to_string())?;
+                }
+                if self.workbook.sheets[sheet].kind != oxicells_core::ir::SheetKind::Chart {
+                    if let Some(display) = window.view.views.get(&sheet) {
+                        single = CellSelectionXml::read_for_view(&single,id)?.write_display(&single,*display,window.view.panes[sheet])?;
+                    }
+                    let home = CellRange::single(CellAddress {sheet,row:1,column:0});
+                    let (first,active) = if sheet == window.view.active_sheet {(window.view.selection,window.view.active_cell)}
+                        else {window.view.selections.get(&sheet).copied().unwrap_or((home,home.first()))};
+                    let areas = window.view.cell_selection_areas.get(&sheet).filter(|areas|areas.first() == Some(&first))
+                        .cloned().unwrap_or_else(||vec![first]);
+                    single = String::from_utf8(CellSelectionXml::read_for_view(&single,id)?.write(&single,&areas,active)?)
+                        .map_err(|error|error.to_string())?;
+                }
+                entries.push(WindowViewElementsXml::read(&single,false)?.entry(&single,Some(id)).ok_or("Missing serialized window view")?);
+            }
+            let next = collection.write(&xml,&entries)?;
+            if next != xml { replacements.insert(target,next.into_bytes()); }
+        }
+        if replacements.is_empty() {Ok(package.to_vec())}
+        else {WorkbookFiles::replace_package_parts(package,replacements,&BTreeSet::new())}
+    }
+
+
+    fn package_with_cell_selections_legacy(&self, package: &[u8]) -> Result<Vec<u8>, String> {
         let mut replacements = BTreeMap::new();
         let mut archive = oxidocs_common::archive::OoxmlArchive::new(package).map_err(|error| error.to_string())?;
         let workbook_xml = archive.read_part("xl/workbook.xml").map_err(|error| error.to_string())?;
