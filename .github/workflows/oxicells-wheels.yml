@@ -1,0 +1,101 @@
+name: OxiCells wheels
+
+# Builds the oxicells Python package (crates/oxicells-python: the oxicells VBA
+# engine binary plus a thin Python API) in release mode for Linux, macOS and
+# Windows, and runs the installed-wheel contract test on each platform that can
+# execute its own wheel. Only a manual run with "publish" ticked uploads the
+# wheels to PyPI. "OxiCells Python" (oxicells-python.yml) remains the quick
+# per-PR check; this workflow builds what would actually be published.
+# Publishing uses PyPI trusted publishing (no token): the PyPI project
+# "oxicells" must list this repository, this workflow and the "pypi"
+# environment as a trusted publisher.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/oxicells-wheels.yml"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload the wheels to PyPI after they pass"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  wheels:
+    name: wheel (${{ matrix.os }} ${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: "2_28", test: true }
+          - { os: ubuntu-latest, target: aarch64, manylinux: "2_28", test: false }
+          # Intel macOS wheels are cross-built on the Apple Silicon runner and not run.
+          - { os: macos-latest, target: aarch64, test: true }
+          - { os: macos-latest, target: x86_64, test: false }
+          - { os: windows-latest, target: x64, test: true }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/oxicells-python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --locked --out dist
+
+      - uses: actions/setup-python@v5
+        if: ${{ matrix.test }}
+        with:
+          python-version: "3.12"
+
+      - name: Install only the oxicells wheel
+        if: ${{ matrix.test }}
+        shell: bash
+        run: python -m pip install --no-index --no-deps --find-links crates/oxicells-python/dist oxicells
+
+      # The contract test builds its fixture workbook with the Rust crates and
+      # then drives the installed wheel (its own engine binary) from Python.
+      - name: Run the installed-wheel contract test
+        if: ${{ matrix.test }}
+        env:
+          OXICELLS_TEST_INSTALLED: "1"
+          PYTHON: python
+        run: >-
+          cargo test --locked -p oxidocs-cli --features vba-execution --bin oxicells --test cells_python
+          --config profile.test.package.oxivba-core.opt-level=1
+          --config profile.test.package.oxidocs-wasm.opt-level=1
+          --config profile.dev.package.oxivba-core.opt-level=1
+          --config profile.dev.package.oxidocs-wasm.opt-level=1
+          -- --nocapture
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxicells-wheel-${{ matrix.os }}-${{ matrix.target }}
+          path: crates/oxicells-python/dist/*.whl
+
+  publish:
+    needs: wheels
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: oxicells-wheel-*
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
