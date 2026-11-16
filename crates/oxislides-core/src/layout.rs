@@ -1438,17 +1438,99 @@ pub fn paragraph_font_size(
     prev_fs: Option<f32>,
     empty_para_rule: bool,
 ) -> f32 {
+    // A run that states no size is set at the inherited one, and counts:
+    // 252cbc8c slide 2's 16pt level text with an 11pt run beside it is a
+    // 16pt paragraph, not an 11pt one (its spcBef 35% and line advance
+    // collapsed). OXI_RUNINHFS_DISABLE counts only the stated sizes.
+    static INH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let inh = *INH.get_or_init(|| std::env::var("OXI_RUNINHFS_DISABLE").is_err());
     let explicit = para
         .runs
         .iter()
-        .filter_map(|r| r.font_size)
+        .filter_map(|r| {
+            if inh && !r.text.is_empty() {
+                r.font_size.or(inherited)
+            } else {
+                r.font_size
+            }
+        })
         .fold(None, |acc: Option<f32>, x| Some(acc.map_or(x, |a: f32| a.max(x))));
     if empty_para_rule && para.runs.iter().all(|r| r.text.is_empty()) {
-        if let Some(fs) = para.end_para_size.or(prev_fs) {
+        // A mark with no sz takes the level's size, not the previous
+        // paragraph's (OXI_EMPTYMARK_DISABLE restores the previous size).
+        static MARK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let mark = *MARK.get_or_init(|| std::env::var("OXI_EMPTYMARK_DISABLE").is_err());
+        let unsized_mark = if mark && para.end_para_mark { inherited } else { None };
+        if let Some(fs) = para.end_para_size.or(unsized_mark).or(prev_fs) {
             return fs;
         }
     }
     explicit.or(inherited).unwrap_or(18.0)
+}
+
+/// Where a tab at pen `x` sends the pen: the stop and how the text after it
+/// sits there. Every position is in points from the text box's inner left
+/// edge -- NOT from `marL` (`gen_pptx_tabs.py`, PowerPoint COM, 21 arms):
+///
+///   * the paragraph's (or level's) `tabLst` stops beyond the pen;
+///   * `marL` itself, when the pen is left of it (a hanging indent: `A<tab>B`
+///     with marL 72 / indent -72 lands on 72, not on the 36pt default);
+///   * past those, multiples of `defTabSz` -- but only beyond the LAST custom
+///     stop: a lone stop at 236.2pt takes `A<tab>B` straight there, and the
+///     next tab goes on to 252 = 7 x 36.
+pub fn next_tab_stop(
+    x: f32,
+    stops: &[crate::ir::TabStop],
+    def_tab: f32,
+    mar_l: f32,
+) -> (f32, crate::ir::TabAlign) {
+    use crate::ir::TabAlign;
+    const EPS: f32 = 0.01;
+    let mut best: Option<(f32, TabAlign)> = None;
+    for t in stops {
+        if t.pos > x + EPS && best.map_or(true, |(b, _)| t.pos < b) {
+            best = Some((t.pos, t.algn));
+        }
+    }
+    if mar_l > x + EPS && best.map_or(true, |(b, _)| mar_l < b) {
+        best = Some((mar_l, TabAlign::Left));
+    }
+    if let Some(b) = best {
+        return b;
+    }
+    let def = if def_tab > 0.1 { def_tab } else { 72.0 };
+    let from = stops.iter().map(|t| t.pos).fold(x, f32::max);
+    ((((from + EPS) / def).floor() + 1.0) * def, TabAlign::Left)
+}
+
+/// Lay a line's tab-separated pieces out from `start`: the left edge of each
+/// piece (inner-left coordinates) and the pen at the end. `widths[i]` is
+/// piece i's advance; piece 0 starts at `start`, every later one follows a
+/// tab. A right stop ends its piece on the stop, a centre stop centres it
+/// there (probe arms `right` / `ctr`), never moving left of the pen.
+pub fn tab_piece_x(
+    start: f32,
+    widths: &[f32],
+    stops: &[crate::ir::TabStop],
+    def_tab: f32,
+    mar_l: f32,
+) -> (Vec<f32>, f32) {
+    use crate::ir::TabAlign;
+    let mut xs = Vec::with_capacity(widths.len());
+    let mut pen = start;
+    for (i, w) in widths.iter().enumerate() {
+        if i > 0 {
+            let (stop, algn) = next_tab_stop(pen, stops, def_tab, mar_l);
+            pen = match algn {
+                TabAlign::Right => (stop - w).max(pen),
+                TabAlign::Center => (stop - w / 2.0).max(pen),
+                _ => stop,
+            };
+        }
+        xs.push(pen);
+        pen += w;
+    }
+    (xs, pen)
 }
 
 /// Where a line starts inside the width it may use, for its alignment.
@@ -1508,8 +1590,11 @@ mod size_tests {
             space_after: None,
             space_before_pct: None,
             space_after_pct: None,
+            tab_stops: None,
+            def_tab_sz: None,
             lvl: 0,
             end_para_size: None,
+            end_para_mark: false,
             mar_l: None,
             indent: None,
             bullet: crate::ir::SlideBullet::default(),
@@ -1644,6 +1729,15 @@ pub fn resolve_level(
         }
         if l.kern.is_some() {
             m.kern = l.kern;
+        }
+        if l.hanging_punct.is_some() {
+            m.hanging_punct = l.hanging_punct;
+        }
+        if l.tab_stops.is_some() {
+            m.tab_stops = l.tab_stops.clone();
+        }
+        if l.def_tab_sz.is_some() {
+            m.def_tab_sz = l.def_tab_sz;
         }
         if let Some(v) = l.own_mar_l {
             m.mar_l = v;
@@ -2380,8 +2474,11 @@ mod shape_tests {
             space_after: None,
             space_before_pct: None,
             space_after_pct: None,
+            tab_stops: None,
+            def_tab_sz: None,
             lvl: 0,
             end_para_size: None,
+            end_para_mark: false,
             mar_l: None,
             indent: None,
             bullet: crate::ir::SlideBullet::default(),
@@ -2922,7 +3019,12 @@ pub fn geom_text_insets(
     };
     match shape_type {
         // The inscribed rectangle at 45 degrees: (1 - cos45) / 2 of each side.
+        // wedgeEllipseCallout states the same il/it/ir/ib as ellipse.
         Some("ellipse") | Some("teardrop") | Some("pie") => {
+            let k = (1.0 - std::f32::consts::FRAC_1_SQRT_2) / 2.0;
+            (width * k, width * k, height * k, height * k)
+        }
+        Some("wedgeEllipseCallout") if std::env::var("OXI_WEDGEELLIPSE_DISABLE").is_err() => {
             let k = (1.0 - std::f32::consts::FRAC_1_SQRT_2) / 2.0;
             (width * k, width * k, height * k, height * k)
         }
@@ -3001,5 +3103,39 @@ mod geom_tests {
         for v in [l, r, t, b] {
             assert!((v - 9.763).abs() < 0.1, "{v}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use super::*;
+    use crate::ir::{TabAlign, TabStop};
+
+    fn l(pos: f32) -> TabStop {
+        TabStop { pos, algn: TabAlign::Left }
+    }
+
+    #[test]
+    fn tabs_follow_the_probe() {
+        // gen_pptx_tabs.py, Arial 14pt "A" = 9.34pt, defTabSz 36.
+        let a = 9.34;
+        assert_eq!(next_tab_stop(a, &[], 36.0, 0.0).0, 36.0); // d1
+        assert_eq!(next_tab_stop(20.0 * a, &[], 36.0, 0.0).0, 216.0); // d_long
+        assert_eq!(next_tab_stop(72.0 + a, &[], 36.0, 72.0).0, 108.0); // marL1
+        assert_eq!(next_tab_stop(a, &[], 36.0, 72.0).0, 72.0); // hang
+        assert!((next_tab_stop(55.1 + a, &[], 39.37, 55.1).0 - 78.74).abs() < 0.01); // dts5_marL
+        assert_eq!(next_tab_stop(a, &[l(23.6)], 36.0, 0.0).0, 23.6); // cust
+        assert_eq!(next_tab_stop(9.0 * a, &[l(23.6)], 36.0, 0.0).0, 108.0); // cust_past
+        assert_eq!(next_tab_stop(23.6, &[l(23.6)], 36.0, 0.0).0, 36.0); // cust_two
+        assert_eq!(next_tab_stop(a, &[l(236.2)], 36.0, 0.0).0, 236.2); // cust_far
+        assert_eq!(next_tab_stop(236.2, &[l(236.2)], 36.0, 0.0).0, 252.0); // cust_far2
+        let (xs, _) = tab_piece_x(0.0, &[a, a], &[l(23.6)], 36.0, 72.0);
+        assert_eq!(xs[1], 23.6); // hang_cust, first tab
+        let r = TabStop { pos: 236.22, algn: TabAlign::Right };
+        let (xs, end) = tab_piece_x(0.0, &[a, 37.51], &[r], 36.0, 0.0);
+        assert!((end - 236.22).abs() < 0.01 && (xs[1] - 198.71).abs() < 0.01);
+        let c = TabStop { pos: 236.22, algn: TabAlign::Center };
+        let (xs, _) = tab_piece_x(0.0, &[a, 37.51], &[c], 36.0, 0.0);
+        assert!((xs[1] - 217.465).abs() < 0.01);
     }
 }

@@ -878,7 +878,7 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
         Some(
             p @ ("ellipse" | "roundRect" | "homePlate" | "chevron" | "teardrop" | "pie"
                 | "star10" | "wedgeRectCallout" | "blockArc" | "chord" | "rtTriangle"
-                | "rightArrow" | "foldedCorner"),
+                | "rightArrow" | "foldedCorner" | "wedgeEllipseCallout"),
         ) if (p != "pie" || pie_on())
             && (!matches!(p, "rightArrow" | "foldedCorner") || arrowfold_on())
             && (p != "chord" || chordclip_on())
@@ -886,6 +886,7 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
             && (p != "chevron" || chevron_on())
             && (p != "star10" || star10_on())
             && (p != "wedgeRectCallout" || wedgecallout_on())
+            && (p != "wedgeEllipseCallout" || wedgeellipse_on())
             && (p != "blockArc" || blockarc_on()) =>
         {
             p
@@ -1218,6 +1219,28 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
                 line(map(px, py));
             }
         }
+        // ECMA-376 presetShapeDefinitions wedgeEllipseCallout: the tail
+        // leaves the ellipse at the parameter angle pang = at2(dxPos*h,
+        // dyPos*w) +/- 11 degrees; the outline is the 338-degree arc from
+        // pang+11 the long way round to pang-11, then the tip, then closed.
+        // 252cbc8c slides 37 / 85 draw their speech balloons with it.
+        "wedgeEllipseCallout" => {
+            let a1 = sh.adjustments.get("adj1").copied().unwrap_or(-20_833.0) / 100_000.0;
+            let a2 = sh.adjustments.get("adj2").copied().unwrap_or(62_500.0) / 100_000.0;
+            let (rx, ry) = (w / 2.0, h / 2.0);
+            let (dxp, dyp) = (a1 * w, a2 * h);
+            let pang = (dyp * w).atan2(dxp * h);
+            let d11 = 11f32.to_radians();
+            let st = pang + d11;
+            let sweep = std::f32::consts::TAU - 2.0 * d11;
+            const N: usize = 96;
+            for i in 0..=N {
+                let t = st + sweep * i as f32 / N as f32;
+                let q = map(rx + rx * t.cos(), ry + ry * t.sin());
+                if i == 0 { let _ = MoveToEx(dc, q.x, q.y, None); } else { line(q); }
+            }
+            line(map(rx + dxp, ry + dyp));
+        }
         "teardrop" => {
             // Default adj=100000: an ellipse whose upper-right quadrant is
             // pulled to the box corner. This is every corpus override too.
@@ -1234,6 +1257,240 @@ unsafe fn emit_shape_path(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Shape, sc
     let _ = CloseFigure(dc);
     let _ = EndPath(dc);
     true
+}
+
+/// EMF pictures are drawn unless OXI_EMFPIC_DISABLE=1 (640d6e4e: 41 of
+/// them, every illustration in the deck, were left blank).
+fn emfpic_on() -> bool {
+    std::env::var("OXI_EMFPIC_DISABLE").is_err()
+}
+
+/// An enhanced metafile carries " EMF" at byte 40 of its header record.
+fn is_emf(data: &[u8]) -> bool {
+    data.len() > 44 && &data[40..44] == b" EMF"
+}
+
+/// A Windows metafile: the Aldus placeable key, or a bare METAHEADER
+/// (type 1 or 2, header size 9 words). abde73e7 / 640d6e4e / 252cbc8c carry
+/// 37 of them, more than EMFs.
+fn is_wmf(data: &[u8]) -> bool {
+    data.len() > 22
+        && (data[0..4] == [0xD7, 0xCD, 0xC6, 0x9A]
+            || (matches!(data[0..2], [1, 0] | [2, 0]) && data[2..4] == [9, 0]))
+}
+
+#[cfg(windows)]
+#[link(name = "gdi32")]
+extern "system" {
+    fn SetWinMetaFileBits(
+        nsize: u32,
+        lpmeta16data: *const u8,
+        hdcref: *mut std::ffi::c_void,
+        lpmfp: *const WmfPict,
+    ) -> *mut std::ffi::c_void;
+}
+
+/// METAFILEPICT.
+#[repr(C)]
+struct WmfPict {
+    mm: i32,
+    x_ext: i32,
+    y_ext: i32,
+    hmf: *mut std::ffi::c_void,
+}
+
+/// A WMF as an enhanced metafile handle. The placeable header's bounding box
+/// gives the picture's extent (MM_ANISOTROPIC, in HIMETRIC), which
+/// `PlayEnhMetaFile` then stretches to the frame.
+#[cfg(windows)]
+unsafe fn wmf_to_emf(data: &[u8]) -> windows::Win32::Graphics::Gdi::HENHMETAFILE {
+    let (body, pict) = if data[0..4] == [0xD7, 0xCD, 0xC6, 0x9A] {
+        let rd = |o: usize| i16::from_le_bytes([data[o], data[o + 1]]) as i32;
+        let (l, t, r, b) = (rd(6), rd(8), rd(10), rd(12));
+        let inch = u16::from_le_bytes([data[14], data[15]]).max(1) as i32;
+        let pict = WmfPict {
+            mm: 8, // MM_ANISOTROPIC
+            x_ext: ((r - l).abs() * 2540) / inch,
+            y_ext: ((b - t).abs() * 2540) / inch,
+            hmf: std::ptr::null_mut(),
+        };
+        (&data[22..], Some(pict))
+    } else {
+        (data, None)
+    };
+    let pp = pict.as_ref().map_or(std::ptr::null(), |p| p as *const WmfPict);
+    let h = SetWinMetaFileBits(body.len() as u32, body.as_ptr(), std::ptr::null_mut(), pp);
+    windows::Win32::Graphics::Gdi::HENHMETAFILE(h)
+}
+
+/// Play an EMF into a `w` x `h` RGBA bitmap. GDI writes no alpha, so it is
+/// played twice, over white and over black: where the two agree the
+/// metafile painted, and the difference is how much of the backdrop showed
+/// through.
+#[cfg(windows)]
+fn rasterize_emf(data: &[u8], w: u32, h: u32) -> Option<image::RgbaImage> {
+    use windows::Win32::Graphics::Gdi::*;
+    let (w, h) = (w.clamp(1, 6000) as i32, h.clamp(1, 6000) as i32);
+    unsafe {
+        let hemf = if is_emf(data) { SetEnhMetaFileBits(data) } else { wmf_to_emf(data) };
+        if hemf.is_invalid() {
+            return None;
+        }
+        let render = |bg: u8| -> Option<Vec<u8>> {
+            let dc = CreateCompatibleDC(None);
+            if dc.is_invalid() {
+                return None;
+            }
+            let mut info = BITMAPINFO::default();
+            info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = w;
+            info.bmiHeader.biHeight = -h;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB.0;
+            let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+            let bmp = match CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+                Ok(b) if !bits.is_null() => b,
+                _ => {
+                    let _ = DeleteDC(dc);
+                    return None;
+                }
+            };
+            let old = SelectObject(dc, bmp);
+            let n = (w * h * 4) as usize;
+            std::ptr::write_bytes(bits as *mut u8, bg, n);
+            let rect = windows::Win32::Foundation::RECT { left: 0, top: 0, right: w, bottom: h };
+            let _ = PlayEnhMetaFile(dc, hemf, &rect);
+            let _ = GdiFlush();
+            let out = std::slice::from_raw_parts(bits as *const u8, n).to_vec();
+            SelectObject(dc, old);
+            let _ = DeleteObject(bmp);
+            let _ = DeleteDC(dc);
+            Some(out)
+        };
+        let white = render(255);
+        let black = render(0);
+        let _ = DeleteEnhMetaFile(hemf);
+        let (white, black) = (white?, black?);
+        let mut img = image::RgbaImage::new(w as u32, h as u32);
+        for (i, px) in img.pixels_mut().enumerate() {
+            let o = i * 4;
+            // BGRA in the DIB.
+            let mut d = 0u8;
+            for c in 0..3 {
+                d = d.max(white[o + c].saturating_sub(black[o + c]));
+            }
+            let a = 255 - d;
+            let un = |v: u8| -> u8 {
+                if a == 0 {
+                    0
+                } else {
+                    ((v as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8
+                }
+            };
+            *px = image::Rgba([un(black[o + 2]), un(black[o + 1]), un(black[o]), a]);
+        }
+        Some(img)
+    }
+}
+
+/// The current paragraph's tab stops (`gen_pptx_tabs.py`), set by
+/// `layout_paragraph_baselines` for a paragraph that holds a tab and read by
+/// its wrap and by the drawing that follows it. None = no tab to place.
+#[derive(Clone)]
+struct TabCtx {
+    stops: Vec<oxislides_core::ir::TabStop>,
+    def: f32,
+    mar_l: f32,
+    /// The text area's width: a line's start is `eff_w - its wrap width`.
+    eff_w: f32,
+}
+
+thread_local! {
+    static TAB_CTX: std::cell::RefCell<Option<TabCtx>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Tabs go to their stops unless OXI_TABSTOP_DISABLE=1 (then a tab is
+/// measured and drawn as a glyph, as before).
+fn tabstop_on() -> bool {
+    std::env::var("OXI_TABSTOP_DISABLE").is_err()
+}
+
+/// One tab-free piece's advance in points.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn tab_piece_width(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    piece: &str,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    scale: f64,
+    styles: Option<RunStyles<'_>>,
+) -> Option<f32> {
+    if piece.is_empty() {
+        return Some(0.0);
+    }
+    let known = match styles {
+        Some(st) => line_width_pt_runs(dc, piece, fs, family, bold, italic, scale, st),
+        None => hmtx_width_styled(piece, fs, family, bold, italic, 0.0).or_else(|| {
+            runtime_width_px(dc, piece, fs, family, bold, italic, scale, 0.0)
+                .map(|px| px as f32 / scale as f32)
+        }),
+    };
+    // A piece the advance chain cannot answer for is still placed: GDI's own
+    // extent in the face it substitutes, which is what the drawing uses.
+    known.or_else(|| {
+        let fam = effective_family(dc, family);
+        Some((measure_text_width(dc, piece, fs, &fam, bold, scale, 0.0) / scale) as f32)
+    })
+}
+
+/// A line's tab-separated pieces laid on their stops from `start`: each
+/// piece's text, its character offset in the line, and its left edge.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn tab_layout_line(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    ctx: &TabCtx,
+    line: &str,
+    start: f32,
+    fs: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    scale: f64,
+    styles: Option<RunStyles<'_>>,
+) -> Option<(Vec<(String, usize, f32)>, f32)> {
+    let mut pieces: Vec<(String, usize)> = Vec::new();
+    let mut off = 0usize;
+    for piece in line.split('\t') {
+        pieces.push((piece.to_string(), off));
+        off += piece.chars().count() + 1;
+    }
+    let mut widths = Vec::with_capacity(pieces.len());
+    for (piece, at) in &pieces {
+        let st = styles.map(|s| RunStyles { line_start: s.line_start + at, ..s });
+        widths.push(tab_piece_width(dc, piece, fs, family, bold, italic, scale, st)?);
+    }
+    let (xs, end) =
+        oxislides_core::layout::tab_piece_x(start, &widths, &ctx.stops, ctx.def, ctx.mar_l);
+    Some((
+        pieces.into_iter().zip(xs).map(|((t, at), x)| (t, at, x)).collect(),
+        end,
+    ))
+}
+
+/// Runs with no `sz` count at the level size in a line's size unless
+/// OXI_RUNINHFS_DISABLE=1 (see `paragraph_font_size`).
+fn runinhfs_on() -> bool {
+    std::env::var("OXI_RUNINHFS_DISABLE").is_err()
+}
+
+/// `wedgeEllipseCallout` drawn as its balloon unless OXI_WEDGEELLIPSE_DISABLE=1.
+fn wedgeellipse_on() -> bool {
+    std::env::var("OXI_WEDGEELLIPSE_DISABLE").is_err()
 }
 
 /// A table row's line height honours the cell's `a:lnSpc` unless this is set.
@@ -5896,6 +6153,54 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 if line_text.trim().is_empty() {
                                     continue;
                                 }
+                                let tab_ctx = if line_text.contains('\t') {
+                                    TAB_CTX.with(|c| c.borrow().clone())
+                                } else {
+                                    None
+                                };
+                                if let Some(ctx) = tab_ctx.as_ref() {
+                                    let lvl_fs_t = if lvlrunsize_on() { m_fs } else { None };
+                                    let laid = tab_layout_line(
+                                        mem_dc,
+                                        ctx,
+                                        &line_text,
+                                        x_off,
+                                        fs,
+                                        &family,
+                                        lvl_bold,
+                                        para_italic,
+                                        scale,
+                                        Some(RunStyles {
+                                            runs: &p.runs,
+                                            line_start: this_off,
+                                            lvl_bold,
+                                            lvl_fs: lvl_fs_t,
+                                        }),
+                                    );
+                                    if let Some((pieces, _)) = laid {
+                                        for (piece, at, px) in pieces {
+                                            if piece.is_empty() {
+                                                continue;
+                                            }
+                                            draw_line_runs(
+                                                mem_dc,
+                                                left_x + (px as f64 * scale).round() as i32,
+                                                baseline,
+                                                &piece,
+                                                this_off + at,
+                                                &p.runs,
+                                                &family,
+                                                lvl_fs_t.unwrap_or(fs),
+                                                run_default_color.as_deref(),
+                                                para_highlight.as_deref(),
+                                                lvl_italic,
+                                                lvl_bold,
+                                                scale,
+                                            );
+                                        }
+                                        continue;
+                                    }
+                                }
                                 if styled && !(is_justify && i + 1 < n_lines) {
                                     let line_x = left_x
                                         + (x_off as f64 * scale).round() as i32;
@@ -6086,7 +6391,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                         );
                                                         let bold =
                                                             para_is_bold(&p.runs, false);
-                                                        set_para_hang(p);
+                                                        set_para_hang(p, None);
                                                         n = gdi_wrap_lines(
                                                             mem_dc, &body, inner, inner,
                                                             scale, fs, &family, bold, false,
@@ -6340,7 +6645,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                     ),
                                                 );
                                                 let bold = para_is_bold(&p.runs, false);
-                                                set_para_hang(p);
+                                                set_para_hang(p, None);
                                                 n = gdi_wrap_lines(
                                                     mem_dc,
                                                     &body,
@@ -6448,7 +6753,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         // 213.6pt column and over its neighbour.
                                         let inner_pt =
                                             (right - left).max(1) as f64 / scale;
-                                        set_para_hang(p);
+                                        set_para_hang(p, None);
                                         let lines = gdi_wrap_lines(
                                             mem_dc,
                                             &text,
@@ -11991,7 +12296,21 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             .fill_rect
                             .map(|(l, t, r, b)| (l, t, r, b))
                             .unwrap_or((0.0, 0.0, 0.0, 0.0));
-                        match image::load_from_memory(data) {
+                        // An EMF picture is played by GDI into a bitmap the
+                        // size it will be drawn at, then goes down the same
+                        // path as a PNG (crop, alpha, rotation).
+                        let decoded = if emfpic_on() && (is_emf(data) || is_wmf(data)) {
+                            let cw = (1.0 - (sl + sr)).max(0.01) as f64;
+                            let ch = (1.0 - (st + sb)).max(0.01) as f64;
+                            let ww = ((sh.width as f64 * scale) / cw).round().max(1.0) as u32;
+                            let hh = ((sh.height as f64 * scale) / ch).round().max(1.0) as u32;
+                            rasterize_emf(data, ww, hh)
+                                .map(image::DynamicImage::ImageRgba8)
+                                .ok_or(())
+                        } else {
+                            image::load_from_memory(data).map_err(|_| ())
+                        };
+                        match decoded {
                             Ok(dyn_img) => {
                                 let mut rgba = dyn_img.to_rgba8();
                                 // `a:alphaModFix/@amt` scales the WHOLE
@@ -16079,13 +16398,14 @@ static HANG_DEFAULT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 
 /// Resolve and publish a paragraph's `hangingPunct` for the wraps that follow.
 /// `OXI_HANGPUNCT_DISABLE=1` never hangs.
-fn set_para_hang(para: &oxislides_core::ir::SlideParagraph) {
+fn set_para_hang(para: &oxislides_core::ir::SlideParagraph, level: Option<bool>) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let on = *ON.get_or_init(|| std::env::var("OXI_HANGPUNCT_DISABLE").is_err());
     let v = on
         && (para.ea_lang || std::env::var("OXI_HANGEA_DISABLE").is_ok())
         && para
             .hanging_punct
+            .or(level)
             .unwrap_or_else(|| HANG_DEFAULT.load(std::sync::atomic::Ordering::Relaxed));
     HANG_PUNCT.with(|h| h.set(v));
 }
@@ -17668,6 +17988,20 @@ fn gdi_wrap_lines(
                 lvl_bold,
                 lvl_fs,
             });
+            if candidate.contains('\t') {
+                let tabbed = TAB_CTX.with(|c| {
+                    let c = c.borrow();
+                    let ctx = c.as_ref()?;
+                    let start = ctx.eff_w - width_pt;
+                    let (_, end) = tab_layout_line(
+                        dc, ctx, candidate, start, fs, family, bold, italic, scale, styles,
+                    )?;
+                    Some(end <= ctx.eff_w + 0.01)
+                });
+                if let Some(ok) = tabbed {
+                    return ok;
+                }
+            }
             fits_line(
                 dc, candidate, fs, family, bold, italic, width_pt, width_px, scale, styles,
             )
@@ -18459,7 +18793,12 @@ fn layout_paragraph_baselines(
     // Master txStyles level for this paragraph's outline level (Spec #8).
     let m = oxislides_core::layout::resolve_level(master, ph_levels, para.lvl);
     KERN_MIN.with(|k| k.set(para.runs.iter().find_map(|r| r.kern).or(m.kern)));
-    set_para_hang(para);
+    // Placeholder: layout over master bodyStyle; text box: defaultTextStyle
+    // (master_styles.other); stated nowhere = hang (gen_pptx_hanglvl.py d0).
+    set_para_hang(
+        para,
+        if oxislides_core::parser::hanglvl_off() { m.hanging_punct } else { Some(m.hanging_punct.unwrap_or(true)) },
+    );
     // Effective font size: a run's explicit sz wins (the max over runs);
     // otherwise the master txStyles level default (Spec #5, phfs probe: V3
     // run 14pt overrides master 32pt); else the engine default. An EMPTY
@@ -18711,6 +19050,15 @@ fn layout_paragraph_baselines(
     // wider than the indent pushes the first line further in -- so the first
     // line's width is taken from the offset as it stands, not from the
     // resolved one. The continuation width never moves.
+    TAB_CTX.with(|c| {
+        *c.borrow_mut() = (tabstop_on() && para.runs.iter().any(|r| r.text.contains('\t')))
+            .then(|| TabCtx {
+                stops: para.tab_stops.clone().or_else(|| m.tab_stops.clone()).unwrap_or_default(),
+                def: para.def_tab_sz.or(m.def_tab_sz).unwrap_or(72.0),
+                mar_l,
+                eff_w: effective_width,
+            });
+    });
     let first_w = (effective_width - if wrapwidth_on() { line0_x_off } else { 0.0 }).max(1.0);
     let rest_w = geom.rest_width;
     // `<a:br/>` arrives as a newline in the run stream and ends the line where
@@ -18790,7 +19138,10 @@ fn layout_paragraph_baselines(
             for run in &para.runs {
                 let run_len = run.text.chars().count();
                 if seen < at + len && at < seen + run_len {
-                    if let Some(size) = run.font_size {
+                    // A run with no sz is set at the level's size and counts
+                    // (252cbc8c slide 2: 16pt text beside an 11pt run).
+                    let inherited = if runinhfs_on() && run_len > 0 { m.font_size } else { None };
+                    if let Some(size) = run.font_size.or(inherited) {
                         best = Some(best.map_or(size, |b: f32| b.max(size)));
                     }
                 }

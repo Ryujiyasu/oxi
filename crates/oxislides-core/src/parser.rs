@@ -18,7 +18,7 @@ use crate::ir::{
     default_chart_updown_gap,
     default_chart_type, default_l_ins, default_r_ins, default_t_ins, Chart, ChartSeries,
     CellBorder, CustomGeometry, EmbeddedFont, GeomCmd, GeomPath, LineEnd,
-    MasterStyleLevel, MasterTxStyles, Presentation, Shape, ShapeContent, Slide,
+    MasterStyleLevel, MasterTxStyles, Presentation, TabAlign, TabStop, Shape, ShapeContent, Slide,
     SlideAlignment, SlideBackgroundImage, SlideBullet, SlideGradient, SlideGradientStop,
     SlideParagraph,
     SlideRun, Table, TableCell,
@@ -250,6 +250,8 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                         if let Some(algn) = get_attr(&e, "algn") {
                             cur_level.algn = Some(parse_alignment_attr(&algn));
                         }
+                        cur_level.hanging_punct = lvl_hanging_punct(&e);
+                        cur_level.def_tab_sz = def_tab_attr(&e);
                         in_level = true;
                         in_spc_bef = false;
                     }
@@ -332,6 +334,8 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                         if let Some(algn) = get_attr(&e, "algn") {
                             lvl.algn = Some(parse_alignment_attr(&algn));
                         }
+                        lvl.hanging_punct = lvl_hanging_punct(&e);
+                        lvl.def_tab_sz = def_tab_attr(&e);
                         if in_body_style {
                             body.push(lvl);
                         } else if in_other_style {
@@ -404,6 +408,11 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                     "buNone" if in_level => {
                         cur_level.bullet = SlideBullet::None;
                     }
+                    "tab" if in_level => {
+                        if let Some(t) = parse_tab_stop(&e) {
+                            cur_level.tab_stops.get_or_insert_with(Vec::new).push(t);
+                        }
+                    }
                     "buAutoNum" if in_level => {
                         let kind =
                             get_attr(&e, "type").unwrap_or_else(|| "arabicPeriod".to_string());
@@ -446,13 +455,50 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
     })
 }
 
-/// `p:defaultTextStyle/a:lvl1pPr/@hangingPunct` (absent = off).
+/// `p:defaultTextStyle/a:lvl1pPr/@hangingPunct`; absent = ON
+/// (`gen_pptx_hanglvl.py`: stated nowhere, PowerPoint hangs the 。 in both a
+/// placeholder and a text box). `OXI_HANGLVL_DISABLE=1` restores absent = off.
 fn parse_default_hanging_punct(xml: &str) -> bool {
-    let Some(i) = xml.find("defaultTextStyle") else { return false };
+    let absent = !hanglvl_off();
+    let Some(i) = xml.find("defaultTextStyle") else { return absent };
     let rest = &xml[i..];
-    let Some(j) = rest.find("lvl1pPr") else { return false };
+    let Some(j) = rest.find("lvl1pPr") else { return absent };
     let tag = &rest[j..rest[j..].find('>').map(|k| j + k).unwrap_or(rest.len())];
-    tag.contains("hangingPunct=\"1\"") || tag.contains("hangingPunct=\"true\"")
+    if tag.contains("hangingPunct=") {
+        tag.contains("hangingPunct=\"1\"") || tag.contains("hangingPunct=\"true\"")
+    } else {
+        absent
+    }
+}
+
+/// An `a:tab` element as a stop (`gen_pptx_tabs.py`).
+fn parse_tab_stop(e: &quick_xml::events::BytesStart) -> Option<TabStop> {
+    let pos = get_attr(e, "pos")?.parse::<f32>().ok()?;
+    let algn = match get_attr(e, "algn").as_deref() {
+        Some("ctr") => TabAlign::Center,
+        Some("r") => TabAlign::Right,
+        Some("dec") => TabAlign::Decimal,
+        _ => TabAlign::Left,
+    };
+    Some(TabStop { pos: emu_to_pt(pos), algn })
+}
+
+/// `@defTabSz` in points.
+fn def_tab_attr(e: &quick_xml::events::BytesStart) -> Option<f32> {
+    get_attr(e, "defTabSz").and_then(|v| v.parse::<f32>().ok()).map(emu_to_pt)
+}
+
+/// `OXI_HANGLVL_DISABLE=1`: no level `hangingPunct`, and absent = off.
+pub fn hanglvl_off() -> bool {
+    std::env::var("OXI_HANGLVL_DISABLE").is_ok()
+}
+
+/// A list level's `@hangingPunct`, if stated.
+fn lvl_hanging_punct(e: &quick_xml::events::BytesStart) -> Option<bool> {
+    if hanglvl_off() {
+        return None;
+    }
+    get_attr(e, "hangingPunct").map(|v| v == "1" || v == "true")
 }
 
 /// Parse presentation.xml to get slide relationship IDs (in order).
@@ -659,6 +705,11 @@ fn parse_layout_ph_lststyles(
                         ph_idx = get_attr(&e, "idx");
                     }
                     "lstStyle" if in_sp => in_lst = true,
+                    "tab" if in_lst && cur_lvl.is_some() => {
+                        if let (Some(idx), Some(t)) = (cur_lvl, parse_tab_stop(&e)) {
+                            levels[idx].tab_stops.get_or_insert_with(Vec::new).push(t);
+                        }
+                    }
                     _ if in_lst && is_master_lvl(&name) => {
                         let idx = name
                             .trim_start_matches("lvl")
@@ -673,6 +724,12 @@ fn parse_layout_ph_lststyles(
                         lvl_bu_font = None;
                         if let Some(a) = get_attr(&e, "algn") {
                             levels[idx].algn = Some(parse_alignment_attr(&a));
+                        }
+                        if let Some(h) = lvl_hanging_punct(&e) {
+                            levels[idx].hanging_punct = Some(h);
+                        }
+                        if let Some(d) = def_tab_attr(&e) {
+                            levels[idx].def_tab_sz = Some(d);
                         }
                         if s_phbullet {
                             let emu = |k: &str| {
@@ -1385,6 +1442,8 @@ fn parse_slide(
     // Spec #8: bullet / indent (a:pPr/@lvl, @marL, @indent + a:buChar/buFont/buNone/buAutoNum)
     let mut para_lvl: u32 = 0;
     let mut para_hang: Option<bool> = None;
+    let mut para_tabs: Option<Vec<TabStop>> = None;
+    let mut para_def_tab: Option<f32> = None;
     let mut para_ea_lang = false;
     let mut para_mar_l: Option<f32> = None;
     let mut para_indent: Option<f32> = None;
@@ -1392,6 +1451,7 @@ fn parse_slide(
     let mut para_bullet_font: Option<String> = None;
     let (mut pb_pend, mut pb_color, mut pb_size): (bool, Option<String>, Option<f32>) = (false, None, None);
     let mut para_end_size: Option<f32> = None;
+    let mut para_end_mark = false;
 
     // Run state
     let mut in_run = false;
@@ -2083,12 +2143,15 @@ fn parse_slide(
                         in_spc_aft = false;
                         para_lvl = 0;
                         para_hang = None;
+                        para_tabs = None;
+                        para_def_tab = None;
                         para_ea_lang = false;
                         para_mar_l = None;
                         para_indent = None;
                         para_bullet = SlideBullet::Inherit;
                         para_bullet_font = None;
                         para_end_size = None;
+                        para_end_mark = false;
                     }
                     // `a:prstTxWarp` is normally self-closing, so both arms
                     // route here (the Start/Empty trap this file keeps).
@@ -2160,6 +2223,9 @@ fn parse_slide(
                         }
                     }
                     "pPr" if in_paragraph => {
+                        if let Some(d) = def_tab_attr(&e) {
+                            para_def_tab = Some(d);
+                        }
                         // Spec #6: a:pPr/@algn — the paragraph's own alignment
                         // (wins over the master txStyles level at render time).
                         if let Some(algn) = get_attr(&e, "algn") {
@@ -2246,6 +2312,7 @@ fn parse_slide(
                         run_font_family = None;
                     }
                     "endParaRPr" if in_paragraph => {
+                        para_end_mark = true;
                         para_end_size = get_attr(&e, "sz")
                             .and_then(|v| v.parse::<f32>().ok())
                             .map(|v| v / 100.0);
@@ -2509,6 +2576,7 @@ fn parse_slide(
                     // arrives here and never in the Start arm. The Start arm has
                     // its own copy for the form that wraps an a:solidFill.
                     "endParaRPr" if in_paragraph => {
+                        para_end_mark = true;
                         para_end_size = get_attr(&e, "sz")
                             .and_then(|v| v.parse::<f32>().ok())
                             .map(|v| v / 100.0);
@@ -2965,6 +3033,9 @@ fn parse_slide(
                         }
                     }
                     "pPr" if in_paragraph => {
+                        if let Some(d) = def_tab_attr(&e) {
+                            para_def_tab = Some(d);
+                        }
                         if let Some(algn) = get_attr(&e, "algn") {
                             para_alignment = Some(parse_alignment_attr(&algn));
                         }
@@ -3034,6 +3105,11 @@ fn parse_slide(
                                     para_line_spacing_pts = Some(x / 100.0);
                                 }
                             }
+                        }
+                    }
+                    "tab" if in_paragraph => {
+                        if let Some(t) = parse_tab_stop(&e) {
+                            para_tabs.get_or_insert_with(Vec::new).push(t);
                         }
                     }
                     // A paragraph's own spcBef/spcAft in PERCENT of its line, as the
@@ -3526,7 +3602,10 @@ fn parse_slide(
                             indent: para_indent,
                             bullet: std::mem::take(&mut para_bullet),
                             end_para_size: para_end_size.take(),
+                            end_para_mark: std::mem::take(&mut para_end_mark),
                             hanging_punct: para_hang.take(),
+                            tab_stops: para_tabs.take(),
+                            def_tab_sz: para_def_tab.take(),
                             ea_lang: std::mem::take(&mut para_ea_lang),
                         };
                         if in_tbl_cell {
@@ -5531,6 +5610,9 @@ fn merge_ph_levels(
                 own_mar_l: l.own_mar_l.or(m.own_mar_l),
                 own_indent: l.own_indent.or(m.own_indent),
                 kern: l.kern.or(m.kern),
+                hanging_punct: l.hanging_punct.or(m.hanging_punct),
+                tab_stops: l.tab_stops.clone().or(m.tab_stops.clone()),
+                def_tab_sz: l.def_tab_sz.or(m.def_tab_sz),
                 bullet: if matches!(l.bullet, SlideBullet::Inherit) {
                     m.bullet.clone()
                 } else {

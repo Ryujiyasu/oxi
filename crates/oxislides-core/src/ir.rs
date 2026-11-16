@@ -183,6 +183,33 @@ pub struct MasterStyleLevel {
     /// `a:defRPr/@kern` of the level, in points (see `SlideRun::kern`).
     #[serde(default)]
     pub kern: Option<f32>,
+    /// `a:lvlNpPr/@hangingPunct` of the level (`gen_pptx_hanglvl.py`): a
+    /// placeholder's unstated paragraph takes it from layout over master
+    /// bodyStyle, a text box from defaultTextStyle; stated nowhere = hang.
+    #[serde(default)]
+    pub hanging_punct: Option<bool>,
+    /// `a:lvlNpPr/a:tabLst` (see `SlideParagraph::tab_stops`).
+    #[serde(default)]
+    pub tab_stops: Option<Vec<TabStop>>,
+    /// `a:lvlNpPr/@defTabSz`, in points.
+    #[serde(default)]
+    pub def_tab_sz: Option<f32>,
+}
+
+/// How the text after a tab sits on its stop.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum TabAlign {
+    Left,
+    Center,
+    Right,
+    Decimal,
+}
+
+/// One `a:tab`: a position in points from the text box's inner left edge.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TabStop {
+    pub pos: f32,
+    pub algn: TabAlign,
 }
 
 pub fn default_l_ins() -> f32 {
@@ -981,6 +1008,12 @@ pub struct SlideParagraph {
     /// `a:spcAft/a:spcPct`, likewise.
     #[serde(default)]
     pub space_after_pct: Option<f32>,
+    /// `a:pPr/a:tabLst`: None = not stated (the level's list applies).
+    #[serde(default)]
+    pub tab_stops: Option<Vec<TabStop>>,
+    /// `a:pPr/@defTabSz`, in points: the default stop interval.
+    #[serde(default)]
+    pub def_tab_sz: Option<f32>,
     /// Outline level (a:pPr/@lvl, 0-based). Default 0.
     #[serde(default)]
     pub lvl: u32,
@@ -992,6 +1025,12 @@ pub struct SlideParagraph {
     /// paragraph has text -- then the runs govern.
     #[serde(default)]
     pub end_para_size: Option<f32>,
+    /// Whether the paragraph HAS an `a:endParaRPr` at all. An empty paragraph
+    /// whose mark states no sz is set at the level size, one with no mark at
+    /// the preceding paragraph's (`gen_pptx_emptymark.py`: 21.60 / 33.60 after
+    /// a 28pt line over an 18pt level).
+    #[serde(default)]
+    pub end_para_mark: bool,
     /// Left indent (a:pPr/@marL) in points. None = not specified (the master
     /// txStyles level provides it).
     #[serde(default)]
