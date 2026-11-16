@@ -3295,6 +3295,7 @@ impl WorkbookHost<'_> {
         self.file_io.create_backup = backup;
         self.file_io.shared = shared;
         self.file_io.retained_project = retained_project;
+        self.window_frames.content_changed = false;
         self.file_io.exports.insert(normalized);
         Ok(())
     }
@@ -3461,6 +3462,7 @@ mod phonetic_saved_default_tests {
         let mut book = oxicells_core::parse_xlsx_preserving_values(&package).unwrap();
         let mut host = WorkbookHost::new(&mut book, 0).unwrap();
         host.file_io.set_package(package.clone()).unwrap();
+        host.mark_unsaved();
         host.saved = true;
         host.calculation = -4135;
         let mut files = Files::default();
@@ -3469,9 +3471,11 @@ mod phonetic_saved_default_tests {
         assert_eq!(host.file_io.package.as_ref(), Some(&package));
         assert!(host.saved);
         assert!(!files.exists(r"C:\missing\saved.xlsx"));
+        assert!(host.window_frames.content_changed);
         assert!(host.save_copy_path(r"C:\work\saved.xlsx", None, None, true, &mut files).is_ok());
         assert_eq!(host.file_io.package.as_ref(), Some(&package));
         assert!(host.saved);
+        assert!(!host.window_frames.content_changed);
         let bytes = files.bytes(r"C:\work\saved.xlsx").unwrap();
         let mut archive = oxidocs_common::archive::OoxmlArchive::new(bytes).unwrap();
         let xml = archive.read_part("xl/worksheets/sheet1.xml").unwrap();

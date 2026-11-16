@@ -629,13 +629,13 @@ fn native_window_collection_calls_preserve_complete_excel_observations() {
 fn native_window_lifecycle_and_state_assignments_preserve_complete_excel_observations() {
     let fixture = native_window_fixture();
     let groups = fixture["groups"].as_array().unwrap();
-    assert_eq!(groups.len(), 22);
+    assert_eq!(groups.len(), 29);
     assert_eq!(
         groups
             .iter()
             .map(|group| group["cases"].as_array().unwrap().len())
             .sum::<usize>(),
-        2718
+        2840
     );
     for group in groups
         .iter()
@@ -650,7 +650,7 @@ fn native_window_lifecycle_and_state_assignments_preserve_complete_excel_observa
 fn native_window_frame_state_transitions_match_excel() {
     let fixture = native_window_fixture();
     let groups = fixture["groups"].as_array().unwrap();
-    assert_eq!(groups.len(), 22);
+    assert_eq!(groups.len(), 29);
     assert_eq!(groups[17]["id"], "window_frame_display_transitions");
     assert_eq!(groups[18]["id"], "window_cross_book_display_transitions");
     assert_eq!(groups[17]["cases"].as_array().unwrap().len(), 6);
@@ -664,16 +664,70 @@ fn native_window_frame_state_transitions_match_excel() {
 fn native_window_creation_and_close_histories_match_excel() {
     let fixture = native_window_fixture();
     let groups = fixture["groups"].as_array().unwrap();
-    assert_eq!(groups.len(), 22);
+    assert_eq!(groups.len(), 29);
     assert_eq!(groups[19]["id"], "window_creation_close_display_histories");
     assert_eq!(groups[20]["id"], "window_creation_from_inactive_source");
     assert_eq!(groups[21]["id"], "window_creation_from_minimized_source");
     assert_eq!(groups[19]["cases"].as_array().unwrap().len(), 12);
     assert_eq!(groups[20]["cases"].as_array().unwrap().len(), 4);
     assert_eq!(groups[21]["cases"].as_array().unwrap().len(), 4);
-    for group in &groups[19..] {
+    for group in &groups[19..22] {
         replay_native_window_group(group);
     }
+}
+
+#[test]
+fn native_application_window_state_assignments_match_excel() {
+    let fixture = native_window_fixture();
+    let groups = fixture["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 29);
+    assert_eq!(groups[22]["id"], "application_window_state_assignments");
+    assert_eq!(groups[23]["id"], "application_window_state_late_object");
+    assert_eq!(groups[24]["id"], "application_window_state_scalar_aliases");
+    assert_eq!(groups[22]["cases"].as_array().unwrap().len(), 54);
+    assert_eq!(groups[23]["cases"].as_array().unwrap().len(), 18);
+    assert_eq!(groups[24]["cases"].as_array().unwrap().len(), 16);
+    for group in &groups[22..25] {
+        replay_native_window_group(group);
+    }
+}
+
+#[test]
+fn native_window_notifications_and_activation_events_match_excel() {
+    let fixture = native_window_fixture();
+    let groups = fixture["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 29);
+    assert_eq!(groups[25]["id"], "window_document_activation_event_loop");
+    assert_eq!(groups[26]["id"], "window_application_activation_event_loop");
+    for group in &groups[25..27] {
+        assert_eq!(group["cases"].as_array().unwrap().len(), 10);
+        assert_eq!(group["fields"].as_array().unwrap().len(), 13);
+        replay_native_window_group(group);
+    }
+}
+
+#[test]
+fn native_window_creation_and_explicit_activation_events_match_excel() {
+    let fixture = native_window_fixture();
+    let groups = fixture["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 29);
+    assert_eq!(groups[27]["id"], "window_creation_and_activation_notifications");
+    assert_eq!(groups[27]["cases"].as_array().unwrap().len(), 11);
+    assert_eq!(groups[27]["fields"].as_array().unwrap().len(), 13);
+    replay_native_window_group(&groups[27]);
+}
+
+#[test]
+fn native_window_creation_after_real_save_matches_excel() {
+    let fixture = native_window_fixture();
+    let groups = fixture["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 29);
+    assert_eq!(groups[28]["id"], "window_creation_after_real_save_checkpoint");
+    assert_eq!(groups[28]["cases"].as_array().unwrap().len(), 3);
+    assert_eq!(groups[28]["fields"].as_array().unwrap().len(), 13);
+    // The probe creates and deletes its temporary saved file. The shared
+    // replay checks all fields and requires no exported or deleted input files.
+    replay_native_window_group(&groups[28]);
 }
 
 fn native_window_fixture() -> serde_json::Value {

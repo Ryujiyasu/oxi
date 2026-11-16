@@ -4932,6 +4932,11 @@ impl<'a> WorkbookHost<'a> {
         }
     }
 
+    fn mark_unsaved(&mut self) {
+        self.saved = false;
+        self.window_frames.content_changed = true;
+    }
+
     fn recalculate(&mut self) {
         let _cell_evaluation = self.cell_evaluation_scope();
         let temporary_order = self.full_calculation_reference_order();
@@ -6837,7 +6842,7 @@ impl<'a> WorkbookHost<'a> {
         let style=&mut self.workbook.named_styles.iter_mut().find(|s|s.source_id==id).unwrap().style;
         style.bg_color=bg;style.pattern_fill=if fill.pattern=="none" {None}else{Some(Box::new(fill))};
         self.propagate_named_group(id,oxicells_core::ir::CellFormatComponent::Fill)?;
-        self.saved=false;
+        self.mark_unsaved();
         Ok(true)
     }
 
@@ -6868,7 +6873,7 @@ impl<'a> WorkbookHost<'a> {
             if let Some(reference)=cell.style.format_reference.as_mut() {if reference.style_id==Some(id) {reference.style_id=None;}}
         }}}
         for style in self.templates.values_mut() {if let Some(reference)=style.format_reference.as_mut() {if reference.style_id==Some(id) {reference.style_id=None;}}}
-        self.saved=false;
+        self.mark_unsaved();
         Ok(Value::Empty)
     }
 
@@ -6939,7 +6944,7 @@ impl<'a> WorkbookHost<'a> {
                 name:name.clone(),source_id:id,style,..Default::default()
             });id
         };
-        if based_on.is_some() {self.saved=false;}
+        if based_on.is_some() {self.mark_unsaved();}
         Ok(self.object(HostObject::NamedStyle(based_on.is_none().then_some(id))))
     }
 
@@ -7047,7 +7052,7 @@ impl<'a> WorkbookHost<'a> {
             }
             self.refresh_changed_row_rules(sheet, rules);
         }
-        self.saved = false;
+        self.mark_unsaved();
         Ok(true)
     }
 
@@ -7080,7 +7085,7 @@ impl<'a> WorkbookHost<'a> {
             _=>return Ok(false),
         }
         font.write_font(&mut self.workbook.named_styles.iter_mut().find(|s|s.source_id==id).unwrap().style);
-        self.propagate_named_font(id,&old)?;self.saved=false;Ok(true)
+        self.propagate_named_font(id,&old)?;self.mark_unsaved();Ok(true)
     }
 
     fn style_group_flag(style:&CellStyle,part:oxicells_core::ir::CellFormatComponent)->Option<bool> {
@@ -7203,7 +7208,7 @@ impl<'a> WorkbookHost<'a> {
             };
             self.propagate_named_group(id,part)?;
         }
-        self.saved=false;Ok(true)
+        self.mark_unsaved();Ok(true)
     }
 
 
@@ -7293,7 +7298,7 @@ impl<'a> WorkbookHost<'a> {
             self.redress_runs(range,|held|*held=font.clone());
             self.mark_automatic_font(range,definition.font_reference.as_ref().is_some_and(|r|r.automatic));
         }
-        self.refit_rows(range)?;self.saved=false;Ok(())
+        self.refit_rows(range)?;self.mark_unsaved();Ok(())
     }
 
 
@@ -7550,7 +7555,7 @@ impl<'a> WorkbookHost<'a> {
                 if !row.custom_height && !inherited_leading {row.height=fitted.height;row.style_font=fitted.style_font;}
             }
         }
-        self.saved=false;Ok(true)
+        self.mark_unsaved();Ok(true)
     }
 
     fn protection_scalar(value: &Value) -> Result<&Value, String> {
@@ -9062,7 +9067,7 @@ impl<'a> WorkbookHost<'a> {
         self.workbook.recalculation.dirty.extend(before);
         self.workbook.recalculation.dirty.extend(after);
         self.wrote = true;
-        self.saved = false;
+        self.mark_unsaved();
         if !self.automatic_calculation() { self.workbook.calculation.completed = Some(false); }
         if self.automatic_calculation() { self.calculate_dirty(None); }
         Ok(())
@@ -9334,7 +9339,7 @@ impl<'a> WorkbookHost<'a> {
                     if table.insert_row {
                         self.workbook.sheets[sheet].tables[index].insert_row = false;
                         self.wrote = true;
-                        self.saved = false;
+                        self.mark_unsaved();
                     } else {
                         self.shift_cells(line, false, true)?;
                         if at_row > whole.end_row {
@@ -9651,7 +9656,7 @@ impl<'a> WorkbookHost<'a> {
                         _ => table.emphasize_last_column = shown,
                     }
                     self.wrote = true;
-                    self.saved = false;
+                    self.mark_unsaved();
                     return Ok(true);
                 }
                 if name.eq_ignore_ascii_case("showautofilter") {
@@ -9669,7 +9674,7 @@ impl<'a> WorkbookHost<'a> {
                         table.hidden_filter_buttons.clear();
                     }
                     self.wrote = true;
-                    self.saved = false;
+                    self.mark_unsaved();
                     if self.automatic_calculation() { self.calculate_dirty(None); }
                     return Ok(true);
                 }
@@ -9681,7 +9686,7 @@ impl<'a> WorkbookHost<'a> {
                     if table.hidden_filter_buttons != hidden {
                         table.hidden_filter_buttons = hidden;
                         self.wrote = true;
-                        self.saved = false;
+                        self.mark_unsaved();
                     }
                     return Ok(true);
                 }
@@ -9715,7 +9720,7 @@ impl<'a> WorkbookHost<'a> {
                         self.set_cell_value(CellAddress { sheet, row: start_row, column }, CellValue::String(new_name.clone()))?;
                     } else {
                         self.wrote = true;
-                        self.saved = false;
+                        self.mark_unsaved();
                     }
                     return Ok(true);
                 }
@@ -10102,7 +10107,7 @@ impl<'a> WorkbookHost<'a> {
             } else { return Err(host_error(1004, "conditional rule could not be saved")); }
         }
         self.conditions[index].source_visual_xml = Some(visual);
-        self.saved = false; self.condition_modified = true;
+        self.mark_unsaved(); self.condition_modified = true;
         self.sync_new_condition(id);
         Ok(())
     }
@@ -10175,7 +10180,7 @@ impl<'a> WorkbookHost<'a> {
         *rule = updated.clone();
         let condition = &mut self.conditions[index]; condition.origin_rule = Some(updated.clone()); condition.source_visual_xml = Some(visual); condition.source_visual_extension_xml = updated.visual_extension_xml; condition.source_visual_extension_id = updated.visual_extension_id;
         condition.scale_value_overrides.resize(2, None); condition.scale_value_overrides[usize::from(at)] = Some(answer);
-        self.saved = false; self.condition_modified = true; self.sync_new_condition(id);
+        self.mark_unsaved(); self.condition_modified = true; self.sync_new_condition(id);
         Ok(Value::Empty)
     }
 
@@ -10198,7 +10203,7 @@ impl<'a> WorkbookHost<'a> {
         let rule = self.workbook.sheets.get_mut(condition.sheet).and_then(|sheet| sheet.conditional_rules.iter_mut().find(|rule| **rule == original)).ok_or_else(|| host_error(1004, "conditional rule could not be saved"))?;
         *rule = updated.clone();
         let condition = &mut self.conditions[index]; condition.origin_rule = Some(updated.clone()); condition.source_visual_xml = Some(visual); condition.source_visual_extension_xml = updated.visual_extension_xml;
-        self.saved = false; self.condition_modified = true; self.sync_new_condition(id);
+        self.mark_unsaved(); self.condition_modified = true; self.sync_new_condition(id);
         Ok(true)
     }
 
@@ -10227,7 +10232,7 @@ impl<'a> WorkbookHost<'a> {
         let rule = self.workbook.sheets.get_mut(condition.sheet).and_then(|sheet| sheet.conditional_rules.iter_mut().find(|rule| **rule == original)).ok_or_else(|| host_error(1004, "conditional rule could not be saved"))?;
         *rule = updated.clone();
         let condition = &mut self.conditions[index]; condition.origin_rule = Some(updated.clone()); condition.source_visual_extension_id = updated.visual_extension_id; condition.source_visual_extension_xml = updated.visual_extension_xml;
-        self.saved = false; self.condition_modified = true; self.sync_new_condition(id);
+        self.mark_unsaved(); self.condition_modified = true; self.sync_new_condition(id);
         Ok(true)
     }
 
@@ -10245,7 +10250,7 @@ impl<'a> WorkbookHost<'a> {
         *rule = updated.clone();
         let condition = &mut self.conditions[index]; condition.origin_rule = Some(updated.clone()); condition.source_visual_extension_id = updated.visual_extension_id; condition.source_visual_extension_xml = updated.visual_extension_xml;
         if role == 1 { condition.axis_color_changed = true; } else if role == 2 { condition.border_color_changed = true; }
-        self.saved = false; self.condition_modified = true; self.sync_new_condition(id);
+        self.mark_unsaved(); self.condition_modified = true; self.sync_new_condition(id);
         Ok(())
     }
 
@@ -10280,7 +10285,7 @@ impl<'a> WorkbookHost<'a> {
         *rule = updated.clone();
         let condition = &mut self.conditions[index]; condition.origin_rule = Some(updated.clone()); condition.source_visual_extension_id = updated.visual_extension_id; condition.source_visual_extension_xml = updated.visual_extension_xml;
         if border { condition.negative_border_type_override = Some(number); }
-        self.saved = false; self.condition_modified = true; self.sync_new_condition(id);
+        self.mark_unsaved(); self.condition_modified = true; self.sync_new_condition(id);
         Ok(true)
     }
 
@@ -10310,7 +10315,7 @@ impl<'a> WorkbookHost<'a> {
         *rule = updated.clone();
         condition.origin_rule = Some(updated);
         self.conditions[index] = condition;
-        self.saved = false; self.condition_modified = true;
+        self.mark_unsaved(); self.condition_modified = true;
         Ok(())
     }
 
@@ -10538,7 +10543,7 @@ impl<'a> WorkbookHost<'a> {
 
     fn drop_selected_conditions_on(&mut self, range: CellRange, selected: Option<u64>) {
         if self.conditions.iter().any(|condition| selected.is_none_or(|id| condition.id == id) && condition.sheet == range.sheet && condition.applies.iter().any(|block| ranges_overlap(*block, range))) {
-            self.saved = false; self.condition_modified = true;
+            self.mark_unsaved(); self.condition_modified = true;
         }
         let mut changed_origins = Vec::new();
         for condition in &mut self.conditions {
@@ -10752,7 +10757,7 @@ impl<'a> WorkbookHost<'a> {
         condition.source_visual_xml = visual_xml;
         condition.source_visual_extension_xml = visual_extension_xml;
         condition.origin_rule = replacement;
-        self.saved = false;
+        self.mark_unsaved();
         self.condition_modified = true;
         Ok(Value::Empty)
     }
@@ -10885,7 +10890,7 @@ impl<'a> WorkbookHost<'a> {
             font_color: None,
             fill: None,
         });
-        self.saved = false;
+        self.mark_unsaved();
         self.condition_modified = true;
         self.sync_new_condition(id);
         Ok(self.object(HostObject::FormatCondition(id, None)))
@@ -11216,7 +11221,7 @@ impl<'a> WorkbookHost<'a> {
     /// 1 leaves the first at 2, and moving it to 1 again after it went last
     /// (3) leaves the first at 3.
     fn set_condition_priority(&mut self, index: usize, priority: i64) {
-        self.saved = false;
+        self.mark_unsaved();
         self.condition_modified = true;
         let sheet = self.conditions[index].sheet;
         let priority = priority.max(1);
@@ -11400,7 +11405,7 @@ impl<'a> WorkbookHost<'a> {
             self.set_condition_priority(index, 1);
             Value::Empty
         } else if name.eq_ignore_ascii_case("setlastpriority") {
-            self.saved = false;
+            self.saved = false; self.window_frames.content_changed = true;
             self.condition_modified = true;
             let last = self.last_condition_priority(condition.sheet) + 1;
             let sheet = condition.sheet;
@@ -11414,7 +11419,7 @@ impl<'a> WorkbookHost<'a> {
                 for range in scope { self.drop_selected_conditions_on(range, Some(id)); }
                 return Ok(Some(Value::Empty));
             }
-            self.saved = false;
+            self.mark_unsaved();
             self.condition_modified = true;
             let removed = self.conditions.remove(index);
             if let Some(original) = removed.origin_rule { self.remove_original_condition(removed.sheet, &original); }
@@ -11774,6 +11779,7 @@ impl<'a> WorkbookHost<'a> {
             let saved_rules = self.workbook.sheets[first.sheet].validations.clone();
             let saved_cells = self.validations.clone();
             let saved_flag = self.saved;
+        let saved_content_changed = self.window_frames.content_changed;
             let result = (|| {
                 for area in blocks {
                     let mut local = args.to_vec();
@@ -11800,7 +11806,7 @@ impl<'a> WorkbookHost<'a> {
                     combined.ranges = areas.iter().map(|area|
                         (area.start_row - 1, area.start_column, area.end_row - 1, area.end_column)).collect();
                     self.workbook.sheets[first.sheet].validations.push(combined);
-                    self.saved = false;
+                    self.mark_unsaved();
                 }
                 Ok(Some(Value::Empty))
             })();
@@ -11808,6 +11814,7 @@ impl<'a> WorkbookHost<'a> {
                 self.workbook.sheets[first.sheet].validations = saved_rules;
                 self.validations = saved_cells;
                 self.saved = saved_flag;
+            self.window_frames.content_changed = saved_content_changed;
             }
             return result;
         }
@@ -11826,6 +11833,7 @@ impl<'a> WorkbookHost<'a> {
         let saved_rules = self.workbook.sheets[first.sheet].validations.clone();
         let saved_cells = self.validations.clone();
         let saved_flag = self.saved;
+        let saved_content_changed = self.window_frames.content_changed;
         let result = (|| {
             let mut handled = false;
             for area in Self::disjoint_validation_blocks(&areas) {
@@ -11837,6 +11845,7 @@ impl<'a> WorkbookHost<'a> {
             self.workbook.sheets[first.sheet].validations = saved_rules;
             self.validations = saved_cells;
             self.saved = saved_flag;
+            self.window_frames.content_changed = saved_content_changed;
         }
         result
     }
@@ -11885,7 +11894,7 @@ impl<'a> WorkbookHost<'a> {
             if !validation_areas_overlap(&areas) { continue; }
             rule.ranges = Self::disjoint_validation_blocks(&areas).iter().map(|area|
                 (area.start_row - 1, area.start_column, area.end_row - 1, area.end_column)).collect();
-            self.saved = false;
+            self.saved = false; self.window_frames.content_changed = true;
         }
     }
 
@@ -11940,7 +11949,7 @@ impl<'a> WorkbookHost<'a> {
     fn store_workbook_validation(&mut self, range: CellRange, rule: &Validation) {
         self.remove_workbook_validation_range(range);
         self.workbook.sheets[range.sheet].validations.push(validation_to_workbook(rule, range));
-        self.saved = false;
+        self.mark_unsaved();
     }
 
     /// Replace a copied block without expanding identical adjacent rules in the file.
@@ -12008,7 +12017,7 @@ impl<'a> WorkbookHost<'a> {
         for (block, rule) in rectangles {
             self.workbook.sheets[range.sheet].validations.push(validation_to_workbook(&rule, block));
         }
-        self.saved = false;
+        self.mark_unsaved();
     }
 
     /// The one validation every cell of a range carries, or the 1004 Excel
@@ -12311,7 +12320,7 @@ impl<'a> WorkbookHost<'a> {
                 self.validations.remove(&address);
             }
             self.remove_workbook_validation_range(range);
-            self.saved = false;
+            self.mark_unsaved();
             return Ok(Some(Value::Empty));
         }
         if name.eq_ignore_ascii_case("parent") {
@@ -12492,7 +12501,7 @@ impl<'a> WorkbookHost<'a> {
         redress(cell, &new_text, &dresses);
         self.finish_shared_cell_input(shared_input);
         self.wrote = true;
-        self.saved = false;
+        self.mark_unsaved();
         Ok(())
     }
 
@@ -13107,7 +13116,7 @@ impl<'a> WorkbookHost<'a> {
                         comment.utf16_text = String::from_utf16(&text_units).err().map(|_| text_units);
                     }
                 }
-                self.saved = false;
+                self.mark_unsaved();
             }
             return Ok(Some(Value::from_utf16(self.threaded_notes[index].text_units.clone())));
         }
@@ -13168,7 +13177,7 @@ impl<'a> WorkbookHost<'a> {
                     comment.resolved = resolved;
                 }
             }
-            self.saved = false;
+            self.mark_unsaved();
             return Ok(Some(Value::Boolean(resolved)));
         }
         if name.eq_ignore_ascii_case("replies") {
@@ -13221,7 +13230,7 @@ impl<'a> WorkbookHost<'a> {
                 date,
                 resolved: false,
             });
-            self.saved = false;
+            self.mark_unsaved();
             return Ok(Some(self.object(HostObject::ThreadedComment(reply_index))));
         }
         if name.eq_ignore_ascii_case("delete") {
@@ -13246,7 +13255,7 @@ impl<'a> WorkbookHost<'a> {
                     }
                 }
             }
-            self.saved = false;
+            self.mark_unsaved();
             return Ok(Some(Value::Empty));
         }
         Ok(None)
@@ -13518,7 +13527,7 @@ impl<'a> WorkbookHost<'a> {
         note.set_units(text);
         self.notes.push(note);
         self.add_comment_shape(at);
-        self.saved = false;
+        self.mark_unsaved();
         Ok(self.object(HostObject::Comment(at)))
     }
 
@@ -13570,13 +13579,13 @@ impl<'a> WorkbookHost<'a> {
                 resolved: false,
             },
         );
-        self.saved = false;
+        self.mark_unsaved();
         Ok(self.object(HostObject::ThreadedComment(self.threaded_notes.len() - 1)))
     }
 
     /// Take the notes off every cell of a range.
     fn clear_comments(&mut self, range: CellRange) {
-        self.saved = false;
+        self.mark_unsaved();
         let clear_legacy = !self.objects_protected(range.sheet);
         let in_range = |at: CellAddress| at.sheet == range.sheet
             && (range.start_row..=range.end_row).contains(&at.row)
@@ -13645,7 +13654,7 @@ impl<'a> WorkbookHost<'a> {
             }
             let visible = shapes::mso_asked(&args[0], "Comment.Visible")?;
             self.notes[index].visible = visible;
-            self.saved = false;
+            self.mark_unsaved();
             if let Some(shape) = self.shapes.iter_mut().find(|shape| shape.comment_at == Some(at)) {
                 shape.visible = visible;
             }
@@ -13685,7 +13694,7 @@ impl<'a> WorkbookHost<'a> {
                 .map(|shape| shape.non_visual_id).collect();
             self.workbook.sheets[at.sheet].legacy_drawing_order.retain(|id| !removed.contains(id));
             self.shapes.retain(|shape| shape.comment_at != Some(at));
-            self.saved = false;
+            self.mark_unsaved();
             return Ok(Some(Value::Empty));
         }
         Ok(None)
@@ -13742,7 +13751,7 @@ impl<'a> WorkbookHost<'a> {
         let at = self.notes[index].at;
         self.notes[index].set_units(changed);
         self.sync_comment_shape_text(at, &units, cut, &text, keep_suffix);
-        self.saved = false;
+        self.mark_unsaved();
         Ok(note_text_as_excel(&self.notes[index]))
     }
 
@@ -16127,7 +16136,7 @@ impl<'a> WorkbookHost<'a> {
         self.workbook.sheets.insert(at, sheet);
         self.sheets_renumbered(&|was| Some(if was >= at { was + 1 } else { was }));
         self.activate_sheet(at);
-        self.saved = false;
+        self.mark_unsaved();
         Ok(self.object(HostObject::Worksheet(at)))
     }
 
@@ -16920,7 +16929,7 @@ impl<'a> WorkbookHost<'a> {
         }
         self.rewrite_every_formula(&|formula| oxicells_calc::rename_sheet_in_formula(formula, &old, &new));
         oxicells_core::recalculation::rename_sheet(&mut self.workbook, &old, &new);
-        self.saved = false;
+        self.mark_unsaved();
         Ok(())
     }
 
@@ -17322,7 +17331,7 @@ impl<'a> WorkbookHost<'a> {
         self.workbook.recalculation.dirty.extend(before);
         self.workbook.recalculation.dirty.extend(after);
         self.wrote = true;
-        self.saved = false;
+        self.mark_unsaved();
         if !self.automatic_calculation() { self.workbook.calculation.completed = Some(false); }
         if self.automatic_calculation() { self.calculate_dirty(None); }
     }
@@ -22052,7 +22061,7 @@ impl<'a> WorkbookHost<'a> {
         if matches!(value, CellValue::Empty) { self.preserve_used_bounds(address.sheet)?; }
         let replaced_formula = self.cell_here(address.sheet, address.row, address.column).is_some_and(|cell| cell.formula.is_some());
         self.note_calculation_change(address);
-        self.saved = false;
+        self.mark_unsaved();
         let starting = self.template_style(address);
         let shared_edit=if record {self.begin_shared_cell_input(address)} else {None};
         // An empty string clears a cell, but does not materialize an absent one.
@@ -22243,7 +22252,7 @@ impl<'a> WorkbookHost<'a> {
             self.workbook.recalculation.order.retain(|held| held != &key);
             self.workbook.recalculation.order.insert(0, key);
         }
-        self.saved = false;
+        self.mark_unsaved();
         let starting = self.template_style(address);
         if !formula.trim_start_matches('=').is_empty() {
             self.invalidate_plain_row_format_records(address.sheet);
@@ -23579,7 +23588,7 @@ impl<'a> WorkbookHost<'a> {
             .get_mut(range.sheet)
             .ok_or_else(|| "worksheet no longer exists".to_string())?;
         let Some(width) = column_dimension_value(value)? else { return Ok(()); };
-        self.saved = false;
+        self.saved = false; self.window_frames.content_changed = true;
         let required = range.end_column as usize + 1;
         if sheet.col_widths.len() < required {
             sheet.col_widths.resize(required, 0.0);
@@ -23737,7 +23746,7 @@ impl<'a> WorkbookHost<'a> {
             .get_mut(range.sheet)
             .ok_or_else(|| "worksheet no longer exists".to_string())?;
         let height = row_dimension_value(value)?;
-        self.saved = false;
+        self.saved = false; self.window_frames.content_changed = true;
         let Some(height) = height else { return Ok(()); };
         if range.start_row == 1 && range.end_row == MAX_WORKSHEET_ROW {
             sheet.default_row_height = height;
@@ -24219,7 +24228,7 @@ impl<'a> WorkbookHost<'a> {
             .ok_or_else(|| "worksheet is out of range".to_string())?.name.clone();
         let validation_shift = ReferenceShift { axis, at, count, across,
             sheet: Some(&moved_sheet), on_sheet: Some(&moved_sheet) };
-        self.saved = false;
+        self.mark_unsaved();
         let relocate = |held: CellAddress| -> Option<CellAddress> {
             if held.sheet != sheet { return Some(held); }
             let (along, crossing) = if sideways {
@@ -25169,7 +25178,7 @@ impl<'a> WorkbookHost<'a> {
             if (range.start_row..=range.end_row).contains(&row.index) { row.hidden = false; }
         }
         // An accepted AutoFit dirties even an unused, already fitting row.
-        self.saved=false;
+        self.mark_unsaved();
         Ok(result)
     }
 
@@ -26414,7 +26423,7 @@ impl<'a> WorkbookHost<'a> {
                 sheet.col_count = sheet.col_count.max(column as usize+1);
             }
         }
-        self.saved = false;
+        self.mark_unsaved();
         Ok(())
     }
 
@@ -27190,7 +27199,7 @@ impl<'a> WorkbookHost<'a> {
         };
         // SUBTOTAL and AGGREGATE read what is showing: measured, a
         // `SUBTOTAL(109,..)` answers again the moment a row is shown.
-        self.saved = false;
+        self.mark_unsaved();
         self.wrote = true;
         let digit = self.digit_width();
         let default_file_width = {
@@ -28157,7 +28166,7 @@ impl<'a> WorkbookHost<'a> {
                 self.conditions[index].priority = last;
                 self.sync_new_condition(id);
                 self.sync_modified_condition(id);
-                self.saved = false;
+                self.mark_unsaved();
                 self.condition_modified = true;
             }
         }
@@ -28872,7 +28881,7 @@ impl<'a> WorkbookHost<'a> {
                     }
                 }
                 self.sync_comment_shape_text(at, &before, cut, &inserted, false);
-                self.saved = false;
+                self.mark_unsaved();
                 Ok(Value::from_utf16(units))
             }
         }
@@ -29612,7 +29621,8 @@ struct WorkbookCloseOperation {
 
 #[derive(Clone, Copy)]
 struct WorkbookEventContext {
-    frame: usize,
+    // None identifies a notification independent of Save/Close continuations.
+    frame: Option<usize>,
     owner: u64,
     activation_owner: Option<u64>,
     saving: bool,
@@ -29644,6 +29654,10 @@ struct WorkbookApplication<'a> {
     next_event: u64,
     activation_order: Vec<u64>,
     window_z_order: Vec<(u64, usize)>,
+    foreground_window: Option<(u64, usize)>,
+    window_ui_messages: std::collections::VecDeque<windows::WindowUiMessage>,
+    window_event_tails: BTreeMap<u64, std::collections::VecDeque<HostEventCall>>,
+    window_creation_completions: BTreeMap<u64, (u64, usize)>,
     window_enumeration_available: bool,
     debug_output: Vec<String>,
     messages: Vec<BrowserMessage>,
@@ -29689,6 +29703,10 @@ impl<'a> WorkbookApplication<'a> {
             next_event: 0,
             activation_order: vec![owner],
             window_z_order: Vec::new(),
+            foreground_window: None,
+            window_ui_messages: std::collections::VecDeque::new(),
+            window_event_tails: BTreeMap::new(),
+            window_creation_completions: BTreeMap::new(),
             window_enumeration_available: true,
             debug_output: Vec::new(),
             messages: Vec::new(),
@@ -29736,7 +29754,7 @@ impl<'a> WorkbookApplication<'a> {
         let source = &self.hosts[&source_owner];
         if !source.workbook.sheets[source_sheet].drawings.iter().any(|drawing| matches!(drawing.kind, oxicells_core::ir::DrawingKind::Chart(_))) { return }
         let name = source.file_io.full_name.clone().or_else(|| source.file_name.clone());
-        self.hosts.get_mut(&source_owner).expect("copy source").saved = false;
+        self.hosts.get_mut(&source_owner).expect("copy source").mark_unsaved();
         if let Some(name) = name {
             let target = self.hosts.get_mut(&target_owner).expect("copy target");
             if let Some((_, held, open)) = target.chart_link_sources.iter_mut().find(|(owner, _, _)| *owner == source_owner) { *held = name; *open=true; }
@@ -29757,7 +29775,7 @@ impl<'a> WorkbookApplication<'a> {
         }).collect::<Vec<_>>();
         if target.workbook.external_books.is_empty() {
             let target=self.hosts.get_mut(&owner).unwrap();target.chart_link_sources=chart_links;
-            if closed_chart_source { target.saved=false; }
+            if closed_chart_source { target.mark_unsaved(); }
             return;
         }
         let mut open = BTreeSet::new();
@@ -29783,11 +29801,11 @@ impl<'a> WorkbookApplication<'a> {
         let target = self.hosts.get_mut(&owner).expect("registered linked workbook");
         target.open_external_books = open;
         target.chart_link_sources = chart_links;
-        if closed_chart_source { target.saved=false; }
+        if closed_chart_source { target.mark_unsaved(); }
         if !replacements.is_empty() {
             for (index, book) in replacements { target.workbook.external_books[index] = book; }
             target.wrote = true;
-            target.saved = false;
+            target.mark_unsaved();
         }
     }
 
@@ -29839,15 +29857,17 @@ impl<'a> WorkbookApplication<'a> {
     fn activate(&mut self, owner: u64) {
         if let Some((_, context)) = self.running_events.last().copied() {
             if context.activation_owner.is_some_and(|locked| locked != owner) {
-                if let Some(operation) = self.collection_close_operations.get_mut(&context.frame) {
-                    operation.activation_attempted = true;
-                }
-                if context.saving {
-                    if let Some(operation) = self.close_operations.get_mut(&context.frame) {
+                if let Some(frame) = context.frame {
+                    if let Some(operation) = self.collection_close_operations.get_mut(&frame) {
                         operation.activation_attempted = true;
                     }
-                    if let Some(operation) = self.save_operations.get_mut(&context.frame) {
-                        operation.activation_attempted = true;
+                    if context.saving {
+                        if let Some(operation) = self.close_operations.get_mut(&frame) {
+                            operation.activation_attempted = true;
+                        }
+                        if let Some(operation) = self.save_operations.get_mut(&frame) {
+                            operation.activation_attempted = true;
+                        }
                     }
                 }
                 return;
@@ -29873,6 +29893,8 @@ impl<'a> WorkbookApplication<'a> {
     }
 
     fn force_activate(&mut self, owner: u64) {
+        self.foreground_window = None;
+        self.window_ui_messages.clear();
         if self.active != owner {
             // An editor selection may activate an identity while its host is
             // detached. Caption refresh belongs to attached native windows.
@@ -29944,14 +29966,14 @@ impl<'a> WorkbookApplication<'a> {
             HostEventDelivery {
                 project: context.owner, receiver, name: name.into(),
                 document_handler: Some(format!("Workbook_{name}")),
-                arguments: (1..shared_args.len()).collect(), require_enabled: false,
+                arguments: (1..shared_args.len()).collect(), require_enabled: context.frame.is_none(),
             },
             HostEventDelivery {
-                project: context.owner, receiver: self.application.clone(), name: format!("Workbook{name}"),
+                project: context.owner, receiver: self.application.clone(), name: if matches!(name, "WindowActivate" | "WindowDeactivate") { name.into() } else { format!("Workbook{name}") },
                 document_handler: None, arguments: (0..shared_args.len()).collect(), require_enabled: true,
             },
         ];
-        let error = self.save_operations.get(&context.frame).and_then(|operation|
+        let error = context.frame.and_then(|frame| self.save_operations.get(&frame)).and_then(|operation|
             operation.arguments.as_ref().and_then(|arguments| arguments.pending_error.clone()));
         self.pending_events.push_back(HostEventCall {
             key: event, deliveries, args: shared_args, by_ref: by_ref.into_iter().map(|index| index + 1).collect(),
@@ -29966,7 +29988,7 @@ impl<'a> WorkbookApplication<'a> {
         self.save_operations.remove(&frame);
         self.collection_close_operations.remove(&frame);
         let events: Vec<_> = self.event_contexts.iter()
-            .filter_map(|(key, context)| (context.frame == frame).then_some(*key)).collect();
+            .filter_map(|(key, context)| (context.frame == Some(frame)).then_some(*key)).collect();
         for key in events {
             self.event_contexts.remove(&key);
             self.event_answers.remove(&key);
@@ -30020,7 +30042,7 @@ impl<'a> WorkbookApplication<'a> {
                     }
                     self.force_activate(owner);
                     if self.hosts[&owner].enable_events {
-                        let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, activation_owner: Some(owner), saving: false },
+                        let event = self.queue_workbook_event(WorkbookEventContext { frame: Some(frame), owner, activation_owner: Some(owner), saving: false },
                             "BeforeClose", vec![Value::Boolean(false)], vec![0]);
                         self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingClose(event);
                         return Ok(Value::Empty);
@@ -30050,7 +30072,7 @@ impl<'a> WorkbookApplication<'a> {
                         self.force_activate(owner);
                         self.close_operations.get_mut(&frame).unwrap().activation_attempted = false;
                         if self.hosts[&owner].enable_events {
-                            let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, activation_owner: (!prefix).then_some(owner), saving: true },
+                            let event = self.queue_workbook_event(WorkbookEventContext { frame: Some(frame), owner, activation_owner: (!prefix).then_some(owner), saving: true },
                                 "BeforeSave", vec![Value::Boolean(false), Value::Boolean(false)], vec![1]);
                             self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingSave {
                                 event, prefix, previous_active,
@@ -30077,7 +30099,7 @@ impl<'a> WorkbookApplication<'a> {
                     if cancelled {
                         if prefix { self.force_activate(previous_active); }
                         if self.hosts[&owner].enable_events {
-                            let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, activation_owner: (!prefix).then_some(owner), saving: false },
+                            let event = self.queue_workbook_event(WorkbookEventContext { frame: Some(frame), owner, activation_owner: (!prefix).then_some(owner), saving: false },
                                 "AfterSave", vec![Value::Boolean(false)], vec![]);
                             self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingAfterSave {
                                 event, prefix, outcome: CloseSaveOutcome::Cancelled,
@@ -30103,7 +30125,7 @@ impl<'a> WorkbookApplication<'a> {
                         }
                     };
                     if self.hosts[&owner].enable_events {
-                        let event = self.queue_workbook_event(WorkbookEventContext { frame, owner, activation_owner: (!prefix).then_some(owner), saving: false },
+                        let event = self.queue_workbook_event(WorkbookEventContext { frame: Some(frame), owner, activation_owner: (!prefix).then_some(owner), saving: false },
                             "AfterSave", vec![Value::Boolean(matches!(outcome, CloseSaveOutcome::Saved))], vec![]);
                         self.close_operations.get_mut(&frame).unwrap().phase = WorkbookClosePhase::WaitingAfterSave {
                             event, prefix, outcome,
@@ -30245,7 +30267,7 @@ impl<'a> WorkbookApplication<'a> {
                             args.first().is_none_or(|value| matches!(value, Value::Missing))
                         } else { host.file_io.full_name.is_none() || host.file_io.read_only };
                         let event = self.queue_workbook_event(WorkbookEventContext {
-                            frame, owner, activation_owner: Some(owner), saving: true,
+                            frame: Some(frame), owner, activation_owner: Some(owner), saving: true,
                         }, "BeforeSave", vec![Value::Boolean(save_as_ui), Value::Boolean(false)], vec![1]);
                         self.save_operations.get_mut(&frame).unwrap().phase = WorkbookSavePhase::WaitingSave(event);
                         return Ok(Value::Empty);
@@ -30263,7 +30285,7 @@ impl<'a> WorkbookApplication<'a> {
                         self.force_activate(previous_active);
                         if cancelled && self.hosts[&owner].enable_events {
                             let event = self.queue_workbook_event(WorkbookEventContext {
-                                frame, owner, activation_owner: None, saving: false,
+                                frame: Some(frame), owner, activation_owner: None, saving: false,
                             }, "AfterSave", vec![Value::Boolean(false)], vec![]);
                             self.save_operations.get_mut(&frame).unwrap().phase =
                                 WorkbookSavePhase::WaitingAfterSave { event, outcome: CloseSaveOutcome::Cancelled };
@@ -30293,7 +30315,7 @@ impl<'a> WorkbookApplication<'a> {
                     if self.hosts[&owner].enable_events {
                         let success = matches!(outcome, CloseSaveOutcome::Saved);
                         let event = self.queue_workbook_event(WorkbookEventContext {
-                            frame, owner, activation_owner: None, saving: false,
+                            frame: Some(frame), owner, activation_owner: None, saving: false,
                         }, "AfterSave", vec![Value::Boolean(success)], vec![]);
                         self.save_operations.get_mut(&frame).unwrap().phase =
                             WorkbookSavePhase::WaitingAfterSave { event, outcome };
@@ -30486,7 +30508,7 @@ impl<'a> WorkbookApplication<'a> {
                     if self.hosts[&owner].enable_events {
                         let save_as_ui = args.first().is_none_or(|value| matches!(value, Value::Missing));
                         let event = self.queue_workbook_event(WorkbookEventContext {
-                            frame, owner, activation_owner: Some(owner), saving: true,
+                            frame: Some(frame), owner, activation_owner: Some(owner), saving: true,
                         }, "BeforeSave", vec![Value::Boolean(save_as_ui), Value::Boolean(false)], vec![1]);
                         self.save_operations.get_mut(&frame).unwrap().phase = WorkbookSavePhase::WaitingSave(event);
                         return Ok(Value::Empty);
@@ -30508,7 +30530,7 @@ impl<'a> WorkbookApplication<'a> {
                         self.force_activate(previous);
                         if cancelled && self.hosts[&owner].enable_events {
                             let event = self.queue_workbook_event(WorkbookEventContext {
-                                frame, owner, activation_owner: None, saving: false,
+                                frame: Some(frame), owner, activation_owner: None, saving: false,
                             }, "AfterSave", vec![Value::Boolean(false)], vec![]);
                             self.save_operations.get_mut(&frame).unwrap().phase =
                                 WorkbookSavePhase::WaitingAfterSave {event, outcome: CloseSaveOutcome::Cancelled};
@@ -30566,7 +30588,7 @@ impl<'a> WorkbookApplication<'a> {
                     }
                     if self.hosts[&owner].enable_events && !(shared_missing_parent && matches!(outcome, CloseSaveOutcome::Failed(_))) {
                         let event = self.queue_workbook_event(WorkbookEventContext {
-                            frame, owner, activation_owner: None, saving: false,
+                            frame: Some(frame), owner, activation_owner: None, saving: false,
                         }, "AfterSave", vec![Value::Boolean(matches!(outcome, CloseSaveOutcome::Saved))], vec![]);
                         self.save_operations.get_mut(&frame).unwrap().phase = WorkbookSavePhase::WaitingAfterSave {event, outcome};
                         return Ok(Value::Empty);
@@ -30691,7 +30713,7 @@ impl<'a> WorkbookApplication<'a> {
                 self.ensure_application_owner(owner);
                 if self.hosts[&owner].enable_events {
                     let event = self.queue_workbook_event(WorkbookEventContext {
-                        frame, owner, activation_owner: Some(self.active), saving: false,
+                        frame: Some(frame), owner, activation_owner: Some(self.active), saving: false,
                     }, "BeforeClose", vec![Value::Boolean(false)], vec![0]);
                     self.collection_close_operations.get_mut(&frame).unwrap().waiting = Some(event);
                     return Ok(Value::Empty);
@@ -31155,7 +31177,7 @@ fn attach_copied_sheet_links(
         host.configure_documents(&documents)?;
         host.mirror_drawings(at);
         host.activate_sheet(at);
-        host.wrote=true;host.saved=false;
+        host.wrote=true;host.mark_unsaved();
         self.code.insert(target_owner,ApplicationCode { source,project_name,documents });
         self.pending_project_updates.push(target_owner);
         self.register_copied_chart_source(source_owner,source_sheet,target_owner);
@@ -31198,7 +31220,7 @@ fn attach_copied_sheet_links(
         // rules as a copy into an existing book, before publishing any object.
         host.notes.clear();host.links.clear();host.validations.clear();host.conditions.clear();host.shapes.clear();
         host.import_sheet_side_tables(&imported,0,0);host.normal_row_defaults.insert(0,RowDefaultCache {height,inherited_rows:false});host.mirror_drawings(0);
-        host.saved=false;host.wrote=true;let book=host.object(HostObject::Workbook);
+        host.mark_unsaved();host.wrote=true;let book=host.object(HostObject::Workbook);
         self.insert(host).map_err(|rejected|host_error(1004,rejected.1))?;
         self.code.insert(owner,ApplicationCode {source:code_source,project_name,documents});
         self.pending_projects.push(owner);self.next_workbook=next;self.workbook_names.insert(key,next_name);
@@ -31802,7 +31824,7 @@ impl<'a> ApplicationHost<'a> {
                 .and_then(|host| host.application_setting(name));
             if !same_application_setting(old_setting.as_ref(), new_setting.as_ref()) {
                 for host in application.hosts.values_mut() {
-                    host.saved = false;
+                    host.mark_unsaved();
                     host.application_setting_dirtied = true;
                 }
             }
@@ -31911,6 +31933,11 @@ impl Host for ApplicationHost<'_> {
         vec![event]
     }
 
+    fn host_event_requires_resume(&self, key: u64) -> bool {
+        self.application.borrow().event_contexts.get(&key)
+            .is_none_or(|context| context.frame.is_some())
+    }
+
     fn host_events_enabled(&self) -> bool {
         let application = self.application.borrow();
         application.application_owner.and_then(|owner| application.hosts.get(&owner))
@@ -31922,7 +31949,29 @@ impl Host for ApplicationHost<'_> {
         if application.running_events.last().is_some_and(|(running, _)| *running == key) {
             application.running_events.pop();
         }
-        application.event_answers.insert(key, result);
+        if application.event_contexts.get(&key).is_some_and(|context| context.frame.is_none()) {
+            application.event_contexts.remove(&key);
+            if let Some((owner, id)) = application.window_creation_completions.remove(&key) {
+                application.finish_window_creation(owner, id);
+            }
+            if let Some(mut tail) = application.window_event_tails.remove(&key) {
+                if result.is_ok() {
+                    if let Some(next) = tail.pop_front() {
+                        if !tail.is_empty() { application.window_event_tails.insert(next.key, tail); }
+                        application.pending_events.push_front(next);
+                    }
+                } else {
+                    for event in tail {
+                        application.event_contexts.remove(&event.key);
+                        if let Some((owner, id)) = application.window_creation_completions.remove(&event.key) {
+                            application.finish_window_creation(owner, id);
+                        }
+                    }
+                }
+            }
+        } else {
+            application.event_answers.insert(key, result);
+        }
     }
 
     fn begin_member_call(&mut self, receiver: Option<&ObjectRef>, name: &str) {
@@ -32407,11 +32456,16 @@ impl Host for ApplicationHost<'_> {
         self.application.borrow_mut().hosts.get_mut(&self.code_owner)
             .expect("worksheet function code owner").user_function_variant_arguments(_functions);
     }
+    fn yield_events(&mut self) -> Result<(), String> {
+        self.application.borrow_mut().pump_window_messages();
+        Ok(())
+    }
     fn finish_execution(&mut self) -> Result<(), String> {
+        self.application.borrow_mut().finish_window_messages();
         self.write(None, "", true, |host, _receiver| host.finish_execution())
     }
     fn set_prepared(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
-        if let Some(result) = self.windows_set(receiver, name, &value) { return result; }
+        if let Some(result) = self.windows_set(receiver, name, &value, true) { return result; }
         let font=self.style_font_write_receiver(receiver)?;
         let receiver=font.as_ref().unwrap_or(receiver);
         let sources = self.external_formula_sources_for_input(receiver, name, &value);
@@ -32423,7 +32477,7 @@ impl Host for ApplicationHost<'_> {
         })
     }
     fn set(&mut self, receiver: &ObjectRef, name: &str, value: Value) -> Result<bool, String> {
-        if let Some(result) = self.windows_set(receiver, name, &value) { return result; }
+        if let Some(result) = self.windows_set(receiver, name, &value, false) { return result; }
         let font=self.style_font_write_receiver(receiver)?;
         let receiver=font.as_ref().unwrap_or(receiver);
         let sources = self.external_formula_sources_for_input(receiver, name, &value);
@@ -32442,7 +32496,7 @@ impl Host for ApplicationHost<'_> {
         _value: Value,
     ) -> Result<bool, String> {
         if _args.is_empty() {
-            if let Some(result) = self.windows_set(_receiver, _name, &_value) { return result; }
+            if let Some(result) = self.windows_set(_receiver, _name, &_value, false) { return result; }
         }
         let sources = self.external_formula_sources_for_input(_receiver, _name, &_value);
         self.write(Some(_receiver), _name, false, |host, receiver| {
@@ -32702,7 +32756,7 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn automation_invocation_error(&self, receiver: &ObjectRef, name: &str, kind: u8) -> Option<i64> {
-        if self.is_window(receiver) && name.eq_ignore_ascii_case("WindowState") && kind == 8 {
+        if (self.is_window(receiver) || self.is_application(receiver)) && name.eq_ignore_ascii_case("WindowState") && kind == 8 {
             return Some(13);
         }
         if self.is_application(receiver) && (name.eq_ignore_ascii_case("standardfont") || name.eq_ignore_ascii_case("standardfontsize")) {
@@ -32800,7 +32854,7 @@ impl Host for WorkbookHost<'_> {
                 && name.eq_ignore_ascii_case("size"))
             || (self.range(receiver).is_some() && name.eq_ignore_ascii_case("locked"))
             || (self.is_application(receiver) && (application_variant_boolean_setting(name).is_some()
-                || name.eq_ignore_ascii_case("screenupdating") || name.eq_ignore_ascii_case("standardfont") || name.eq_ignore_ascii_case("standardfontsize")))))
+                || name.eq_ignore_ascii_case("screenupdating") || name.eq_ignore_ascii_case("standardfont") || name.eq_ignore_ascii_case("standardfontsize") || name.eq_ignore_ascii_case("WindowState")))))
             .then_some(number)
     }
 
@@ -32893,7 +32947,8 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn property_assignment_uses_variant(&self, receiver: &ObjectRef, name: &str) -> bool {
-        (self.is_workbook(receiver) && name.eq_ignore_ascii_case("readonlyrecommended"))
+        (self.is_application(receiver) && name.eq_ignore_ascii_case("WindowState"))
+            || (self.is_workbook(receiver) && name.eq_ignore_ascii_case("readonlyrecommended"))
             || (self.range(receiver).is_some() && name.eq_ignore_ascii_case("locked"))
             || (self.is_application(receiver) && (application_variant_boolean_setting(name).is_some()
                 || name.eq_ignore_ascii_case("screenupdating") || name.eq_ignore_ascii_case("standardfont") || name.eq_ignore_ascii_case("standardfontsize")))
@@ -32904,7 +32959,7 @@ impl Host for WorkbookHost<'_> {
     }
 
     fn property_assignment_value(&self, _receiver: Option<&ObjectRef>, name: &str, value: &Value, by_reference: bool) -> Option<Value> {
-        if name.eq_ignore_ascii_case("WindowState") && _receiver.is_some_and(|receiver| self.is_window(receiver)) {
+        if name.eq_ignore_ascii_case("WindowState") && _receiver.is_some_and(|receiver| self.is_window(receiver) || self.is_application(receiver)) {
             return Some(value.clone());
         }
         if name.eq_ignore_ascii_case("size") && _receiver.is_some_and(|receiver|self.range_font(receiver).is_some())
@@ -33814,7 +33869,7 @@ impl Host for WorkbookHost<'_> {
                     self.workbook.sheets[sheet].protected = asked.contents;
                     self.workbook.sheets[sheet].protection = Some(asked.saved_flags());
                     self.protected[sheet] = Some(asked);
-                    self.saved = false;
+                    self.mark_unsaved();
                     return Ok(Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("unprotect") {
@@ -33834,7 +33889,7 @@ impl Host for WorkbookHost<'_> {
                         self.workbook.sheets[sheet].protection =
                             (flags != oxicells_core::ir::SheetProtection::default()).then_some(flags);
                         self.protected[sheet] = Some(free);
-                        self.saved = false;
+                        self.mark_unsaved();
                     }
                     // A function to Excel: measured, CallByName of it is True
                     // where Protect, a Sub, is Empty.
@@ -38416,7 +38471,7 @@ impl Host for WorkbookHost<'_> {
                     let areas=self.application_selection.clone().unwrap_or_else(||self.selected_cell_ranges());
                     let ranges=areas.into_iter().map(|area|CellRange{sheet:receiver_range.sheet,..area}).collect::<Vec<_>>();
                     self.set_variant_font_size(&ranges,&value)?;
-                    self.saved=false;
+                    self.mark_unsaved();
                     return Ok(true);
                 }
                 _ => {}
@@ -38425,7 +38480,7 @@ impl Host for WorkbookHost<'_> {
         if let Some((id, face)) = self.condition_id(receiver) {
             let result = self.set_condition(id, face, name, value);
             if matches!(result, Ok(true)) {
-                self.saved = false;
+                self.mark_unsaved();
                 self.condition_modified = true;
                 self.sync_new_condition(id);
                 if let Some(face) = face { self.sync_original_condition_style(id, face, name); }
@@ -38563,7 +38618,7 @@ impl Host for WorkbookHost<'_> {
                     if let Some(shape) = self.shapes.iter_mut().find(|shape| shape.comment_at == Some(at)) {
                         shape.visible = visible;
                     }
-                    self.saved = false;
+                    self.mark_unsaved();
                 }
                 return Ok(true);
             }
@@ -38849,7 +38904,7 @@ impl Host for WorkbookHost<'_> {
                 if name.eq_ignore_ascii_case("DecimalSeparator") || name.eq_ignore_ascii_case("ThousandsSeparator") {
                     let previous = self.application_setting(&name.to_ascii_lowercase());
                     if !same_application_setting(previous.as_ref(), Some(&value)) {
-                        self.saved = false;
+                        self.mark_unsaved();
                         self.application_setting_dirtied = true;
                     }
                 }
@@ -38865,7 +38920,7 @@ impl Host for WorkbookHost<'_> {
                 let changed = self.calculation != mode;
                 self.calculation = mode;
                 self.application_setting_dirtied = true;
-                self.saved = false;
+                self.mark_unsaved();
                 if changed && self.automatic_calculation() {
                     self.calculate_dirty(None);
                 }
@@ -39414,9 +39469,9 @@ impl Host for WorkbookHost<'_> {
             let locked = self.locked_assignment_boolean(&value)?;
             // Assigning Null leaves the protection value unchanged but still
             // dirties the workbook, as does assigning the existing value.
-            let Some(locked) = locked else { self.saved = false; return Ok(true); };
+            let Some(locked) = locked else { self.mark_unsaved(); return Ok(true); };
             self.set_range_style(range, |_, style| style.unlocked = !locked)?;
-            self.saved = false;
+            self.mark_unsaved();
             for address in self.touched(range) {
                 if locked {
                     self.unlocked.remove(&address);
@@ -39646,13 +39701,13 @@ impl Host for WorkbookHost<'_> {
                 sheet.rows.sort_by_key(|row| row.index);
                 self.refit_rows(range)?;
             }
-            self.saved = false;
+            self.mark_unsaved();
             return Ok(true);
         }
         if name.eq_ignore_ascii_case("usestandardwidth") {
             if column_standard_flag(&value)? {
                 self.guard_column_formats(range.sheet, "restoring the standard column width")?;
-                self.saved = false;
+                self.mark_unsaved();
                 let held = &mut self.workbook.sheets[range.sheet];
                 for column in range.start_column..=range.end_column {
                     held.best_fit_cols.remove(&column);
@@ -39705,7 +39760,7 @@ impl Host for WorkbookHost<'_> {
         if matches!(&result,Ok(true)) {
             if let Some((range,part))=format_intent {self.finish_format_intent(range,part,name)?;}
             if let Some(request)=shared_format {self.finish_shared_format(request);}
-            if format_assignment.is_some() { self.saved = false; }
+            if format_assignment.is_some() { self.mark_unsaved(); }
         }
         result
     }
@@ -48439,9 +48494,9 @@ fn select_session_workbook_with_revision(
     let mut previous = session.take().expect("validated project");
     let mut host = WorkbookHost::resume_storage(WorkbookStorage::Owned(Box::new(workbook)), previous.host);
     remap_workbook_host(&mut host, &old_workbook, &previous.documents, false);
-    if input_changed { host.saved = false; }
+    if input_changed { host.mark_unsaved(); }
     if let Some(revision) = edit_revision {
-        if host.file_io.edit_revision.unwrap_or(0) != revision { host.saved = false; }
+        if host.file_io.edit_revision.unwrap_or(0) != revision { host.mark_unsaved(); }
         host.file_io.edit_revision = Some(revision);
     }
     host.activate_sheet(active_sheet);
@@ -49978,7 +50033,7 @@ fn execute_workbook_invocation_capturing(
             let mut host=WorkbookHost::resume_storage(
                 WorkbookStorage::Owned(Box::new(workbook_slot.take().ok_or("missing workbook input")?)),previous.host);
             remap_workbook_host(&mut host, &old_workbook, &documents, refreshed_positions);
-            if previous_input.as_ref()!=Some(&incoming) { host.saved = false; }
+            if previous_input.as_ref()!=Some(&incoming) { host.mark_unsaved(); }
             host.activate_sheet(active_sheet);
             host.application_setting_dirtied = false;
             *host.user_functions.borrow_mut() = UserFunctions::default();
@@ -49989,10 +50044,10 @@ fn execute_workbook_invocation_capturing(
         None => (WorkbookHost::new_owned(workbook_slot.take().ok_or("missing workbook input")?,active_sheet)?,None,ExternalReferences::default()),
     };
     if !was_loaded { host.saved = loaded_saved; host.compiled_modules = imported_ready; }
-    if editor_changed || source_changed { host.saved = false; }
+    if editor_changed || source_changed { host.mark_unsaved(); }
     if source_changed || (was_loaded && documents_changed) { host.compilation_stamp = None; host.compiled_modules.clear(); }
     if let Some(result) = &compilation {
-        if result.performed && result.compiled { host.saved = false; }
+        if result.performed && result.compiled { host.mark_unsaved(); }
         if result.compiled { host.compilation_stamp = next_compilation_stamp; host.compiled_modules = expected_modules; }
     }
     if reset_storage { external_references.reset_project(); }

@@ -248,6 +248,12 @@ pub struct HostEventResult {
     pub error_changed: bool,
 }
 
+#[derive(Clone, Copy, Default)]
+struct HostWork {
+    performed: bool,
+    requires_resume: bool,
+}
+
 pub trait Host {
     /// Encode complete UTF-16 units using the system ANSI page (`None`) or
     /// the requested conversion locale (`Some(0)` means the user locale).
@@ -433,6 +439,9 @@ pub trait Host {
     /// Native events can call private document handlers and WithEvents sinks,
     /// then resume the same host operation with the updated ByRef arguments.
     fn take_host_event_calls(&mut self) -> Vec<HostEventCall> { Vec::new() }
+    /// A continuation needs the suspended operation to run again. A completed
+    /// operation's notifications are delivered without repeating its effects.
+    fn host_event_requires_resume(&self, _key: u64) -> bool { true }
     fn host_events_enabled(&self) -> bool { true }
     fn answer_host_event(&mut self, _key: u64, _result: Result<HostEventResult, String>) {}
 
@@ -515,6 +524,10 @@ pub trait Host {
 
     /// Parameters declared Variant, which preserve worksheet references while evaluating their arguments.
 
+
+    /// Yield to one batch of host notifications. Work posted while yielding
+    /// remains queued for a subsequent host turn; callbacks run in the runtime.
+    fn yield_events(&mut self) -> Result<(), String> { Ok(()) }
 
     /// Complete deferred host work while callbacks can still invoke the project.
     fn finish_execution(&mut self) -> Result<(), String> { Ok(()) }
@@ -3322,17 +3335,20 @@ impl<'a> Runtime<'a> {
         Ok(HostEventResult { args: slots.iter().map(|slot| slot.borrow().clone()).collect(), handlers, error, error_changed })
     }
 
-    fn work_out_host_events(&mut self) -> Result<bool, RuntimeError> {
+    fn work_out_host_events(&mut self) -> Result<HostWork, RuntimeError> {
         let events = self.host.as_deref_mut().map(|host| host.take_host_event_calls()).unwrap_or_default();
-        let had_events = !events.is_empty();
+        let mut work = HostWork::default();
         for event in events {
+            work.performed = true;
+            work.requires_resume |= self.host.as_deref()
+                .is_some_and(|host| host.host_event_requires_resume(event.key));
             let result = self.dispatch_host_event(&event);
             if let Some(host) = self.host.as_deref_mut() {
                 host.answer_host_event(event.key, result.as_ref().cloned().map_err(ToString::to_string));
             }
             result?;
         }
-        Ok(had_events)
+        Ok(work)
     }
 
     /// `obj.Name(args) = value` on an instance: a Property Let (Set for an
@@ -4190,7 +4206,7 @@ impl<'a> Runtime<'a> {
                 Some(host) => host.finish_execution(),
                 None => return Ok(()),
             };
-            if !self.work_out_user_functions()? {
+            if !self.work_out_user_functions()?.performed {
                 return answer.map_err(|message| host_failure(message, 0));
             }
         }
@@ -5542,6 +5558,7 @@ impl<'a> Runtime<'a> {
                 }.filter(|kind| matches!(self.parameter_scalar_name(kind).as_str(),
                     "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double"
                         | "currency" | "date" | "boolean" | "string"));
+                let typed_host_scalar_bound = typed_host_scalar.is_some();
                 let value = if let Some(kind) = typed_host_scalar {
                     let value = self.scalar_operand(value, frame, span.line)?;
                     self.coerce_runtime(value, &kind, span.line, self.this_year())?
@@ -5570,7 +5587,12 @@ impl<'a> Runtime<'a> {
                 if let Some((receiver, name)) = variant_member {
                     if !self.instance_handles_member(&receiver, name) {
                         if let Some(prepared) = self.host.as_deref().and_then(|host| host.property_assignment_value(Some(&receiver), name, &value, false)) {
-                            if self.host_set(&receiver, name, prepared, span.line)? {
+                            let assigned = if typed_host_scalar_bound {
+                                self.host_set_prepared(&receiver, name, prepared, span.line)?
+                            } else {
+                                self.host_set(&receiver, name, prepared, span.line)?
+                            };
+                            if assigned {
                                 return Ok(Flow::Continue);
                             }
                             return Err(no_such_member(format!("{}.{} has no setter", receiver.kind, name), Some(span.line)));
@@ -10607,6 +10629,15 @@ impl<'a> Runtime<'a> {
         ) {
             return result;
         }
+        if name.eq_ignore_ascii_case("doevents") && args.is_empty() && self.host.is_some() {
+            self.with_callback_error_context(frame, |runtime, _| {
+                if let Some(host) = runtime.host.as_deref_mut() {
+                    host.yield_events().map_err(|message| host_failure(message, line.unwrap_or(0)))?;
+                }
+                while runtime.work_out_user_functions()?.performed {}
+                Ok(())
+            })?;
+        }
         if let Some(result) = call_builtin(
             name,
             read_args.as_deref().unwrap_or(&args),
@@ -11553,7 +11584,7 @@ impl<'a> Runtime<'a> {
                     Ok(None) if implicit.is_some() && args.is_empty()=>host.get(receiver.expect("implicit document receiver"),name),
                     answer=>answer,
                 };
-                if !self.work_out_user_functions()? {
+                if !self.work_out_user_functions()?.requires_resume {
                     return answer.map_err(|message| host_failure(message, line));
                 }
                 if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
@@ -11563,20 +11594,24 @@ impl<'a> Runtime<'a> {
         result
     }
 
-    /// Work out the user functions a worksheet recalculation asked for, and
-    /// say whether there were any -- when there were, the host call that set
-    /// the recalculation going is asked again. A function that fails answers
-    /// #VALUE!, as a cell shows it: measured, `=Twice("x")` for a function
-    /// taking a Double is #VALUE!.
-    fn work_out_user_functions(&mut self) -> Result<bool, RuntimeError> {
+    /// Deliver completed notifications without repeating their triggering API.
+    /// Deferred host operations and worksheet callbacks can require resumption.
+    /// A failing worksheet callback answers #VALUE!, as a cell shows it.
+    fn work_out_user_functions(&mut self) -> Result<HostWork, RuntimeError> {
         self.load_host_application_projects()?;
-        let had_events = self.work_out_host_events()?;
+        let mut events = HostWork::default();
+        loop {
+            let next = self.work_out_host_events()?;
+            events.performed |= next.performed;
+            events.requires_resume |= next.requires_resume;
+            if !next.performed || next.requires_resume { break; }
+        }
         let Some(host) = self.host.as_deref_mut() else {
-            return Ok(had_events);
+            return Ok(events);
         };
         let calls = host.take_user_function_calls();
         if calls.is_empty() {
-            return Ok(had_events);
+            return Ok(events);
         }
         let mut calls: std::collections::VecDeque<_> = calls.into();
         let mut pending: std::collections::BTreeSet<_> = calls.iter().map(|(key, _, _)| *key).collect();
@@ -11616,7 +11651,7 @@ impl<'a> Runtime<'a> {
                 }
             }
         }
-        Ok(true)
+        Ok(HostWork { performed: true, requires_resume: true })
     }
 
     fn call_worksheet_function(&mut self, key: u64, name: &str, args: Vec<Value>) -> Value {
@@ -11717,7 +11752,7 @@ impl<'a> Runtime<'a> {
                         receiver, name, late_bound, value_context, &message).unwrap_or(message),
                     None => message,
                 });
-                if !self.work_out_user_functions()? {
+                if !self.work_out_user_functions()?.requires_resume {
                     return answer.map_err(|message| host_failure(message, line));
                 }
                 if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
@@ -11773,7 +11808,7 @@ impl<'a> Runtime<'a> {
                 self.tick(Some(line))?;
                 let Some(host) = self.host.as_deref_mut() else { return Ok(None) };
                 let answer = host.get(receiver, name);
-                if !self.work_out_user_functions()? { return answer.map_err(|message| host_failure(message, line)); }
+                if !self.work_out_user_functions()?.requires_resume { return answer.map_err(|message| host_failure(message, line)); }
                 if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
             }
         })();
@@ -11893,7 +11928,7 @@ impl<'a> Runtime<'a> {
                     else { host.set(receiver, name, value) }
                 }
             };
-            while self.work_out_user_functions()? {
+            while self.work_out_user_functions()?.requires_resume {
                 self.tick(Some(line))?;
                 if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
             }
@@ -11929,7 +11964,7 @@ impl<'a> Runtime<'a> {
                     host.set_indexed(receiver, name, args, value)
                 }
             };
-            while self.work_out_user_functions()? {
+            while self.work_out_user_functions()?.requires_resume {
                 self.tick(Some(line))?;
                 if let Some(host) = self.host.as_deref_mut() { host.resume_user_function_calculation().map_err(|message| host_failure(message, line))?; }
             }
