@@ -6359,6 +6359,7 @@ impl<'a> Runtime<'a> {
                 let upper = number_of(range).map_err(mismatch).map(|held| held != 0);
                 upper.map(|upper| Value::Int16(self.files.free_number(upper) as i16))
             }
+            ("fileattr", args) => self.file_attribute_function(args, line),
             ("eof", [file]) => number_of(file)
                 .map_err(mismatch)
                 .and_then(|file| self.files.at_end(file).map_err(failure))
@@ -6392,6 +6393,33 @@ impl<'a> Runtime<'a> {
             ("dir" | "dir$", args) => self.dir_function(args,line),
             _ => return None,
         })
+    }
+
+    fn file_attribute_function(&mut self, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
+        use crate::files::OpenMode;
+        if args.is_empty() || args.len() > 2 {
+            return Err(error(RuntimeErrorKind::ArgumentCount, "FileAttr accepts a channel and an optional information selector", Some(line)));
+        }
+        // The native signature coerces the optional Integer selector first.
+        let selector = if let Some(value) = args.get(1) {
+            convert_integer(value, i64::from(i16::MIN), i64::from(i16::MAX), Some(line))?
+        } else { 1 };
+        let number = convert_integer(&args[0], i64::from(i16::MIN), i64::from(i16::MAX), Some(line))?;
+        if !(1..=511).contains(&number) {
+            return Err(file_failure(crate::files::FileError::BadNumber, line));
+        }
+        let mode = self.files.handle(number).map_err(|failure| file_failure(failure, line))?.mode;
+        // Modern Excel checks the open channel before rejecting the selector.
+        if selector != 1 {
+            return Err(language_error(5, "FileAttr requires information selector 1", line));
+        }
+        Ok(Value::Integer(match mode {
+            OpenMode::Input => 1,
+            OpenMode::Output => 2,
+            OpenMode::Random(_) => 4,
+            OpenMode::Append => 8,
+            OpenMode::Binary => 32,
+        }))
     }
 
     fn dir_function(&mut self, args: &[Value], line: u32) -> Result<Value,RuntimeError> {
@@ -10582,7 +10610,11 @@ impl<'a> Runtime<'a> {
         } else {
             None
         };
-        if let Some(result) = self.file_function(name, &args, line.unwrap_or(0)) {
+        if let Some(result) = self.file_function(
+            name,
+            read_args.as_deref().unwrap_or(&args),
+            line.unwrap_or(0),
+        ) {
             return result;
         }
         // Array counts from the module's Option Base: measured, under Option
@@ -13782,6 +13814,7 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "lof"
             | "loc"
             | "filelen"
+            | "fileattr"
             | "getattr"
             | "dir"
             | "dir$"
@@ -21838,6 +21871,115 @@ End Function
     }
 
     #[test]
+    fn fileattr_reports_native_modes_and_long_subtype() {
+        // Independent Excel controls include the omitted information selector.
+        for (mode, expected) in [("Input", 1), ("Output", 2), ("Random", 4), ("Append", 8), ("Binary", 32)] {
+            for selector in ["", ", 1"] {
+                let source = format!(r#"
+Public Function Probe() As String
+Dim value As Variant
+Open "C:\fileattr-probe.bin" For Output As #9
+Print #9, "abc"
+Close #9
+Open "C:\fileattr-probe.bin" For {mode} As #1
+On Error Resume Next
+value = FileAttr(1{selector})
+Probe = CStr(Err.Number) & "|" & TypeName(value) & "|" & CStr(VarType(value)) & "|" & CStr(value)
+Close #1
+End Function
+"#);
+                assert_eq!(run(&source, "Probe", vec![]).unwrap(), Value::String(format!("0|Long|3|{expected}")), "{mode}, selector {selector}");
+            }
+        }
+    }
+
+    #[test]
+    fn fileattr_preserves_native_selector_and_channel_coercion_order() {
+        let source = r#"
+Public Function Probe(ByVal channel As Variant, ByVal selector As Variant, ByVal opened As Boolean) As String
+Dim value As Variant
+On Error Resume Next
+Err.Clear
+If opened Then Open "C:\fileattr-probe.bin" For Binary As #1
+value = FileAttr(channel, selector)
+Probe = CStr(Err.Number) & "|" & TypeName(value) & "|" & CStr(VarType(value)) & "|" & CStr(value)
+Close #1
+End Function
+"#;
+        let cases = [
+            (Value::Int16(1), Value::Int16(1), false, "52|Empty|0|"),
+            (Value::Int16(1), Value::Int16(0), false, "52|Empty|0|"),
+            (Value::Int16(1), Value::Int16(2), true, "5|Empty|0|"),
+            (Value::Int16(1), Value::Empty, true, "5|Empty|0|"),
+            (Value::String("1".into()), Value::String("1".into()), true, "0|Long|3|32"),
+            (Value::Double(1.5), Value::Int16(1), true, "52|Empty|0|"),
+            (Value::Int16(1), Value::Double(1.5), true, "5|Empty|0|"),
+            (Value::Null, Value::String("bad".into()), true, "13|Empty|0|"),
+            (Value::String("bad".into()), Value::Null, true, "94|Empty|0|"),
+            (Value::Int16(1), Value::Integer(32768), true, "6|Empty|0|"),
+            (Value::Integer(32768), Value::Null, true, "94|Empty|0|"),
+            (Value::Boolean(true), Value::Int16(1), true, "52|Empty|0|"),
+        ];
+        for (channel, selector, opened, expected) in cases {
+            assert_eq!(run(source, "Probe", vec![channel.clone(), selector.clone(), Value::Boolean(opened)]).unwrap(), Value::String(expected.into()), "channel {channel:?}, selector {selector:?}, opened {opened}");
+        }
+    }
+
+    #[test]
+    fn fileattr_and_file_functions_use_native_default_member_values_once() {
+        let source = r#"
+Attribute VB_Name = "FileAttrDriver"
+Public Trace As String
+Public Function Probe(ByVal mode As Long) As String
+ Dim f As New FileAttrBox, s As New FileAttrBox, value As Variant
+ Trace = ""
+ f.Token = "F": f.Held = 1
+ s.Token = "S": s.Held = 1
+ Open "C:\fileattr-default.bin" For Binary As #1
+ On Error Resume Next
+ Err.Clear
+ Select Case mode
+ Case 0: value = FileAttr(f, s)
+ Case 1: value = FileAttr(f, 1)
+ Case 2: value = FileAttr(1, s)
+ Case 3: s.Held = Null: value = FileAttr(f, s)
+ Case 4: f.Held = Null: s.Held = "bad": value = FileAttr(f, s)
+ Case 5: f.Held = "bad": s.Held = Null: value = FileAttr(f, s)
+ Case 6: s.Held = 2: value = FileAttr(f, s)
+ Case 7: Close #1: value = FileAttr(f, s)
+ Case 8: value = CInt(f)
+ Case 9: f.Held = "C:\fileattr-default.bin": value = FileLen(f)
+ Case 10: value = LOF(f)
+ Case 11: f.Held = 0: value = FreeFile(f)
+ End Select
+ Probe = Trace & "|" & CStr(Err.Number) & "|" & TypeName(value) & "|" & CStr(VarType(value)) & "|" & CStr(value)
+ Close #1
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "FileAttrBox"
+Public Token As String
+Public Held As Variant
+Public Property Get Value() As Variant
+Attribute Value.VB_UserMemId = 0
+ FileAttrDriver.Trace = FileAttrDriver.Trace & Token
+ Value = Held
+End Property
+"#;
+        let expected = [
+            "FS|0|Long|3|32", "F|0|Long|3|32", "S|0|Long|3|32",
+            "FS|94|Empty|0|", "FS|13|Empty|0|", "FS|94|Empty|0|",
+            "FS|5|Empty|0|", "FS|52|Empty|0|", "F|0|Integer|2|1",
+            "F|0|Long|3|0", "F|0|Long|3|0", "F|0|Integer|2|2",
+        ];
+        let (module, classes) = crate::parser::parse_project(source).unwrap();
+        for (mode, expected) in expected.into_iter().enumerate() {
+            let actual = Runtime::new(&module).with_classes(&classes)
+                .call("FileAttrDriver.Probe", vec![Value::Integer(mode as i64)]).unwrap();
+            assert_eq!(actual, Value::String(expected.into()), "native default-member case {mode}");
+        }
+    }
+
+    #[test]
     fn file_copy_and_name_preserve_distinct_coercion_order() {
         let source=r#"
 Private trace As String
@@ -22176,7 +22318,7 @@ End Sub
     /// odd value, under On Error Resume Next, and must answer or raise.
     #[test]
     fn no_builtin_panics_on_odd_arguments() {
-        const NAMES: &[&str] = &["abs", "array", "asc", "ascb", "ascw", "atn", "callbyname", "cbool", "cbyte", "ccur", "cdate", "cdbl", "cdec", "choose", "chr", "chr$", "chrb", "chrb$", "chrw", "cint", "clng", "clnglng", "clngptr", "cos", "csng", "cstr", "cvar", "cvdate", "cverr", "date", "date$", "dateadd", "datediff", "datepart", "dateserial", "datevalue", "day", "ddb", "environ", "environ$", "error", "error$", "exp", "filter", "fix", "format", "format$", "formatcurrency", "formatdatetime", "formatnumber", "formatpercent", "freefile", "fv", "hex", "hex$", "hour", "iif", "instr", "instrb", "instrrev", "int", "ipmt", "irr", "isarray", "isdate", "isempty", "iserror", "ismissing", "isnull", "isnumeric", "isobject", "join", "lbound", "lcase", "lcase$", "left", "left$", "leftb", "len", "lenb", "log", "ltrim", "mid", "mid$", "midb", "minute", "mirr", "month", "monthname", "now", "nper", "npv", "objptr", "oct", "oct$", "partition", "pmt", "ppmt", "pv", "qbcolor", "rate", "replace", "rgb", "right", "right$", "rightb", "rnd", "round", "rtrim", "second", "sgn", "sin", "sln", "space", "space$", "split", "sqr", "str", "str$", "strcomp", "strconv", "string", "string$", "strptr", "strreverse", "switch", "syd", "tan", "time", "time$", "timer", "timeserial", "timevalue", "trim", "trim$", "typename", "ubound", "ucase", "ucase$", "val", "varptr", "vartype", "weekday", "weekdayname", "year"];
+        const NAMES: &[&str] = &["abs", "array", "asc", "ascb", "ascw", "atn", "callbyname", "cbool", "cbyte", "ccur", "cdate", "cdbl", "cdec", "choose", "chr", "chr$", "chrb", "chrb$", "chrw", "cint", "clng", "clnglng", "clngptr", "cos", "csng", "cstr", "cvar", "cvdate", "cverr", "date", "date$", "dateadd", "datediff", "datepart", "dateserial", "datevalue", "day", "ddb", "environ", "environ$", "error", "error$", "exp", "filter", "fix", "format", "format$", "formatcurrency", "formatdatetime", "formatnumber", "formatpercent", "freefile", "fileattr", "fv", "hex", "hex$", "hour", "iif", "instr", "instrb", "instrrev", "int", "ipmt", "irr", "isarray", "isdate", "isempty", "iserror", "ismissing", "isnull", "isnumeric", "isobject", "join", "lbound", "lcase", "lcase$", "left", "left$", "leftb", "len", "lenb", "log", "ltrim", "mid", "mid$", "midb", "minute", "mirr", "month", "monthname", "now", "nper", "npv", "objptr", "oct", "oct$", "partition", "pmt", "ppmt", "pv", "qbcolor", "rate", "replace", "rgb", "right", "right$", "rightb", "rnd", "round", "rtrim", "second", "sgn", "sin", "sln", "space", "space$", "split", "sqr", "str", "str$", "strcomp", "strconv", "string", "string$", "strptr", "strreverse", "switch", "syd", "tan", "time", "time$", "timer", "timeserial", "timevalue", "trim", "trim$", "typename", "ubound", "ucase", "ucase$", "val", "varptr", "vartype", "weekday", "weekdayname", "year"];
         const KINDS: &[&str] = &[
             "\"\"", "\"abc\"", "Empty", "Null", "True", "-1", "0", "0.5", "1E+300", "-1E+300",
             "1E+10", "2147483648#", "1000000000", "-2147483648#", "32768", "-32769", "#12/31/9999 11:59:59 PM#", "CDec(\"79228162514264337593543950335\")", "\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"", "Array()", "Array(1, \"x\")", "CVErr(5)", "#1/1/100#", "Nothing",
