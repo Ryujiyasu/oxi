@@ -43,5 +43,11 @@ tiny-skia = { version = "0.11", default-features = false, features = ["std", "si
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -83,4 +83,87 @@ try {
         returned.files.length=0;returned.folders.length=0;returned.mountedFiles.length=0;returned.mountedFolders.length=0;
     }
 } finally {runner.closeVbaProject();globalThis.Worker=originalWorker;}
-console.log(JSON.stringify({native_steps:fixture.cases.length,expected_end_terminations:1,invalid_snapshots:invalidStates.length,direct_session_worker:true,caller_snapshot_isolation:true,passed:true}));
+async function validateBridge(w,b){
+ const ensure=(condition,label)=>{if(!condition)throw Error(label)};
+ const decode=v=>v.type==='array'?v.value.values.map(decode):v.type==='empty'?null:v.value;
+ const source=`Attribute VB_Name = "BrowserDates"
+Public Function Probe(ByVal mode As Long) As Variant
+ Dim value As Variant, octet As Byte
+ On Error Resume Next
+ If mode=1 Then
+  octet=90
+  Open "C:\\work\\data.bin" For Binary As #1
+  Put #1,,octet
+  Close #1
+ ElseIf mode=2 Then
+  Kill "C:\\work\\data.bin"
+ End If
+ Err.Clear
+ value=FileDateTime("C:\\work\\data.bin")
+ Probe=Array(Err.Number,TypeName(value),VarType(value),value)
+End Function
+`;
+ const bytes=new Uint8Array(b.groups[0].bytes),old=43890.50283564815,path='C:\\work\\data.bin';
+ const context={packageBytes:bytes,fullName:'C:\\work\\bridge.xlsm',folders:['C:\\work'],
+  files:[{path,bytes:new Uint8Array([65,66,67])}],modifiedTimes:[{path,value:old}]};
+ const options=()=>({errorLanguage:'ja-JP',projectName:'VBAProject',hostAnsiCodePage:932,
+  applicationState:{displayAlerts:false,enableEvents:false},fileContext:context});
+ let workbook=w.parse_spreadsheet(bytes),session=new w.SpreadsheetVbaSession();
+ const validation=[];
+ try{
+  let out=session.run(workbook,source,'BrowserDates.Probe',[0],0,'bridge.xlsm',options());
+  ensure(JSON.stringify(decode(out.result))===JSON.stringify([0,'Date',7,old]),'initial Date metadata');
+  workbook=out.workbook;
+  const invalid=[null,0,{},[null],[{path,value:NaN}],[{path,value:Infinity}],
+   [{path,value:true}],[{path,value:'43890'}],[{path}],[{path,value:old,unknown:1}],
+   [{path,value:old},{path:'c:/WORK/DATA.bin',value:old}],
+   [{path:'C:\\work\\absent.bin',value:old}]];
+  for(let index=0;index<invalid.length;index++){
+   let message='';
+   try{session.run(workbook,source,'BrowserDates.Probe',[0],0,'bridge.xlsm',{
+    ...options(),fileContext:{...context,modifiedTimes:invalid[index]}})}catch(error){message=String(error)}
+   ensure(/invalid VBA|modifiedTimes/i.test(message),'invalid metadata rejected '+index+': '+message);
+   out=session.run(workbook,source,'BrowserDates.Probe',[0],0,'bridge.xlsm',options());
+   ensure(JSON.stringify(decode(out.result))===JSON.stringify([0,'Date',7,old]),'invalid metadata leaves live state '+index);
+   workbook=out.workbook;validation.push({index,message,result:out.result});
+  }
+  const snapshot=structuredClone(out.file_system_state);snapshot.modifiedTimes[0].value=NaN;
+  let message='';try{session.run(workbook,source,'BrowserDates.Probe',[0],0,'bridge.xlsm',{
+   ...options(),fileSystemState:snapshot})}catch(error){message=String(error)}
+  ensure(/invalid VBA|modifiedTimes/i.test(message),'invalid snapshot time rejected');
+  out=session.run(workbook,source,'BrowserDates.Probe',[0],0,'bridge.xlsm',options());
+  ensure(JSON.stringify(decode(out.result))===JSON.stringify([0,'Date',7,old]),'invalid snapshot leaves live state');
+  validation.push({index:'snapshot',message,result:out.result});
+ }finally{session.free()}
+ const observations=[];
+ workbook=w.parse_spreadsheet(bytes);
+ async function run(mode,extra={}){
+  const out=await runner.runVbaInWorker(workbook,source,'BrowserDates.Probe',[mode],0,'bridge.xlsm',{
+   ...options(),...extra},bytes);
+  ensure(!out.error,'runner macro error '+JSON.stringify(out.error));workbook=out.workbook;
+  observations.push(structuredClone(out));return out;
+ }
+ try{
+  runner.closeVbaProject();
+  let out=await run(0,{fileSystemState:{folders:[],files:[],mountedFolders:[],mountedFiles:[]}});
+  ensure(JSON.stringify(decode(out.result))===JSON.stringify([0,'Date',7,old]),'real Worker initial metadata');
+  out=await run(1);const current=decode(out.result)[3];
+  ensure(JSON.stringify(decode(out.result).slice(0,3))===JSON.stringify([0,'Date',7])&&Number.isFinite(current)&&current!==old,'real Worker writes new time');
+  out=await run(0);ensure(decode(out.result)[3]===current,'repeated bootstrap preserves written date');
+  const returned=out.file_system_state.modifiedTimes.find(x=>x.path.toLowerCase()===path.toLowerCase());
+  ensure(returned,'returned snapshot includes file date');returned.value=old;
+  ensure(runner.closeVbaProject(),'owned Worker closed before restoring snapshot');
+  out=await run(0);ensure(decode(out.result)[3]===current,'cached snapshot owns a deep copy of dates across actual Worker restart');
+  out=await run(2);ensure(JSON.stringify(decode(out.result))===JSON.stringify([53,'Empty',0,null]),'deleted metadata is absent');
+  ensure(runner.closeVbaProject(),'owned Worker closed after deletion');
+  out=await run(0);ensure(JSON.stringify(decode(out.result))===JSON.stringify([53,'Empty',0,null]),'consumed mount does not resurrect after Worker restart');
+ }finally{runner.closeVbaProject()}
+ return {validation,observations,passed:true};
+}
+
+let modificationDateControls;
+try{globalThis.Worker=BrowserWorker;modificationDateControls=await validateBridge(wasm,{groups:[{bytes}]});}
+finally{runner.closeVbaProject();globalThis.Worker=originalWorker;}
+assert(modificationDateControls.passed);
+
+console.log(JSON.stringify({file_date_validation_cases:modificationDateControls.validation.length,file_date_worker_calls:modificationDateControls.observations.length,native_steps:fixture.cases.length,expected_end_terminations:1,invalid_snapshots:invalidStates.length,direct_session_worker:true,caller_snapshot_isolation:true,passed:true}));

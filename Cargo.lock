@@ -521,6 +521,7 @@ version = "0.9.0"
 dependencies = [
  "encoding_rs",
  "image",
+ "libc",
  "mimalloc",
  "ovba",
  "oxicells-core",
@@ -538,6 +539,7 @@ dependencies = [
  "serde_json",
  "subsetter",
  "tiny-skia",
+ "windows-sys",
  "zip",
 ]
 

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """Contract tests against the actual compiled OxiCells engine, never a mock."""
+import datetime
 import decimal
 import json
 import math
@@ -14,6 +15,58 @@ from unittest.mock import patch
 import zipfile
 
 import oxicells as ox
+
+
+
+def _set_file_mtime(path, nanoseconds):
+    if os.name != "nt":
+        os.utime(path, ns=(nanoseconds, nanoseconds))
+        return
+    # The Windows CRT rejects pre-1970 utime values; NTFS FILETIME supports them.
+    import ctypes
+    from ctypes import wintypes
+    api = ctypes.WinDLL("kernel32", use_last_error=True)
+    api.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                               ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    api.CreateFileW.restype = wintypes.HANDLE
+    api.SetFileTime.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+                               ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME)]
+    api.SetFileTime.restype = wintypes.BOOL
+    api.CloseHandle.argtypes = [wintypes.HANDLE]
+    api.CloseHandle.restype = wintypes.BOOL
+    handle = api.CreateFileW(str(path), 0x100, 7, None, 3, 0x02000000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        ticks = nanoseconds // 100 + 116444736000000000
+        stamp = wintypes.FILETIME(ticks & 0xffffffff, ticks >> 32)
+        if not api.SetFileTime(handle, None, None, ctypes.byref(stamp)):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        api.CloseHandle(handle)
+
+
+def _local_file_time(path):
+    import datetime as host_datetime
+    nanoseconds = path.stat().st_mtime_ns
+    if os.name != "nt":
+        return host_datetime.datetime.fromtimestamp(nanoseconds // 1_000_000_000)
+    import ctypes
+    from ctypes import wintypes
+    class SystemTime(ctypes.Structure):
+        _fields_ = [(name, wintypes.WORD) for name in
+                    ["year", "month", "weekday", "day", "hour", "minute", "second", "millisecond"]]
+    api = ctypes.WinDLL("kernel32", use_last_error=True)
+    api.FileTimeToSystemTime.argtypes = [ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(SystemTime)]
+    api.FileTimeToSystemTime.restype = wintypes.BOOL
+    api.SystemTimeToTzSpecificLocalTimeEx.argtypes = [ctypes.c_void_p, ctypes.POINTER(SystemTime), ctypes.POINTER(SystemTime)]
+    api.SystemTimeToTzSpecificLocalTimeEx.restype = wintypes.BOOL
+    ticks = nanoseconds // 100 + 116444736000000000
+    stamp = wintypes.FILETIME(ticks & 0xffffffff, ticks >> 32)
+    utc, local = SystemTime(), SystemTime()
+    if not api.FileTimeToSystemTime(ctypes.byref(stamp), ctypes.byref(utc)) or not api.SystemTimeToTzSpecificLocalTimeEx(None, ctypes.byref(utc), ctypes.byref(local)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return host_datetime.datetime(local.year, local.month, local.day, local.hour, local.minute, local.second)
 
 
 class EngineDiagnostics(unittest.TestCase):
@@ -297,6 +350,36 @@ class NativeWorkbook(unittest.TestCase):
                     else:
                         self.assertEqual(answer.values[4], "PK"[:count])
                     self.assertEqual(answer.values[5:], (count + 1, False, count))
+
+    def test_file_modification_dates_are_local_whole_seconds_and_survive_calls(self):
+        moments = [datetime.datetime(2020, 2, 29, 3, 4, 5, tzinfo=datetime.timezone.utc),
+                   datetime.datetime(2030, 1, 2, 12, 34, 56, tzinfo=datetime.timezone.utc),
+                   datetime.datetime(1969, 12, 31, 23, 59, 59, tzinfo=datetime.timezone.utc),
+                   datetime.datetime(1899, 12, 29, 3, 4, 5, tzinfo=datetime.timezone.utc)]
+        # NTFS supports the distant native dates; other filesystems may clamp
+        # them. The platform-independent calendar tests cover those years too.
+        if os.name == "nt":
+            moments += [datetime.datetime(5000, 1, 1, 15, 3, 11, tzinfo=datetime.timezone.utc),
+                        datetime.datetime(9998, 1, 1, 15, 0, 2, tzinfo=datetime.timezone.utc)]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "dates.xlsm"
+            path.write_bytes(self.fixture.read_bytes())
+            for moment in moments:
+                requested = int(moment.timestamp()) * 1_000_000_000 + 999_999_900
+                _set_file_mtime(path, requested)
+                local = _local_file_time(path)
+                days = (local.date() - datetime.date(1899, 12, 30)).days
+                fraction = (local.hour * 3600 + local.minute * 60 + local.second) / 86400
+                serial = days + (-fraction if days < 0 else fraction)
+                expected = ("Date", 7, serial, local.year, local.month, local.day,
+                            local.hour, local.minute, local.second, ox.Date(serial))
+                with self.subTest(moment=moment.isoformat()), ox.open(path, timeout=60) as book:
+                    for repeat in range(2):
+                        answer = book.run("PythonBridge.ModifiedDate")
+                        self.assertIsInstance(answer, ox.Array)
+                        self.assertEqual(answer.values, expected)
+                        self.assertIsInstance(answer.values[-1], ox.Date)
+                        book.run("PythonBridge.Step", 1)
 
     def test_execution_environment_persists_across_calls(self):
         help_file = "C:\\example\\日本語\\VbLR6.chm"

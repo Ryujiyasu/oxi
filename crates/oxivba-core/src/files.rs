@@ -193,8 +193,12 @@ impl Default for Files {
 
 
 fn whole_second_date(serial: f64) -> f64 {
-    let seconds = (serial.abs().fract() * 86_400.0 + 0.00001).floor();
-    serial.trunc() + serial.signum() * seconds / 86_400.0
+    let seconds = serial.abs().fract() * 86_400.0;
+    let whole = |seconds| serial.trunc() + serial.signum() * seconds / 86_400.0;
+    // Whole-second DATEs can land below their second after the fractional
+    // part is separated from a distant day. Preserve an exact round trip
+    // instead of adding a fixed epsilon that fails near the Date limits.
+    if whole(seconds.round()) == serial { serial } else { whole(seconds.floor()) }
 }
 
 /// The last part of a path.
@@ -1523,6 +1527,32 @@ impl Files {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn modification_dates_preserve_whole_seconds_across_the_date_range() {
+        let path = r"C:\work\data.bin";
+        let mut files = Files::default();
+        files.mount_folder(r"C:\work").unwrap();
+        files.replace_bytes(path, b"ABC".to_vec()).unwrap();
+        // Include both supported limits and the independently measured
+        // 1601, 3000, 5000 and 9998 dates, with all seconds of each day.
+        for days in [-657434_i64, -109204, -1, 0, 43890, 401770, 1132255, 2957737, 2958465] {
+            for second in 0..86_400 {
+                let direction = if days < 0 { -1.0 } else { 1.0 };
+                let expected = days as f64 + direction * f64::from(second) / 86_400.0;
+                files.set_modified_time(path, expected).unwrap();
+                assert_eq!(files.date_modified(path), Ok(expected), "day {days}, second {second}");
+            }
+            for second in [0, 191, 43200, 86399] {
+                let direction = if days < 0 { -1.0 } else { 1.0 };
+                let expected = days as f64 + direction * f64::from(second) / 86_400.0;
+                for subsecond in [0.001, 0.5, 0.999] {
+                    files.set_modified_time(path, expected + direction * subsecond / 86_400.0).unwrap();
+                    assert_eq!(files.date_modified(path), Ok(expected));
+                }
+            }
+        }
+    }
 
     #[test]
     fn modification_times_follow_native_open_write_close_copy_and_name() {

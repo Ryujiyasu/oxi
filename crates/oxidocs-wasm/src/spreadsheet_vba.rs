@@ -49976,6 +49976,7 @@ fn execute_workbook_invocation_capturing(
     let incoming = observable_workbook_bytes(&mut workbook)?;
     let previous_input=previous_workbook.as_mut().map(observable_workbook_bytes).transpose()?;
     let mut next_files = session.as_ref().map(|previous| previous.host.file_io.clone()).unwrap_or_default();
+    next_files.files.set_current_time(context.current_time);
     if let Some(state)=context.application_state.as_ref().and_then(|state|state.directory_state.as_ref()) {
         next_files.files.restore_directory_state(&state.core_state()?).map_err(|failure|format!("invalid VBA directory state: {}",failure.description()))?;
     }
@@ -91986,7 +91987,7 @@ End Sub
             let seed = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
             let original_a = crate::vba_project::write_project_source(seed, &a, None).unwrap();
             let peer = crate::vba_project::write_project_source(seed, &routed, None).unwrap();
-            let mut context = failure_context();
+            let mut context = failure_context(); context.host_ansi_code_page=Some(AnsiCodePage::Japanese);
             context.file_name = Some("close-collection-A.xlsm".into());
             context.document_modules = Some(crate::vba_project::read_document_modules(&original_a).unwrap());
             context.file_context = Some(file_io::FileContext {
@@ -92001,15 +92002,15 @@ End Sub
                 Some("Driver.SeedErrors"), vec![Value::Integer(kind)], 0, context, &mut session).unwrap();
             assert!(opened.error.is_none(), "{route} case {kind} setup");
             let view = select_session_workbook(&mut session, "1").unwrap();
-            let outcome = close_fixture_run(view.selected.workbook, &view.selected.source,
-                "Driver.Probe", vec![Value::Integer(kind)], &view.selected.name, &mut session);
+            let outcome = execute_workbook_action_in_session(view.selected.workbook, &view.selected.source,
+                Some("Driver.Probe"), vec![Value::Integer(kind)], 0, {let mut c=failure_context();c.file_name=Some(view.selected.name.clone());c.host_ansi_code_page=Some(AnsiCodePage::Japanese);c}, &mut session).unwrap();
             assert!(outcome.error.is_none(), "{route} case {kind}: {:?}", outcome.error.as_ref().map(|error| &error.message));
             assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], case["value"], "{route} case {kind} caller Err");
             assert_eq!(outcome.other_workbooks.len() + 1, 3, "{route} case {kind} cancelled close");
             let snapshot = serde_json::to_value(&outcome.file_system_state).unwrap();
             let files: Vec<file_io::ProducedFile> = serde_json::from_value(snapshot["files"].clone()).unwrap();
             let log = files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\close-collection-events.txt")).unwrap();
-            assert_eq!(String::from_utf8_lossy(&log.bytes).replace("\r\n", "\n"), case["event_log"].as_str().unwrap(),
+            assert_eq!(String::from_utf16_lossy(&oxivba_core::AnsiCodec::for_locale(Some(2048),932,1252).unwrap().decode(&log.bytes)).replace("\r\n", "\n"), case["event_log"].as_str().unwrap(),
                 "{route} case {kind} Err through native events and nested Application.Run");
           }
         }
@@ -109569,6 +109570,105 @@ End Function
         }
     }
 
+
+
+    #[test]
+    fn filedatetime_host_metadata_survives_repeated_mounts_snapshots_and_source_reset() {
+        let source=r#"
+Attribute VB_Name = "FileDates"
+Public Function InspectDate(ByVal path As String) As Variant
+ Dim value As Variant
+ On Error Resume Next
+ value=FileDateTime(path)
+ InspectDate=Array(Err.Number,TypeName(value),VarType(value),value)
+End Function
+Public Sub WriteDate(ByVal path As String)
+ Dim b As Byte
+ b=90
+ Open path For Binary As #1
+ Put #1,,b
+ Close #1
+End Sub
+Public Sub DeleteDate(ByVal path As String)
+ Kill path
+End Sub
+"#;
+        let path=r"C:\work\data.bin";
+        let old=43890.50283564815;
+        let current=47485.89925925926;
+        let context=|| {
+        let mut context=failure_context();
+        context.current_time=current;
+        context.file_context=Some(file_io::FileContext {
+            folders:vec![r"C:\work".into()],
+            files:vec![file_io::ProducedFile {path:path.into(),bytes:b"ABC".to_vec()}],
+            modified_times:vec![file_io::FileModifiedTime {path:path.into(),value:old},
+                file_io::FileModifiedTime {path:r"C:\work".into(),value:old},
+                file_io::FileModifiedTime {path:r"C:\".into(),value:old}],
+            ..Default::default()
+        });
+        context
+        };
+        let mut session=None;
+        let args=||vec![Value::String(path.into())];
+        let initial=execute_workbook_action_in_session(workbook(),source,Some("FileDates.InspectDate"),args(),0,context(),&mut session).unwrap();
+        assert!(initial.error.is_none());
+        let wire=serde_json::to_value(&initial.result).unwrap();
+        assert_eq!(wire["value"]["values"][1],serde_json::json!({"type":"string","value":"Date"}));
+        assert_eq!(wire["value"]["values"][2],serde_json::json!({"type":"integer","value":7}));
+        assert_eq!(wire["value"]["values"][3],serde_json::json!({"type":"double","value":old}));
+        let wrote=execute_workbook_action_in_session(initial.workbook,source,Some("FileDates.WriteDate"),args(),0,context(),&mut session).unwrap();
+        assert!(wrote.error.is_none());
+        let read=execute_workbook_action_in_session(wrote.workbook,source,Some("FileDates.InspectDate"),args(),0,context(),&mut session).unwrap();
+        assert!(read.error.is_none());
+        let wire=serde_json::to_value(&read.result).unwrap();
+        assert_eq!(wire["value"]["values"][1],serde_json::json!({"type":"string","value":"Date"}));
+        assert_eq!(wire["value"]["values"][2],serde_json::json!({"type":"integer","value":7}));
+        assert_eq!(wire["value"]["values"][3],serde_json::json!({"type":"double","value":current}));
+        let state: file_io::FileSystemState=serde_json::from_value(serde_json::to_value(&read.file_system_state).unwrap()).unwrap();
+        let resume_context=|| {let mut next=context();next.current_time=current+10.0;next};
+        let restored=|| {let mut next=resume_context();next.file_system_state=Some(state.clone());next};
+        let edited=format!("{source}\n' Source replacement preserves the containing filesystem.\n");
+        let mut replacement=None;
+        let resumed=execute_workbook_action_in_session(read.workbook,&edited,Some("FileDates.InspectDate"),args(),0,restored(),&mut replacement).unwrap();
+        assert!(resumed.error.is_none());
+        let wire=serde_json::to_value(&resumed.result).unwrap();
+        assert_eq!(wire["value"]["values"][1],serde_json::json!({"type":"string","value":"Date"}));
+        assert_eq!(wire["value"]["values"][2],serde_json::json!({"type":"integer","value":7}));
+        assert_eq!(wire["value"]["values"][3],serde_json::json!({"type":"double","value":current}));
+        let deleted=execute_workbook_action_in_session(resumed.workbook,&edited,Some("FileDates.DeleteDate"),args(),0,resume_context(),&mut replacement).unwrap();
+        assert!(deleted.error.is_none());
+        let missing=execute_workbook_action_in_session(deleted.workbook,&edited,Some("FileDates.InspectDate"),args(),0,resume_context(),&mut replacement).unwrap();
+        assert!(missing.error.is_none());
+        let wire=serde_json::to_value(&missing.result).unwrap();
+        assert_eq!(wire["value"]["values"][0],serde_json::json!({"type":"integer","value":53}));
+        let state=serde_json::to_value(&missing.file_system_state).unwrap();
+        assert!(state["modifiedTimes"].as_array().unwrap().iter().all(|entry|entry["path"].as_str().unwrap().to_lowercase()!=path.to_lowercase()));
+    }
+
+    #[test]
+    fn filedatetime_rejects_invalid_metadata_without_consuming_the_live_session() {
+        let source="Public Function Probe() As Date\n Probe=FileDateTime(\"C:\\work\\data.bin\")\nEnd Function\n";
+        let context=|| {
+        let mut context=failure_context();
+        context.file_context=Some(file_io::FileContext {folders:vec![r"C:\work".into()],
+            files:vec![file_io::ProducedFile {path:r"C:\work\data.bin".into(),bytes:b"ABC".to_vec()}],
+            modified_times:vec![file_io::FileModifiedTime {path:r"C:\work\data.bin".into(),value:43890.50283564815}],..Default::default()});
+        context
+        };
+        let mut session=None;
+        let initial=execute_workbook_action_in_session(workbook(),source,Some("Probe"),vec![],0,context(),&mut session).unwrap();
+        let expected=serde_json::to_value(&initial.result).unwrap();
+        for facts in [vec![file_io::FileModifiedTime {path:r"C:\work\data.bin".into(),value:f64::NAN}],
+            vec![file_io::FileModifiedTime {path:r"C:\work\data.bin".into(),value:1.0},file_io::FileModifiedTime {path:"c:/WORK/DATA.bin".into(),value:2.0}],
+            vec![file_io::FileModifiedTime {path:r"C:\absent.bin".into(),value:2.0}]] {
+            let mut invalid=context();invalid.file_context.as_mut().unwrap().modified_times=facts;
+            assert!(execute_workbook_action_in_session(initial.workbook.clone(),source,Some("Probe"),vec![],0,invalid,&mut session).is_err());
+            let valid=execute_workbook_action_in_session(initial.workbook.clone(),source,Some("Probe"),vec![],0,context(),&mut session).unwrap();
+            assert!(valid.error.is_none());assert_eq!(serde_json::to_value(&valid.result).unwrap(),expected);
+        }
+    }
+
     fn failure_context() -> VbaRunContext {
         VbaRunContext {
             environment: ErrorEnvironment { language: ErrorLanguage::Japanese, help_file: String::new() },
@@ -109674,6 +109774,7 @@ End Function
             let mut context=failure_context();context.application_state=application_state;
             context.document_modules=Some(crate::vba_project::read_document_modules(package).unwrap());
             context.file_context=Some(file_io::FileContext {
+                modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,package_bytes:Some(package.to_vec()),full_name:Some(case["full_name"].as_str().unwrap().into()),read_only:Some(true),folders:serde_json::from_value(fixture["folders"].clone()).unwrap(),files:vec![]});
             let args=case["arguments"].as_array().unwrap().iter().map(|value|Value::String(value.as_str().unwrap().into())).collect();
             let outcome=execute_workbook_action_in_session(book,source,Some(case["procedure"].as_str().unwrap()),args,0,context,&mut session).unwrap();
@@ -109707,6 +109808,7 @@ End Function
             if changed {context.file_system_state=state.take();}
             context.document_modules=Some(crate::vba_project::read_document_modules(package).unwrap());
             context.file_context=Some(file_io::FileContext {
+                modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,package_bytes:Some(package.to_vec()),full_name:Some(case["full_name"].as_str().unwrap().into()),read_only:Some(true),folders:serde_json::from_value(fixture["folders"].clone()).unwrap(),files:serde_json::from_value(fixture["files"].clone()).unwrap()});
             let args=case["arguments"].as_array().unwrap().iter().map(|value|Value::String(value.as_str().unwrap().into())).collect();
             let outcome=execute_workbook_action_in_session(book,source,Some(case["procedure"].as_str().unwrap()),args,0,context,&mut session).unwrap();
@@ -109741,6 +109843,7 @@ End Function
                     directory_state:Some(serde_json::from_value(fixture["initial_directory_state"].clone()).unwrap()),..Default::default()});
                 context.document_modules=Some(crate::vba_project::read_document_modules(&package).unwrap());
                 context.file_context=Some(file_io::FileContext {
+                    modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,package_bytes:Some(package.clone()),full_name:Some(case["full_name"].as_str().unwrap().into()),read_only:Some(true),
                     folders:serde_json::from_value(case["folders"].clone()).unwrap(),files:serde_json::from_value(case["files"].clone()).unwrap()});
                 let args=vec![Value::Integer(kind),Value::String(case["arguments"][1].as_str().unwrap().into())];
@@ -109783,6 +109886,7 @@ End Function
                     directory_state:Some(serde_json::from_value(fixture["initial_directory_state"].clone()).unwrap()),..Default::default()});
                 context.document_modules=Some(crate::vba_project::read_document_modules(&package).unwrap());
                 context.file_context=Some(file_io::FileContext {
+                    modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,package_bytes:Some(package.clone()),full_name:Some(case["full_name"].as_str().unwrap().into()),read_only:Some(true),
                     folders:serde_json::from_value(case["folders"].clone()).unwrap(),files:serde_json::from_value(case["files"].clone()).unwrap()});
                 if let Some(volumes)=fixture.get("volumes") {
@@ -144134,6 +144238,7 @@ End Function"#;
         let package = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package.to_vec()),
             full_name: Some("C:\\work\\source.xlsx".into()),
@@ -144193,6 +144298,7 @@ End Function"#;
         let saved_bytes = outcome.files[0].bytes.clone();
         let mut unchanged_context = failure_context();
         unchanged_context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(saved_bytes.clone()),
             full_name: Some("C:\\work\\saved.xlsx".into()),
@@ -144213,6 +144319,7 @@ End Function"#;
 
         let mut delete_context = failure_context();
         delete_context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(saved_bytes.clone()),
             full_name: Some("C:\\work\\saved.xlsx".into()),
@@ -144255,6 +144362,7 @@ End Function"#;
 
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(source_package),
             full_name: Some("C:\\work\\source.xlsx".into()),
@@ -144350,6 +144458,7 @@ End Function"#;
         let package = editor.save().unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package.clone()),
             full_name: Some("C:\\work\\source.xlsx".into()),
@@ -144421,6 +144530,7 @@ End Function"#;
         let original_drawing = oxicells_core::parse_xlsx(&package).unwrap().sheets[0].drawings[0].clone();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package.clone()),
             full_name: Some("C:\\work\\source.xlsx".into()),
@@ -145215,6 +145325,7 @@ End Function"####;
         End Sub"#;
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(base.to_vec()),
             full_name: Some("C:\\work\\source.xlsx".into()),
@@ -145259,6 +145370,7 @@ End Function"####;
         End Sub"#;
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(base.to_vec()),
             full_name: Some("C:\\work\\source.xlsx".into()),
@@ -145293,6 +145405,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\picture-original.xlsx".into()),
@@ -145330,6 +145443,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\picture-exif-original.xlsx".into()),
@@ -145376,6 +145490,7 @@ End Function"####;
         End Sub"#;
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\picture-svg-original.xlsx".into()),
@@ -145597,6 +145712,7 @@ End Function"####;
         End Function"#;
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\ole-original.xlsx".into()),
@@ -145659,6 +145775,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\ole-original.xlsx".into()),
@@ -145729,6 +145846,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\ole-original.xlsx".into()),
@@ -145766,6 +145884,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\ole-original.xlsx".into()),
@@ -145820,6 +145939,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\ole-original.xlsx".into()),
@@ -145937,6 +146057,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\ole-original.xlsx".into()),
@@ -146039,6 +146160,7 @@ End Function"####;
         End Sub"#;
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\ole-original.xlsx".into()),
@@ -146232,6 +146354,7 @@ End Function"####;
         End Sub"#;
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\ole-original.xlsx".into()),
@@ -146309,6 +146432,7 @@ End Function"####;
         End Sub"#;
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\picture-crop-source.xlsx".into()),
@@ -146340,6 +146464,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\picture-crop-source.xlsx".into()),
@@ -146397,6 +146522,7 @@ End Function"####;
             );
             let mut context = failure_context();
             context.file_context = Some(file_io::FileContext {
+                modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
                 package_bytes: Some(bytes.to_vec()),
                 full_name: Some("C:\\work\\picture-crop-source.xlsx".into()),
@@ -146423,6 +146549,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\picture-format-source.xlsx".into()),
@@ -146459,6 +146586,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\picture-format-source.xlsx".into()),
@@ -146507,6 +146635,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\picture-format-source.xlsx".into()),
@@ -146647,6 +146776,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\nested.xlsx".into()),
@@ -146692,6 +146822,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\nested-inner-rotated.xlsx".into()),
@@ -146740,6 +146871,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\grouped.xlsx".into()),
@@ -146785,6 +146917,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\grouped.xlsx".into()),
@@ -146814,6 +146947,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\grouped-three.xlsx".into()),
@@ -146864,6 +146998,7 @@ End Function"####;
         assert!(book.sheets[0].drawings.iter().all(|drawing| drawing.group_rotation == 1_800_000));
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\grouped-rotated.xlsx".into()),
@@ -146901,6 +147036,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\grouped-scaled.xlsx".into()),
@@ -146958,6 +147094,7 @@ End Function"####;
         let book = oxicells_core::parse_xlsx(bytes).unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(bytes.to_vec()),
             full_name: Some("C:\\work\\grouped-scaled-rotated.xlsx".into()),
@@ -147040,6 +147177,7 @@ End Function"####;
         let package = editor.save().unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package.clone()),
             full_name: Some("C:\\work\\source.xlsx".into()),
@@ -147117,6 +147255,7 @@ End Function"####;
         book.theme_colors[4] = "CC6600".into();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package), full_name: Some("C:\\work\\custom-theme.xlsx".into()),
             read_only: Some(true), folders: vec!["C:\\work".into()], files: vec![],
@@ -147241,6 +147380,7 @@ End Function"####;
         let package = editor.save().unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package.clone()), full_name: Some("C:\\work\\source.xlsx".into()),
             read_only: Some(true), folders: vec!["C:\\work".into()], files: vec![],
@@ -147323,6 +147463,7 @@ End Function"####;
         let package = editor.save().unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package.clone()), full_name: Some("C:\\work\\source.xlsx".into()),
             read_only: Some(true), folders: vec!["C:\\work".into()], files: vec![],
@@ -147401,6 +147542,7 @@ End Function"####;
 
         let mut no_edit_context = failure_context();
         no_edit_context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package.clone()), full_name: Some("C:\\work\\source.xlsx".into()),
             read_only: Some(true), folders: vec!["C:\\work".into()], files: vec![],
@@ -147421,6 +147563,7 @@ End Function"####;
         let package = include_bytes!("../../../tests/fixtures/basic_test.xlsx").to_vec();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package.clone()),
             full_name: Some("C:\\work\\source.xlsx".into()),
@@ -147465,6 +147608,7 @@ End Function"####;
         let saved_bytes = outcome.files[0].bytes.clone();
         let mut unchanged_context = failure_context();
         unchanged_context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(saved_bytes.clone()),
             full_name: Some("C:\\work\\saved.xlsx".into()),
@@ -147485,6 +147629,7 @@ End Function"####;
 
         let mut delete_context = failure_context();
         delete_context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(saved_bytes),
             full_name: Some("C:\\work\\saved.xlsx".into()),
@@ -149292,6 +149437,7 @@ End Function"####;
         let package = include_bytes!("../../oxicells-core/tests/fixtures/wrapped.xlsx");
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package.to_vec()),
             full_name: Some("C:\\work\\source.xlsx".into()),
@@ -152987,6 +153133,7 @@ End Function
                 context.document_modules = Some(crate::vba_project::read_document_modules(&package).unwrap());
                 context.application_state = Some(VbaApplicationState { display_alerts: false, ..VbaApplicationState::default() });
                 context.file_context = Some(file_io::FileContext {
+                    modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
                     package_bytes: Some(package.clone()),
                     full_name: Some(group["full_name"].as_str().unwrap().into()),
@@ -153053,6 +153200,7 @@ End Function
                 context.document_modules = Some(crate::vba_project::read_document_modules(&package).unwrap());
                 context.application_state = Some(VbaApplicationState { display_alerts: false, ..VbaApplicationState::default() });
                 context.file_context = Some(file_io::FileContext {
+                    modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
                     package_bytes: Some(package.clone()), full_name: Some(group["full_name"].as_str().unwrap().into()), read_only: Some(true),
                     folders: serde_json::from_value(group["folders"].clone()).unwrap(),
@@ -153106,6 +153254,7 @@ End Function
         let target = case["arguments"][1].as_str().unwrap();
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package.to_vec()),
             full_name: Some(case["full_name"].as_str().unwrap().into()),
@@ -153316,6 +153465,7 @@ End Function"#).unwrap();
         assert_eq!(oxicells_core::XlsxEditor::new(&package).unwrap().save().unwrap(), package);
         let mut context = failure_context();
         context.file_context = Some(file_io::FileContext {
+            modified_times: Vec::new(),
             edit_revision: None, source_code_page: None,
             package_bytes: Some(package), full_name: Some("C:\\work\\seed.xlsx".into()),
             read_only: Some(true), folders: vec!["C:\\work".into()], files: vec![],
@@ -153393,6 +153543,7 @@ End Function"#;
             let book = oxicells_core::parse_xlsx(&package).unwrap();
             let mut context = failure_context();
             context.file_context = Some(file_io::FileContext {
+                modified_times: Vec::new(),
                 edit_revision: None, source_code_page: None, package_bytes: Some(package),
                 full_name: Some("C:\\work\\seed.xlsx".into()), read_only: Some(true),
                 folders: vec!["C:\\work".into()], files: vec![],
