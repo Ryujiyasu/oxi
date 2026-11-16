@@ -17,6 +17,8 @@ pub(super) struct FileContext {
     pub source_code_page: Option<u16>,
     pub folders: Vec<String>,
     pub files: Vec<ProducedFile>,
+    /// Initial local OLE modification dates for mounted files and folders.
+    pub modified_times: Vec<FileModifiedTime>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -39,6 +41,15 @@ pub(super) struct FileSystemState {
     attributes: Vec<FileAttributes>,
     #[serde(default)]
     volumes: Vec<VolumeInfo>,
+    #[serde(default)]
+    modified_times: Vec<FileModifiedTime>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FileModifiedTime {
+    pub path: String,
+    pub value: f64,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -970,7 +981,8 @@ impl WorkbookFiles {
         FileSystemState {folders:state.folders,files:state.files.into_iter().map(|(path,bytes)|ProducedFile {path,bytes}).collect(),
             mounted_folders:self.mounted_folders.iter().cloned().collect(),mounted_files:self.mounted_files.iter().cloned().collect(),
             attributes:state.attributes.into_iter().map(|(path,value)|FileAttributes {path,value}).collect(),
-            volumes:self.files.volume_facts().into_iter().map(|(root,label)|VolumeInfo {root,label}).collect()}
+            volumes:self.files.volume_facts().into_iter().map(|(root,label)|VolumeInfo {root,label}).collect(),
+            modified_times:self.files.modified_facts().into_iter().map(|(path,value)|FileModifiedTime {path,value}).collect()}
     }
 
     pub(super) fn restore(&mut self, state: &FileSystemState) -> Result<(), String> {
@@ -981,6 +993,8 @@ impl WorkbookFiles {
         }).map_err(|error|format!("invalid VBA fileSystemState: {}",error.description()))?;
         next.restore_volume_facts(&state.volumes.iter().map(|entry|(entry.root.clone(),entry.label.clone())).collect::<Vec<_>>())
             .map_err(|error|format!("invalid VBA fileSystemState volumes: {}",error.description()))?;
+        next.restore_modified_facts(&state.modified_times.iter().map(|entry|(entry.path.clone(),entry.value)).collect::<Vec<_>>())
+            .map_err(|error|format!("invalid VBA fileSystemState modifiedTimes: {}",error.description()))?;
         let keys=|paths:&[String]| -> Result<BTreeSet<String>,String> {
             let mut keys=BTreeSet::new();
             for path in paths {
@@ -2263,6 +2277,29 @@ impl WorkbookFiles {
         Ok(())
     }
 
+
+    /// Bootstrap metadata is consumed once, like input bytes. In particular a
+    /// repeated host context cannot roll back writes, copies or deleted mounts.
+    fn prepare_modified_mounts(&self, facts: &[FileModifiedTime]) -> Result<Vec<(FileModifiedTime, bool)>, String> {
+        let consumed:BTreeSet<_>=self.mounted_files.iter().chain(self.mounted_folders.iter())
+            .map(|path|path.trim_end_matches('\\').to_lowercase()).collect();
+        let existing:BTreeSet<_>=self.files.modified_facts().into_iter()
+            .map(|(path,_)|path.trim_end_matches('\\').to_lowercase()).collect();
+        let mut seen=BTreeSet::new();
+        let mut result=Vec::with_capacity(facts.len());
+        for fact in facts {
+            let path=self.files.normalize_snapshot_path(&fact.path)
+                .map_err(|e|format!("invalid VBA modifiedTimes path: {}",e.description()))?;
+            let key=path.trim_end_matches('\\').to_lowercase();
+            if !seen.insert(key.clone()) || !fact.value.is_finite() || !(fact.value > -657435.0 && fact.value < 2958466.0) {
+                return Err("invalid VBA modifiedTimes: duplicate path or invalid local OLE date".into());
+            }
+            let preserve=consumed.contains(&key) || existing.contains(&key);
+            result.push((FileModifiedTime {path,value:fact.value},preserve));
+        }
+        Ok(result)
+    }
+
     pub(super) fn configure(&mut self, context: Option<FileContext>, source: &str, file_name: &mut Option<String>) -> Result<(), String> {
         self.exports.clear();
         self.source = source.to_string();
@@ -2272,6 +2309,7 @@ impl WorkbookFiles {
             }
         }
         let Some(context) = context else { return Ok(()); };
+        let modified_mounts=self.prepare_modified_mounts(&context.modified_times)?;
         if let Some(revision) = context.edit_revision { self.edit_revision = Some(revision); }
         if let Some(page) = context.source_code_page { self.source_code_page = Some(page); }
         // A retained workbook owns its current saved package. Repeated editor
@@ -2312,6 +2350,18 @@ impl WorkbookFiles {
                 self.mount_file(&path,package)?;
             }
         }
+
+        for (fact,preserve) in modified_mounts {
+            let key=self.files.absolute_path(&fact.path).to_lowercase();
+            let file=self.files.exists(&fact.path);
+            let folder=self.files.folder_exists(&fact.path);
+            if !preserve {
+                self.files.set_modified_time(&fact.path,fact.value)
+                    .map_err(|e|format!("invalid VBA modifiedTimes: {}",e.description()))?;
+            }
+            if file {self.mounted_files.insert(key);}
+            else if folder {self.mounted_folders.insert(key);}
+        }
         Ok(())
     }
 
@@ -2328,6 +2378,26 @@ impl WorkbookFiles {
     }
 }
 
+
+fn validate_modified_times_js(owner: &JsValue) -> Result<(), JsError> {
+    let entries=js_sys::Reflect::get(owner,&JsValue::from_str("modifiedTimes"))
+        .map_err(|_|JsError::new("invalid VBA modifiedTimes"))?;
+    if entries.is_undefined() {return Ok(());}
+    if !js_sys::Array::is_array(&entries) {return Err(JsError::new("invalid VBA modifiedTimes: expected an array"));}
+    for entry in js_sys::Array::from(&entries).iter() {
+        if entry.is_null() || !entry.is_object() || js_sys::Array::is_array(&entry) {return Err(JsError::new("invalid VBA modification time"));}
+        for key in js_sys::Object::keys(&js_sys::Object::from(entry.clone())).iter() {
+            if !matches!(key.as_string().as_deref(),Some("path"|"value")) {return Err(JsError::new("invalid VBA modification time field"));}
+        }
+        let path=js_sys::Reflect::get(&entry,&JsValue::from_str("path")).map_err(|_|JsError::new("invalid VBA modification time path"))?;
+        let value=js_sys::Reflect::get(&entry,&JsValue::from_str("value")).map_err(|_|JsError::new("invalid VBA modification time value"))?;
+        if !path.is_string() || !value.as_f64().is_some_and(|value|value.is_finite() && value > -657435.0 && value < 2958466.0) {
+            return Err(JsError::new("invalid VBA modification time path/value"));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn validate_context_js(options: &JsValue) -> Result<(), JsError> {
     let context = js_sys::Reflect::get(options, &JsValue::from_str("fileContext"))
         .map_err(|_| JsError::new("invalid VBA options: cannot read fileContext"))?;
@@ -2337,7 +2407,7 @@ pub(super) fn validate_context_js(options: &JsValue) -> Result<(), JsError> {
     }
     for key in js_sys::Object::keys(&js_sys::Object::from(context.clone())).iter() {
         let key = key.as_string().unwrap_or_default();
-        if !matches!(key.as_str(), "packageBytes" | "fullName" | "readOnly" | "folders" | "files" | "editRevision" | "sourceCodePage") {
+        if !matches!(key.as_str(), "packageBytes" | "fullName" | "readOnly" | "folders" | "files" | "editRevision" | "sourceCodePage" | "modifiedTimes") {
             return Err(JsError::new(&format!("invalid VBA fileContext field {key}")));
         }
     }
@@ -2351,6 +2421,7 @@ pub(super) fn validate_context_js(options: &JsValue) -> Result<(), JsError> {
             return Err(JsError::new(&format!("invalid VBA fileContext {key}")));
         }
     }
+    validate_modified_times_js(&context)?;
     let files = js_sys::Reflect::get(&context, &JsValue::from_str("files"))
         .map_err(|_| JsError::new("invalid VBA fileContext files"))?;
     if files.is_null() || files.is_undefined() { return Ok(()); }
@@ -2370,8 +2441,9 @@ pub(super) fn validate_snapshot_js(options: &JsValue) -> Result<(), JsError> {
     if state.is_null() || state.is_undefined() {return Ok(());}
     if !state.is_object() || js_sys::Array::is_array(&state) {return Err(JsError::new("invalid VBA fileSystemState: expected an object"));}
     for key in js_sys::Object::keys(&js_sys::Object::from(state.clone())).iter() {
-        if !matches!(key.as_string().as_deref(),Some("folders"|"files"|"mountedFolders"|"mountedFiles"|"attributes"|"volumes")) {return Err(JsError::new("invalid VBA fileSystemState field"));}
+        if !matches!(key.as_string().as_deref(),Some("folders"|"files"|"mountedFolders"|"mountedFiles"|"attributes"|"volumes"|"modifiedTimes")) {return Err(JsError::new("invalid VBA fileSystemState field"));}
     }
+    validate_modified_times_js(&state)?;
     let volumes=js_sys::Reflect::get(&state,&JsValue::from_str("volumes")).map_err(|_|JsError::new("invalid VBA fileSystemState volumes"))?;
     if !volumes.is_undefined() {
         if !js_sys::Array::is_array(&volumes) {return Err(JsError::new("invalid VBA fileSystemState volumes: expected an array"));}

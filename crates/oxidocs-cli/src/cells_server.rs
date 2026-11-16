@@ -2,6 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+#[path = "cells_server_time.rs"]
+mod host_time;
+
 use oxicells_core::ir::Workbook;
 use oxidocs_wasm::{
     read_spreadsheet_vba_project_native, NativeVbaAction, NativeVbaCall, SpreadsheetVbaSession,
@@ -281,7 +284,10 @@ impl OpenBook {
         clock(request)?;
         let environment = execution_environment(request)?;
         let path = Path::new(text(request, "path")?);
-        let bytes = fs::read(path).map_err(|e| e.to_string())?;
+        let mut input = fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut input, &mut bytes).map_err(|e| e.to_string())?;
+        let modified_time = host_time::modified_time(&input.metadata().map_err(|e| e.to_string())?)?;
         let code_page = request
             .get("sourceCodePage")
             .filter(|v| !v.is_null())
@@ -317,7 +323,8 @@ impl OpenBook {
         if let Some(name) = metadata.get("projectName").filter(|v| !v.is_null()) {
             continued["projectName"] = name.clone();
         }
-        metadata["fileContext"] = json!({"packageBytes":bytes,"fullName":full_name,"folders":["C:\\work"],"sourceCodePage":code_page});
+        metadata["fileContext"] = json!({"packageBytes":bytes,"fullName":full_name,"folders":["C:\\work"],"sourceCodePage":code_page,
+            "modifiedTimes":[{"path":full_name,"value":modified_time}]});
         metadata["applicationState"] = json!({"displayAlerts":false});
         let book = oxicells_core::parse_xlsx(&bytes).map_err(|e| e.to_string())?;
         if book.sheets.is_empty() {

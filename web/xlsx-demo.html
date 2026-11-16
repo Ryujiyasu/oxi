@@ -729,6 +729,7 @@ let conditional = new Map();
 // what the screen knows is how an editor quietly throws that away.
 let source = null;
 let fileName = 'workbook.xlsx';
+let macroSourceFileMetadata;
 let macroProjectSource = '';
 let macroSourceBound = false;
 let macroSourceBaseline = '';
@@ -5257,13 +5258,29 @@ document.addEventListener('keydown', (event) => {
  */
 let opened = 0;
 
-async function open(data, name) {
+function localFileModificationDate(milliseconds) {
+  if (!Number.isFinite(milliseconds)) return undefined;
+  const local = new Date(Math.floor(milliseconds / 1000) * 1000);
+  const year = local.getFullYear();
+  if (!Number.isFinite(year) || year < 100 || year > 9999) return undefined;
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, local.getMonth(), local.getDate());
+  calendar.setUTCHours(0, 0, 0, 0);
+  const days = calendar.getTime() / 86400000 + 25569;
+  const seconds = local.getHours() * 3600 + local.getMinutes() * 60 + local.getSeconds();
+  return days + (days < 0 ? -seconds : seconds) / 86400;
+}
+
+async function open(data, name, modifiedMilliseconds) {
   macroEditRevision = 0;
   macroSavedEditRevision = 0;
   opened += 1;
   try {
     source = new Uint8Array(data).slice();
     fileName = name || 'workbook.xlsx';
+    const modifiedDate = localFileModificationDate(modifiedMilliseconds);
+    macroSourceFileMetadata = modifiedDate === undefined ? undefined
+      : {path: 'C:\\' + fileName, value: modifiedDate};
     macroProjectSource = '';
     macroSourceBound = false;
     macroSourceBaseline = '';
@@ -5322,7 +5339,7 @@ async function openSample() {
     stateBox.style.display = 'none';
     return;
   }
-  await open(held, DESKTOP ? 'Book1.xlsx' : 'the sample');
+  await open(held, DESKTOP ? 'Book1.xlsx' : 'the sample', Date.parse(reply.headers.get('Last-Modified')));
 }
 
 document.getElementById('reset').onclick = openSample;
@@ -5331,7 +5348,7 @@ document.getElementById('reset').onclick = openSample;
 document.getElementById('fresh').onclick = openSample;
 document.getElementById('pick').onchange = async (event) => {
   const file = event.target.files[0];
-  if (file) await open(await file.arrayBuffer(), file.name);
+  if (file) await open(await file.arrayBuffer(), file.name, file.lastModified);
 };
 
 for (const kind of ['dragenter', 'dragover']) {
@@ -5348,7 +5365,7 @@ for (const kind of ['dragleave', 'drop']) {
 }
 sheetBox.addEventListener('drop', async (event) => {
   const file = event.dataTransfer.files[0];
-  if (file) await open(await file.arrayBuffer(), file.name);
+  if (file) await open(await file.arrayBuffer(), file.name, file.lastModified);
 });
 
 // A macro can touch anything the workbook holds, so running one is treated the
@@ -5394,14 +5411,15 @@ const macroEditorSettings = bindVbaEditorSettings({
 
 function macroRuntimeOptions() {
   const options = macroEditorSettings.options();
-  return { ...options, fileContext: { ...options.fileContext, editRevision: macroEditRevision } };
+  return { ...options, fileContext: { ...options.fileContext, editRevision: macroEditRevision,
+    ...(macroSourceFileMetadata ? {modifiedTimes: [...(options.fileContext?.modifiedTimes || []), {...macroSourceFileMetadata}]} : {}) } };
 }
 
 function captureMacroWorkbookView() {
   document.activeElement?.blur();
   return {workbook: book, activeSheet: shown, editRevision: macroEditRevision, view: {
     editRevision: macroEditRevision, savedEditRevision: macroSavedEditRevision,
-    bytes: source, bound: macroSourceBound, baseline: macroSourceBaseline,
+    bytes: source, bound: macroSourceBound, baseline: macroSourceBaseline, fileMetadata: macroSourceFileMetadata,
     savedCalculation, cell: {...at}, procedure: macroProc.value, args: macroArgs.value,
   }};
 }
@@ -5412,6 +5430,7 @@ function applyMacroWorkbookView(selection, previous) {
   if (!bytes) throw new Error('This workbook has no save package.');
   const originalSource = spreadsheet_vba_source(bytes, macroEditorSettings.options().hostAnsiCodePage);
   source = bytes;
+  macroSourceFileMetadata = previous?.fileMetadata;
   fileName = selected.name;
   book = selected.workbook;
   macroEditRevision = previous?.editRevision ?? 0;
@@ -5503,7 +5522,7 @@ function reportMacro(execution) {
 }
 
 function clearClosedMacroWorkbookView() {
-  book = null; source = null; fileName = ''; shown = 0; geom = null;
+  book = null; source = null; fileName = ''; macroSourceFileMetadata = undefined; shown = 0; geom = null;
   macroProjectSource = ''; macroSourceBound = false; macroSourceBaseline = '';
   macroSourceDirty = false; macroSourceRevision++;
   beyondValues = false; conditional.clear();
