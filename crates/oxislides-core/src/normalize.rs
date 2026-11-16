@@ -1481,6 +1481,15 @@ pub(crate) fn normalize_archive(archive: &mut OoxmlArchive) {
         })
         .and_then(|m| masters.get(m));
     if let Some((theme, map)) = first_master {
+        // `p:defaultTextStyle` is what a plain text box inherits, and it names
+        // its colour and faces as tokens (`tx1`, `+mn-lt`) like any master.
+        if std::env::var("OXI_DEFTXSTYLE_DISABLE").is_err() {
+            if let Ok(Some(xml)) = archive.try_read_part("ppt/presentation.xml") {
+                if let Some(out) = normalize_part(&xml, theme, map) {
+                    archive.set_part_override("ppt/presentation.xml", out);
+                }
+            }
+        }
         for c in names.iter().filter(|n| is_part("ppt/charts/", n)) {
             let Ok(Some(xml)) = archive.try_read_part(c) else { continue };
             if let Some(out) = normalize_part(&xml, theme, map) {
