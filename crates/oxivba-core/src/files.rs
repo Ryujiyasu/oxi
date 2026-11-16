@@ -838,7 +838,8 @@ impl Files {
         Ok(match handle.mode {
             OpenMode::Binary => handle.position as i64,
             OpenMode::Random(length) => (handle.position / length.max(1)) as i64,
-            _ => (handle.position as i64 + 127) / 128,
+            OpenMode::Input => handle.position.div_ceil(128).max(1) as i64,
+            OpenMode::Output | OpenMode::Append => (handle.position / 128) as i64,
         })
     }
 
@@ -1590,6 +1591,27 @@ mod tests {
         files.close(&[1]);
         files.replace_bytes("C:\\copies\\copy.xlsm", vec![2]).unwrap();
         assert_eq!(files.bytes("C:\\copies\\copy.xlsm").unwrap(), &[2]);
+    }
+
+    #[test]
+    fn sequential_location_matches_native_block_boundaries() {
+        let controls = [(0, 1), (0, 2), (127, 128), (127, 129),
+            (128, 129), (128, 130), (513, 514), (513, 515)];
+        for (mode, initial, expected) in [
+            (OpenMode::Input, 1, [1, 1, 1, 1, 1, 2, 5, 5]),
+            (OpenMode::Output, 0, [0, 0, 0, 1, 1, 1, 4, 4]),
+            (OpenMode::Append, 0, [0, 0, 0, 1, 1, 1, 4, 4]),
+        ] {
+            for ((size, position), expected) in controls.into_iter().zip(expected) {
+                let mut files = Files::default();
+                files.mount_folder("C:\\work").unwrap();
+                files.replace_bytes("C:\\work\\location.bin", vec![65; size]).unwrap();
+                files.open("C:\\work\\location.bin", mode, 1).unwrap();
+                assert_eq!(files.location(1), Ok(initial), "initial {mode:?}, size {size}");
+                files.move_to(1, position).unwrap();
+                assert_eq!(files.location(1), Ok(expected), "{mode:?}, size {size}, Seek {position}");
+            }
+        }
     }
 
     #[test]
