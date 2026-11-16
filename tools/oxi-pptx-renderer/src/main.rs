@@ -1550,6 +1550,11 @@ fn curvconn_on() -> bool {
     std::env::var("OXI_CURVCONN_DISABLE").is_err()
 }
 
+/// Faceless runs take the level face (S-LVLFACE) unless OXI_LVLFACE_DISABLE=1.
+fn lvlface_on() -> bool {
+    std::env::var("OXI_LVLFACE_DISABLE").is_err()
+}
+
 /// Unfilled shapes and tables cast shadows unless OXI_SHADOWLN_DISABLE=1.
 fn shadowln_on() -> bool {
     std::env::var("OXI_SHADOWLN_DISABLE").is_err()
@@ -6665,6 +6670,37 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             std::collections::HashMap::<(u32, String), (Option<u32>, u32)>::new();
                         let mut prev_fs: Option<f32> = None;
                         for (pi, p) in paragraphs.iter().enumerate() {
+                            // A run that states no face inherits the LEVEL's, not the
+                            // first face-stating sibling's (S-LVLFACE): 252cbc8c s104's
+                            // title mixes faceless runs with a "Web" run in Meiryo UI,
+                            // and PowerPoint draws the faceless ones in the master
+                            // title's Meiryo. OXI_LVLFACE_DISABLE.
+                            let filled: oxislides_core::ir::SlideParagraph;
+                            let p = if lvlface_on()
+                                && p.runs.iter().any(|r| r.font_family.is_some())
+                                && p.runs.iter().any(|r| r.font_family.is_none())
+                            {
+                                let lvl = p.lvl as usize;
+                                let lf = [&sh.ph_levels[..], &master_ctx[..]].into_iter().find_map(|ls| {
+                                    ls.get(lvl.min(ls.len().saturating_sub(1)))
+                                        .and_then(|l| l.font_family.clone())
+                                });
+                                match lf {
+                                    Some(f) => {
+                                        let mut q = p.clone();
+                                        for r in &mut q.runs {
+                                            if r.font_family.is_none() {
+                                                r.font_family = Some(f.clone());
+                                            }
+                                        }
+                                        filled = q;
+                                        &filled
+                                    }
+                                    None => p,
+                                }
+                            } else {
+                                p
+                            };
                             // Effective font size: a run's explicit sz wins (the
                             // max over runs); else the master txStyles level
                             // default (Spec #5, phfs probe: V2 layout sz is
@@ -7146,7 +7182,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                         );
                                                         let bold =
                                                             para_is_bold(&p.runs, false);
-                                                        set_para_hang(p, None);
+                                                        set_para_hang(p, None, None);
                                                         n = gdi_wrap_lines(
                                                             mem_dc, &body, inner, inner,
                                                             scale, fs, &family, bold, false,
@@ -7404,7 +7440,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                                     ),
                                                 );
                                                 let bold = para_is_bold(&p.runs, false);
-                                                set_para_hang(p, None);
+                                                set_para_hang(p, None, None);
                                                 let (w0, w1) = match cell_rich_geom(mem_dc, p, fs, &family, scale) {
                                                     Some((fx, ml, _, _)) => (
                                                         (cell_inner_pt as f32 - fx).max(1.0),
@@ -7526,7 +7562,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         // 213.6pt column and over its neighbour.
                                         let inner_pt =
                                             (right - left).max(1) as f64 / scale;
-                                        set_para_hang(p, None);
+                                        set_para_hang(p, None, None);
                                         // S-CELLRICH: a cell paragraph is a text frame paragraph:
                                         // its runs keep their own colour / weight / underline,
                                         // `marL` / `indent` move its lines and a `buChar` draws a
@@ -15407,6 +15443,11 @@ unsafe fn draw_line_runs(
     // Walk the runs, clipping each to this line's character range.
     let line_chars: Vec<char> = line_text.chars().collect();
     let line_end = line_start + line_chars.len();
+    // Where the line's ink ends: the spaces after it hang past the edge and
+    // PowerPoint does not underline them (640d6e4e s33 forces a break with
+    // `悪用     された` inside one u="sng" run; the rule stops under 用).
+    let ink_end = line_start
+        + line_chars.iter().rposition(|c| *c != ' ').map(|i| i + 1).unwrap_or(0);
 
     // The highlight box is the LINE's, not the run's: a 48pt neighbour made
     // an 18pt highlighted run's box 53.64pt tall, exactly the 48pt face's
@@ -15520,12 +15561,19 @@ unsafe fn draw_line_runs(
         };
         // A raised / lowered run sits off the line's baseline.
         let baseline = baseline - run.baseline_shift.unwrap_or(0.0);
+        // The underlined run's hanging spaces are not drawn at all: a space
+        // has no ink, so dropping it removes exactly the rule beneath it.
+        let seg_drawn: String = if run.underline && to > ink_end && ultrail_on() {
+            line_chars[from - line_start..ink_end.max(from) - line_start].iter().collect()
+        } else {
+            seg.clone()
+        };
         if chunks.is_empty() {
             draw_text_baseline_wiu(
                 dc,
                 cursor_x,
                 baseline,
-                &seg,
+                &seg_drawn,
                 fs,
                 family,
                 color,
@@ -15558,6 +15606,12 @@ unsafe fn draw_line_runs(
             }
         }
     }
+}
+
+/// An underlined run's spaces hanging at the line end are left without the
+/// rule unless OXI_ULTRAIL_DISABLE is set.
+fn ultrail_on() -> bool {
+    std::env::var("OXI_ULTRAIL_DISABLE").is_err()
 }
 
 /// The layout / master placeholder `a:lstStyle` chain is applied unless this
@@ -17276,6 +17330,8 @@ thread_local! {
     /// The paragraph's `hangingPunct`, resolved (see `WrapOpts::hang_punct`).
     /// Set with KERN_MIN; the table-cell wraps set it themselves.
     static HANG_PUNCT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The paragraph's East Asian kinsoku (`eaLnBrk`, resolved; default on).
+    static EA_KINSOKU: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 /// `p:defaultTextStyle`'s `hangingPunct`, for paragraphs that say nothing.
@@ -17283,10 +17339,15 @@ static HANG_DEFAULT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 
 /// Resolve and publish a paragraph's `hangingPunct` for the wraps that follow.
 /// `OXI_HANGPUNCT_DISABLE=1` never hangs.
-fn set_para_hang(para: &oxislides_core::ir::SlideParagraph, level: Option<bool>) {
+fn set_para_hang(para: &oxislides_core::ir::SlideParagraph, level: Option<bool>, level_ea: Option<bool>) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let on = *ON.get_or_init(|| std::env::var("OXI_HANGPUNCT_DISABLE").is_err());
+    // eaLnBrk="0" (S-EALNBRK, gen_pptx_kinsoku.py): no kinsoku, and 、。 do
+    // not hang either -- they start the next line like anything else.
+    let kinsoku = para.ea_ln_brk.or(level_ea).unwrap_or(true);
+    EA_KINSOKU.with(|k| k.set(kinsoku));
     let v = on
+        && kinsoku
         && (para.ea_lang || std::env::var("OXI_HANGEA_DISABLE").is_ok())
         && para
             .hanging_punct
@@ -17883,6 +17944,25 @@ fn line_width_pt_runs(
         let (sz, sb, si, sspc, sfam) = st;
         let sfs = sz as f32 / 100.0;
         let spc = sspc as f32 / 100.0;
+        // The hmtx sum drops a segment's trailing spaces (they are the LINE's
+        // trailing spaces there), but a segment that ends mid-line keeps them:
+        // d44 slide 5's lone `<a:rPr lang="en-US"/>` space run measured 0pt
+        // and its right-aligned line sat 3.84pt right of PowerPoint's.
+        // OXI_SEGSPACE_DISABLE.
+        let trail = seg.chars().count() - seg.trim_end_matches(' ').chars().count();
+        if trail > 0 && segspace_on() {
+            if let (Some(w), Some(em)) = (
+                hmtx_width_styled(seg, sfs, sfam, sb, si, spc),
+                font_adv::hmtx_advance_em(sfam, ' '),
+            ) {
+                let one = if font_adv::mudraw_on() {
+                    font_adv::mu_advance_pt(em, sfs, 0.0)
+                } else {
+                    em * sfs
+                };
+                return Some(w + trail as f32 * (one + spc));
+            }
+        }
         hmtx_width_styled(seg, sfs, sfam, sb, si, spc).or_else(|| {
             runtime_width_px(dc, seg, sfs, sfam, sb, si, scale, spc)
                 .map(|px| px as f32 / scale as f32)
@@ -17979,6 +18059,12 @@ fn runalign_on() -> bool {
 /// drew the right 492 but still CENTRED it on the regular-Arial width, landing
 /// the line 2px right. The table has to decline styled text, not answer for it.
 #[cfg(windows)]
+/// A run segment that ends mid-line counts its trailing spaces in the line
+/// width unless OXI_SEGSPACE_DISABLE is set.
+fn segspace_on() -> bool {
+    std::env::var("OXI_SEGSPACE_DISABLE").is_err()
+}
+
 fn hmtx_width_styled(
     text: &str,
     fs: f32,
@@ -18859,6 +18945,7 @@ fn gdi_wrap_lines(
         char_wrap: charwrap_on(),
         hyphen_breaks: hyphbrk_on(),
         hang_punct: HANG_PUNCT.with(|h| h.get()),
+        kinsoku: EA_KINSOKU.with(|k| k.get()),
     };
     let lines = oxislides_core::layout::wrap_lines(
         text,
@@ -19683,6 +19770,7 @@ fn layout_paragraph_baselines(
     set_para_hang(
         para,
         if oxislides_core::parser::hanglvl_off() { m.hanging_punct } else { Some(m.hanging_punct.unwrap_or(true)) },
+        m.ea_ln_brk,
     );
     // Effective font size: a run's explicit sz wins (the max over runs);
     // otherwise the master txStyles level default (Spec #5, phfs probe: V3

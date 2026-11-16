@@ -251,6 +251,7 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                             cur_level.algn = Some(parse_alignment_attr(&algn));
                         }
                         cur_level.hanging_punct = lvl_hanging_punct(&e);
+                        cur_level.ea_ln_brk = lvl_ea_ln_brk(&e);
                         cur_level.def_tab_sz = def_tab_attr(&e);
                         in_level = true;
                         in_spc_bef = false;
@@ -335,6 +336,7 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                             lvl.algn = Some(parse_alignment_attr(&algn));
                         }
                         lvl.hanging_punct = lvl_hanging_punct(&e);
+                        lvl.ea_ln_brk = lvl_ea_ln_brk(&e);
                         lvl.def_tab_sz = def_tab_attr(&e);
                         if in_body_style {
                             body.push(lvl);
@@ -471,6 +473,48 @@ fn parse_default_hanging_punct(xml: &str) -> bool {
     }
 }
 
+/// A character PowerPoint sets in a run's EAST ASIAN face (kana, kanji,
+/// CJK punctuation, full- and half-width forms).
+fn is_ea_char(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x11FF | 0x2E80..=0x2FDF | 0x3000..=0x30FF | 0x3100..=0x31FF
+        | 0x3200..=0x33FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xAC00..=0xD7AF
+        | 0xF900..=0xFAFF | 0xFE30..=0xFE4F | 0xFF00..=0xFFEF)
+}
+
+/// East Asian characters never take the run's LATIN face (`gen_pptx_eaface.py`,
+/// PowerPoint PDF: a run stating only `latin="ＭＳ 明朝"` draws its kana in MS
+/// PGothic, one stating latin Arial + ea ＭＳ 明朝 draws them in Mincho). So a run
+/// whose two faces differ is split where the script changes: East Asian
+/// pieces take its `ea` face (None = inherited), the rest its `latin` face
+/// (None = inherited). 640d6e4e s88's `latin="ＭＳ"` runs over Japanese text
+/// were drawn in the substitute for "ＭＳ" and wrapped a character early.
+/// With S-LVLFACE (faceless runs take the level face) the split no longer
+/// borrows a sibling's face. OXI_EAFACE_DISABLE keeps the run whole.
+fn split_run_by_script(run: SlideRun, latin: Option<String>, ea: Option<String>) -> Vec<SlideRun> {
+    if std::env::var("OXI_EAFACE_DISABLE").is_ok() || (latin.is_none() && ea.is_none()) || latin == ea {
+        return vec![run];
+    }
+    let face = |c: char| if is_ea_char(c) { ea.clone() } else { latin.clone() };
+    let mut out: Vec<SlideRun> = Vec::new();
+    for c in run.text.chars() {
+        let f = face(c);
+        match out.last_mut() {
+            Some(last) if last.font_family == f => last.text.push(c),
+            _ => {
+                let mut piece = run.clone();
+                piece.text = c.to_string();
+                piece.font_family = f;
+                out.push(piece);
+            }
+        }
+    }
+    if out.len() == 1 && out[0].font_family == run.font_family {
+        return vec![run];
+    }
+    out
+}
+
 /// An `a:tab` element as a stop (`gen_pptx_tabs.py`).
 fn parse_tab_stop(e: &quick_xml::events::BytesStart) -> Option<TabStop> {
     let pos = get_attr(e, "pos")?.parse::<f32>().ok()?;
@@ -496,6 +540,15 @@ fn blipfx_on() -> bool {
 /// `OXI_HANGLVL_DISABLE=1`: no level `hangingPunct`, and absent = off.
 pub fn hanglvl_off() -> bool {
     std::env::var("OXI_HANGLVL_DISABLE").is_ok()
+}
+
+/// A paragraph or list level's `@eaLnBrk`, if stated; None when
+/// OXI_EALNBRK_DISABLE is set (kinsoku always on, as before).
+fn lvl_ea_ln_brk(e: &quick_xml::events::BytesStart) -> Option<bool> {
+    if std::env::var("OXI_EALNBRK_DISABLE").is_ok() {
+        return None;
+    }
+    get_attr(e, "eaLnBrk").map(|v| v == "1" || v == "true")
 }
 
 /// A list level's `@hangingPunct`, if stated.
@@ -732,6 +785,9 @@ fn parse_layout_ph_lststyles(
                         }
                         if let Some(h) = lvl_hanging_punct(&e) {
                             levels[idx].hanging_punct = Some(h);
+                        }
+                        if let Some(h) = lvl_ea_ln_brk(&e) {
+                            levels[idx].ea_ln_brk = Some(h);
                         }
                         if let Some(d) = def_tab_attr(&e) {
                             levels[idx].def_tab_sz = Some(d);
@@ -1456,6 +1512,7 @@ fn parse_slide(
     // Spec #8: bullet / indent (a:pPr/@lvl, @marL, @indent + a:buChar/buFont/buNone/buAutoNum)
     let mut para_lvl: u32 = 0;
     let mut para_hang: Option<bool> = None;
+    let mut para_ea_brk: Option<bool> = None;
     let mut para_tabs: Option<Vec<TabStop>> = None;
     let mut para_def_tab: Option<f32> = None;
     let mut para_ea_lang = false;
@@ -1502,6 +1559,9 @@ fn parse_slide(
     let mut in_highlight = false;
     let mut run_highlight: Option<String> = None;
     let mut run_font_family: Option<String> = None;
+    // The run's own latin / ea faces, kept apart for `split_run_by_script`.
+    let mut run_latin_face: Option<String> = None;
+    let mut run_ea_face: Option<String> = None;
 
     let mut in_text = false;
 
@@ -2280,6 +2340,9 @@ fn parse_slide(
                         if let Some(v) = get_attr(&e, "hangingPunct") {
                             para_hang = Some(v == "1" || v == "true");
                         }
+                        if let Some(v) = lvl_ea_ln_brk(&e) {
+                            para_ea_brk = Some(v);
+                        }
                         if let Some(mar_l) = get_attr(&e, "marL") {
                             if let Ok(v) = mar_l.parse::<f32>() {
                                 para_mar_l = Some(emu_to_pt(v));
@@ -2350,6 +2413,8 @@ fn parse_slide(
                         run_color_alpha = None;
                         run_highlight = None;
                         run_font_family = None;
+                        run_latin_face = None;
+                        run_ea_face = None;
                     }
                     "endParaRPr" if in_paragraph => {
                         para_end_mark = true;
@@ -2445,6 +2510,11 @@ fn parse_slide(
                     // them in the level's メイリオ. OXI_RUNCS_DISABLE reads it as before.
                     "latin" | "ea" | "cs" if in_run && (name != "cs" || runcs_off()) => {
                         if let Some(typeface) = get_attr(&e, "typeface") {
+                            if name == "latin" {
+                                run_latin_face = Some(typeface.clone());
+                            } else if name == "ea" {
+                                run_ea_face = Some(typeface.clone());
+                            }
                             if run_font_family.is_none() {
                                 run_font_family = Some(typeface);
                             }
@@ -3110,6 +3180,9 @@ fn parse_slide(
                         if let Some(v) = get_attr(&e, "hangingPunct") {
                             para_hang = Some(v == "1" || v == "true");
                         }
+                        if let Some(v) = lvl_ea_ln_brk(&e) {
+                            para_ea_brk = Some(v);
+                        }
                         if let Some(mar_l) = get_attr(&e, "marL") {
                             if let Ok(v) = mar_l.parse::<f32>() {
                                 para_mar_l = Some(emu_to_pt(v));
@@ -3241,6 +3314,11 @@ fn parse_slide(
                     // them in the level's メイリオ. OXI_RUNCS_DISABLE reads it as before.
                     "latin" | "ea" | "cs" if in_run && (name != "cs" || runcs_off()) => {
                         if let Some(typeface) = get_attr(&e, "typeface") {
+                            if name == "latin" {
+                                run_latin_face = Some(typeface.clone());
+                            } else if name == "ea" {
+                                run_ea_face = Some(typeface.clone());
+                            }
                             if run_font_family.is_none() {
                                 run_font_family = Some(typeface);
                             }
@@ -3685,6 +3763,7 @@ fn parse_slide(
                             end_para_size: para_end_size.take(),
                             end_para_mark: std::mem::take(&mut para_end_mark),
                             hanging_punct: para_hang.take(),
+                            ea_ln_brk: para_ea_brk.take(),
                             tab_stops: para_tabs.take(),
                             def_tab_sz: para_def_tab.take(),
                             ea_lang: std::mem::take(&mut para_ea_lang),
@@ -3897,6 +3976,10 @@ fn parse_slide(
                                 kern: run_kern,
                             baseline_shift: superscript_shift(run_font_size, run_baseline),
                             });
+                            let (lf, ef) = (run_latin_face.take(), run_ea_face.take());
+                            if let Some(last) = para_runs.pop() {
+                                para_runs.extend(split_run_by_script(last, lf, ef));
+                            }
                         }
                     }
                     "t" => {
@@ -5698,6 +5781,7 @@ fn merge_ph_levels(
                 own_indent: l.own_indent.or(m.own_indent),
                 kern: l.kern.or(m.kern),
                 hanging_punct: l.hanging_punct.or(m.hanging_punct),
+                ea_ln_brk: l.ea_ln_brk.or(m.ea_ln_brk),
                 tab_stops: l.tab_stops.clone().or(m.tab_stops.clone()),
                 def_tab_sz: l.def_tab_sz.or(m.def_tab_sz),
                 bullet: if matches!(l.bullet, SlideBullet::Inherit) {

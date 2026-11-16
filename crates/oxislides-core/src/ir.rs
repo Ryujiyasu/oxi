@@ -188,6 +188,11 @@ pub struct MasterStyleLevel {
     /// bodyStyle, a text box from defaultTextStyle; stated nowhere = hang.
     #[serde(default)]
     pub hanging_punct: Option<bool>,
+    /// `@eaLnBrk`: "0" turns East Asian kinsoku off for the paragraph -- no
+    /// line-start / line-end prohibition and no hanging (`gen_pptx_kinsoku.py`:
+    /// ー, small kana, ）」、。 all start a line). Absent = on.
+    #[serde(default)]
+    pub ea_ln_brk: Option<bool>,
     /// `a:lvlNpPr/a:tabLst` (see `SlideParagraph::tab_stops`).
     #[serde(default)]
     pub tab_stops: Option<Vec<TabStop>>,
@@ -1058,6 +1063,11 @@ pub struct SlideParagraph {
     /// 19.6pt cell and twelve control characters).
     #[serde(default)]
     pub hanging_punct: Option<bool>,
+    /// `@eaLnBrk`: "0" turns East Asian kinsoku off for the paragraph -- no
+    /// line-start / line-end prohibition and no hanging (`gen_pptx_kinsoku.py`:
+    /// ー, small kana, ）」、。 all start a line). Absent = on.
+    #[serde(default)]
+    pub ea_ln_brk: Option<bool>,
     /// Some run's `lang` or `altLang` is Japanese, Chinese or Korean. Hanging
     /// punctuation needs it: wrapfit's `west war.` (lang="en-US") breaks
     /// before `war.` even under hangingPunct="1", and hangs with altLang="ja-JP"
