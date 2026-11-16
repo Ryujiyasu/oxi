@@ -1290,6 +1290,23 @@ pub fn indent_geometry(
     }
 }
 
+/// Where line 0 starts when the paragraph draws NO marker.
+///
+/// A hanging indent without a bullet does not hang: line 0 starts where the
+/// marker would have stood, `max(0, marL + indent)` (probe `hangnobu`, 5 no-bullet
+/// arms: m72/i-54 -> 18, m36/i-36 -> 0, m18/i-36 -> 0, m108/i-90 -> 18,
+/// m72/i-18 -> 54; the bullet arms keep their text at `max(marL, -indent)`).
+/// 252cbc8c slide 41 draws its `（ⅰ）基本編：` lines this way. A positive indent
+/// is unchanged. `OXI_HANGNOBU_DISABLE=1` keeps the bulleted geometry.
+pub fn first_x_without_marker(g: &IndentGeometry, indent: f32) -> f32 {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if indent > 0.0 || *OFF.get_or_init(|| std::env::var("OXI_HANGNOBU_DISABLE").is_ok()) {
+        g.first_x
+    } else {
+        g.marker_x.max(0.0)
+    }
+}
+
 /// The baseline-to-baseline step between two lines of DIFFERENT size.
 ///
 /// A paragraph whose lines are all one size steps by `fs * 1.2 * n` exactly,
@@ -1489,6 +1506,8 @@ mod size_tests {
             line_spacing_pts: None,
             space_before: None,
             space_after: None,
+            space_before_pct: None,
+            space_after_pct: None,
             lvl: 0,
             end_para_size: None,
             mar_l: None,
@@ -2178,6 +2197,7 @@ pub fn layout_text_shape(
         if pi > 0 || shape.spc_first_last_para {
             cursor += para
                 .space_before
+                .or_else(|| para.space_before_pct.map(|p| p * fs * 1.2))
                 .or_else(|| level.spc_bef_pct.map(|p| p * adv))
                 .or(level.spc_bef_pts)
                 .unwrap_or(0.0);
@@ -2212,12 +2232,18 @@ pub fn layout_text_shape(
         };
         let italic =
             para.runs.iter().any(|r| r.italic) || level_italic(master, ph_levels, para.lvl);
-        let geom = indent_geometry(
+        let p_indent = para.indent.unwrap_or(level.indent);
+        let mut geom = indent_geometry(
             inner_w,
             para.mar_l.unwrap_or(level.mar_l),
-            para.indent.unwrap_or(level.indent),
+            p_indent,
             true,
         );
+        let p_bullet = if matches!(para.bullet, crate::ir::SlideBullet::Inherit) { &level.bullet } else { &para.bullet };
+        if !matches!(p_bullet, crate::ir::SlideBullet::Char { .. } | crate::ir::SlideBullet::AutoNum { .. }) {
+            geom.first_x = first_x_without_marker(&geom, p_indent);
+            geom.first_width = (inner_w - geom.first_x).max(1.0);
+        }
 
         let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
         let broken = break_paragraph(
@@ -2293,7 +2319,7 @@ pub fn layout_text_shape(
             char_at += line.chars().count();
         }
         cursor += broken.len() as f32 * adv;
-        cursor += para.space_after.unwrap_or(0.0);
+        cursor += para.space_after.or_else(|| para.space_after_pct.map(|p| p * fs * 1.2)).unwrap_or(0.0);
     }
 
     let height = (cursor - shape.t_ins - geom_t).max(0.0);
@@ -2352,6 +2378,8 @@ mod shape_tests {
             line_spacing_pts: None,
             space_before: None,
             space_after: None,
+            space_before_pct: None,
+            space_after_pct: None,
             lvl: 0,
             end_para_size: None,
             mar_l: None,

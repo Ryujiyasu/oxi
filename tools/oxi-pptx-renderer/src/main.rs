@@ -277,7 +277,7 @@ fn dump_layout_json_gdi(pres: &Presentation, path: &str, dpi: u32, supersample: 
                                                 &pres.master_styles.title
                                             }
                                             Some("dt") | Some("ftr") | Some("sldNum") | Some("hdr") if footerstyle_on() => {
-                                                &pres.master_styles.other
+                                                &pres.master_styles.footer
                                             }
                                             Some(_) => &pres.master_styles.body,
                                             None => &pres.master_styles.other,
@@ -477,7 +477,7 @@ fn compute_shape_anchor_off(
     let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
         Some("title") | Some("ctrTitle") => &pres.master_styles.title,
         Some("dt") | Some("ftr") | Some("sldNum") | Some("hdr") if footerstyle_on() => {
-            &pres.master_styles.other
+            &pres.master_styles.footer
         }
         Some(_) => &pres.master_styles.body,
         None => &pres.master_styles.other,
@@ -5640,7 +5640,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         let master_ctx: &Vec<MasterStyleLevel> = match sh.ph_type.as_deref() {
                             Some("title") | Some("ctrTitle") => &pres.master_styles.title,
                             Some("dt") | Some("ftr") | Some("sldNum") | Some("hdr") if footerstyle_on() => {
-                                &pres.master_styles.other
+                                &pres.master_styles.footer
                             }
                             Some(_) => &pres.master_styles.body,
                             None => &pres.master_styles.other,
@@ -18525,6 +18525,8 @@ fn layout_paragraph_baselines(
     if !is_first || spc_first_last || !spcfirst_on() {
         if let Some(sb) = para.space_before {
             *cursor_pt += sb;
+        } else if let Some(pct) = para.space_before_pct {
+            *cursor_pt += pct * fs * 1.2;
         } else if !is_first {
             // Master spcBef (a:spcPct) — a fraction of the line advance,
             // applied between paragraphs only (the first paragraph's first
@@ -18680,7 +18682,9 @@ fn layout_paragraph_baselines(
                 align_off: 0.0, // filled in the line loop, with line 0's
             });
         }
-        _ => {}
+        _ => {
+            line0_x_off = oxislides_core::layout::first_x_without_marker(&geom, indent);
+        }
     }
     // An EMPTY paragraph draws no marker: 252cbc8c ends most bodies with a
     // bare `<a:endParaRPr/>` paragraph, and PowerPoint leaves that line blank
@@ -19013,6 +19017,8 @@ fn layout_paragraph_baselines(
     };
     if let Some(sa) = para.space_after {
         *cursor_pt += sa;
+    } else if let Some(pct) = para.space_after_pct {
+        *cursor_pt += pct * fs * 1.2;
     }
     // ★The face and weight the paragraph was MEASURED with. The dump gave
     // positions but never said what produced them, so every disagreement had to

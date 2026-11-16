@@ -81,6 +81,11 @@ pub struct MasterTxStyles {
     pub other: Vec<MasterStyleLevel>,
     #[serde(default)]
     pub title: Vec<MasterStyleLevel>,
+    /// The master's `p:otherStyle` as written, for the dt / ftr / sldNum / hdr
+    /// placeholders. `other` itself holds what a PLAIN text box inherits, which
+    /// is `p:presentation/p:defaultTextStyle` (probe `otherstyle`).
+    #[serde(default)]
+    pub footer: Vec<MasterStyleLevel>,
 }
 
 /// One outline-level master text style (a:lvlNpPr).
@@ -969,6 +974,13 @@ pub struct SlideParagraph {
     /// Space after this paragraph, in points (`a:spcAft/a:spcPts` val/100).
     #[serde(default)]
     pub space_after: Option<f32>,
+    /// `a:spcBef/a:spcPct` as a fraction of the line (val/100000); used when
+    /// `space_before` (points) is absent.
+    #[serde(default)]
+    pub space_before_pct: Option<f32>,
+    /// `a:spcAft/a:spcPct`, likewise.
+    #[serde(default)]
+    pub space_after_pct: Option<f32>,
     /// Outline level (a:pPr/@lvl, 0-based). Default 0.
     #[serde(default)]
     pub lvl: u32,

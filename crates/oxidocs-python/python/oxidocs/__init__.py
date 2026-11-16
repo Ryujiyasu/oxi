@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Convert .docx and .pptx to PDF with the Oxi engine, without LibreOffice,
-Word or PowerPoint.
+"""Convert .docx, .pptx and .xlsx to PDF without Microsoft Office or LibreOffice.
 
     import oxidocs
 
@@ -47,6 +46,7 @@ __all__ = [
     "binary_path",
     "docx_to_pdf",
     "pptx_to_pdf",
+    "xlsx_to_pdf",
 ]
 
 PathLike = Union[str, "os.PathLike[str]"]
@@ -200,7 +200,8 @@ class Converter:
         """Convert ``docx`` to ``pdf``; see :func:`docx_to_pdf`.
 
         A presentation (.pptx and its variants) is converted too, one page
-        per slide: the engine tells the formats apart by name and content.
+        per slide. Spreadsheets use their print settings and saved cell values.
+        The engine tells the formats apart by name and content.
         """
         source, target = Path(docx).resolve(), Path(pdf).resolve()
         if not source.is_file():
@@ -276,3 +277,22 @@ def pptx_to_pdf(
     """
     with Converter(threads=1) as converter:
         return converter.convert(pptx, pdf, strict=strict, timeout=timeout)
+
+
+def xlsx_to_pdf(
+    xlsx: PathLike,
+    pdf: PathLike,
+    *,
+    strict: bool = False,
+    timeout: Optional[float] = None,
+) -> Result:
+    """Convert visible spreadsheet sheets to PDF using their print settings.
+
+    Uses saved formula values without recalculation or macro execution.
+    Supports .xlsx, .xlsm, .xltx and .xltm. Drawings, charts, print titles,
+    headers/footers and advanced cell formatting are not fully drawn yet;
+    ``strict=True`` raises UnsupportedContent for these features.
+    Returns and raises as :func:`docx_to_pdf`.
+    """
+    with Converter(threads=1) as converter:
+        return converter.convert(xlsx, pdf, strict=strict, timeout=timeout)

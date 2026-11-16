@@ -3,14 +3,24 @@
 # GitLab Pages carries the demo, and the URL it serves is the one that has been
 # given out, so the deploy stays here. Everything else — the unit and
 # integration suite, clippy, the WebAssembly build and the browser editor's own
-# suites — moved to GitHub Actions (`.github/workflows/ci.yml`) when GitHub
-# became the place issues and pull requests arrive.
+# suites — runs on GitHub Actions (`.github/workflows/ci.yml`).
 #
 # Nobody pushes here any more. GitHub is where work lands, and it pushes `main`
-# across (`.github/workflows/mirror-to-gitlab.yml`) so this pipeline runs and
-# the site is rebuilt. Committing here directly would put this copy ahead of
-# GitHub and stop that mirror, which is the one thing that would take the site
-# down.
+# across (`.github/workflows/mirror-to-gitlab.yml`). Committing here directly
+# would put this copy ahead of GitHub and stop that mirror.
+#
+# The site itself is now built on GitHub too (`.github/workflows/site.yml`).
+# This job used to build the WebAssembly engine on every push to main: about
+# 14 minutes a run against GitLab's monthly compute quota, which ran out within
+# the first days of each month and left every later deploy refused before it
+# started (`ci_quota_exceeded`), so the site stayed weeks old without anything
+# looking broken. Now GitHub builds it, publishes the tarball on its rolling
+# `site` release, and triggers this pipeline with the SHA-256 the tarball must
+# have. This job only downloads, checks and unpacks it.
+#
+# A push (the mirror) starts no job here, so it costs no minutes. A tarball
+# that does not match the expected hash fails the job, and Pages keeps serving
+# the previous deploy.
 #
 # The pixel-fidelity gates (SSIM against Word, Excel and PowerPoint's own
 # renders) need a Windows machine with Microsoft Office installed and are run
@@ -19,44 +29,21 @@
 stages:
   - deploy
 
-# The site is `docs/` plus the WebAssembly engine, built here from the same
-# commit. The engine used to be committed into `docs/` by hand, which put a
-# 50-80 MB binary into the repository history on every site update and let the
-# demo drift from the source it claims to run. Building it here keeps the
-# history free of it and makes the demo exactly the commit it was deployed from.
-#
-# The full suite is built (`--features suite`): the Word, Excel and PowerPoint
-# demo pages all load this one module. `external-font-catalog` leaves the ~34 MB
-# per-face metric catalog out of the module; its members are published beside
-# the pages as font_catalog/<offset>.bin, one file per face (Pages does not
-# honour Range requests), and docs/font-catalog.js fetches only the faces a
-# document needs. If the build fails the job fails and
-# Pages keeps serving the previous deploy, so a broken toolchain cannot take the
-# site down.
 pages:
   stage: deploy
-  image: rust:latest
-  needs: []
+  image: alpine:3
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "trigger" && $SITE_SHA256'
   variables:
-    WASM_PACK_VERSION: "v0.15.0"
-    CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
-  cache:
-    key: wasm-pages
-    paths:
-      - .cargo/registry
-      - target
+    # The repository is not needed: everything comes in the tarball.
+    GIT_STRATEGY: none
+    SITE_URL: "https://github.com/Ryujiyasu/oxi/releases/download/site/site.tar.gz"
   script:
-    - rustup target add wasm32-unknown-unknown
-    - curl -sSfL "https://github.com/rustwasm/wasm-pack/releases/download/${WASM_PACK_VERSION}/wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C /usr/local/bin --strip-components=1 "wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack"
-    - wasm-pack --version
-    - (cd crates/oxidocs-wasm && wasm-pack build --target web --release -- --features suite,external-font-catalog)
-    - mkdir -p public
-    - cp -r docs/* public/
-    - cp crates/oxidocs-wasm/pkg/oxidocs_wasm.js crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm crates/oxidocs-wasm/pkg/oxidocs_wasm.d.ts crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm.d.ts public/
-    - sh tools/site/split_font_catalog.sh public/font_catalog
+    - apk add --no-cache curl
+    - curl -fsSL --retry 5 --retry-delay 5 -o site.tar.gz "$SITE_URL"
+    - echo "$SITE_SHA256  site.tar.gz" | sha256sum -c -
+    - tar -xzf site.tar.gz
     - ls -la public/oxidocs_wasm_bg.wasm
   artifacts:
     paths:
       - public
-  only:
-    - main

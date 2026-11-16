@@ -112,9 +112,9 @@ with oxicells.open("帳票.xlsm", timeout=60) as wb:
 VBA ソースは、標準ではプロジェクトに記録されたコードページで読みます。記録と実際の文字コードが異なるファイルでは、文字化けした名前や構文エラーになることがあります。実際のソースが日本語 Windows の CP932 だと分かっている場合は、次のように指定します。
 
 ```python
-report = oxicells.inspect_macros(受領ファイル.xlsm, source_code_page=932)
-with oxicells.open(受領ファイル.xlsm, source_code_page=932) as wb:
-    result = wb.run(集計.Probe)
+report = oxicells.inspect_macros("受領ファイル.xlsm", source_code_page=932)
+with oxicells.open("受領ファイル.xlsm", source_code_page=932) as wb:
+    result = wb.run("集計.Probe")
 ```
 
 非 ASCII 文字を含むソースを解析できなかった場合は、元のエラーに `source_code_page` の案内を添えます。適切な文字コードを指定して開き直してください。この指定は Python 文字列の文字コードを変更するものではありません。

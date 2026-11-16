@@ -440,6 +440,7 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
 
     Ok(MasterTxStyles {
         body,
+        footer: other.clone(),
         other,
         title,
     })
@@ -997,6 +998,12 @@ fn parse_slide(
             HashMap::new()
         };
 
+    // A shape's OWN `a:lstStyle` (txBody), laid over whatever its placeholder
+    // inherits. 252cbc8c slide 41 is a plain text box whose lstStyle carries
+    // every bullet, indent, space-before and the メイリオ face; PowerPoint draws
+    // all of it. OXI_SPLST_DISABLE ignores it, as before.
+    let own_lst_styles = parse_sp_own_lststyles(xml, theme_colors);
+
     let (layout_ph_geoms, layout_ph_anchors, layout_ph_styles): (
         HashMap<(Option<String>, Option<String>), (f32, f32, f32, f32)>,
         HashMap<(Option<String>, Option<String>), String>,
@@ -1287,6 +1294,7 @@ fn parse_slide(
     // its geometry from the referenced slideLayout's matching placeholder.
     let mut shape_ph_type: Option<String> = None;
     let mut shape_ph_idx: Option<String> = None;
+    let mut shape_cnv_id: Option<String> = None;
     let mut shape_has_xfrm = false;
     // Group (p:grpSp) child-space transform stack.  Each entry is the
     // cumulative (offset_x, offset_y, scale_x, scale_y) mapping a child's
@@ -1370,6 +1378,7 @@ fn parse_slide(
     let mut para_line_spacing_pts: Option<f32> = None;
     let mut para_space_before: Option<f32> = None;
     let mut para_space_after: Option<f32> = None;
+    let (mut para_spc_bef_pct, mut para_spc_aft_pct): (Option<f32>, Option<f32>) = (None, None);
     let mut in_ln_spc = false;
     let mut in_spc_bef = false;
     let mut in_spc_aft = false;
@@ -1567,6 +1576,7 @@ fn parse_slide(
                         shape_border_width = None;
                         shape_ph_type = None;
                         shape_ph_idx = None;
+                        shape_cnv_id = None;
                         shape_has_xfrm = false;
                         in_body_pr = false;
                         shape_l_ins = 7.2;
@@ -1618,6 +1628,7 @@ fn parse_slide(
                         chart_r_id = None;
                         shape_ph_type = None;
                         shape_ph_idx = None;
+                        shape_cnv_id = None;
                         shape_has_xfrm = false;
                         in_body_pr = false;
                         shape_l_ins = 7.2;
@@ -1921,6 +1932,9 @@ fn parse_slide(
                             p.commands.push(GeomCmd::Close);
                         }
                     }
+                    "cNvPr" if in_shape && shape_cnv_id.is_none() => {
+                        shape_cnv_id = get_attr(&e, "id");
+                    }
                     "ph" if in_shape => {
                         // p:ph in nvPr — placeholder identity. Missing type defaults
                         // to "obj" (body placeholder) per the schema.
@@ -2062,6 +2076,8 @@ fn parse_slide(
                         para_line_spacing_pts = None;
                         para_space_before = None;
                         para_space_after = None;
+                        para_spc_bef_pct = None;
+                        para_spc_aft_pct = None;
                         in_ln_spc = false;
                         in_spc_bef = false;
                         in_spc_aft = false;
@@ -2316,7 +2332,11 @@ fn parse_slide(
                             }
                         }
                     }
-                    "latin" | "ea" | "cs" if in_run => {
+                    // `a:cs` is the COMPLEX-SCRIPT face (Arabic, Hebrew, Thai ...), not
+                    // the face of Japanese or Latin text: 252cbc8c slide 66 sets nothing
+                    // but `<a:cs typeface="Meiryo UI"/>` on its runs and PowerPoint draws
+                    // them in the level's メイリオ. OXI_RUNCS_DISABLE reads it as before.
+                    "latin" | "ea" | "cs" if in_run && (name != "cs" || runcs_off()) => {
                         if let Some(typeface) = get_attr(&e, "typeface") {
                             if run_font_family.is_none() {
                                 run_font_family = Some(typeface);
@@ -2715,6 +2735,9 @@ fn parse_slide(
                     "arcTo" | "quadBezTo" if in_cust_geom => {
                         cg_unsupported = true;
                     }
+                    "cNvPr" if in_shape && shape_cnv_id.is_none() => {
+                        shape_cnv_id = get_attr(&e, "id");
+                    }
                     "ph" if in_shape => {
                         shape_ph_type = match get_attr(&e, "type") {
                             Some(t) if !t.is_empty() => Some(t),
@@ -3013,6 +3036,18 @@ fn parse_slide(
                             }
                         }
                     }
+                    // A paragraph's own spcBef/spcAft in PERCENT of its line, as the
+                    // master levels already were (abde73e7 states 20% on every
+                    // paragraph and Oxi added nothing). OXI_PARASPCPCT_DISABLE.
+                    "spcPct" if (in_spc_bef || in_spc_aft) && std::env::var("OXI_PARASPCPCT_DISABLE").is_err() => {
+                        if let Some(x) = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()) {
+                            if in_spc_bef {
+                                para_spc_bef_pct = Some(x / 100_000.0);
+                            } else {
+                                para_spc_aft_pct = Some(x / 100_000.0);
+                            }
+                        }
+                    }
                     "spcPts" if in_spc_bef || in_spc_aft => {
                         // a:spcBef/spcAft/a:spcPts/@val is in 100ths of a point.
                         if let Some(v) = get_attr(&e, "val") {
@@ -3061,7 +3096,11 @@ fn parse_slide(
                             }
                         }
                     }
-                    "latin" | "ea" | "cs" if in_run => {
+                    // `a:cs` is the COMPLEX-SCRIPT face (Arabic, Hebrew, Thai ...), not
+                    // the face of Japanese or Latin text: 252cbc8c slide 66 sets nothing
+                    // but `<a:cs typeface="Meiryo UI"/>` on its runs and PowerPoint draws
+                    // them in the level's メイリオ. OXI_RUNCS_DISABLE reads it as before.
+                    "latin" | "ea" | "cs" if in_run && (name != "cs" || runcs_off()) => {
                         if let Some(typeface) = get_attr(&e, "typeface") {
                             if run_font_family.is_none() {
                                 run_font_family = Some(typeface);
@@ -3398,19 +3437,25 @@ fn parse_slide(
                             shape_type: shape_prst.take(),
                             adjustments: std::mem::take(&mut shape_adjustments),
                             ph_type: shape_ph_type.clone(),
-                            ph_levels: merge_ph_levels(
-                                lookup_ph_levels(
-                                    &layout_ph_styles,
-                                    shape_ph_type.as_ref(),
-                                    shape_ph_idx.as_ref(),
-                                ),
-                                lookup_ph_levels_in(
-                                    &master_ph_styles,
-                                    shape_ph_type.take().as_ref(),
-                                    shape_ph_idx.as_ref(),
-                                    true,
-                                ),
-                            ),
+                            ph_levels: {
+                                let base = merge_ph_levels(
+                                        lookup_ph_levels(
+                                            &layout_ph_styles,
+                                            shape_ph_type.as_ref(),
+                                            shape_ph_idx.as_ref(),
+                                        ),
+                                        lookup_ph_levels_in(
+                                            &master_ph_styles,
+                                            shape_ph_type.take().as_ref(),
+                                            shape_ph_idx.as_ref(),
+                                            true,
+                                        ),
+                                );
+                                match shape_cnv_id.take().and_then(|id| own_lst_styles.get(&id)) {
+                                    Some(own) => merge_ph_levels(own.clone(), base),
+                                    None => base,
+                                }
+                            },
                             content,
                             fill_color: shape_fill_color.take(),
                             fill_alpha: shape_fill_alpha.take(),
@@ -3474,6 +3519,8 @@ fn parse_slide(
                             line_spacing_pts: para_line_spacing_pts,
                             space_before: para_space_before,
                             space_after: para_space_after,
+                            space_before_pct: para_spc_bef_pct.take(),
+                            space_after_pct: para_spc_aft_pct.take(),
                             lvl: para_lvl,
                             mar_l: para_mar_l,
                             indent: para_indent,
@@ -5406,6 +5453,45 @@ fn grpfliprot_on() -> bool {
     std::env::var("OXI_GRPFLIPROT_DISABLE").is_err()
 }
 
+/// `OXI_RUNCS_DISABLE=1` lets a run's `a:cs` face name its font again.
+fn runcs_off() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("OXI_RUNCS_DISABLE").is_ok())
+}
+
+/// Each `p:sp`'s own `a:lstStyle` levels, keyed by its `p:cNvPr/@id`.
+/// Shapes do not nest inside `p:sp`, so the element's text runs to the first
+/// `</p:sp>`. `OXI_SPLST_DISABLE=1` returns nothing.
+fn parse_sp_own_lststyles(
+    xml: &str,
+    theme_colors: &HashMap<String, String>,
+) -> HashMap<String, Vec<MasterStyleLevel>> {
+    let mut out = HashMap::new();
+    if std::env::var("OXI_SPLST_DISABLE").is_ok() {
+        return out;
+    }
+    let mut rest = xml;
+    while let Some(a) = rest.find("<p:sp>").or_else(|| rest.find("<p:sp ")) {
+        let body = &rest[a..];
+        let end = body.find("</p:sp>").map(|e| e + 7).unwrap_or(body.len());
+        let sp = &body[..end];
+        rest = &body[end..];
+        let Some(ls) = sp.find("<a:lstStyle>") else { continue };
+        let Some(le) = sp[ls..].find("</a:lstStyle>") else { continue };
+        let id = sp.find("<p:cNvPr ").and_then(|c| {
+            let t = &sp[c..];
+            let q = t.find(" id=\"")? + 5;
+            t[q..].find('"').map(|r| t[q..q + r].to_string())
+        });
+        let Some(id) = id else { continue };
+        let frag = format!("<p:sp>{}</p:sp>", &sp[ls..ls + le + 13]);
+        if let Some(levels) = parse_layout_ph_lststyles(&frag, theme_colors).remove(&(None, None)) {
+            out.insert(id, levels);
+        }
+    }
+    out
+}
+
 fn merge_ph_levels(
     layout: Vec<MasterStyleLevel>,
     master: Vec<MasterStyleLevel>,
@@ -6456,10 +6542,25 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
     // 2.7. Parse the slide master text styles (Spec #8): the inherited
     // marL/indent/bullet/spcBef per outline level. Standard path is
     // ppt/slideMasters/slideMaster1.xml; absent part -> empty styles.
-    let master_styles = match archive.try_read_part("ppt/slideMasters/slideMaster1.xml")? {
+    let mut master_styles = match archive.try_read_part("ppt/slideMasters/slideMaster1.xml")? {
         Some(master_xml) => parse_master_txstyles(&master_xml)?,
         None => MasterTxStyles::default(),
     };
+    // A PLAIN text box takes its levels from `p:defaultTextStyle`, not from the
+    // master's `p:otherStyle` (probe `otherstyle`: defaultTextStyle 24pt red,
+    // otherStyle 12pt blue -> PowerPoint draws both levels 24pt red). abde73e7
+    // says 18pt / 13.5pt and PowerPoint draws its unsized boxes at 18pt. The two
+    // agree in most decks. OXI_DEFTXSTYLE_DISABLE keeps otherStyle.
+    if std::env::var("OXI_DEFTXSTYLE_DISABLE").is_err() {
+        if let (Some(i), Some(j)) = (pres_xml.find("<p:defaultTextStyle>"), pres_xml.find("</p:defaultTextStyle>")) {
+            let frag = format!("<p:otherStyle>{}</p:otherStyle>", &pres_xml[i + 20..j]);
+            if let Ok(d) = parse_master_txstyles(&frag) {
+                if !d.other.is_empty() {
+                    master_styles.other = d.other;
+                }
+            }
+        }
+    }
 
     // 2.8. Parse the slide master placeholder geometries AND bodyPr anchors
     // (Spec #8 follow-up + Spec #6). A layout placeholder without an explicit

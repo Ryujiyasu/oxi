@@ -16,6 +16,7 @@ mod fontidx;
 mod vba;
 mod emf;
 mod pptx;
+mod xlsx;
 mod raster;
 
 #[cfg(target_env = "musl")]
@@ -81,8 +82,10 @@ fn main() {
             };
             finish(input, output, convert_png(input, output, strict, page, size));
         }
-        Some("pptx-to-pdf") => {
-            let usage = "Usage: oxi pptx-to-pdf [--strict] <input.pptx> <output.pdf>";
+        Some("pptx-to-pdf") | Some("xlsx-to-pdf") => {
+            let usage = if args[1] == "xlsx-to-pdf" {
+                "Usage: oxi xlsx-to-pdf [--strict] <input.xlsx> <output.pdf>"
+            } else { "Usage: oxi pptx-to-pdf [--strict] <input.pptx> <output.pdf>" };
             let strict = args[2..].iter().any(|a| a == "--strict");
             let paths: Vec<&String> = args[2..].iter().filter(|a| *a != "--strict").collect();
             let (Some(input), Some(output)) = (paths.first(), paths.get(1)) else {
@@ -228,6 +231,7 @@ fn main() {
             eprintln!("  oxi docx-to-pdf [--strict] [--quiet] <input.docx> <output.pdf>");
             eprintln!("  oxi docx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.docx> <output.png>");
             eprintln!("  oxi pptx-to-pdf [--strict] [--quiet] <input.pptx> <output.pdf>");
+            eprintln!("  oxi xlsx-to-pdf [--strict] [--quiet] <input.xlsx> <output.pdf>");
             eprintln!("  oxi pptx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.pptx> <output.png>");
             eprintln!("      page N (default 1), fitted inside the given width and/or height (default 96 dpi)");
             eprintln!("  oxi serve [--threads N]");
@@ -311,6 +315,16 @@ fn stand_in_face_bytes() -> Option<Vec<u8>> {
 /// under `strict` when it holds content Oxi does not draw.
 fn lay_out(input: &str, strict: bool) -> Result<PdfDocument, ConvertError> {
     let data = fs::read(input).map_err(|e| ConvertError::Failed(format!("read {input}: {e}")))?;
+    if xlsx::is_workbook(input, &data) {
+        let (document, unsupported) = xlsx::pages(&data).map_err(ConvertError::Failed)?;
+        if strict && !unsupported.is_empty() {
+            return Err(ConvertError::Unsupported(unsupported));
+        }
+        for item in unsupported {
+            eprintln!("Warning: {} x{} in {} is not drawn as Excel draws it", item.kind, item.count, item.part);
+        }
+        return Ok(document);
+    }
     if is_presentation(input, &data) {
         return lay_out_slides(input, &data, strict);
     }

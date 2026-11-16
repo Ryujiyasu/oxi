@@ -16,7 +16,7 @@ path = "src/cells.rs"
 required-features = ["vba-execution"]
 
 [features]
-vba-execution = ["dep:oxidocs-wasm", "dep:oxicells-core", "dep:quick-xml"]
+vba-execution = ["dep:oxidocs-wasm"]
 
 [dependencies]
 oxidocs-common = { version = "0.9.0", path = "../oxidocs-common" }
@@ -27,8 +27,8 @@ oxislides-core = { version = "0.9.0", path = "../oxislides-core" }
 oxipdf-core = { version = "0.9.0", path = "../oxipdf-core" }
 serde_json = "1"
 oxidocs-wasm = { version = "0.9.0", path = "../oxidocs-wasm", features = ["suite", "external-font-catalog"], optional = true }
-oxicells-core = { version = "0.9.0", path = "../oxicells-core", optional = true }
-quick-xml = { version = "0.37", optional = true }
+oxicells-core = { version = "0.9.0", path = "../oxicells-core" }
+quick-xml = "0.37"
 encoding_rs = "0.8"
 subsetter = "0.2.6"
 rustybuzz = "0.20"
@@ -42,3 +42,6 @@ tiny-skia = { version = "0.11", default-features = false, features = ["std", "si
 # speed; the glibc builds keep the system allocator.
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }

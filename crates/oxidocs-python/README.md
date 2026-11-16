@@ -1,6 +1,6 @@
 # oxidocs
 
-Convert `.docx` and `.pptx` to PDF in Python without LibreOffice or Microsoft Office.
+Convert `.docx`, `.pptx` and `.xlsx` to PDF in Python without LibreOffice or Microsoft Office.
 
 ```sh
 pip install oxidocs
@@ -13,6 +13,7 @@ result = oxidocs.docx_to_pdf("report.docx", "report.pdf")
 print(result.pages)
 
 oxidocs.pptx_to_pdf("deck.pptx", "deck.pdf")   # one page per slide
+oxidocs.xlsx_to_pdf("report.xlsx", "report.pdf")  # visible sheets, in print order
 ```
 
 The package bundles the [Oxi](https://github.com/Ryujiyasu/oxi) engine as a single binary. Oxi is an open-source Rust engine that lays out Word documents the way Word does. There is no office suite to install and no server to run. The document is converted on the machine that holds it.
@@ -52,7 +53,41 @@ except oxidocs.UnsupportedContent as e:
     print("falling back:", e.kinds)   # e.g. ['chart']
 ```
 
-A `Converter` takes documents and presentations alike.
+A `Converter` takes documents, presentations and spreadsheets alike.
+
+## Spreadsheets
+
+`xlsx_to_pdf` exports visible worksheets in workbook order. It supports cell text
+(including Japanese), saved formula results, number formats, solid backgrounds,
+simple borders, alignment, wrapping, shrink-to-fit, merged cells and hidden rows
+and columns. Printing uses each sheet's cell-range print areas, Letter/Legal/A3/A4/A5
+paper size, orientation, margins, scale, fit-to-page settings, centering and manual
+page breaks. Separate print areas start on separate pages. Empty sheets are skipped.
+
+```python
+oxidocs.xlsx_to_pdf("report.xlsx", "report.pdf", strict=True)
+```
+
+The engine does not recalculate formulas or run VBA; save updated calculation
+results before conversion. Macro-enabled workbooks (`.xlsm`) are accepted too.
+This first spreadsheet PDF path does not establish Excel print-layout parity:
+row heights use the saved values and unwrapped text is clipped to its cell.
+Drawings/charts, table styles, conditional formatting, rich or rotated text,
+complex borders, merges crossing print boundaries, repeating print titles, headers/footers and print headings are
+reported as unsupported. `strict=True` refuses these before writing the output;
+without strict the engine warns and writes the supported content.
+
+CLI: `oxidocs xlsx-to-pdf [--strict] [--quiet] input.xlsx output.pdf`.
+
+### Excel の PDF 出力
+
+`oxidocs.xlsx_to_pdf("帳票.xlsx", "帳票.pdf")` で、表示中のシートを順に
+PDFへ出力できます。印刷範囲、用紙サイズ・向き、余白、倍率、ページへの
+縮小、手動改ページ、結合セル、数値書式、背景色、単純な罫線に対応します。
+数式には保存済みの計算結果を使い、再計算やマクロ実行は行いません。
+Excelとの完全な印刷一致を保証する段階ではありません。グラフ・図形、
+条件付き書式、印刷タイトル、ヘッダー／フッターなどは未対応として報告し、
+`strict=True` を指定すると出力前に `UnsupportedContent` で停止します。
 
 ## Command line
 
