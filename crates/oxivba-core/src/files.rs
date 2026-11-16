@@ -8,9 +8,8 @@
 //! and are there to read back until the run ends -- which is what a macro
 //! writing a report and reading it back, or keeping a scratch file, needs.
 //! Paths are compared the way Windows compares them: case aside, `/` and
-//! `\` alike. Text is kept as UTF-8, so a byte count (`LOF`, `FileLen`)
-//! matches Excel's for ASCII and not for text its ANSI code page writes in
-//! two bytes.
+//! `\` alike. Sequential VBA output is encoded by the host ANSI profile;
+//! binary reads and writes retain the original bytes.
 
 use std::collections::BTreeMap;
 mod wildcards;
@@ -172,6 +171,9 @@ pub struct Files {
     attributes: BTreeMap<String, i64>,
     volume_labels: BTreeMap<String,String>,
     record_locks: Vec<RecordLock>,
+    modified: BTreeMap<String, f64>,
+    current_time: f64,
+    pending_writes: std::collections::BTreeSet<(u64, i64)>,
 }
 
 impl Default for Files {
@@ -183,9 +185,16 @@ impl Default for Files {
             attributes: BTreeMap::new(),
             volume_labels: BTreeMap::new(),
             record_locks: Vec::new(),
+            modified: BTreeMap::new(), current_time: 0.0, pending_writes: Default::default(),
             cursors: BTreeMap::new(),
         }
     }
+}
+
+
+fn whole_second_date(serial: f64) -> f64 {
+    let seconds = (serial.abs().fract() * 86_400.0 + 0.00001).floor();
+    serial.trunc() + serial.signum() * seconds / 86_400.0
 }
 
 /// The last part of a path.
@@ -216,6 +225,7 @@ impl Files {
         self.contents.is_empty() && self.open.is_empty() && self.listings.is_empty()
             && self.folders.is_empty() && self.attributes.is_empty()
             && self.volume_labels.is_empty() && self.record_locks.is_empty()
+            && self.modified.is_empty() && self.pending_writes.is_empty()
             && self.next_stream_number==1000 && self.current_drive=='C'
             && self.drive_directories.len()==1
             && self.drive_directories.get(&'C').is_some_and(|path|path=="C:\\")
@@ -278,6 +288,8 @@ impl Files {
         self.folders=folders;
         self.contents=contents;
         self.attributes=attributes;
+        self.modified=self.contents.keys().chain(self.folders.iter()).map(|key|(key.clone(),self.current_time)).collect();
+        self.pending_writes.clear();
         self.open.clear();
         self.cursors.clear();
         self.record_locks.clear();
@@ -433,6 +445,83 @@ impl Files {
         self.volume_labels=volumes;Ok(())
     }
 
+
+    /// Supply the host's local OLE clock for newly created or closed files.
+    pub fn set_current_time(&mut self, serial: f64) {
+        if serial.is_finite() { self.current_time = whole_second_date(serial); }
+    }
+
+    /// Local modification times are separate host facts, like volume labels.
+    /// Keeping them separate preserves existing closed-snapshot callers.
+    pub fn modified_facts(&self) -> Vec<(String, f64)> {
+        self.modified.iter().map(|(key, serial)| {
+            let path = self.contents.get(key).map(|(path, _)| path.clone())
+                .unwrap_or_else(|| if key.len() == 2 && key.ends_with(':') { format!("{key}\\") } else { key.clone() });
+            (path, *serial)
+        }).collect()
+    }
+
+    /// Seed a mounted entry's real modification time without writing its bytes.
+    pub fn set_modified_time(&mut self, path: &str, serial: f64) -> Result<(), FileError> {
+        if !serial.is_finite() || !(-657435.0..2958466.0).contains(&serial) { return Err(FileError::InvalidArgument); }
+        let path = self.normalize_snapshot_path(path)?;
+        let key = path.to_lowercase().trim_end_matches('\\').to_string();
+        if !self.contents.contains_key(&key) && !self.folder_exists(&path) { return Err(FileError::InvalidArgument); }
+        self.modified.insert(key, whole_second_date(serial));
+        Ok(())
+    }
+
+    /// Validate the entire time snapshot before replacing any existing facts.
+    pub fn restore_modified_facts(&mut self, facts: &[(String, f64)]) -> Result<(), FileError> {
+        let mut next = self.clone();
+        next.modified.clear();
+        let paths: Vec<_> = next.contents.keys().chain(next.folders.iter()).cloned().collect();
+        for key in paths { next.modified.insert(key, next.current_time); }
+        let mut seen = std::collections::BTreeSet::new();
+        for (path, serial) in facts {
+            let key = next.normalize_snapshot_path(path)?.to_lowercase().trim_end_matches('\\').to_string();
+            if !seen.insert(key) { return Err(FileError::InvalidArgument); }
+            next.set_modified_time(path, *serial)?;
+        }
+        self.modified = next.modified;
+        Ok(())
+    }
+
+    /// FileDateTime uses the local last-write time and native pathname errors.
+    pub fn date_modified(&self, path: &str) -> Result<f64, FileError> {
+        let path = path.split('\0').next().unwrap_or_default();
+        if path.trim_end_matches(' ').is_empty() { return Err(FileError::NotFound); }
+        if path.contains(['*', '?']) { return Err(FileError::BadNumber); }
+        if path.chars().enumerate().any(|(at, ch)|
+            ch.is_control() || matches!(ch, '"' | '<' | '>' | '|') || ch == ':' && at != 1) {
+            return Err(FileError::InvalidArgument);
+        }
+        let key = self.absolute_path(path).to_lowercase().trim_end_matches('\\').to_string();
+        let leaf=key.rsplit('\\').next().unwrap_or_default().split('.').next().unwrap_or_default();
+        if matches!(leaf,"con"|"prn"|"aux"|"nul") || (leaf.starts_with("com") || leaf.starts_with("lpt"))
+            && leaf.len()==4 && matches!(leaf.as_bytes()[3],b'1'..=b'9') { return Err(FileError::InvalidArgument); }
+        if path.ends_with(['\\', '/']) {
+            return Err(if self.contents.contains_key(&key) { FileError::InvalidArgument } else { FileError::NotFound });
+        }
+        if !self.contents.contains_key(&key) && !self.folder_exists(&key) {
+            let parent = key.rsplit_once('\\').map_or("", |(parent, _)| parent);
+            return Err(if self.folder_exists(parent) { FileError::NotFound } else { FileError::PathNotFound });
+        }
+        Ok(self.modified.get(&key).copied().unwrap_or(self.current_time))
+    }
+
+    fn mark_handle_written(&mut self, number: i64, path: &str, nonempty: bool) {
+        self.mark_written(path);
+        if nonempty { self.pending_writes.insert(channel_key(self.project_scope, number)); }
+    }
+
+    fn close_key(&mut self, key: (u64, i64)) {
+        if let Some(handle) = self.open.remove(&key) {
+            if self.pending_writes.remove(&key) { self.modified.insert(handle.path, self.current_time); }
+        }
+        self.cursors.remove(&key);
+    }
+
     pub fn attributes(&self, path: &str) -> Result<i64, FileError> {
         let key=self.key(path).trim_end_matches('\\').to_string();
         let default=if self.contents.contains_key(&key) {32}
@@ -485,6 +574,7 @@ impl Files {
             }
         }
         self.mark_written(&name);
+        self.modified.insert(name.clone(),self.current_time);
         self.contents.insert(name, (self.absolute_path(path.trim()), bytes));
         Ok(())
     }
@@ -540,6 +630,7 @@ impl Files {
             (matches!(mode,OpenMode::Output|OpenMode::Append) || matches!(held.mode,OpenMode::Output|OpenMode::Append))) {
             return Err(FileError::AlreadyOpen);
         }
+        let newly_created=!self.contents.contains_key(&name);
         let read_only=self.is_read_only_key(&name);
         let (can_read,can_write)=match access {
             Some(crate::ast::FileAccess::Read)=>(true,false),
@@ -574,6 +665,7 @@ impl Files {
             }
             OpenMode::Input => {}
         }
+        if newly_created || mode==OpenMode::Output { self.modified.insert(name.clone(),self.current_time); }
         let column = match mode {
             OpenMode::Append => {
                 let bytes = &self.contents[&name].1;
@@ -595,6 +687,7 @@ impl Files {
         if mode!=OpenMode::Input && self.is_read_only_key(&name) {return Err(FileError::PermissionDenied);}
         // Native FSO streams permit concurrent readers. ForWriting and
         // ForAppending deny writers, including writers that opened first.
+        let newly_created=!self.contents.contains_key(&name);
         let can_read=mode==OpenMode::Input;let can_write=!can_read;
         let share_read=true;let share_write=can_read;
         if self.sharing_conflict(&name,can_read,can_write,share_read,share_write) {return Err(FileError::PermissionDenied);}
@@ -609,6 +702,7 @@ impl Files {
                 self.contents.entry(name.clone()).or_insert_with(|| (path, Vec::new()));
             }
         }
+        if newly_created || mode==OpenMode::Output { self.modified.insert(name.clone(),self.current_time); }
         let column = if mode == OpenMode::Append {
             let bytes = &self.contents[&name].1;
             let start = bytes.iter().rposition(|byte| matches!(*byte, b'\r' | b'\n')).map_or(0, |at| at + 1);
@@ -656,6 +750,7 @@ impl Files {
             let parent=key.rfind('\\').ok_or(FileError::InvalidArgument)?;
             key.truncate(parent);
         }
+        for folder in &folders { self.modified.entry(folder.clone()).or_insert(self.current_time); }
         self.folders.extend(folders);
         Ok(())
     }
@@ -670,6 +765,7 @@ impl Files {
         }
         let parent=folder.rsplit_once('\\').map(|(parent,_)|parent).ok_or(FileError::PathNotFound)?;
         if !self.folder_exists(&format!("{parent}\\")) {return Err(FileError::PathNotFound);}
+        self.modified.insert(folder.clone(),self.current_time);
         self.folders.insert(folder);
         Ok(())
     }
@@ -694,6 +790,7 @@ impl Files {
         }
         self.folders.remove(&folder);
         self.attributes.remove(&folder);
+        self.modified.remove(&folder);
         Ok(())
     }
 
@@ -716,6 +813,7 @@ impl Files {
                 if self.open.values().any(|handle|handle.path==path) || !force && self.is_read_only_key(&path) {return Err(FileError::PermissionDenied);}
                 self.contents.remove(&path);
                 self.attributes.remove(&path);
+                self.modified.remove(&path);
             }
         }
         let cwd=self.key(&self.current_directory(None)?).trim_end_matches('\\').to_string();
@@ -723,6 +821,7 @@ impl Files {
         if !force && self.is_read_only_key(folder) {return Err(FileError::PermissionDenied);}
         self.folders.remove(folder);
         self.attributes.remove(folder);
+        self.modified.remove(folder);
         Ok(())
     }
 
@@ -773,13 +872,12 @@ impl Files {
     /// Close internal handles, including streams, or every handle for an empty list.
     pub fn close(&mut self, numbers: &[i64]) {
         if numbers.is_empty() {
-            self.open.clear();
+            for key in self.open.keys().copied().collect::<Vec<_>>() { self.close_key(key); }
             self.cursors.clear();
             self.record_locks.clear();
         } else {
             for number in numbers {
-                self.open.remove(&channel_key(self.project_scope, *number));
-                self.cursors.remove(&channel_key(self.project_scope, *number));
+                self.close_key(channel_key(self.project_scope,*number));
             }
             self.record_locks.retain(|held|!numbers.iter().any(|number| held.owner == channel_key(self.project_scope, *number)));
         }
@@ -796,8 +894,8 @@ impl Files {
     pub(crate) fn close_vba(&mut self, numbers: &[i64]) {
         if numbers.is_empty() {
             let project = self.project_scope;
-            self.open.retain(|(owner, number), _| *owner != project || !(1..=511).contains(number));
-            self.cursors.retain(|(owner, number), _| *owner != project || !(1..=511).contains(number));
+            let keys:Vec<_>=self.open.keys().filter(|(owner,number)|*owner==project && (1..=511).contains(number)).copied().collect();
+            for key in keys { self.close_key(key); }
             self.record_locks.retain(|held| held.owner.0 != project || !(1..=511).contains(&held.owner.1));
         } else {
             self.close(numbers);
@@ -860,7 +958,7 @@ impl Files {
             None => handle.column += text.chars().count(),
         }
         let path=handle.path.clone();
-        self.mark_written(&path);
+        self.mark_handle_written(number,&path,!text.is_empty());
         Ok(())
     }
 
@@ -885,7 +983,7 @@ impl Files {
             None => handle.column += text.chars().count(),
         }
         let path = handle.path.clone();
-        self.mark_written(&path);
+        self.mark_handle_written(number,&path,!bytes.is_empty());
         Ok(())
     }
 
@@ -1005,7 +1103,7 @@ impl Files {
         cursor.record = None;
         handle.position = logical;
         let path = handle.path.clone();
-        self.mark_written(&path);
+        self.mark_handle_written(number,&path,!bytes.is_empty());
         Ok(())
     }
 
@@ -1309,6 +1407,7 @@ impl Files {
             if !force && self.is_read_only_key(&full) {return Err(if fso {FileError::PermissionDenied} else {FileError::PathFileAccess});}
             self.contents.remove(&full);
             self.attributes.remove(&full);
+            self.modified.remove(&full);
         }
         Ok(())
     }
@@ -1358,6 +1457,8 @@ impl Files {
         if self.is_read_only_key(&key) {return Err(if fso {FileError::PermissionDenied}else{FileError::PathFileAccess});}
         let attributes=if fso {self.attributes(source)? | 32}else{32};
         self.attributes.insert(key.clone(),attributes);
+        let modified=self.modified.get(&source_key).copied().unwrap_or(self.current_time);
+        self.modified.insert(key.clone(),modified);
         self.contents.insert(key, (self.absolute_path(destination.trim()), bytes));
         Ok(())
     }
@@ -1411,6 +1512,8 @@ impl Files {
         }
         if self.folder_exists(&format!("{key}\\")) {return Err(FileError::PermissionDenied);}
         let (_, bytes) = self.contents.remove(&old).ok_or(FileError::NotFound)?;
+        let modified=self.modified.remove(&old).unwrap_or(self.current_time);
+        self.modified.insert(key.clone(),modified);
         self.attributes.remove(&old);
         self.attributes.insert(key.clone(),attributes);
         self.contents.insert(key, (self.absolute_path(destination.trim()), bytes));
@@ -1420,6 +1523,66 @@ impl Files {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn modification_times_follow_native_open_write_close_copy_and_name() {
+        let old=43890.50283564815;
+        let current=47485.89925925926;
+        for mode in [OpenMode::Binary,OpenMode::Output,OpenMode::Append,OpenMode::Random(1)] {
+            let mut files=Files::default();
+            files.set_current_time(current);
+            files.mount_folder(r"C:\work").unwrap();
+            files.replace_bytes(r"C:\work\data.bin",b"ABC".to_vec()).unwrap();
+            files.set_modified_time(r"C:\work\data.bin",old).unwrap();
+            files.open(r"C:\work\data.bin",mode,1).unwrap();
+            let during=if mode==OpenMode::Output {current}else{old};
+            assert_eq!(files.date_modified(r"C:\work\data.bin"),Ok(during));
+            match mode {
+                OpenMode::Output|OpenMode::Append=>files.write_sequential(1,"Z\r\n",b"Z\r\n").unwrap(),
+                _=>files.put(1,b"Z").unwrap(),
+            }
+            assert_eq!(files.date_modified(r"C:\work\data.bin"),Ok(during));
+            files.close(&[1]);
+            assert_eq!(files.date_modified(r"C:\work\data.bin"),Ok(current));
+            files.set_modified_time(r"C:\work\data.bin",old).unwrap();
+            files.copy(r"C:\work\data.bin",r"C:\work\copy.bin").unwrap();
+            assert_eq!(files.date_modified(r"C:\work\copy.bin"),Ok(old));
+            files.rename(r"C:\work\copy.bin",r"C:\work\renamed.bin").unwrap();
+            assert_eq!(files.date_modified(r"C:\work\renamed.bin"),Ok(old));
+            assert_eq!(files.date_modified(r"C:\work\copy.bin"),Err(FileError::NotFound));
+            files.make_folder(r"C:\work\created").unwrap();
+            assert_eq!(files.date_modified(r"C:\work\created"),Ok(current));
+        }
+    }
+
+    #[test]
+    fn modification_snapshots_validate_atomically_and_survive_project_scoped_close() {
+        let old=43890.50283564815;
+        let current=47485.89925925926;
+        let mut files=Files::default();
+        files.set_current_time(current);
+        files.mount_folder(r"C:\work").unwrap();
+        files.replace_bytes(r"C:\work\data.bin",b"ABC".to_vec()).unwrap();
+        files.set_modified_time(r"C:\work\data.bin",old).unwrap();
+        let namespace=files.closed_snapshot();let times=files.modified_facts();
+        let mut restored=Files::default();
+        restored.restore_closed_snapshot(&namespace).unwrap();
+        restored.restore_modified_facts(&times).unwrap();
+        assert_eq!(restored.modified_facts(),times);
+        for facts in [vec![(r"C:\missing".into(),old)],vec![(r"C:\work\data.bin".into(),f64::NAN)],
+            vec![(r"C:\work\data.bin".into(),old),(r"c:/WORK/DATA.bin".into(),current)]] {
+            assert_eq!(restored.restore_modified_facts(&facts),Err(FileError::InvalidArgument));
+            assert_eq!(restored.modified_facts(),times);
+        }
+        files.select_project(1);files.open(r"C:\work\data.bin",OpenMode::Binary,1).unwrap();
+        files.put(1,b"Z").unwrap();
+        files.select_project(2);files.open(r"C:\work\data.bin",OpenMode::Input,1).unwrap();
+        files.close_vba(&[]);
+        assert_eq!(files.date_modified(r"C:\work\data.bin"),Ok(old));
+        files.select_project(1);files.close_vba(&[]);
+        assert_eq!(files.date_modified(r"C:\work\data.bin"),Ok(current));
+    }
+
     use super::*;
 
     #[test]

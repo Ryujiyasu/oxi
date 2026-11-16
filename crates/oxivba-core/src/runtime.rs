@@ -1402,6 +1402,9 @@ enum Flow {
 
 impl<'a> Runtime<'a> {
     pub fn new(module: &'a Module) -> Self {
+        let current_time=default_current_time();
+        let mut files=crate::files::Files::default();
+        files.set_current_time(current_time);
         Self {
             err_in: None,
             err_out: None,
@@ -1423,7 +1426,7 @@ impl<'a> Runtime<'a> {
             module_declared: BTreeMap::new(),
             module_variants: BTreeSet::new(),
             static_values: BTreeMap::new(),
-            files: crate::files::Files::default(),
+            files,
             temp_names: 0,
             module_initialized: false,
             classes: BTreeMap::new(),
@@ -1449,7 +1452,7 @@ impl<'a> Runtime<'a> {
             pending_references: None,
             worksheet_callback_key: None,
             pending_callback_body: None,
-            current_time: default_current_time(),
+            current_time,
             project_name: "VBAProject".to_string(),
             error_environment: Rc::new(ErrorEnvironment::default()),
             project_ended: false,
@@ -1474,6 +1477,7 @@ impl<'a> Runtime<'a> {
     /// this code owner's numbered channels and Dir cursor before execution.
     pub fn replace_file_system(&mut self, mut files: crate::files::Files) -> crate::files::Files {
         files.select_project(self.project_identity);
+        files.set_current_time(self.current_time);
         std::mem::replace(&mut self.files, files)
     }
 
@@ -1537,6 +1541,7 @@ impl<'a> Runtime<'a> {
         self.module = self.standard_module(&self.standard_name).unwrap_or(self.main_module);
         self.put_state(state.module);
         self.files = state.files;
+        self.files.set_current_time(self.current_time);
         self.temp_names = state.temp_names;
         self.internal_objects = state.internal_objects;
         self.next_internal_handle = state.next_internal_handle;
@@ -3519,6 +3524,7 @@ impl<'a> Runtime<'a> {
     pub fn with_current_time(mut self, serial: f64) -> Self {
         if serial.is_finite() {
             self.current_time = serial;
+            self.files.set_current_time(serial);
         }
         self
     }
@@ -3994,6 +4000,7 @@ impl<'a> Runtime<'a> {
     }
     fn install_object_heap(&mut self,heap:ApplicationHeap<'a>){
         self.files=heap.files;self.files.select_project(self.project_identity);
+        self.files.set_current_time(self.current_time);
         self.internal_objects=heap.objects;self.next_internal_handle=heap.next;
         self.object_pointers=heap.pointers;self.bstr_literals=heap.literals;
         self.due=heap.due;self.object_projects=heap.object_projects;self.projects=heap.projects;self.project_loader=heap.project_loader;
@@ -6392,6 +6399,13 @@ impl<'a> Runtime<'a> {
                 .map_err(mismatch)
                 .and_then(|path| self.files.length(&path).map_err(failure))
                 .map(|length| Value::Integer(length as i64)),
+            ("filedatetime", [path]) => {
+                if *path==Value::Null { Err(invalid_null(Some(line))) }
+                else if matches!(path,Value::Error(_)) { Err(mismatch("FileDateTime pathname cannot be an Error value".into())) }
+                else if *path==Value::Nothing { Err(language_error(91,"FileDateTime pathname requires an object value",line)) }
+                else { text(path).map_err(mismatch).and_then(|path|self.files.date_modified(&path).map_err(failure)).map(Value::Date) }
+            },
+            ("filedatetime", _) => Err(error(RuntimeErrorKind::ArgumentCount,"FileDateTime requires one pathname",Some(line))),
             ("getattr", [path]) => {
                 if *path==Value::Null {Err(invalid_null(Some(line)))}
                 else {text(path).map_err(mismatch).and_then(|path|self.files.attributes(&path).map_err(failure)).map(Value::Integer)}
@@ -13840,6 +13854,7 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "lof"
             | "loc"
             | "filelen"
+            | "filedatetime"
             | "fileattr"
             | "getattr"
             | "dir"
@@ -21893,6 +21908,101 @@ End Function
                 .unwrap(),
             Value::Integer(5)
         );
+    }
+
+
+
+    #[test]
+    fn filedatetime_retained_handles_close_using_the_new_invocation_clock() {
+        let source=r#"
+Public Sub StartWrite()
+ Dim b As Byte
+ Open "C:\work\data.bin" For Binary As #1
+ b=90
+ Put #1,,b
+End Sub
+Public Function FinishWrite() As Date
+ Close #1
+ FinishWrite=FileDateTime("C:\work\data.bin")
+End Function
+"#;
+        let (module,_)=crate::parser::parse_project(source).unwrap();
+        let old=43890.50283564815;
+        let current=47485.89925925926;
+        let mut first=Runtime::new(&module).with_current_time(old);
+        first.file_system_mut().mount_folder(r"C:\work").unwrap();
+        first.file_system_mut().replace_bytes(r"C:\work\data.bin",b"ABC".to_vec()).unwrap();
+        first.call("StartWrite",vec![]).unwrap();
+        let state=first.into_project_state();
+        let mut second=Runtime::new(&module).with_current_time(current).with_project_state(state);
+        assert_eq!(second.call("FinishWrite",vec![]).unwrap(),Value::Date(current));
+    }
+
+    #[test]
+    fn filedatetime_returns_native_date_subtypes_and_path_errors() {
+        let source=r#"
+Public Function Probe(ByVal pathname As Variant) As Variant
+ Dim value As Variant
+ On Error Resume Next
+ value=FileDateTime(pathname)
+ Probe=Array(Err.Number,TypeName(value),VarType(value),value)
+End Function
+"#;
+        let (module,_)=crate::parser::parse_project(source).unwrap();
+        let cases=[
+            (Value::String(r"C:\work\data.bin".into()),0),
+            (Value::String(r"C:\work\folder".into()),0),
+            (Value::String(r"C:\work\folder\".into()),53),
+            (Value::String("data.bin".into()),0),
+            (Value::String("data.bin ".into()),0),
+            (Value::String("data.bin.".into()),0),
+            (Value::String("data.bin\0ignored".into()),0),
+            (Value::String("missing.bin".into()),53),
+            (Value::String(r"absent\child.bin".into()),76),
+            (Value::String("*.bin".into()),52),
+            (Value::String(r" C:\work\data.bin".into()),5),
+            (Value::String(r"C:\work\data.bin\".into()),5),
+            (Value::String("a|b".into()),5),
+            (Value::String(" leading.bin".into()),0),
+            (Value::String(" missing.bin".into()),53),
+            (Value::String(" ".into()),53),(Value::String("\t".into()),5),
+            (Value::String(".".into()),0),
+            (Value::String(r"C:\".into()),53),
+            (Value::String(r"folder\.".into()),0),
+            (Value::String(r"folder\..".into()),0),
+            (Value::String(r".\data.bin".into()),0),
+            (Value::String("C:data.bin".into()),0),
+            (Value::String(r"C:\work\\data.bin".into()),0),
+            (Value::String("C:/work/data.bin".into()),0),
+            (Value::String("NUL".into()),5),(Value::String("CON".into()),5),
+            (Value::String("PRN".into()),5),(Value::String("COM1".into()),5),
+            (Value::String(":bad".into()),5),(Value::String("data.bin:stream".into()),5),
+
+            (Value::String(r"Y:\absent.bin".into()),76),
+            (Value::String(String::new()),53),(Value::Empty,53),(Value::Null,94),
+            (Value::Integer(1),53),(Value::Double(1.5),53),
+            (Value::Boolean(true),53),(Value::Boolean(false),53),
+            (Value::Error(2042),13),(Value::Nothing,91),
+        ];
+        for (serial,fraction) in [(43890.50283564815,0.1234567),(47485.89925925926,0.9876543)] {
+            for (pathname,number) in &cases {
+                let mut runtime=Runtime::new(&module).with_current_time(46000.0);
+                let files=runtime.file_system_mut();
+                files.mount_folder(r"C:\work\folder").unwrap();
+                files.change_directory(r"C:\work").unwrap();
+                files.replace_bytes(r"C:\work\data.bin",b"ABC".to_vec()).unwrap();
+                files.replace_bytes(r"C:\work\ leading.bin",b"ABC".to_vec()).unwrap();
+                for path in [r"C:\work\data.bin",r"C:\work\folder",r"C:\work",r"C:\work\ leading.bin"] { files.set_modified_time(path,serial+fraction/86400.0).unwrap(); }
+                let actual=runtime.call("Probe",vec![pathname.clone()]).unwrap();
+                let Value::Array(array)=actual else { panic!("{actual:?}"); };
+                let expected=if *number==0 {
+                    vec![Value::Integer(0),Value::String("Date".into()),Value::Integer(7),Value::Date(serial)]
+                } else {
+                    vec![Value::Integer(*number),Value::String("Empty".into()),Value::Integer(0),Value::Empty]
+                };
+                assert_eq!(array.values,expected,"native pathname {pathname:?}");
+            }
+        }
     }
 
     #[test]
