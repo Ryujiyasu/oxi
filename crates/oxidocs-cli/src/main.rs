@@ -2540,12 +2540,63 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                                 character_spacing: *character_spacing as f64, stroke_width: 0.0, skew: synth_skew, horizontal_scale: hscale, stroke_color: None,
                             }));
                         }
-                        contents.push(ContentElement::Text(TextSpan {
-                            x: sx, y: text_y,
-                            text: seg_text, font_name: seg_font,
-                            font_size: fs, fill_color: main_fill,
-                            character_spacing: *character_spacing as f64, stroke_width: main_w, skew: synth_skew, horizontal_scale: hscale, stroke_color: main_stroke,
-                        }));
+                        // OXI_PDF_KERN (2026-11-17): a kerned Latin word is drawn with its pair
+                        // kerning. The layout already sized the element with the pairs (KERNBREAK
+                        // widths), but one span per word drew the glyphs at their bare advances,
+                        // so each kerned pair pushed the rest of the word right (en/forms__006d1fbe,
+                        // Aptos 12 w:kern 2: «have» e at 59.97 vs Word 59.76). When the element
+                        // width is the kerned sum, the word is split at every kerned pair.
+                        let kern_pieces: Option<Vec<(String, f64)>> = (true
+                            && std::env::var_os("OXI_PDF_KERN_DISABLE").is_none()
+                            && *character_spacing == 0.0
+                            && (hscale - 100.0).abs() < 0.01
+                            && (_sw - ew).abs() < 0.01
+                            && seg_text.chars().count() > 1
+                            && seg_text.chars().all(|c| !c.is_control() && (c as u32) < 0x3000))
+                            .then(|| {
+                                let m = font_family.as_deref()
+                                    .map(|ff| registry.get_with_style(ff, *bold, *italic))
+                                    .unwrap_or_else(|| registry.default_metrics());
+                                let cs: Vec<char> = seg_text.chars().collect();
+                                let adv: Vec<f64> = cs.iter().map(|c| m.char_width_em(*c) as f64 * fs).collect();
+                                let kern: Vec<f64> = (0..cs.len()).map(|k| cs.get(k + 1).map_or(0.0, |n|
+                                    registry.latin_kern_em(&m.family, m.units_per_em, cs[k], *n) as f64 * fs)).collect();
+                                let bare: f64 = adv.iter().sum();
+                                let kerned: f64 = bare + kern.iter().sum::<f64>();
+                                if kern.iter().all(|k| k.abs() < 1e-6) || (ew - kerned).abs() > 0.02 || (ew - bare).abs() < 0.02 {
+                                    return None;
+                                }
+                                let mut out: Vec<(String, f64)> = Vec::new();
+                                let mut cur = String::new();
+                                let mut start = sx;
+                                let mut pen = sx;
+                                for k in 0..cs.len() {
+                                    if cur.is_empty() { start = pen; }
+                                    cur.push(cs[k]);
+                                    pen += adv[k] + kern[k];
+                                    if kern[k].abs() >= 1e-6 || k + 1 == cs.len() {
+                                        out.push((std::mem::take(&mut cur), start));
+                                    }
+                                }
+                                Some(out)
+                            })
+                            .flatten();
+                        match kern_pieces {
+                            Some(pieces) => for (piece, px) in pieces {
+                                contents.push(ContentElement::Text(TextSpan {
+                                    x: px, y: text_y,
+                                    text: piece, font_name: seg_font.clone(),
+                                    font_size: fs, fill_color: main_fill,
+                                    character_spacing: 0.0, stroke_width: main_w, skew: synth_skew, horizontal_scale: hscale, stroke_color: main_stroke,
+                                }));
+                            },
+                            None => contents.push(ContentElement::Text(TextSpan {
+                                x: sx, y: text_y,
+                                text: seg_text, font_name: seg_font,
+                                font_size: fs, fill_color: main_fill,
+                                character_spacing: *character_spacing as f64, stroke_width: main_w, skew: synth_skew, horizontal_scale: hscale, stroke_color: main_stroke,
+                            })),
+                        }
                     }
 
                     // Underline

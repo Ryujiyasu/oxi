@@ -9625,6 +9625,25 @@ impl<'a> ParagraphLayouter<'a> {
                         .chars()
                         .map(|c| frag_metrics.char_width_em(c) * resolved_font_size * sc + cs)
                         .sum();
+                    // OXI_LATINX_KERN (2026-11-17): the word's kerned pairs move the next
+                    // word too -- the element is already sized with them (KERNBREAK), but
+                    // the true-cumulative track advanced by the bare advances, leaving a
+                    // gap after every kerned word (en/forms__006d1fbe, Aptos 12 w:kern 2:
+                    // «have» ends 66.17, the space started at 66.30; Word 66.08).
+                    let true_w = if true
+                        && !crate::env_flag!("OXI_LATINX_KERN_DISABLE")
+                        && frag.style.kern
+                            .or_else(|| para.style.default_run_style.as_ref().and_then(|rs| rs.kern))
+                            .or(self.default_kern)
+                            .is_some_and(|k| k > 0.0 && resolved_font_size >= k)
+                    {
+                        let cs_: Vec<char> = frag.text.chars().collect();
+                        true_w + cs_.windows(2)
+                            .filter(|w| !kinsoku::is_cjk(w[0]) && !kinsoku::is_cjk(w[1]))
+                            .map(|w| self.registry.latin_kern_em(&frag_metrics.family, frag_metrics.units_per_em, w[0], w[1])
+                                * resolved_font_size * sc)
+                            .sum::<f32>()
+                    } else { true_w };
                     render_x += true_w + frag_spacing_after[frag_idx];
                 }
             }
