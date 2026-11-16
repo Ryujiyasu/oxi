@@ -242,7 +242,26 @@ def binary_path() -> str:
 
 class Workbook:
     def __init__(self, path: os.PathLike[str] | str, *, binary: Optional[str] = None,
-                 source_code_page: Optional[int] = None, timeout: Optional[float] = None) -> None:
+                 source_code_page: Optional[int] = None, timeout: Optional[float] = None,
+                 error_language: Optional[str] = None, vba_help_file: Optional[str] = None,
+                 host_ansi_code_page: Optional[int] = None) -> None:
+        environment: dict[str, Any] = {}
+        if error_language is not None:
+            if not isinstance(error_language, str):
+                raise TypeError("error_language must be a string")
+            if error_language.lower() not in {"en", "en-us", "en-gb", "ja", "ja-jp"}:
+                raise ValueError("error_language must be en, en-US, en-GB, ja or ja-JP")
+            environment["errorLanguage"] = error_language
+        if vba_help_file is not None:
+            if not isinstance(vba_help_file, str):
+                raise TypeError("vba_help_file must be a string")
+            environment["vbaHelpFile"] = vba_help_file
+        if host_ansi_code_page is not None:
+            if not isinstance(host_ansi_code_page, int) or isinstance(host_ansi_code_page, bool):
+                raise TypeError("host_ansi_code_page must be an integer")
+            if host_ansi_code_page not in {932, 1252}:
+                raise ValueError("host_ansi_code_page must be 932 or 1252")
+            environment["hostAnsiCodePage"] = host_ansi_code_page
         self.path = Path(path).resolve()
         self.timeout = timeout
         self.last_outcome: dict[str, Any] = {}
@@ -261,7 +280,7 @@ class Workbook:
         self._stdout_thread.start()
         try:
             info = self._rpc("open", path=str(self.path), sourceCodePage=source_code_page,
-                             seed=secrets.randbits(64))
+                             seed=secrets.randbits(64), **environment)
             if info.get("protocol") != 1: raise OxiCellsError("unsupported OxiCells engine protocol")
             self.sheets = tuple(info["sheets"])
             self.has_macros = bool(info["hasMacros"])

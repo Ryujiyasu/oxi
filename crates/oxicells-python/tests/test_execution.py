@@ -50,6 +50,23 @@ class EngineDiagnostics(unittest.TestCase):
             self.assertEqual(wb.sheets, ())
 
 
+class ExecutionEnvironmentValidation(unittest.TestCase):
+    def test_invalid_environment_fails_before_starting_an_engine(self):
+        for options, error in [
+            ({"error_language": 932}, TypeError),
+            ({"error_language": "fr-FR"}, ValueError),
+            ({"error_language": ""}, ValueError),
+            ({"vba_help_file": Path("help.chm")}, TypeError),
+            ({"host_ansi_code_page": True}, TypeError),
+            ({"host_ansi_code_page": 932.0}, TypeError),
+            ({"host_ansi_code_page": "932"}, TypeError),
+            ({"host_ansi_code_page": 65001}, ValueError),
+        ]:
+            with self.subTest(options=options), patch("oxicells.subprocess.Popen") as start:
+                with self.assertRaises(error): ox.open("unused.xlsx", **options)
+                start.assert_not_called()
+
+
 @unittest.skipUnless(os.environ.get("OXICELLS_TEST_FIXTURE"), "run the cells_python Cargo integration test")
 class NativeWorkbook(unittest.TestCase):
     def setUp(self):
@@ -262,6 +279,50 @@ class NativeWorkbook(unittest.TestCase):
         self.wb.close()
         self.wb.close()
         with self.assertRaises(ox.OxiCellsError): self.wb.run("PythonBridge.Step", 1)
+
+    def test_execution_environment_persists_across_calls(self):
+        help_file = "C:\\example\\日本語\\VbLR6.chm"
+        # Default StrConv uses the user locale; LCID 2048 selects the system
+        # ANSI code page. These can differ in the same Windows environment.
+        cases = [
+            ({"error_language":"ja-JP", "host_ansi_code_page":932},
+             "プロシージャの呼び出し、または引数が不正です。", "3F|82A0"),
+            ({"error_language":"EN-us", "host_ansi_code_page":1252},
+             "Invalid procedure call or argument", "3F|3F"),
+        ]
+        for options, description, encoded in cases:
+            with self.subTest(options=options), ox.open(
+                    self.fixture, vba_help_file=help_file, timeout=60, **options) as book:
+                for _ in range(2):
+                    value = book.run("PythonBridge.Environment")
+                    self.assertIsInstance(value, ox.Array)
+                    self.assertEqual(value.dimensions, ((0, 7),))
+                    self.assertEqual(value.values[0], 5)
+                    self.assertEqual(value.values[1], description)
+                    self.assertTrue(value.values[2])
+                    self.assertEqual(value.values[3], help_file)
+                    self.assertEqual(value.values[5:], (encoded, 0))
+
+    def test_protocol_rejects_invalid_environment_without_consuming_the_book(self):
+        invalid = [{"errorLanguage":1}, {"errorLanguage":"fr-FR"},
+                   {"vbaHelpFile":False}, {"hostAnsiCodePage":True},
+                   {"hostAnsiCodePage":932.0}, {"hostAnsiCodePage":65001}]
+        requests = [{"op":"open", "path":str(self.fixture), "seed":1, **v}
+                    for v in invalid]
+        requests += [{"op":"open", "path":str(self.fixture), "seed":1},
+                     {"op":"run", "procedure":"PythonBridge.Step",
+                      "args":[{"type":"long", "value":5}]}, {"op":"close"}]
+        process = subprocess.run([ox.binary_path(), "serve"],
+            input="\n".join(json.dumps({"id":i, "currentTime":45000.0, **r})
+                            for i, r in enumerate(requests)) + "\n",
+            text=True, encoding="utf-8", capture_output=True, timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertEqual(process.returncode, 0, process.stderr)
+        answers = [json.loads(line) for line in process.stdout.splitlines()]
+        self.assertEqual(len(answers), len(requests))
+        for answer in answers[:len(invalid)]: self.assertFalse(answer["ok"], answer)
+        self.assertTrue(answers[-3]["ok"], answers[-3])
+        self.assertEqual(answers[-2]["outcome"]["result"], {"type":"long", "value":5})
 
     def test_bad_protocol_request_does_not_consume_the_workbook(self):
         requests = [

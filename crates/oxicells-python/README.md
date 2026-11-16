@@ -55,6 +55,19 @@ with oxicells.open("received.xlsm", source_code_page=932) as wb:
 
 A wrong code page can corrupt names and produce a syntax error. The engine preserves the original error and adds a code-page hint when non-ASCII source fails to parse. Reopen the workbook with the appropriate override. This option does not change the encoding of Python strings.
 
+### Execution language and ANSI code page
+
+`error_language` selects VBA error descriptions (`en`, `en-US`, `en-GB`, `ja` or `ja-JP`, case-insensitive). `vba_help_file` supplies the string returned by `Err.HelpFile`; it does not open that path. `host_ansi_code_page` selects runtime ANSI conversions (932 or 1252). These settings persist for the workbook session and can also be passed to `inspect_macros()`.
+
+```python
+with oxicells.open("received.xlsm", error_language="ja-JP",
+                   host_ansi_code_page=932,
+                   vba_help_file=r"C:\example\VbLR6.chm") as wb:
+    result = wb.run("Module1.Probe")
+```
+
+Defaults remain English error descriptions, an empty HelpFile and the engine's default ANSI code page (1252). These options are independent of `source_code_page`, which decodes stored VBA source. Select values that match the Excel environment being compared; they are not inferred from the Python host's locale.
+
 Unexpected engine exits include the exit code and a bounded tail of engine stderr in `OxiCellsError`, so startup failures and panics retain their diagnostic text.
 
 ## Values and objects
@@ -122,5 +135,18 @@ with oxicells.open("受領ファイル.xlsm", source_code_page=932) as wb:
 ```
 
 非 ASCII 文字を含むソースを解析できなかった場合は、元のエラーに `source_code_page` の案内を添えます。適切な文字コードを指定して開き直してください。この指定は Python 文字列の文字コードを変更するものではありません。
+
+### 実行時の言語と文字コード
+
+`error_language` で VBA のエラー説明の言語を指定できます（`en`・`en-US`・`en-GB`・`ja`・`ja-JP`、大文字と小文字は区別しません）。`vba_help_file` は `Err.HelpFile` に返す文字列で、そのパスのファイルを開くことはありません。`host_ansi_code_page` は実行時の ANSI 変換に使うコードページ（932 または 1252）です。同じセッションの呼び出しに引き継がれ、`inspect_macros()` にも指定できます。
+
+```python
+with oxicells.open("受領ファイル.xlsm", error_language="ja-JP",
+                   host_ansi_code_page=932,
+                   vba_help_file=r"C:\example\VbLR6.chm") as wb:
+    result = wb.run("Module1.Probe")
+```
+
+既定値は英語のエラー説明、空の HelpFile、エンジン既定の ANSI コードページ（1252）です。保存された VBA ソースを読む `source_code_page` とは別の指定です。比較先の Excel 環境に合わせて設定してください。Python を動かす環境からの自動推定はしません。
 
 エンジンが異常終了したときは、終了コードと長さを制限した stderr の末尾を `OxiCellsError` に含めます。起動失敗や panic の原因を Python 側でも確認できます。
