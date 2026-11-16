@@ -31357,7 +31357,7 @@ fn attach_copied_sheet_links(
         host.now = caller.now;
         host.file_name = Some(name);
         host.file_io.set_package(package)?;
-        host.restore_package_cell_selections()?;
+        host.restore_package_cell_selections(true)?;
         // Excel reports the default save format for a newly created book,
         // including a macro sheet. Its backing package must still declare
         // macro-enabled content to retain that sheet on export.
@@ -31459,7 +31459,7 @@ fn attach_copied_sheet_links(
         host.now = caller.now;
         host.file_name = Some(path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string());
         host.file_io.set_package(package.to_vec())?;
-        host.restore_package_cell_selections()?;
+        host.restore_package_cell_selections(true)?;
         host.file_io.full_name = Some(path);
         host.file_io.read_only = read_only;
         host.file_io.source = source.clone();
@@ -50057,7 +50057,7 @@ fn execute_workbook_invocation_capturing(
     host.file_name = file_name;
     host.file_io = next_files;
     if !was_loaded {
-        host.restore_package_cell_selections()?;
+        host.restore_package_cell_selections(false)?;
         let loaded_active = host.file_io.package.as_deref().map(|package|
             file_io::WorkbookFiles::package_active_sheet(package, host.workbook.sheets.len()))
             .transpose()?.unwrap_or(active_sheet);

@@ -2239,5 +2239,53 @@ let nativeConversionObservations = 0;
     assert.equal(nativeConversionObservations, 108);
 }
 
+let nativeSavedViewObservations = 0;
+let nativeSavedViewReopens = 0;
+{
+    const fixture = JSON.parse(await readFile(path.join(root, 'tests/fixtures/vba/saved_window_views_native.json'), 'utf8')).atomic_vba;
+    assert.deepEqual(fixture.cases.map(item => item.windows), [1, 2, 3, 4, 5]);
+    const source = fixture.program + '\r\nPublic Sub SaveViews()\r\nThisWorkbook.SaveCopyAs "C:\\saved\\views.xlsm"\r\nEnd Sub\r\n';
+    const options = bytes => ({
+        applicationState: {visible: true, enableEvents: false, displayAlerts: false},
+        fileContext: {packageBytes: bytes, fullName: String.raw`C:\work\views.xlsm`, readOnly: true,
+            folders: [String.raw`C:\work`, String.raw`C:\saved`]},
+    });
+    const check = (outcome, item, label) => {
+        assert.equal(outcome.error, undefined, label);
+        assert.equal(outcome.result.type, 'array', label);
+        assert.deepEqual(outcome.result.value.values.map(value => value.value), item.Native_runs[3].values, label);
+        assert.equal(outcome.workbook_changed, false, label + ' no cell edits');
+        assert.deepEqual(outcome.files ?? [], [], label + ' no exports');
+        assert.deepEqual(outcome.deleted_files ?? [], [], label + ' no deletions');
+        assert.equal(outcome.application_state.visible, true, label + ' application visibility');
+    };
+    for (const item of [...fixture.cases, ...[...fixture.cases].reverse()]) for (const route of ['direct', 'session']) {
+        const bytes = Buffer.from(item.carrier_bytes_hex, 'hex');
+        const session = route === 'session' ? new wasm.SpreadsheetVbaSession() : null;
+        const invoke = (book, procedure, args, activeSheet, context) => session
+            ? session.run(book, source, procedure, args, activeSheet, 'views.xlsm', context)
+            : wasm.run_spreadsheet_vba_with_outcome(book, source, procedure, args, activeSheet, 'views.xlsm', context);
+        try {
+            const book = wasm.parse_spreadsheet(bytes);
+            const activeSheet = book.sheets.findIndex(sheet => sheet.name === item.Native_runs[3].values[5]);
+            assert.ok(activeSheet >= 0);
+            const initial = invoke(book, 'SavedViews1912.Probe', [3], activeSheet, options(bytes));
+            check(initial, item, `saved views ${item.windows} ${route} import`);
+            nativeSavedViewObservations++;
+            const saved = invoke(initial.workbook, 'SavedViews1912.SaveViews', [], initial.active_sheet, options(bytes));
+            assert.equal(saved.error, undefined, `saved views ${item.windows} ${route} SaveCopyAs`);
+            assert.equal(saved.files?.length, 1);
+            const copyBytes = new Uint8Array(saved.files[0].bytes);
+            const reopened = wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsheet(copyBytes), source,
+                'SavedViews1912.Probe', [3], activeSheet, 'views.xlsm', options(copyBytes));
+            check(reopened, item, `saved views ${item.windows} ${route} cold reopen`);
+            nativeSavedViewReopens++;
+        } finally { session?.free(); }
+    }
+    assert.equal(nativeSavedViewObservations, 20);
+    assert.equal(nativeSavedViewReopens, 20);
+}
+
+
 assert.deepEqual(failures, [], 'Excel saves validation and inherited row/column formatting');
-console.log(JSON.stringify({passed: true, native_window_conditions: 380, native_window_route_observations: nativeWindowObservations, native_window_state_error_conditions: 2406, native_numeric_conversion_conditions: 54, native_numeric_conversion_route_observations: nativeConversionObservations, native_window_state_error_route_observations: nativeWindowStateErrorObservations, native_sheet_collection_conditions: 93, native_sheet_binding_profile_conditions: 60, native_selected_sheet_add_conditions: 144, native_chart_anchor_boundary_conditions: 48, native_sheet_additional_route_observations: nativeSheetAddObservations, native_worksheet_add_count_conditions: 31, native_worksheet_add_count_route_observations: 62, native_iconset_variant_cases: 20, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));
+console.log(JSON.stringify({passed: true, native_saved_window_conditions: 5, native_saved_window_route_observations: nativeSavedViewObservations, native_saved_window_reopens: nativeSavedViewReopens, native_window_conditions: 380, native_window_route_observations: nativeWindowObservations, native_window_state_error_conditions: 2406, native_numeric_conversion_conditions: 54, native_numeric_conversion_route_observations: nativeConversionObservations, native_window_state_error_route_observations: nativeWindowStateErrorObservations, native_sheet_collection_conditions: 93, native_sheet_binding_profile_conditions: 60, native_selected_sheet_add_conditions: 144, native_chart_anchor_boundary_conditions: 48, native_sheet_additional_route_observations: nativeSheetAddObservations, native_worksheet_add_count_conditions: 31, native_worksheet_add_count_route_observations: 62, native_iconset_variant_cases: 20, native_structural_save_cases: 4, native_existing_validation_cases: 1, new_sheet_save_cases: 1, save_copy_band_cases: 1, native_band_intersections: 6, native_clear_intersections: 7, native_sheet_format_clears: 3, native_sheet_format_cross: 1, native_relative_validation_cases: 3, native_validation_shift_cases: 10, native_validation_two_bounds: 4, native_validation_value_cases: 1, native_validation_cross_sheet: 1, multi_validation_cases: 15, multi_validation_shift_cases: 5, workbook_json_roundtrip: true}));

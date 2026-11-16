@@ -730,6 +730,313 @@ fn native_window_creation_after_real_save_matches_excel() {
     replay_native_window_group(&groups[28]);
 }
 
+#[test]
+fn native_saved_window_counts_match_excel_cold_open() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/vba/saved_window_views_native.json"
+    )).unwrap();
+    for case in fixture["cases"].as_array().unwrap().iter().chain(
+        fixture["cases"].as_array().unwrap().iter().rev()
+    ) {
+        let hex = case["carrier_bytes_hex"].as_str().unwrap();
+        let carrier: Vec<u8> = (0..hex.len()).step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap()).collect();
+        let book = oxicells_core::parse_xlsx_preserving_values(&carrier).unwrap();
+        let options = serde_json::json!({
+            "applicationState": {"visible": true, "enableEvents": false, "displayAlerts": false},
+            "fileContext": {"packageBytes": carrier, "fullName": r"C:\work\views.xlsx",
+                "readOnly": true, "folders": [r"C:\work"]}
+        }).to_string();
+        let mut call = NativeVbaCall::new(fixture["program"].as_str().unwrap(),
+            fixture["procedure"].as_str().unwrap(), vec![], 46_000.0, 1);
+        call.file_name = Some("views.xlsx".into());
+        call.options = &options;
+        let outcome = SpreadsheetVbaSession::default().run_native(book, call).unwrap();
+        let wire: serde_json::Value = serde_json::from_str(&outcome.to_json().unwrap()).unwrap();
+        assert!(wire["error"].is_null(), "{wire}");
+        assert_eq!(wire["result"]["value"], case["expected_count"],
+            "saved window count {}", case["windows"]);
+        assert_eq!(wire["workbook_changed"], false);
+        assert!(wire.get("files").is_none());
+        assert!(wire.get("deleted_files").is_none());
+    }
+}
+
+#[test]
+fn native_saved_window_view_content_matches_excel_cold_open() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/vba/saved_window_views_native.json"
+    )).unwrap();
+    // These are per-window COM getter observations. WindowState depends on
+    // the starting application profile and is intentionally a separate contract.
+    let properties = [
+        ("Caption", "caption"), ("Visible", "visible"),
+        ("ActiveSheet", "active_sheet"), ("Zoom", "zoom"),
+        ("RangeSelection", "selection"), ("ScrollRow", "scroll_row"),
+        ("ScrollColumn", "scroll_column"), ("FreezePanes", "freeze_panes"),
+        ("SplitRow", "split_row"), ("SplitColumn", "split_column"),
+        ("DisplayGridlines", "display_gridlines"), ("DisplayWorkbookTabs", "display_tabs"),
+    ];
+    let source = concat!(
+        "Attribute VB_Name = \"ColdViewContent\"\n",
+        "Public Function Probe(ByVal index As Long, ByVal member As String) As String\n",
+        " Dim w As Window\n Set w = ThisWorkbook.Windows(index)\n",
+        " Select Case member\n",
+        " Case \"ActiveSheet\": Probe = w.ActiveSheet.Name\n",
+        " Case \"RangeSelection\": Probe = w.RangeSelection.Address\n",
+        " Case Else: Probe = CStr(CallByName(w, member, VbGet))\n",
+        " End Select\nEnd Function\n"
+    );
+    for case in fixture["cases"].as_array().unwrap().iter().chain(
+        fixture["cases"].as_array().unwrap().iter().rev()
+    ) {
+        let hex = case["carrier_bytes_hex"].as_str().unwrap();
+        let carrier: Vec<u8> = (0..hex.len()).step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap()).collect();
+        let options = serde_json::json!({
+            "applicationState": {"visible": true, "enableEvents": false, "displayAlerts": false},
+            "fileContext": {"packageBytes": carrier, "fullName": r"C:\work\views.xlsx",
+                "readOnly": true, "folders": [r"C:\work"]}
+        }).to_string();
+        for view in case["Native_after_cold_open"].as_array().unwrap() {
+            for (member, field) in properties {
+                let book = oxicells_core::parse_xlsx_preserving_values(&carrier).unwrap();
+                let args = vec![Value::Integer(view["index"].as_i64().unwrap()),
+                    Value::String(member.into())];
+                let mut call = NativeVbaCall::new(source, "ColdViewContent.Probe", args, 46_000.0, 1);
+                call.active_sheet = book.sheets.iter().position(|sheet|Some(sheet.name.as_str()) ==
+                    case["Native_after_cold_open"][0]["active_sheet"].as_str()).unwrap();
+                call.file_name = Some("views.xlsx".into());
+                call.options = &options;
+                let outcome = SpreadsheetVbaSession::default().run_native(book, call).unwrap();
+                let wire: serde_json::Value = serde_json::from_str(&outcome.to_json().unwrap()).unwrap();
+                let expected = match &view[field] {
+                    serde_json::Value::String(value) => value.clone(),
+                    serde_json::Value::Bool(value) => if *value { "True" } else { "False" }.into(),
+                    serde_json::Value::Number(value) => value.as_f64().unwrap().to_string(),
+                    value => panic!("unexpected native property {field}: {value}"),
+                };
+                assert!(wire["error"].is_null(), "windows={} view={} {member}: {wire}", case["windows"], view["index"]);
+                assert_eq!(wire["result"]["value"].as_str(), Some(expected.as_str()),
+                    "windows={} view={} {member}", case["windows"], view["index"]);
+                assert_eq!(wire["workbook_changed"], false, "read-only {member} changed content");
+            }
+        }
+    }
+}
+
+
+fn assert_saved_window_values(outcome: &serde_json::Value, expected: &serde_json::Value, context: &str) {
+    assert!(outcome["error"].is_null(), "{outcome}");
+    let actual = outcome["result"]["value"]["values"].as_array().unwrap();
+    let expected = expected.as_array().unwrap();
+    assert_eq!(actual.len(), expected.len());
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        let value = &actual["value"];
+        let equal = if expected.is_number() { value.as_f64() == expected.as_f64() }
+            else { value == expected };
+        assert!(equal, "{context}: saved view field {index}: {actual} != {expected}");
+    }
+}
+
+#[test]
+fn native_saved_window_views_survive_repeated_save_as() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/vba/saved_window_views_native.json"
+    )).unwrap();
+    let atomic = &fixture["atomic_vba"];
+    let source = atomic["program"].as_str().unwrap();
+    let cases = atomic["cases"].as_array().unwrap();
+    for (iteration,case) in cases.iter().chain(cases.iter().rev()).enumerate() {
+        let hex = case["carrier_bytes_hex"].as_str().unwrap();
+        let carrier: Vec<u8> = (0..hex.len()).step_by(2)
+            .map(|at|u8::from_str_radix(&hex[at..at+2],16).unwrap()).collect();
+        let options = |bytes: &[u8]|serde_json::json!({
+            "applicationState":{"visible":true,"enableEvents":false,"displayAlerts":false},
+            "fileContext":{"packageBytes":bytes,"fullName":r"C:\work\views.xlsm","readOnly":true,
+                "folders":[r"C:\work",r"C:\saved",r"C:\again"]}
+        }).to_string();
+        let input = options(&carrier);
+        let mut call = NativeVbaCall::new(source, "SavedViews1912.Probe", vec![Value::Integer(3)],46_000.0,1);
+        call.file_name = Some("views.xlsm".into());call.options=&input;
+        let mut session=SpreadsheetVbaSession::default();
+        let book=oxicells_core::parse_xlsx_preserving_values(&carrier).unwrap();
+        call.active_sheet=book.sheets.iter().position(|sheet|Some(sheet.name.as_str()) ==
+            case["Native_runs"][3]["values"][5].as_str()).unwrap();
+        let initial=session.run_native(book,call).unwrap();
+        let wire=serde_json::from_str(&initial.to_json().unwrap()).unwrap();
+        assert_saved_window_values(&wire,&case["Native_runs"][3]["values"],&format!("windows={} initial",case["windows"]));
+        // Carry the editor selection returned by the preceding call.
+        let mut active_sheet=wire["active_sheet"].as_u64().unwrap() as usize;
+        let mut book=initial.into_workbook();
+        for (stage,folder) in [r"C:\saved",r"C:\again"].into_iter().enumerate() {
+            let mut save=NativeVbaCall::new(source,"",vec![],46_000.0,1);
+            save.active_sheet=active_sheet;
+            save.action=NativeVbaAction::SaveAs{file_name:format!(r"{folder}\views.xlsm"),format:52};
+            let saved=session.run_native(book,save).unwrap();
+            let wire:serde_json::Value=serde_json::from_str(&saved.to_json().unwrap()).unwrap();
+            assert!(wire["error"].is_null(),"{wire}");assert_eq!(wire["save"]["completed"],true);
+            active_sheet=wire["active_sheet"].as_u64().unwrap() as usize;
+            let package=saved.saved_package_bytes().unwrap().to_vec();
+            if let Some(folder) = std::env::var_os("OXI_VBA_SAVED_VIEWS_EXPORT_DIR") {
+                // Optional local artifacts let the independently installed
+                // Excel process validate the exact packages produced here.
+                if iteration < cases.len() {
+                    use std::io::Write;
+                    let root = std::path::PathBuf::from(folder);
+                    assert!(root.is_absolute() && root.is_dir());
+                    let target = root.join(format!("count{}-save{}.xlsm",case["windows"].as_u64().unwrap(),stage+1));
+                    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(target).unwrap();
+                    file.write_all(&package).unwrap();
+                }
+            }
+
+            let input=options(&package);
+            let mut call=NativeVbaCall::new(source,"SavedViews1912.Probe",vec![Value::Integer(3)],46_000.0,1);
+            call.file_name=Some("views.xlsm".into());call.options=&input;
+            let reopened_book=oxicells_core::parse_xlsx_preserving_values(&package).unwrap();
+            call.active_sheet=reopened_book.sheets.iter().position(|sheet|Some(sheet.name.as_str()) ==
+                case["Native_runs"][3]["values"][5].as_str()).unwrap();
+            let reopened=SpreadsheetVbaSession::default().run_native(reopened_book,call).unwrap();
+            let wire=serde_json::from_str(&reopened.to_json().unwrap()).unwrap();
+            assert_saved_window_values(&wire,&case["Native_runs"][3]["values"],&format!("windows={} save={stage}",case["windows"]));
+            book=saved.into_workbook();
+        }
+    }
+}
+
+#[test]
+fn native_saved_window_add_close_and_save_keeps_each_view() {
+    let fixture:serde_json::Value=serde_json::from_str(include_str!(
+        "../../../tests/fixtures/vba/saved_window_views_native.json"
+    )).unwrap();
+    let case=&fixture["atomic_vba"]["cases"][2];
+    let hex=case["carrier_bytes_hex"].as_str().unwrap();
+    let carrier:Vec<u8>=(0..hex.len()).step_by(2)
+        .map(|at|u8::from_str_radix(&hex[at..at+2],16).unwrap()).collect();
+    let source=concat!(
+        "Attribute VB_Name = \"SavedViewMutation\"\n",
+        "Public Function Mutate() As String\n Dim w As Window, i As Long\n",
+        " For i = 1 To 2\n Set w = ThisWorkbook.NewWindow\n",
+        " w.Zoom = 135 + i\n w.ActiveSheet.Range(\"F6\").Select\n Next\n",
+        " ThisWorkbook.Windows(ThisWorkbook.Windows.Count).Close\n DoEvents\n Mutate = Snapshot()\nEnd Function\n",
+        "Public Function Snapshot() As String\n Dim number As Long, w As Window, s As String\n",
+        " For number = 1 To ThisWorkbook.Windows.Count\n For Each w In ThisWorkbook.Windows\n",
+        " If w.WindowNumber = number Then\n",
+        " s = s & CStr(number) & \"|\" & w.ActiveSheet.Name & \"|\" & CStr(w.Zoom) & \"|\" & w.RangeSelection.Address & \"|\"",
+        " & CStr(w.ScrollRow) & \"|\" & CStr(w.ScrollColumn) & \"|\" & CStr(w.FreezePanes) & \"|\"",
+        " & CStr(w.SplitRow) & \"|\" & CStr(w.SplitColumn) & \"|\" & CStr(w.DisplayGridlines) & \";\"\n",
+        " End If\n Next\n Next\n Snapshot = s\nEnd Function\n"
+    );
+    let options=|bytes:&[u8]|serde_json::json!({
+        "applicationState":{"visible":true,"enableEvents":false,"displayAlerts":false},
+        "fileContext":{"packageBytes":bytes,"fullName":r"C:\work\views.xlsm","readOnly":true,
+            "folders":[r"C:\work",r"C:\saved",r"C:\again"]}
+    }).to_string();
+    let input=options(&carrier);
+    let mut call=NativeVbaCall::new(source,"SavedViewMutation.Mutate",vec![],46_000.0,1);
+    call.file_name=Some("views.xlsm".into());call.options=&input;
+    let mut session=SpreadsheetVbaSession::default();
+    let mutated=session.run_native(oxicells_core::parse_xlsx_preserving_values(&carrier).unwrap(),call).unwrap();
+    let wire:serde_json::Value=serde_json::from_str(&mutated.to_json().unwrap()).unwrap();
+    assert!(wire["error"].is_null(),"{wire}");let expected=wire["result"].clone();
+    assert_eq!(expected["value"].as_str().unwrap().matches(';').count(),4);
+    // Carry the editor selection returned by the preceding call.
+    let mut active_sheet=wire["active_sheet"].as_u64().unwrap() as usize;
+    let mut book=mutated.into_workbook();
+    for (stage,folder) in [r"C:\saved",r"C:\again"].into_iter().enumerate() {
+        let mut save=NativeVbaCall::new(source,"",vec![],46_000.0,1);
+            save.active_sheet=active_sheet;
+        save.action=NativeVbaAction::SaveAs{file_name:format!(r"{folder}\views.xlsm"),format:52};
+        let saved=session.run_native(book,save).unwrap();
+        let wire:serde_json::Value=serde_json::from_str(&saved.to_json().unwrap()).unwrap();
+        assert!(wire["error"].is_null(),"{wire}");assert_eq!(wire["save"]["completed"],true);
+            active_sheet=wire["active_sheet"].as_u64().unwrap() as usize;
+        let package=saved.saved_package_bytes().unwrap().to_vec();
+        if let Some(folder)=std::env::var_os("OXI_VBA_SAVED_VIEWS_EXPORT_DIR") {
+            use std::io::Write;
+            let root=std::path::PathBuf::from(folder);
+            assert!(root.is_absolute() && root.is_dir());
+            let mut file=std::fs::OpenOptions::new().write(true).create_new(true)
+                .open(root.join(format!("mutation-save{}.xlsm",stage+1))).unwrap();
+            file.write_all(&package).unwrap();
+            if stage == 0 {
+                let mut file=std::fs::OpenOptions::new().write(true).create_new(true)
+                    .open(root.join("mutation-expected.json")).unwrap();
+                file.write_all(serde_json::to_string(&expected).unwrap().as_bytes()).unwrap();
+            }
+        }
+        let input=options(&package);
+        let mut call=NativeVbaCall::new(source,"SavedViewMutation.Snapshot",vec![],46_000.0,1);
+        call.file_name=Some("views.xlsm".into());call.options=&input;
+        let reopened=SpreadsheetVbaSession::default().run_native(
+            oxicells_core::parse_xlsx_preserving_values(&package).unwrap(),call).unwrap();
+        let wire:serde_json::Value=serde_json::from_str(&reopened.to_json().unwrap()).unwrap();
+        assert!(wire["error"].is_null(),"{wire}");assert_eq!(wire["result"],expected);
+        book=saved.into_workbook();
+    }
+}
+
+
+#[test]
+fn native_saved_window_initial_sheet_selection_follows_caller() {
+    let fixture:serde_json::Value=serde_json::from_str(include_str!(
+        "../../../tests/fixtures/vba/saved_window_views_native.json"
+    )).unwrap();
+    let hex=fixture["cases"][0]["carrier_bytes_hex"].as_str().unwrap();
+    let carrier:Vec<u8>=(0..hex.len()).step_by(2)
+        .map(|at|u8::from_str_radix(&hex[at..at+2],16).unwrap()).collect();
+    let source=concat!("Attribute VB_Name = \"InitialSheetSelection\"\n",
+        "Public Function Probe() As String\n",
+        " Probe = ActiveSheet.Name & \"|\" & ThisWorkbook.ActiveSheet.Name & \"|\" & ActiveWindow.ActiveSheet.Name\n",
+        "End Function\n");
+    let options=serde_json::json!({"applicationState":{"enableEvents":false,"displayAlerts":false},
+        "fileContext":{"packageBytes":carrier,"fullName":r"C:\work\views.xlsx","readOnly":true,"folders":[r"C:\work"]}}).to_string();
+    for requested in [0,1] {
+        let book=oxicells_core::parse_xlsx_preserving_values(&carrier).unwrap();
+        let name=book.sheets[requested].name.clone();
+        let mut call=NativeVbaCall::new(source,"InitialSheetSelection.Probe",vec![],46_000.0,1);
+        call.active_sheet=requested;call.file_name=Some("views.xlsx".into());call.options=&options;
+        let outcome=SpreadsheetVbaSession::default().run_native(book,call).unwrap();
+        let wire:serde_json::Value=serde_json::from_str(&outcome.to_json().unwrap()).unwrap();
+        assert!(wire["error"].is_null(),"{wire}");
+        assert_eq!(wire["result"]["value"],format!("{name}|{name}|{name}"),"explicit caller sheet {requested}");
+        assert_eq!(wire["active_sheet"],requested);
+    }
+}
+
+#[test]
+fn native_saved_window_views_follow_edited_sheet_identity() {
+    let fixture:serde_json::Value=serde_json::from_str(include_str!(
+        "../../../tests/fixtures/vba/saved_window_views_native.json"
+    )).unwrap();
+    let hex=fixture["cases"][1]["carrier_bytes_hex"].as_str().unwrap();
+    let carrier:Vec<u8>=(0..hex.len()).step_by(2)
+        .map(|at|u8::from_str_radix(&hex[at..at+2],16).unwrap()).collect();
+    let source=concat!("Attribute VB_Name = \"EditedSheetIdentity\"\n",
+        "Public Function Probe() As String\n Dim w As Window\n Set w = ThisWorkbook.Windows(2)\n",
+        " Probe = w.ActiveSheet.Name & \"|\" & CStr(w.FreezePanes) & \"|\" & CStr(ThisWorkbook.Worksheets.Count) & \"|\" & CStr(ActiveWindow.SplitRow) & \"|\" & CStr(ActiveWindow.SplitColumn)\nEnd Function\n");
+    let options=serde_json::json!({"applicationState":{"enableEvents":false,"displayAlerts":false},
+        "fileContext":{"packageBytes":carrier,"fullName":r"C:\work\views.xlsx","readOnly":true,"folders":[r"C:\work"]}}).to_string();
+    for mode in [0,1,2] {
+        let mut book=oxicells_core::parse_xlsx_preserving_values(&carrier).unwrap();
+        let expected=if mode == 0 {book.sheets.remove(0);"First|False|1|0|0"}
+            else if mode == 1 {book.sheets.swap(0,1);"Second|True|2|0|0"}
+            else {
+                let mut inserted=book.sheets[1].clone();
+                inserted.name="Inserted".into();inserted.origin_id=None;
+                inserted.frozen_rows=2;inserted.frozen_cols=3;
+                book.sheets.insert(0,inserted);"Second|True|3|2|3"
+            };
+        let mut call=NativeVbaCall::new(source,"EditedSheetIdentity.Probe",vec![],46_000.0,1);
+        call.active_sheet=0;call.file_name=Some("views.xlsx".into());call.options=&options;
+        let outcome=SpreadsheetVbaSession::default().run_native(book,call).unwrap();
+        let wire:serde_json::Value=serde_json::from_str(&outcome.to_json().unwrap()).unwrap();
+        assert!(wire["error"].is_null(),"{wire}");
+        assert_eq!(wire["result"]["value"],expected,"edited sheet identity mode {mode}");
+    }
+}
+
 fn native_window_fixture() -> serde_json::Value {
     serde_json::from_str(include_str!(
         "../../../tests/fixtures/vba/window_collections_native.json"

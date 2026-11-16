@@ -217,32 +217,36 @@ fn inspect_source(source: &str) -> Value {
 }
 
 fn package_active_sheet(bytes: &[u8], count: usize) -> Result<usize, String> {
-    let mut archive =
-        oxidocs_common::archive::OoxmlArchive::new(bytes).map_err(|e| e.to_string())?;
-    let xml = archive
-        .read_part("xl/workbook.xml")
-        .map_err(|e| e.to_string())?;
-    let mut reader = quick_xml::Reader::from_str(&xml);
+    use quick_xml::events::Event;
+    let mut archive=oxidocs_common::archive::OoxmlArchive::new(bytes).map_err(|e|e.to_string())?;
+    let xml=archive.read_part("xl/workbook.xml").map_err(|e|e.to_string())?;
+    let mut reader=quick_xml::NsReader::from_str(&xml);
+    let mut path=Vec::<(Vec<u8>,bool)>::new();
+    let mut views=Vec::new();
     loop {
-        match reader.read_event().map_err(|e| e.to_string())? {
-            quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e)
-                if e.local_name().as_ref() == b"workbookView" =>
-            {
-                let at = oxidocs_common::xml_utils::get_attr(&e, "activeTab")
-                    .map(|v| v.parse::<usize>())
-                    .transpose()
-                    .map_err(|e| e.to_string())?
-                    .unwrap_or(0);
-                return if at < count {
-                    Ok(at)
-                } else {
-                    Err("active sheet index is out of bounds".into())
-                };
+        let event=reader.read_event().map_err(|e|e.to_string())?;
+        match &event {
+            Event::Start(element)|Event::Empty(element)=>{
+                let standard=matches!(reader.resolve_element(element.name()).0,
+                    quick_xml::name::ResolveResult::Bound(ns)if matches!(ns.as_ref(),
+                        b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"|
+                        b"http://purl.oclc.org/ooxml/spreadsheetml/main"));
+                let local=element.local_name().as_ref().to_vec();
+                if standard && path.iter().all(|(_,valid)|*valid) && path.len()==2
+                    && path[0].0==b"workbook" && path[1].0==b"bookViews" && local==b"workbookView" {
+                    let at=oxidocs_common::xml_utils::get_attr(element,"activeTab")
+                        .map(|v|v.parse::<usize>()).transpose().map_err(|e|e.to_string())?.unwrap_or(0);
+                    if at>=count{return Err("active sheet index is out of bounds".into());}
+                    views.push(at);
+                }
+                if matches!(event,Event::Start(_)){path.push((local,standard));}
             }
-            quick_xml::events::Event::Eof => return Ok(0),
-            _ => {}
+            Event::End(_)=>{path.pop();}
+            Event::Eof=>break,
+            _=>{}
         }
     }
+    Ok(views.get(views.len().saturating_sub(2)).copied().unwrap_or(0))
 }
 
 impl OpenBook {
@@ -541,6 +545,18 @@ pub(super) fn serve(input: impl BufRead, mut output: impl Write) -> Result<(), S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cold_open_chooses_saved_active_window_sheet() {
+        let fixture:Value=serde_json::from_str(include_str!("../../../tests/fixtures/vba/saved_window_views_native.json")).unwrap();
+        for case in fixture["atomic_vba"]["cases"].as_array().unwrap() {
+            let hex=case["carrier_bytes_hex"].as_str().unwrap();
+            let bytes:Vec<u8>=(0..hex.len()).step_by(2).map(|at|u8::from_str_radix(&hex[at..at+2],16).unwrap()).collect();
+            let book=oxicells_core::parse_xlsx(&bytes).unwrap();
+            let active=super::package_active_sheet(&bytes,book.sheets.len()).unwrap();
+            assert_eq!(book.sheets[active].name,case["Native_runs"][3]["values"][5].as_str().unwrap(),"saved windows {}",case["windows"]);
+        }
+    }
+
     use super::*;
 
     #[test]
