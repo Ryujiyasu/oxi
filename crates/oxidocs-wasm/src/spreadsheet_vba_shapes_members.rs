@@ -1759,7 +1759,7 @@ impl<'a> WorkbookHost<'a> {
         self.workbook.sheets[sheet].legacy_drawing_order.retain(|held| !physical_ids.contains(held));
         if let Some(at) = deleted.comment_at {
             self.notes.retain(|note| note.at != at);
-            self.saved = false;
+            self.mark_unsaved();
         }
         self.shapes.retain(|shape| !removed.contains(&shape.id));
         let mut parent = deleted.group_parent_id;

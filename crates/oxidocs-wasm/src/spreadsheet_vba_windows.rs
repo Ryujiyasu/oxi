@@ -2,17 +2,27 @@
 
 use super::*;
 
+/// A frame change posts a notification; the VBA activation is a separate
+/// queued action. Messages posted by a host turn are not consumed recursively.
+#[derive(Clone, Copy)]
+pub(super) enum WindowUiMessage {
+    FrameChanged(u64, usize),
+    ActivateForeground(u64, usize),
+}
+
 /// A frame's identity survives changes to its collection position and number.
 /// The loaded frame uses WorkbookHost's working fields; other frames own them
 /// here. Keeping closed frames also keeps already issued references distinct
 /// from subsequently created windows.
 pub(super) struct WindowFrames {
+    pub(super) content_changed: bool,
     pub(super) active: usize,
     loaded: usize,
     frames: Vec<WindowFrame>,
 }
 
 struct WindowFrame {
+    creation_caption: Option<String>,
     open: bool,
     state: i64,
     view: Option<WindowView>,
@@ -35,9 +45,10 @@ struct WindowView {
 impl Default for WindowFrames {
     fn default() -> Self {
         Self {
+            content_changed: false,
             active: 0,
             loaded: 0,
-            frames: vec![WindowFrame { open: true, state: -4137, view: None }],
+            frames: vec![WindowFrame { creation_caption: None, open: true, state: -4137, view: None }],
         }
     }
 }
@@ -158,6 +169,9 @@ impl WorkbookHost<'_> {
     }
 
     fn new_window(&mut self, source: Option<usize>, state: i64) -> Value {
+        // Saved=True acknowledges the current flag; it does not erase content
+        // changes that creating another view exposes again.
+        if self.window_frames.content_changed { self.saved = false; }
         if let Some(id) = source { self.load_window(id); }
         let sheet = self.active_sheet;
         if source.is_none() {
@@ -179,7 +193,7 @@ impl WorkbookHost<'_> {
         view.panes.fill((0, 0));
         view.caption = None;
         let id = self.window_frames.frames.len();
-        self.window_frames.frames.push(WindowFrame { open: true, state, view: Some(view) });
+        self.window_frames.frames.push(WindowFrame { creation_caption: None, open: true, state, view: Some(view) });
         self.load_window(id);
         self.window_frames.active = id;
         self.object(HostObject::Window(id))
@@ -196,6 +210,29 @@ impl WorkbookHost<'_> {
     }
 
     fn requested_window_state(&self, value: &Value) -> Result<i64, String> {
+        self.requested_display_state(value, || self.scalar_set_error("Window", "WindowState"))
+    }
+
+    fn requested_application_window_state(&self, value: &Value, typed: bool) -> Result<i64, String> {
+        let state = self.requested_display_state(value, || {
+            if typed {
+                let description = match self.error_language {
+                    ErrorLanguage::Japanese => "'WindowState' メソッドは失敗しました: '_Application' オブジェクト",
+                    ErrorLanguage::English => "Method 'WindowState' of object '_Application' failed",
+                };
+                host_error_described(1004, description)
+            } else { self.scalar_set_error("Application", "WindowState") }
+        })?;
+        let numeric_enum = matches!(value, Value::Int16(_) | Value::Integer(_) | Value::LongLong(_)
+            | Value::Byte(_) | Value::Single(_) | Value::Double(_) | Value::Decimal(_))
+            && Self::legacy_assignment_number(value).ok().flatten().is_some_and(|number|
+                number == -4140.0 || number == -4137.0 || number == -4143.0);
+        Ok(if numeric_enum { state } else {
+            match state { -4140 => -4143, -4137 => -4140, _ => -4137 }
+        })
+    }
+
+    fn requested_display_state(&self, value: &Value, invalid: impl Fn() -> String) -> Result<i64, String> {
         let mut pending = vec![(value, false)];
         let mut object_operand = false;
         while let Some((operand, array_element)) = pending.pop() {
@@ -228,7 +265,7 @@ impl WorkbookHost<'_> {
                 _ => {}
             }
         }
-        if object_operand { return Err(self.scalar_set_error("Window", "WindowState")); }
+        if object_operand { return Err(invalid()); }
         let scalar = Self::protection_scalar(value)?;
         let number = if let Value::Currency(units) = scalar {
             let magnitude = units.unsigned_abs();
@@ -242,11 +279,11 @@ impl WorkbookHost<'_> {
         } else {
             Self::legacy_assignment_number(value)
                 .map_err(|number| if number == 1004 {
-                    self.scalar_set_error("Window", "WindowState")
+                    invalid()
                 } else { host_error(number, "WindowState cannot convert this operand") })?
         };
         let number = number.filter(|number| number.is_finite())
-            .ok_or_else(|| self.scalar_set_error("Window", "WindowState"))?;
+            .ok_or_else(&invalid)?;
         let enum_operand = matches!(value, Value::Int16(_) | Value::Integer(_) | Value::LongLong(_)
             | Value::Byte(_) | Value::Single(_) | Value::Double(_) | Value::Decimal(_));
         let internal = if enum_operand {
@@ -256,7 +293,7 @@ impl WorkbookHost<'_> {
         // would collapse adjacent Double operands at the upper boundary.
         let margin = 2049.0 / 8589934592.0;
         if !((1.0 - margin)..(4.0 - margin)).contains(&internal) {
-            return Err(self.scalar_set_error("Window", "WindowState"));
+            return Err(invalid());
         }
         // Apply the near-integer tolerance when selecting the requested enum.
         // Direct comparisons retain adjacent Double operands at the boundaries.
@@ -282,6 +319,9 @@ impl WorkbookHost<'_> {
     }
 
     pub(super) fn frame_caption(&self) -> Value {
+        if let Some(caption) = &self.window_frames.frames[self.window_frames.loaded].creation_caption {
+            return Value::String(caption.clone());
+        }
         self.window_caption.clone().unwrap_or_else(|| {
             let mut caption = self.file_name.clone().unwrap_or_else(|| "Book1".into());
             if self.window_frames.open_ids().len() > 1 {
@@ -296,11 +336,90 @@ impl WorkbookHost<'_> {
 }
 
 impl WorkbookApplication<'_> {
+    fn logical_frame(&self) -> Option<(u64, usize)> {
+        let owner = self.active;
+        let host = self.hosts.get(&owner)?;
+        (!self.closed.contains(&owner) && host.window_is_open(host.window_frames.active))
+            .then_some((owner, host.window_frames.active))
+    }
+
+    fn foreground_frame(&self) -> Option<(u64, usize)> {
+        if let Some((owner, id)) = self.foreground_window {
+            if !self.closed.contains(&owner) && self.hosts.get(&owner).is_some_and(|host| host.window_is_open(id)) {
+                return Some((owner, id));
+            }
+        }
+        self.logical_frame()
+    }
+
+    pub(super) fn pump_window_messages(&mut self) {
+        let messages = std::mem::take(&mut self.window_ui_messages);
+        for message in messages {
+            let (owner, id) = match message {
+                WindowUiMessage::FrameChanged(owner, id) | WindowUiMessage::ActivateForeground(owner, id) => (owner, id),
+            };
+            if self.foreground_window != Some((owner, id)) { continue; }
+            if self.closed.contains(&owner) || !self.hosts.get(&owner).is_some_and(|host| host.window_is_open(id)) {
+                self.foreground_window = None;
+                continue;
+            }
+            match message {
+                WindowUiMessage::FrameChanged(..) => self.window_ui_messages
+                    .push_back(WindowUiMessage::ActivateForeground(owner, id)),
+                WindowUiMessage::ActivateForeground(..) => self.activate_frame(owner, id),
+            }
+        }
+    }
+
+    pub(super) fn finish_window_messages(&mut self) {
+        while !self.window_ui_messages.is_empty() { self.pump_window_messages(); }
+    }
+
+    fn queue_window_activation_events(&mut self, previous: Option<(u64, usize)>, current: Option<(u64, usize)>) -> Option<u64> {
+        if previous == current || self.application_owner.and_then(|owner| self.hosts.get(&owner))
+            .is_some_and(|host| !host.enable_events) { return None; }
+        let pending_start = self.pending_events.len();
+        let previous_owner = previous.map(|(owner, _)| owner);
+        let current_owner = current.map(|(owner, _)| owner);
+        let context = |owner| WorkbookEventContext { frame: None, owner, activation_owner: None, saving: false };
+        if let Some((owner, id)) = previous {
+            let window = self.hosts.get_mut(&owner).expect("previous window owner").object(HostObject::Window(id));
+            self.queue_workbook_event(context(owner), "WindowDeactivate", vec![window], vec![]);
+            if previous_owner != current_owner {
+                self.queue_workbook_event(context(owner), "Deactivate", vec![], vec![]);
+            }
+        }
+        if let Some((owner, id)) = current {
+            if previous_owner != current_owner {
+                self.queue_workbook_event(context(owner), "Activate", vec![], vec![]);
+            }
+            let window = self.hosts.get_mut(&owner).expect("active window owner").object(HostObject::Window(id));
+            self.queue_workbook_event(context(owner), "WindowActivate", vec![window], vec![]);
+        }
+        // Only the head can run. Publishing its tail after the answer prevents
+        // getters inside a handler from delivering later notifications early.
+        let mut calls = self.pending_events.split_off(pending_start);
+        let completion = calls.back().map(|event| event.key);
+        if let Some(first) = calls.pop_front() {
+            if !calls.is_empty() { self.window_event_tails.insert(first.key, calls); }
+            if self.running_events.is_empty() {
+                self.pending_events.push_back(first);
+            } else {
+                self.pending_events.push_front(first);
+            }
+        }
+        completion
+    }
+
+    pub(super) fn finish_window_creation(&mut self, owner: u64, id: usize) {
+        if let Some(frame) = self.hosts.get_mut(&owner).and_then(|host| host.window_frames.frames.get_mut(id)) {
+            frame.creation_caption = None;
+        }
+    }
+
     fn active_window_display_state(&self) -> Option<i64> {
-        if self.closed.contains(&self.active) { return None; }
-        let host = self.hosts.get(&self.active)?;
-        let id = host.window_frames.active;
-        host.window_is_open(id).then(|| host.window_frames.frames[id].state)
+        let (owner, id) = self.foreground_frame()?;
+        Some(self.hosts[&owner].window_frames.frames[id].state)
     }
 
     fn next_display_window(&self, excluded: (u64, usize)) -> Option<(u64, usize)> {
@@ -322,11 +441,13 @@ impl WorkbookApplication<'_> {
     }
 
     fn activate_frame(&mut self, owner: u64, id: usize) {
+        let previous = self.logical_frame();
         self.activate(owner);
         if self.active == owner {
             self.hosts.get_mut(&owner).expect("window owner").activate_window_frame(id);
             self.activate(owner);
         }
+        self.queue_window_activation_events(previous, self.logical_frame());
     }
 
     pub(super) fn window_application_visible(&self) -> bool {
@@ -372,10 +493,29 @@ impl WorkbookApplication<'_> {
 }
 
 impl ApplicationHost<'_> {
-    pub(super) fn windows_set(&mut self, receiver: &ObjectRef, name: &str, value: &Value)
+    pub(super) fn windows_set(&mut self, receiver: &ObjectRef, name: &str, value: &Value, typed: bool)
         -> Option<Result<bool, String>> {
         if !name.eq_ignore_ascii_case("WindowState") { return None; }
         let mut application = self.application.borrow_mut();
+        if application.is_application(receiver) {
+            let (owner, id) = application.foreground_frame()?;
+            application.ensure_application_owner(owner);
+            application.last_owner = owner;
+            let requested = match application.hosts[&owner].requested_application_window_state(value, typed) {
+                Ok(state) => state,
+                Err(error) => return Some(Err(error)),
+            };
+            if application.hosts[&owner].window_frames.frames[id].state != requested {
+                application.hosts.get_mut(&owner).expect("foreground owner").window_frames.frames[id].state = requested;
+                if requested == -4140 {
+                    application.foreground_window = application.next_display_window((owner, id));
+                    if let Some((owner, id)) = application.foreground_window {
+                        application.window_ui_messages.push_back(WindowUiMessage::FrameChanged(owner, id));
+                    }
+                }
+            }
+            return Some(Ok(true));
+        }
         let owner = application.native_owner(receiver)?;
         let id = application.hosts.get(&owner)?.window_id(receiver)?;
         if let Some(error) = application.closed_object_error(receiver) { return Some(Err(error)); }
@@ -461,6 +601,7 @@ impl ApplicationHost<'_> {
                 } else { "Workbook.NewWindow takes no arguments" })));
             }
             application.ensure_application_owner(owner);
+            let previous = application.logical_frame();
             let primary = source.is_none().then(|| {
                 *application.hosts[&owner].window_frames.open_ids().last()
                     .expect("NewWindow has a source frame")
@@ -482,10 +623,26 @@ impl ApplicationHost<'_> {
             application.window_z_order.push((owner, id));
             application.window_enumeration_available = true;
             application.activate(owner);
+            let event_previous = match (previous, primary) {
+                (Some((previous_owner, _)), Some(primary)) if previous_owner == owner => Some((owner, primary)),
+                _ => previous,
+            };
+            let current = application.logical_frame();
+            if let Some(completion) = application.queue_window_activation_events(event_previous, current) {
+                // Notifications precede attachment of the workbook's window
+                // caption. The temporary blank-sheet frame has its own title.
+                let host = application.hosts.get_mut(&owner).expect("created window owner");
+                let title = host.file_io.full_name.as_deref()
+                    .map(|path| path.rsplit(['\\', '/']).next().unwrap_or(path))
+                    .unwrap_or("Sheet1");
+                host.window_frames.frames[id].creation_caption = Some(format!("{title}  -  1"));
+                application.window_creation_completions.insert(completion, (owner, id));
+            }
             return Some(Ok(Some(result)));
         }
         if let Some(owner) = book.filter(|_| name.eq_ignore_ascii_case("Activate")) {
             if !args.is_empty() { return Some(Err(host_error(450, "Workbook.Activate takes no arguments"))); }
+            let previous = application.logical_frame();
             application.activate(owner);
             if application.active == owner {
                 let host = application.hosts.get_mut(&owner).expect("Workbook.Activate owner");
@@ -494,6 +651,8 @@ impl ApplicationHost<'_> {
                 }
                 application.activate(owner);
             }
+            let current = application.logical_frame();
+            application.queue_window_activation_events(previous, current);
             return Some(Ok(Some(Value::Empty)));
         }
         if let Some((owner, id)) = window {
@@ -517,12 +676,7 @@ impl ApplicationHost<'_> {
             }
             if name.eq_ignore_ascii_case("Activate") {
                 if !args.is_empty() { return Some(Err(host_error(450, "Window.Activate takes no arguments"))); }
-                application.activate(owner);
-                if application.active == owner {
-                    let host = application.hosts.get_mut(&owner).expect("Window owner");
-                    host.activate_window_frame(id);
-                    application.activate(owner);
-                }
+                application.activate_frame(owner, id);
                 return Some(Ok(Some(Value::Empty)));
             }
             if name.eq_ignore_ascii_case("Close") {
