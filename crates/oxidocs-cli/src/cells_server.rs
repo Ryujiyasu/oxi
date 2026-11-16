@@ -79,6 +79,28 @@ fn clock(request: &Value) -> Result<f64, String> {
         .ok_or_else(|| "currentTime must be a finite local OLE date serial".into())
 }
 
+fn execution_environment(request: &Value) -> Result<Value, String> {
+    let mut options = json!({});
+    if let Some(language) = request.get("errorLanguage").filter(|v| !v.is_null()) {
+        let name = language.as_str().ok_or("errorLanguage must be a string")?;
+        if !matches!(name.to_ascii_lowercase().as_str(), "en" | "en-us" | "en-gb" | "ja" | "ja-jp") {
+            return Err("unsupported VBA errorLanguage".into());
+        }
+        options["errorLanguage"] = language.clone();
+    }
+    if let Some(help) = request.get("vbaHelpFile").filter(|v| !v.is_null()) {
+        if !help.is_string() { return Err("vbaHelpFile must be a string".into()); }
+        options["vbaHelpFile"] = help.clone();
+    }
+    if let Some(page) = request.get("hostAnsiCodePage").filter(|v| !v.is_null()) {
+        if !matches!(page.as_u64(), Some(932 | 1252)) {
+            return Err("hostAnsiCodePage must be the integer 932 or 1252".into());
+        }
+        options["hostAnsiCodePage"] = page.clone();
+    }
+    Ok(options)
+}
+
 fn capability_name(value: oxivba_core::Capability) -> &'static str {
     use oxivba_core::Capability;
     match value {
@@ -253,9 +275,11 @@ impl OpenBook {
     fn open(request: &Value) -> Result<(Self, Value), String> {
         fields(
             request,
-            &["id", "op", "path", "sourceCodePage", "seed", "currentTime"],
+            &["id", "op", "path", "sourceCodePage", "seed", "currentTime",
+              "errorLanguage", "vbaHelpFile", "hostAnsiCodePage"],
         )?;
         clock(request)?;
+        let environment = execution_environment(request)?;
         let path = Path::new(text(request, "path")?);
         let bytes = fs::read(path).map_err(|e| e.to_string())?;
         let code_page = request
@@ -286,7 +310,10 @@ impl OpenBook {
             .ok_or("filename must be valid UTF-8")?
             .to_owned();
         let full_name = format!("C:\\work\\{initial_name}");
-        let mut continued = json!({});
+        let mut continued = environment.clone();
+        for (name, value) in environment.as_object().expect("environment object") {
+            metadata[name] = value.clone();
+        }
         if let Some(name) = metadata.get("projectName").filter(|v| !v.is_null()) {
             continued["projectName"] = name.clone();
         }

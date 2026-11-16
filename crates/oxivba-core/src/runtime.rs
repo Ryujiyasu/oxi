@@ -5966,7 +5966,12 @@ impl<'a> Runtime<'a> {
             _ => {
                 // A random file's records are 128 bytes unless Len says.
                 let length = match &open.record_len {
-                    Some(expr) => self.file_number(expr, frame, line)?.max(1) as usize,
+                    Some(expr) => {
+                        let value = self.eval_scalar_expr(expr, frame)?;
+                        let length = convert_integer(&value, i64::from(i16::MIN), i64::from(i16::MAX), Some(line))?;
+                        if length == 0 || length < -1 { return Err(language_error(5, "invalid random record length", line)); }
+                        if length == -1 { 128 } else { length as usize }
+                    }
                     None => 128,
                 };
                 OpenMode::Random(length)
@@ -6061,7 +6066,8 @@ impl<'a> Runtime<'a> {
         if !trailing {
             written.push_str("\r\n");
         }
-        self.files.write(number, &written).map_err(|failure| file_failure(failure, line))
+        let bytes = utf16::encode_ansi(self.host.as_deref(), &written.encode_utf16().collect::<Vec<_>>(), None, Some(line))?;
+        self.files.write_sequential(number, &written, &bytes).map_err(|failure| file_failure(failure, line))
     }
 
     /// `Line Input #` and `Input #`. A field read by Input is the type it
@@ -6156,6 +6162,7 @@ impl<'a> Runtime<'a> {
         let number = self.file_number(&transfer.file_number, frame, line)?;
         let record=transfer.record_number.as_ref().map(|record|self.file_number(record,frame,line)).transpose()?;
         let saved=self.files.handle(number).map_err(|failure|file_failure(failure,line))?.clone();
+        let saved_cursor = self.files.cursor_snapshot(number);
         let mut permission_refused=false;
         let result=(|| {
         if let Some(position) = record {
@@ -6181,6 +6188,7 @@ impl<'a> Runtime<'a> {
             }
             FileTransferKind::Get => {
                 let read = self.value_from_file(&current, variant, fixed, random, number, 0);
+                if read.is_err() { self.files.abort_get_record(number); }
                 permission_refused=matches!(read,Err(crate::files::FileError::PermissionDenied|crate::files::FileError::PathFileAccess));
                 let read=read.map_err(|failure| file_failure(failure, line))?;
                 self.files.finish_record(number);
@@ -6189,7 +6197,7 @@ impl<'a> Runtime<'a> {
         }
         })();
         if permission_refused {
-            self.files.restore_byte_position(number,&saved.path,saved.position);
+            self.files.restore_byte_position(number, &saved.path, saved.position, saved_cursor);
         }
         result
     }
@@ -6275,6 +6283,9 @@ impl<'a> Runtime<'a> {
                 11 => Value::Boolean(false),
                 17 => Value::Byte(0),
                 20 => Value::LongLong(0),
+                0 => return Ok(Value::Empty),
+                1 => return Ok(Value::Null),
+                _ if random => return Err(crate::files::FileError::UnsupportedType),
                 _ => return Ok(Value::Empty),
             };
             return self.value_from_file(&template, false, false, random, number, depth);
@@ -6362,7 +6373,7 @@ impl<'a> Runtime<'a> {
             ("fileattr", args) => self.file_attribute_function(args, line),
             ("eof", [file]) => number_of(file)
                 .map_err(mismatch)
-                .and_then(|file| self.files.at_end(file).map_err(failure))
+                .and_then(|file| self.files.vba_eof(file).map_err(failure))
                 .map(Value::Boolean),
             ("lof", [file]) => number_of(file)
                 .map_err(mismatch)
@@ -18575,9 +18586,8 @@ fn call_string_builtin(
             }
             Ok(Value::String(String::new()))
         }
-        // `ChrB` answers a string of ONE byte, which a String of UTF-16
-        // units cannot hold; its length is what shows, and that is nothing:
-        // measured, `Len(ChrB(67))` is 0. Past a byte is error 5.
+        // ChrB returns one raw BSTR byte: Len is zero but LenB is one.
+        // Preserve it for byte slicing, concatenation and ANSI conversion.
         "chrb" | "chrb$" => {
             if args.len() != 1 {
                 return Err(wrong_count("1 argument"));
@@ -18586,7 +18596,7 @@ fn call_string_builtin(
             if !(0..=255).contains(&value) {
                 return Err(invalid_procedure_call("ChrB takes a byte".to_string(), line));
             }
-            Ok(Value::String(String::new()))
+            Ok(Value::from_bstr_bytes(vec![value as u8]))
         }
         // The folder a macro stands in; a browser has none of its own, so
         // the drive's root answers (measured only as non-empty).
@@ -21868,6 +21878,219 @@ End Function
                 .unwrap(),
             Value::Integer(5)
         );
+    }
+
+    #[test]
+    fn chrb_preserves_single_bytes_and_concatenated_ansi_data() {
+        let source = r#"
+Public Function OneByte(ByVal code As Long) As String
+ OneByte = ChrB$(code)
+End Function
+Public Function DecodePair() As String
+ Dim raw As String
+ raw = ChrB(130) & ChrB$(160)
+ DecodePair = StrConv(raw, vbUnicode, 1041)
+End Function
+"#;
+        for code in [0, 65, 255] {
+            let actual = run(source, "OneByte", vec![Value::Integer(code)]).unwrap();
+            assert_eq!(actual.string_bytes().unwrap().as_ref(), &[code as u8]);
+        }
+        assert_eq!(run(source, "DecodePair", vec![]).unwrap(), Value::String("\u{3042}".into()));
+    }
+
+    fn run_file_state_probe(source: &str, args: Vec<Value>, seed: &[u8]) -> (Value, Vec<u8>) {
+        let module = crate::parse_module(source).unwrap();
+        let mut runtime = Runtime::new(&module);
+        runtime.file_system_mut().mount_folder("C:\\work").unwrap();
+        runtime.file_system_mut().replace_bytes("C:\\work\\state.bin", seed.to_vec()).unwrap();
+        let result = runtime.call("Probe", args).unwrap();
+        let bytes = runtime.file_system_mut().bytes("C:\\work\\state.bin").unwrap().to_vec();
+        (result, bytes)
+    }
+
+    #[test]
+    fn file_state_open_coerces_native_integer_record_lengths() {
+        let source = r#"
+Public Function Probe(ByVal recordLength As Variant) As String
+ Dim b As Byte, n As Long
+ On Error Resume Next
+ Open "C:\work\state.bin" For Random As #1 Len = recordLength
+ n = Err.Number
+ If n <> 0 Then
+  Probe = CStr(n)
+  Exit Function
+ End If
+ Get #1, , b
+ Probe = CStr(n) & "|" & CStr(b) & "|" & CStr(EOF(1)) & "|" & CStr(Loc(1)) & "|" & CStr(Seek(1))
+ If recordLength = -1 Then
+  Close #1
+  Open "C:\work\state.bin" For Random As #1 Len = recordLength
+  b = 88: Put #1, , b
+  Put #1, , b
+  Probe = Probe & "|" & CStr(LOF(1))
+ End If
+ Close #1
+End Function
+"#;
+        for (length, expected) in [
+            (1, "0|65|False|1|2"), (4, "0|65|True|1|2"),
+            (-1, "0|65|True|1|2|129"), (-2, "5"), (-32768, "5"), (0, "5"), (32767, "0|65|True|1|2"),
+            (32768, "6"), (65535, "6"), (65536, "6"),
+        ] {
+            let (actual, _) = run_file_state_probe(source, vec![Value::Integer(length)], b"A");
+            assert_eq!(actual, Value::String(expected.into()), "record length {length}");
+        }
+    }
+
+    #[test]
+    fn file_state_variant_descriptors_must_fit_the_random_record() {
+        let source = r#"
+Public Function Probe(ByVal recordLength As Long) As String
+ Dim value As Variant, n As Long
+ Open "C:\work\state.bin" For Random As #1 Len = recordLength
+ On Error Resume Next
+ Get #1, , value
+ n = Err.Number
+ Probe = CStr(n) & "|" & CStr(Seek(1)) & "|" & CStr(EOF(1)) & "|" & CStr(Loc(1)) & "|" & TypeName(value) & "|" & CStr(VarType(value))
+ Close #1
+End Function
+"#;
+        for (seed, length, expected) in [
+            (vec![0,0], 1, "59|1|False|0|Empty|0"),
+            (vec![0,0], 2, "0|2|False|1|Empty|0"),
+            (vec![0,0], 4, "0|2|True|1|Empty|0"),
+            (vec![3,0,7,0,0,0], 4, "59|1|False|0|Empty|0"),
+            (vec![3,0,7,0,0,0], 6, "0|2|False|1|Long|3"),
+            (vec![3,0,7,0,0,0], 8, "0|2|True|1|Long|3"),
+        ] {
+            let (actual, _) = run_file_state_probe(source, vec![Value::Integer(length)], &seed);
+            assert_eq!(actual, Value::String(expected.into()), "record length {length}, seed {seed:?}");
+        }
+    }
+
+    #[test]
+    fn file_state_output_tracks_native_seek_and_mode_errors() {
+        let source = r#"
+Public Function Probe(ByVal mode As String, ByVal position As Long) As String
+ Select Case mode
+ Case "Input": Open "C:\work\state.bin" For Input As #1
+ Case "Output": Open "C:\work\state.bin" For Output As #1
+ Case "Append": Open "C:\work\state.bin" For Append As #1
+ Case "Binary": Open "C:\work\state.bin" For Binary As #1
+ Case "Random": Open "C:\work\state.bin" For Random As #1 Len = 4
+ End Select
+ On Error Resume Next
+ If position > 0 Then Seek #1, position
+ Err.Clear
+ Print #1, "X";
+ Probe = CStr(Err.Number) & "|" & CStr(Seek(1)) & "|" & CStr(EOF(1)) & "|" & CStr(Loc(1)) & "|" & CStr(LOF(1))
+ Close #1
+End Function
+"#;
+        for (mode, position, expected, bytes) in [
+            ("Input", 0, "54|1|False|1|7", b"AAAAAAA".to_vec()),
+            ("Binary", 0, "54|1|False|0|7", b"AAAAAAA".to_vec()),
+            ("Random", 0, "54|1|False|0|7", b"AAAAAAA".to_vec()),
+            ("Output", 0, "0|2|True|0|1", b"X".to_vec()),
+            ("Append", 0, "0|2|True|0|8", b"AAAAAAAX".to_vec()),
+            ("Output", 8, "0|9|True|0|8", vec![0,0,0,0,0,0,0,88]),
+            ("Append", 8, "0|9|True|0|8", b"AAAAAAAX".to_vec()),
+        ] {
+            let (actual, payload) = run_file_state_probe(source,
+                vec![Value::String(mode.into()), Value::Integer(position)], b"AAAAAAA");
+            assert_eq!(actual, Value::String(expected.into()), "{mode}, Seek {position}");
+            assert_eq!(payload, bytes, "{mode}, Seek {position}");
+        }
+    }
+
+    #[test]
+    fn file_state_past_end_reads_and_writes_keep_distinct_positions() {
+        let source = r#"
+Public Function Probe(ByVal random As Boolean) As String
+ Dim b As Byte, i As Long, state As String
+ If random Then
+  Open "C:\work\state.bin" For Random As #1 Len = 4
+ Else
+  Open "C:\work\state.bin" For Binary As #1
+ End If
+ For i = 1 To 12
+  Get #1, , b
+ Next
+ state = CStr(EOF(1))
+ b = 88: Put #1, , b
+ state = state & "|" & CStr(EOF(1)) & "|" & CStr(LOF(1))
+ Put #1, , b
+ Probe = state & "|" & CStr(EOF(1)) & "|" & CStr(LOF(1)) & "|" & CStr(Loc(1)) & "|" & CStr(Seek(1))
+ Close #1
+End Function
+"#;
+        for (size, binary, random) in [
+            (0, "True|True|1|True|2|14|15", "True|True|1|True|53|14|15"),
+            (1, "True|True|2|True|3|14|15", "True|True|2|True|53|14|15"),
+            (4, "True|True|5|True|6|14|15", "True|True|5|True|53|14|15"),
+            (7, "True|True|8|True|9|14|15", "True|True|8|True|53|14|15"),
+            (8, "True|True|9|True|10|14|15", "True|True|9|True|53|14|15"),
+        ] {
+            for (mode, expected) in [(false, binary), (true, random)] {
+                let (actual, _) = run_file_state_probe(source, vec![Value::Boolean(mode)], &vec![65; size]);
+                assert_eq!(actual, Value::String(expected.into()), "random {mode}, size {size}");
+            }
+        }
+    }
+
+    #[test]
+    fn file_state_overlong_random_values_fail_before_advancing_the_record() {
+        let source = r#"
+Public Function Probe(ByVal operation As Long) As String
+ Dim d As Double, s As String * 8, b As Byte, n As Long
+ Open "C:\work\state.bin" For Random As #1 Len = 4
+ On Error Resume Next
+ Select Case operation
+ Case 0: Get #1, , d
+ Case 1: Put #1, , d
+ Case 2: Get #1, , s
+ Case 3: Put #1, , s
+ End Select
+ n = Err.Number
+ Probe = CStr(n) & "|" & CStr(Seek(1)) & "|" & CStr(EOF(1)) & "|" & CStr(Loc(1)) & "|" & CStr(LOF(1))
+ Get #1, , b
+ b = 88: Put #1, , b
+ Close #1
+End Function
+"#;
+        for (seed, read_eof, payload) in [
+            (b"".as_slice(), "True", b"X".as_slice()),
+            (b"A".as_slice(), "True", b"AX".as_slice()),
+            (b"AAAAAAA".as_slice(), "False", b"AAAAXAA".as_slice()),
+        ] {
+            for operation in 0..4 {
+                let (actual, bytes) = run_file_state_probe(source, vec![Value::Integer(operation)], seed);
+                let eof = if matches!(operation, 0 | 2) { read_eof } else { "False" };
+                assert_eq!(actual, Value::String(format!("59|1|{eof}|0|{}", seed.len())), "operation {operation}, seed {seed:?}");
+                assert_eq!(bytes, payload, "operation {operation}, seed {seed:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn file_state_invalid_random_variant_tag_preserves_the_next_read() {
+        let source = r#"
+Public Function Probe() As String
+ Dim value As Variant, b As Byte, n As Long
+ Open "C:\work\state.bin" For Random As #1 Len = 4
+ On Error Resume Next
+ Get #1, , value
+ n = Err.Number
+ Probe = CStr(n) & "|" & CStr(Seek(1)) & "|" & CStr(EOF(1)) & "|" & CStr(Loc(1))
+ Get #1, , b
+ b = 88: Put #1, , b
+ Close #1
+End Function
+"#;
+        let (actual, bytes) = run_file_state_probe(source, vec![], b"AAAAAAA");
+        assert_eq!(actual, Value::String("458|1|False|0".into()));
+        assert_eq!(bytes, b"AAAAXAA");
     }
 
     #[test]

@@ -634,7 +634,7 @@ async function verifyCloseErrors(mode){
   const source=closeErrorControl.source.replace('VERSION 1.0 CLASS',setup+'VERSION 1.0 CLASS');
   const rootPacket=wasm.save_spreadsheet_vba_source(closeEventSeedBytes,source);
   const peer=wasm.save_spreadsheet_vba_source(closeEventSeedBytes,closeErrorControl.source);
-  const options={errorLanguage:'ja-JP',documentModules:wasm.spreadsheet_vba_document_modules(rootPacket),
+  const options={errorLanguage:'ja-JP',hostAnsiCodePage:932,documentModules:wasm.spreadsheet_vba_document_modules(rootPacket),
    fileSystemState:{folders:['C:\\'],files:[],mountedFolders:[],mountedFiles:[]},
    fileContext:{fullName:a,packageBytes:rootPacket,files:[{path:b,bytes:peer},{path:c,bytes:peer}]}};
   const session=mode==='direct'?new wasm.SpreadsheetVbaSession():undefined;
@@ -644,14 +644,14 @@ async function verifyCloseErrors(mode){
     :await runner.runVbaInWorker(wasm.parse_spreadsheet(rootPacket),source,'Driver.SeedErrors',[item.kind],0,'close-collection-A.xlsm',options,rootPacket);
    assert.equal(opened.error,undefined,mode+' close error seed '+item.kind);
    const view=session?session.select_workbook('1'):await runner.selectVbaWorkbookInWorker('1');
-   const out=session?session.run(view.selected.workbook,view.selected.source,item.procedure,[item.kind],0,view.selected.name,{errorLanguage:'ja-JP'})
-    :await runner.runVbaInWorker(view.selected.workbook,view.selected.source,item.procedure,[item.kind],0,view.selected.name,{errorLanguage:'ja-JP'},peer);
+   const out=session?session.run(view.selected.workbook,view.selected.source,item.procedure,[item.kind],0,view.selected.name,{errorLanguage:'ja-JP',hostAnsiCodePage:932})
+    :await runner.runVbaInWorker(view.selected.workbook,view.selected.source,item.procedure,[item.kind],0,view.selected.name,{errorLanguage:'ja-JP',hostAnsiCodePage:932},peer);
    const label=mode+' '+item.route+' close error '+item.kind;
    assert.equal(out.error,undefined,label);
    assert.deepEqual(out.result,{type:'string',value:item.value},label+' caller Err');
    assert.equal((out.other_workbooks||[]).length+1,3,label+' live books');
    const log=out.file_system_state.files.find(file=>file.path.toLowerCase()===(folder+'\\close-collection-events.txt').toLowerCase());
-   assert.equal(new TextDecoder().decode(new Uint8Array(log.bytes)).replaceAll('\r\n','\n'),item.event_log,label+' decoded Err trace');
+   assert.equal(new TextDecoder('shift_jis').decode(new Uint8Array(log.bytes)).replaceAll('\r\n','\n'),item.event_log,label+' decoded Err trace');
    checked++;
   }finally{session?.free();if(!session)runner.closeVbaProject();}
  }
