@@ -91986,7 +91986,7 @@ End Sub
             let seed = include_bytes!("../../../tests/fixtures/vba/array_argument_rank.xlsm");
             let original_a = crate::vba_project::write_project_source(seed, &a, None).unwrap();
             let peer = crate::vba_project::write_project_source(seed, &routed, None).unwrap();
-            let mut context = failure_context();
+            let mut context = failure_context(); context.host_ansi_code_page=Some(AnsiCodePage::Japanese);
             context.file_name = Some("close-collection-A.xlsm".into());
             context.document_modules = Some(crate::vba_project::read_document_modules(&original_a).unwrap());
             context.file_context = Some(file_io::FileContext {
@@ -92001,15 +92001,15 @@ End Sub
                 Some("Driver.SeedErrors"), vec![Value::Integer(kind)], 0, context, &mut session).unwrap();
             assert!(opened.error.is_none(), "{route} case {kind} setup");
             let view = select_session_workbook(&mut session, "1").unwrap();
-            let outcome = close_fixture_run(view.selected.workbook, &view.selected.source,
-                "Driver.Probe", vec![Value::Integer(kind)], &view.selected.name, &mut session);
+            let outcome = execute_workbook_action_in_session(view.selected.workbook, &view.selected.source,
+                Some("Driver.Probe"), vec![Value::Integer(kind)], 0, {let mut c=failure_context();c.file_name=Some(view.selected.name.clone());c.host_ansi_code_page=Some(AnsiCodePage::Japanese);c}, &mut session).unwrap();
             assert!(outcome.error.is_none(), "{route} case {kind}: {:?}", outcome.error.as_ref().map(|error| &error.message));
             assert_eq!(serde_json::to_value(&outcome.result).unwrap()["value"], case["value"], "{route} case {kind} caller Err");
             assert_eq!(outcome.other_workbooks.len() + 1, 3, "{route} case {kind} cancelled close");
             let snapshot = serde_json::to_value(&outcome.file_system_state).unwrap();
             let files: Vec<file_io::ProducedFile> = serde_json::from_value(snapshot["files"].clone()).unwrap();
             let log = files.iter().find(|file| file.path.eq_ignore_ascii_case(r"C:\close-collection-events.txt")).unwrap();
-            assert_eq!(String::from_utf8_lossy(&log.bytes).replace("\r\n", "\n"), case["event_log"].as_str().unwrap(),
+            assert_eq!(String::from_utf16_lossy(&oxivba_core::AnsiCodec::for_locale(Some(2048),932,1252).unwrap().decode(&log.bytes)).replace("\r\n", "\n"), case["event_log"].as_str().unwrap(),
                 "{route} case {kind} Err through native events and nested Application.Run");
           }
         }
