@@ -10461,6 +10461,20 @@ impl<'a> TableFitLayouter<'a> {
                                             );
                                             // Session 72 Phase A: populate text_y_off (y still includes it).
                                             cell_el.text_y_off = cell_text_y_off;
+                                            // OXI_PGNUM_LINE: a cell's PAGE number keeps the edge its
+                                            // paragraph alignment anchors (the default 0.5 centred a
+                                            // right-aligned footer cell's number).
+                                            if _source_style.cell_field_type == Some(FieldType::Page)
+                                                && !crate::env_flag!("OXI_PGNUM_LINE_DISABLE")
+                                            {
+                                                cell_el.page_field_anchor = if should_justify { 0.0 } else {
+                                                    match para.alignment {
+                                                        Alignment::Center => 0.5,
+                                                        Alignment::Right => 1.0,
+                                                        _ => 0.0,
+                                                    }
+                                                };
+                                            }
                                             cell_el.baseline_offset = shared_cell_baseline;
                                             self.set_cell_exact_baseline(&mut cell_el, effective_line_rule, effective_line_spacing.unwrap_or(lh));
                                             // OXI_CELL_RUBY_BASE (2026-10-12, default ON, opt-out _DISABLE): the

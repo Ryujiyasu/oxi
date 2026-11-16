@@ -5419,7 +5419,10 @@ impl LayoutEngine {
                 .get(page_idx)
                 .and_then(|&ir| doc_resolved.pages.get(ir))
                 .and_then(|p| p.page_number_format.clone());
-            for elem in &mut page.elements {
+            // OXI_PGNUM_LINE (2026-11-16): (element index, width change, anchor) of every
+            // substituted number, so the text it touches on its line can follow below.
+            let mut pgnum_moves: Vec<(usize, f32, f32)> = Vec::new();
+            for (elem_i, elem) in page.elements.iter_mut().enumerate() {
                 if let LayoutContent::Text {
                     text,
                     field_type: Some(ft),
@@ -5457,6 +5460,7 @@ impl LayoutEngine {
                         let m = &*self.registry.get(font_family.as_deref().unwrap_or("Times New Roman"));
                         let w_of = |t: &str| t.chars().map(|c| m.char_width_pt(c, fs)).sum::<f32>();
                         let dw = w_of(&new_text) - w_of(text);
+                        pgnum_moves.push((elem_i, dw, elem.page_field_anchor));
                         elem.x -= dw * elem.page_field_anchor;
                         elem.width = (elem.width + dw).max(0.0);
                         *text = new_text;
@@ -5483,6 +5487,52 @@ impl LayoutEngine {
                         elem.width = new_w;
                         *text = new_text;
                     }
+                }
+            }
+            // OXI_PGNUM_LINE (2026-11-16): the number's paragraph re-aligns as a whole.
+            // administrative__008d98e2's footer cell (jc right) «Page » + PAGE: the
+            // layout placed «Page 2» flush right; on p10 only the number moved and drew
+            // over the space («Page10»), where Word ends «Page 10» at the same edge and
+            // starts «Page » 5pt further left. The text that touches the number on its
+            // line (its tab segment: a tab leaves a gap) moves with it -- the part
+            // before the number by -dw·anchor, the part after by +dw·(1 − anchor).
+            if !crate::env_flag!("OXI_PGNUM_LINE_DISABLE") {
+                for &(fi, dw, anchor) in &pgnum_moves {
+                    if dw.abs() < 0.01 {
+                        continue;
+                    }
+                    let (fy, fpi, fcell) = {
+                        let f = &page.elements[fi];
+                        (f.y, f.paragraph_index, (f.cell_row_index, f.cell_col_index, f.cell_paragraph_index))
+                    };
+                    // a tab element ends the number's tab segment
+                    let same_line = |e: &LayoutElement| {
+                        matches!(&e.content, LayoutContent::Text { text, .. } if !text.contains('\t'))
+                            && (e.y - fy).abs() < 0.1
+                            && e.paragraph_index == fpi
+                            && (e.cell_row_index, e.cell_col_index, e.cell_paragraph_index) == fcell
+                    };
+                    // the number's own pre-move edges
+                    let f_left = page.elements[fi].x + dw * anchor;
+                    let f_right = f_left + (page.elements[fi].width - dw);
+                    let mut left: Vec<usize> = Vec::new();
+                    let mut edge = f_left;
+                    loop {
+                        let next = (0..page.elements.len()).find(|&j| j != fi && !left.contains(&j)
+                            && same_line(&page.elements[j])
+                            && (page.elements[j].x + page.elements[j].width - edge).abs() < 0.3);
+                        match next { Some(j) => { edge = page.elements[j].x; left.push(j); } None => break }
+                    }
+                    let mut right: Vec<usize> = Vec::new();
+                    let mut edge = f_right;
+                    loop {
+                        let next = (0..page.elements.len()).find(|&j| j != fi && !right.contains(&j)
+                            && same_line(&page.elements[j])
+                            && (page.elements[j].x - edge).abs() < 0.3);
+                        match next { Some(j) => { edge = page.elements[j].x + page.elements[j].width; right.push(j); } None => break }
+                    }
+                    for j in left { page.elements[j].x -= dw * anchor; }
+                    for j in right { page.elements[j].x += dw * (1.0 - anchor); }
                 }
             }
         }

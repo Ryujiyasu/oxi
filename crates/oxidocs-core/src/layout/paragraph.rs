@@ -9209,7 +9209,10 @@ impl<'a> ParagraphLayouter<'a> {
                 // S1527: every text fragment keeps its source run (cell text
                 // included) so a footnote reference can be found on its line.
                 el.run_index = Some(frag.run_index);
-                if frag.field_type == Some(FieldType::Page) {
+                if frag.field_type == Some(FieldType::Page)
+                    || (frag.field_type == Some(FieldType::NumPages)
+                        && !crate::env_flag!("OXI_PGNUM_LINE_DISABLE"))
+                {
                     // the last tab before the field places it; else the paragraph
                     el.page_field_anchor = match line.fragments[..frag_idx].iter().rev()
                         .find_map(|f| f.tab_alignment) {

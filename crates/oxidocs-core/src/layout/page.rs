@@ -7079,9 +7079,25 @@ tbl_top={:.1} advance={:.1} new_top={:.1}",
                             } else {
                                 (pull_from..block_idx).collect()
                             };
-                            let is_mine = |e: &LayoutElement| {
+                            let is_owned = |e: &LayoutElement| {
                                 e.paragraph_index.is_some_and(|pi| pulled_here.contains(&pi))
                                     && tail_split_y.map_or(true, |ty| e.y >= ty - 0.1)
+                            };
+                            // OXI_KCHAIN_MARKER (2026-11-16): a list number («(11)») is laid as
+                            // a text element without a paragraph index, so the vacated-band
+                            // test read the heading's own number as a stranger below the chain
+                            // and kept the heading at the old page foot. A body-level text
+                            // element without an owner on one of the chain's own lines is the
+                            // chain's marker. administrative__008d98e2 p9/p10.
+                            let chain_line_ys: Vec<f32> = if !crate::env_flag!("OXI_KCHAIN_MARKER_DISABLE") {
+                                pages[old_idx].elements.iter().filter(|e| is_owned(e)).map(|e| e.y).collect()
+                            } else { Vec::new() };
+                            let is_mine = |e: &LayoutElement| {
+                                is_owned(e)
+                                    || (e.paragraph_index.is_none()
+                                        && e.cell_paragraph_index.is_none()
+                                        && matches!(e.content, LayoutContent::Text { .. })
+                                        && chain_line_ys.iter().any(|y| (y - e.y).abs() < 0.1))
                             };
                             let chain_min_y = pages[old_idx]
                                 .elements
