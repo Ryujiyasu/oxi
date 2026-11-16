@@ -610,3 +610,87 @@ fn native_save_as_converts_the_package_and_keeps_the_live_project() {
         .unwrap();
     assert!(matches!(next.result(), Value::Integer(24)));
 }
+
+#[test]
+fn native_window_collection_calls_preserve_complete_excel_observations() {
+    // Exercise the public options decoder as well as execution. The native
+    // observations include Japanese Err descriptions and a host help-file path;
+    // replaying them with the API's English defaults would change the input.
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/vba/window_collections_native.json"
+    ))
+    .unwrap();
+    let group = fixture["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|group| group["id"] == "binding_and_coercion")
+        .unwrap();
+    let hex = group["carrier_bytes_hex"].as_str().unwrap();
+    let carrier: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
+        .collect();
+    let file_name = group["file_name"].as_str().unwrap();
+    let options = serde_json::json!({
+        "errorLanguage": "ja-JP",
+        "vbaHelpFile": group["help_file"],
+        "projectName": "VBAProject",
+        "applicationState": {
+            "visible": false, "enableEvents": false, "displayAlerts": false,
+            "standardFontStartup": {"profileUtf16": group["startup_profile_utf16"]}
+        },
+        "fileContext": {
+            "packageBytes": carrier, "fullName": format!(r"C:\work\{file_name}"),
+            "readOnly": true, "folders": [r"C:\work"]
+        }
+    })
+    .to_string();
+    let workbook = oxicells_core::parse_xlsx_preserving_values(&carrier).unwrap();
+    let fields = group["fields"].as_array().unwrap();
+    let cases = group["cases"].as_array().unwrap();
+    assert_eq!(fields.len(), 20);
+    assert_eq!(cases.len(), 112);
+    for reverse in [false, true] {
+        for position in 0..cases.len() {
+            let case = &cases[if reverse {
+                cases.len() - 1 - position
+            } else {
+                position
+            }];
+            let mode = case["mode"].as_i64().unwrap();
+            let binding = case["binding"].as_i64().unwrap();
+            let context = format!("reverse={reverse}, mode={mode}, binding={binding}");
+            let mut call = NativeVbaCall::new(
+                group["program"].as_str().unwrap(),
+                group["procedure"].as_str().unwrap_or("Probe"),
+                vec![Value::Integer(mode), Value::Integer(binding)],
+                46_000.0,
+                1,
+            );
+            call.file_name = Some(file_name.into());
+            call.options = &options;
+            let outcome = SpreadsheetVbaSession::default()
+                .run_native(workbook.clone(), call)
+                .unwrap_or_else(|error| panic!("{context}: {error}"));
+            let details: serde_json::Value =
+                serde_json::from_str(&outcome.to_json().unwrap()).unwrap();
+            assert!(
+                details["error"].is_null(),
+                "{context}: {}",
+                details["error"]
+            );
+            assert_eq!(details["workbook_changed"], false, "{context}");
+            // Empty file lists are omitted by the public outcome serializer.
+            assert!(details.get("files").is_none(), "{context}");
+            assert!(details.get("deleted_files").is_none(), "{context}");
+            let actual = details["result"]["value"]["values"].as_array().unwrap();
+            let expected = case["expected"].as_array().unwrap();
+            assert_eq!(actual.len(), fields.len(), "{context}");
+            assert_eq!(expected.len(), fields.len(), "{context}");
+            for ((field, actual), expected) in fields.iter().zip(actual).zip(expected) {
+                assert_eq!(&actual["value"], expected, "{context}, field={field}");
+            }
+        }
+    }
+}
