@@ -18586,9 +18586,8 @@ fn call_string_builtin(
             }
             Ok(Value::String(String::new()))
         }
-        // `ChrB` answers a string of ONE byte, which a String of UTF-16
-        // units cannot hold; its length is what shows, and that is nothing:
-        // measured, `Len(ChrB(67))` is 0. Past a byte is error 5.
+        // ChrB returns one raw BSTR byte: Len is zero but LenB is one.
+        // Preserve it for byte slicing, concatenation and ANSI conversion.
         "chrb" | "chrb$" => {
             if args.len() != 1 {
                 return Err(wrong_count("1 argument"));
@@ -18597,7 +18596,7 @@ fn call_string_builtin(
             if !(0..=255).contains(&value) {
                 return Err(invalid_procedure_call("ChrB takes a byte".to_string(), line));
             }
-            Ok(Value::String(String::new()))
+            Ok(Value::from_bstr_bytes(vec![value as u8]))
         }
         // The folder a macro stands in; a browser has none of its own, so
         // the drive's root answers (measured only as non-empty).
@@ -21879,6 +21878,25 @@ End Function
                 .unwrap(),
             Value::Integer(5)
         );
+    }
+
+    #[test]
+    fn chrb_preserves_single_bytes_and_concatenated_ansi_data() {
+        let source = r#"
+Public Function OneByte(ByVal code As Long) As String
+ OneByte = ChrB$(code)
+End Function
+Public Function DecodePair() As String
+ Dim raw As String
+ raw = ChrB(130) & ChrB$(160)
+ DecodePair = StrConv(raw, vbUnicode, 1041)
+End Function
+"#;
+        for code in [0, 65, 255] {
+            let actual = run(source, "OneByte", vec![Value::Integer(code)]).unwrap();
+            assert_eq!(actual.string_bytes().unwrap().as_ref(), &[code as u8]);
+        }
+        assert_eq!(run(source, "DecodePair", vec![]).unwrap(), Value::String("\u{3042}".into()));
     }
 
     fn run_file_state_probe(source: &str, args: Vec<Value>, seed: &[u8]) -> (Value, Vec<u8>) {
