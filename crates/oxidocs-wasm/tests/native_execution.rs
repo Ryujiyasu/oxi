@@ -629,18 +629,33 @@ fn native_window_collection_calls_preserve_complete_excel_observations() {
 fn native_window_lifecycle_and_state_assignments_preserve_complete_excel_observations() {
     let fixture = native_window_fixture();
     let groups = fixture["groups"].as_array().unwrap();
-    assert_eq!(groups.len(), 17);
+    assert_eq!(groups.len(), 19);
     assert_eq!(
         groups
             .iter()
             .map(|group| group["cases"].as_array().unwrap().len())
             .sum::<usize>(),
-        2688
+        2698
     );
     for group in groups
         .iter()
+        .take(17)
         .filter(|group| group["id"] != "binding_and_coercion")
     {
+        replay_native_window_group(group);
+    }
+}
+
+#[test]
+fn native_window_frame_state_transitions_match_excel() {
+    let fixture = native_window_fixture();
+    let groups = fixture["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 19);
+    assert_eq!(groups[17]["id"], "window_frame_display_transitions");
+    assert_eq!(groups[18]["id"], "window_cross_book_display_transitions");
+    assert_eq!(groups[17]["cases"].as_array().unwrap().len(), 6);
+    assert_eq!(groups[18]["cases"].as_array().unwrap().len(), 4);
+    for group in &groups[17..] {
         replay_native_window_group(group);
     }
 }
@@ -703,7 +718,8 @@ fn replay_native_window_group(group: &serde_json::Value) {
         "vbaHelpFile": group["help_file"],
         "projectName": "VBAProject",
         "applicationState": {
-            "visible": false, "enableEvents": false, "displayAlerts": false,
+            "visible": group["initial_application_visible"].as_bool().unwrap_or(false),
+            "enableEvents": false, "displayAlerts": false,
             "standardFontStartup": {"profileUtf16": group["startup_profile_utf16"]}
         },
         "fileContext": {
@@ -753,6 +769,12 @@ fn replay_native_window_group(group: &serde_json::Value) {
                 "{context}: {}",
                 details["error"]
             );
+            if let Some(expected) = group.get("expected_application_visible") {
+                assert_eq!(
+                    details["application_state"]["visible"], *expected,
+                    "{context}"
+                );
+            }
             if !group["mutates_caller_inputs"].as_bool().unwrap_or(false) {
                 assert_eq!(details["workbook_changed"], false, "{context}");
             }

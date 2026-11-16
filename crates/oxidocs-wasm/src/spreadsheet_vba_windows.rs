@@ -145,16 +145,16 @@ impl WorkbookHost<'_> {
 
     fn activate_window_frame(&mut self, id: usize) {
         self.load_window(id);
-        let maximized = self.window_frames.frames.iter().any(|frame| frame.open && frame.state == -4137);
-        if maximized {
-            for frame in &mut self.window_frames.frames {
-                if frame.open && frame.state == -4137 { frame.state = -4143; }
-            }
-            if self.window_frames.frames[id].state != -4140 {
-                self.window_frames.frames[id].state = -4137;
-            }
-        }
         self.window_frames.active = id;
+    }
+
+    pub(super) fn loaded_window_state(&self) -> i64 {
+        let frame = &self.window_frames.frames[self.window_frames.loaded];
+        if frame.state == -4137 && self.window_frames.loaded != self.window_frames.active {
+            -4143
+        } else {
+            frame.state
+        }
     }
 
     fn new_window(&mut self, source: Option<usize>) -> Value {
@@ -179,9 +179,6 @@ impl WorkbookHost<'_> {
         view.panes.fill((0, 0));
         view.caption = None;
         let id = self.window_frames.frames.len();
-        for frame in &mut self.window_frames.frames {
-            if frame.open && frame.state == -4137 { frame.state = -4143; }
-        }
         self.window_frames.frames.push(WindowFrame { open: true, state: -4137, view: Some(view) });
         self.load_window(id);
         self.window_frames.active = id;
@@ -270,10 +267,16 @@ impl WorkbookHost<'_> {
 
     pub(super) fn set_window_state(&mut self, value: &Value) -> Result<(), String> {
         let requested = self.requested_window_state(value)?;
-        // One open frame has a direct state transition. Multiple frames also
-        // need the deferred activation/event model, which remains incomplete.
-        if self.window_frames.frames.iter().filter(|frame| frame.open).count() == 1 {
-            self.window_frames.frames[self.window_frames.loaded].state = requested;
+        let id = self.window_frames.loaded;
+        if self.window_frames.frames[id].state == requested { return Ok(()); }
+        self.window_frames.frames[id].state = requested;
+        if requested != -4140 {
+            self.activate_window_frame(id);
+        } else if self.window_frames.active == id {
+            if let Some(next) = self.window_frames.open_ids().into_iter()
+                .find(|next| *next != id && self.window_frames.frames[*next].state != -4140) {
+                self.activate_window_frame(next);
+            }
         }
         Ok(())
     }
@@ -293,6 +296,24 @@ impl WorkbookHost<'_> {
 }
 
 impl WorkbookApplication<'_> {
+    fn reported_window_state(&self, owner: u64, id: usize) -> i64 {
+        let host = &self.hosts[&owner];
+        let state = host.window_frames.frames[id].state;
+        if state == -4137 && (self.active != owner || host.window_frames.active != id) {
+            -4143
+        } else {
+            state
+        }
+    }
+
+    fn activate_frame(&mut self, owner: u64, id: usize) {
+        self.activate(owner);
+        if self.active == owner {
+            self.hosts.get_mut(&owner).expect("window owner").activate_window_frame(id);
+            self.activate(owner);
+        }
+    }
+
     pub(super) fn window_application_visible(&self) -> bool {
         self.caption_settings().and_then(|settings| settings.get("visible")) != Some(&Value::Boolean(false))
     }
@@ -336,6 +357,39 @@ impl WorkbookApplication<'_> {
 }
 
 impl ApplicationHost<'_> {
+    pub(super) fn windows_set(&mut self, receiver: &ObjectRef, name: &str, value: &Value)
+        -> Option<Result<bool, String>> {
+        if !name.eq_ignore_ascii_case("WindowState") { return None; }
+        let mut application = self.application.borrow_mut();
+        let owner = application.native_owner(receiver)?;
+        let id = application.hosts.get(&owner)?.window_id(receiver)?;
+        if let Some(error) = application.closed_object_error(receiver) { return Some(Err(error)); }
+        if !application.hosts[&owner].window_is_open(id) {
+            return Some(Err(host_error(424, "The Window object is no longer available")));
+        }
+        application.ensure_application_owner(owner);
+        application.last_owner = owner;
+        let requested = match application.hosts[&owner].requested_window_state(value) {
+            Ok(state) => state,
+            Err(error) => return Some(Err(error)),
+        };
+        let host = &application.hosts[&owner];
+        if host.window_frames.frames[id].state == requested { return Some(Ok(true)); }
+        let was_active = application.active == owner && host.window_frames.active == id;
+        application.hosts.get_mut(&owner).expect("window owner").window_frames.frames[id].state = requested;
+        if requested != -4140 {
+            application.activate_frame(owner, id);
+        } else if was_active {
+            let next = application.window_z_order.iter().rev().copied().find(|(next_owner, next_id)| {
+                (*next_owner, *next_id) != (owner, id) && !application.closed.contains(next_owner)
+                    && application.hosts.get(next_owner).is_some_and(|host|
+                        host.window_is_open(*next_id) && host.window_frames.frames[*next_id].state != -4140)
+            });
+            if let Some((next_owner, next_id)) = next { application.activate_frame(next_owner, next_id); }
+        }
+        Some(Ok(true))
+    }
+
     pub(super) fn windows_call(&mut self, receiver: Option<&ObjectRef>, name: &str,
         args: &[Value], names: &[Option<String>], files: Option<&mut oxivba_core::files::Files>)
         -> Option<Result<Option<Value>, String>> {
@@ -412,7 +466,7 @@ impl ApplicationHost<'_> {
         }
         if let Some((owner, id)) = window {
             if name.eq_ignore_ascii_case("WindowState") && args.is_empty() {
-                return Some(Ok(Some(Value::Integer(application.hosts[&owner].window_frames.frames[id].state))));
+                return Some(Ok(Some(Value::Integer(application.reported_window_state(owner, id)))));
             }
             if name.eq_ignore_ascii_case("Index") && args.is_empty() {
                 let position = application.window_collection(None).iter().position(|held| *held == (owner, id));
@@ -484,7 +538,7 @@ mod tests {
                 host_ansi_code_page: None, project_name: "VBAProject".into(),
                 file_name: Some(file_name.into()), random_seed: 1, current_time: 46000.0,
                 application_state: Some(VbaApplicationState {
-                    visible: Some(false),
+                    visible: Some(group["initial_application_visible"].as_bool().unwrap_or(false)),
                     enable_events: false, display_alerts: false,
                     standard_font_startup: Some(VbaStandardFontStartup { profile_utf16: Some(startup.clone()) }),
                     ..Default::default()
@@ -551,6 +605,16 @@ mod tests {
     #[test]
     fn window_collections_match_native_binding_and_coercion() {
         native_group(0);
+    }
+
+    #[test]
+    fn window_frame_display_transitions_match_native() {
+        native_group(17);
+    }
+
+    #[test]
+    fn window_cross_book_display_transitions_match_native() {
+        native_group(18);
     }
 
     #[test]
