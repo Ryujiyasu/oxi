@@ -552,7 +552,7 @@ const demo = vm.createContext({
 const demoFunctions=['macroRuntimeOptions','captureMacroWorkbookView','applyMacroWorkbookView','clearClosedMacroWorkbookView',
  'applyMacroExecution','reportMacro','calculationPendingSave','markSaved','save'];
 vm.runInContext('let book=closeSeed.workbook, source=closePacketA, fileName="CloseUI-A.xlsm", shown=0, geom={};\n'
- +'let macroProjectSource="",macroSourceBound=false,macroSourceBaseline="",macroSourceDirty=false,macroSourceRevision=0,beyondValues=false,digitWidth=7,editor=null;\n'
+ +'let macroProjectSource="",macroSourceBound=false,macroSourceBaseline="",macroSourceDirty=false,macroSourceRevision=0,macroSourceFileMetadata,beyondValues=false,digitWidth=7,editor=null;\n'
  +'let macroEditRevision=0,macroSavedEditRevision=0,macroSaveBusy=false;const sheetBox=document.getElementById("sheet");let savedCalculation={mode:"auto",on_save:true};const at={row:1,col:0},changes=new Map(),pristine=new Map(),conditional=new Map(),undone=[],redone=[];\n'
  +'const macroSource=document.getElementById("source"),macroProc=document.getElementById("proc"),macroArgs=document.getElementById("args");\n'
  +'const macroRun=document.getElementById("run"),macroCompile=document.getElementById("compile"),saveButton=document.getElementById("save"),macroProcList=document.getElementById("list");\n'
