@@ -73,8 +73,16 @@ struct RecordRead {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FileCursor {
     physical: usize,
+    input_origin: usize,
     read_eof: bool,
     record: Option<RecordRead>,
+}
+
+impl FileCursor {
+    fn text_end_position(&self, at: usize, length: usize) -> usize {
+        let start = self.input_origin.saturating_add(at.saturating_sub(self.input_origin) / 512 * 512);
+        start.saturating_add(512).min(length).saturating_add(at.saturating_sub(start)).saturating_add(1)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +98,8 @@ struct RecordLock {
 pub enum FileError {
     /// 5, Invalid procedure call or argument.
     InvalidArgument = 5,
+    /// 7, Out of memory.
+    OutOfMemory = 7,
     /// 52, Bad file name or number.
     BadNumber = 52,
     /// 53, File not found.
@@ -126,6 +136,7 @@ impl FileError {
     pub fn description(self) -> &'static str {
         match self {
             FileError::InvalidArgument => "Invalid procedure call or argument",
+            FileError::OutOfMemory => "Out of memory",
             FileError::BadNumber => "Bad file name or number",
             FileError::NotFound => "File not found",
             FileError::BadMode => "Bad file mode",
@@ -878,14 +889,30 @@ impl Files {
         Ok(())
     }
 
-    pub(crate) fn vba_eof(&self, number: i64) -> Result<bool, FileError> {
+    pub(crate) fn vba_eof(&mut self, number: i64) -> Result<bool, FileError> {
         if !(1..=511).contains(&number) { return Err(FileError::BadNumber); }
-        let handle = self.handle(number)?;
-        match handle.mode {
-            OpenMode::Input => self.at_end(number),
+        let mode = self.handle(number)?.mode;
+        let key = channel_key(self.project_scope, number);
+        match mode {
             OpenMode::Output | OpenMode::Append => Ok(true),
-            OpenMode::Binary | OpenMode::Random(_) => self.cursors.get(&channel_key(self.project_scope, number))
+            OpenMode::Binary | OpenMode::Random(_) => self.cursors.get(&key)
                 .map(|cursor| cursor.read_eof).ok_or(FileError::BadNumber),
+            OpenMode::Input => {
+                let handle = self.open.get_mut(&key).expect("checked handle");
+                let cursor = self.cursors.get_mut(&key).ok_or(FileError::BadNumber)?;
+                if cursor.read_eof { return Ok(true); }
+                let bytes = self.contents.get(&handle.path).map_or(&[][..], |file| file.1.as_slice());
+                cursor.physical = handle.position;
+                while bytes.get(cursor.physical) == Some(&0) { cursor.physical += 1; }
+                handle.position = cursor.physical;
+                if bytes.get(cursor.physical) == Some(&26) {
+                    let at = cursor.physical;
+                    cursor.physical += 1;
+                    handle.position = cursor.text_end_position(at, bytes.len());
+                    cursor.read_eof = true;
+                    Ok(true)
+                } else { Ok(cursor.physical >= bytes.len()) }
+            }
         }
     }
 
@@ -941,6 +968,7 @@ impl Files {
         };
         if let Some(cursor) = self.cursors.get_mut(&channel_key(self.project_scope, number)) {
             cursor.physical = handle.position;
+            cursor.input_origin = handle.position;
             cursor.read_eof = false;
             cursor.record = None;
         }
@@ -1078,6 +1106,49 @@ impl Files {
         }
         *position = next;
         Ok(line)
+    }
+
+    pub(crate) fn input_bytes(&mut self, number: i64, count: usize, byte_result: bool) -> Result<Vec<u8>, FileError> {
+        if !(1..=511).contains(&number) { return Err(FileError::BadNumber); }
+        let handle = self.handle(number)?;
+        if !matches!(handle.mode, OpenMode::Input | OpenMode::Binary) { return Err(FileError::BadMode); }
+        if !handle.can_read { return Err(FileError::PathFileAccess); }
+        self.check_record_access(number, handle, count)?;
+        let key = channel_key(self.project_scope, number);
+        let handle = self.open.get_mut(&key).expect("checked handle");
+        let cursor = self.cursors.get_mut(&key).ok_or(FileError::BadNumber)?;
+        let file = self.contents.get(&handle.path).ok_or(FileError::BadNumber)?.1.as_slice();
+        let mut result = Vec::new();
+        if handle.mode == OpenMode::Binary {
+            let available = file.len().saturating_sub(cursor.physical).min(count);
+            let length = if byte_result { count } else { available };
+            result.try_reserve_exact(length).map_err(|_| FileError::OutOfMemory)?;
+            result.resize(length, 0);
+            if available != 0 { result[..available].copy_from_slice(&file[cursor.physical..cursor.physical + available]); }
+            cursor.physical = cursor.physical.saturating_add(available);
+            handle.position = handle.position.saturating_add(available);
+            if count != 0 { cursor.read_eof = available < count; }
+            return Ok(result);
+        }
+        result.try_reserve_exact(count.min(file.len())).map_err(|_| FileError::OutOfMemory)?;
+        if !cursor.read_eof { cursor.physical = handle.position; }
+        while result.len() < count {
+            if cursor.read_eof { return Err(FileError::PastEnd); }
+            let Some(&byte) = file.get(cursor.physical) else {
+                handle.position = cursor.physical;
+                return Err(FileError::PastEnd);
+            };
+            let at = cursor.physical;
+            cursor.physical += 1;
+            if byte == 26 {
+                handle.position = cursor.text_end_position(at, file.len());
+                cursor.read_eof = true;
+                return Err(FileError::PastEnd);
+            }
+            handle.position = cursor.physical;
+            if byte != 0 { result.push(byte); }
+        }
+        Ok(result)
     }
 
     /// `Input(n, #f)`: the next n characters, line breaks and all.
