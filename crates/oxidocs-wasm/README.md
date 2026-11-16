@@ -10,11 +10,12 @@ the method are in the [repository README](https://github.com/Ryujiyasu/oxi).
 
 ## A word about size
 
-The `.wasm` is about 37 MB, and roughly four fifths of that is data rather than
-code: font metrics, typography tables and the measured constants the layout is
-derived from. Splitting the package by document format was measured and does not
-help — a docs-only build is 31 MB against 35 MB for all three formats, because
-the tables are shared. Load it once and cache it.
+The `.wasm` is about 95 MB (56 MB gzip-compressed, as browsers and CDNs usually
+send it), and most of that is data rather than code: font metrics, typography
+tables and the measured constants the layout is derived from. The largest single
+part is the per-face font metric catalog, about 33 MB. A docs-only build (the
+crate's default features, without spreadsheets, presentations and VBA) is about
+74 MB. Load it once and cache it.
 
 ## Use
 
