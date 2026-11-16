@@ -280,6 +280,24 @@ class NativeWorkbook(unittest.TestCase):
         self.wb.close()
         with self.assertRaises(ox.OxiCellsError): self.wb.run("PythonBridge.Step", 1)
 
+    def test_input_functions_read_the_mounted_package_and_preserve_odd_bstr_bytes(self):
+        for mode in range(4):
+            for count in [1, 2]:
+                with self.subTest(mode=mode, count=count):
+                    answer = self.wb.run("PythonBridge.InputHeader", mode, count)
+                    self.assertIsInstance(answer, ox.Array)
+                    self.assertEqual(answer.dimensions, ((0, 8),))
+                    byte_result = mode < 2
+                    byte_length = count if byte_result else count * 2
+                    self.assertEqual(answer.values[:4], ("String", 8, byte_length, byte_length // 2))
+                    if byte_result and count == 1:
+                        self.assertEqual(answer.values[4], ox.BStr(b"P"))
+                    elif byte_result:
+                        self.assertEqual(answer.values[4].encode("utf-16-le"), b"PK")
+                    else:
+                        self.assertEqual(answer.values[4], "PK"[:count])
+                    self.assertEqual(answer.values[5:], (count + 1, False, count))
+
     def test_execution_environment_persists_across_calls(self):
         help_file = "C:\\example\\日本語\\VbLR6.chm"
         # Default StrConv uses the user locale; LCID 2048 selects the system

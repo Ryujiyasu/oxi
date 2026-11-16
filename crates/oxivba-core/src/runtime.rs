@@ -6379,11 +6379,7 @@ impl<'a> Runtime<'a> {
                 .map_err(mismatch)
                 .and_then(|file| self.files.length_of_open(file).map_err(failure))
                 .map(|length| Value::Integer(length as i64)),
-            ("input" | "input$", [count, file]) => number_of(count)
-                .and_then(|count| number_of(file).map(|file| (count, file)))
-                .map_err(mismatch)
-                .and_then(|(count, file)| self.files.read_characters(file, count.max(0) as usize).map_err(failure))
-                .map(Value::String),
+            ("input" | "input$" | "inputb" | "inputb$", args) => self.file_input_function(name, args, line),
             ("seek", [file]) => number_of(file)
                 .map_err(mismatch)
                 .and_then(|file| self.files.next_position(file).map_err(failure))
@@ -6404,6 +6400,23 @@ impl<'a> Runtime<'a> {
             ("dir" | "dir$", args) => self.dir_function(args,line),
             _ => return None,
         })
+    }
+
+    fn file_input_function(&mut self, name: &str, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
+        if args.len() != 2 {
+            return Err(error(RuntimeErrorKind::ArgumentCount, "Input requires a count and a channel", Some(line)));
+        }
+        let channel = convert_integer(&args[1], i64::from(i16::MIN), i64::from(i16::MAX), Some(line))?;
+        let count = convert_integer(&args[0], i64::from(i32::MIN), i64::from(i32::MAX), Some(line))?;
+        if count < 0 { return Err(language_error(5, "Input count cannot be negative", line)); }
+        let byte_result = name.trim_end_matches('$').eq_ignore_ascii_case("inputb");
+        let bytes = self.files.input_bytes(channel, count as usize, byte_result).map_err(|failure| file_failure(failure, line))?;
+        if byte_result { return Ok(Value::from_bstr_bytes(bytes)); }
+        let mut units = Vec::with_capacity(bytes.len());
+        for byte in bytes {
+            units.extend(utf16::decode_ansi(self.host.as_deref(), &[byte], None, Some(line))?);
+        }
+        Ok(Value::from_utf16(units))
     }
 
     fn file_attribute_function(&mut self, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
@@ -13820,6 +13833,8 @@ pub fn is_builtin_function(name: &str) -> bool {
             | "freefile"
             | "input"
             | "input$"
+            | "inputb"
+            | "inputb$"
             | "seek"
             | "eof"
             | "lof"
@@ -21878,6 +21893,143 @@ End Function
                 .unwrap(),
             Value::Integer(5)
         );
+    }
+
+    #[test]
+    fn file_input_binary_retains_raw_bstr_bytes_and_native_positions() {
+        let source = r#"
+Public Function Probe(ByVal count As Variant) As String
+ Dim value As Variant, n As Long, i As Long, encoded As String
+ Open "C:\work\state.bin" For Binary As #1
+ On Error Resume Next
+ value = InputB(count, 1)
+ n = Err.Number
+ For i = 1 To LenB(value)
+  encoded = encoded & Right$("0" & Hex$(AscB(MidB$(value, i, 1))), 2)
+ Next
+ Probe = CStr(n) & "|" & TypeName(value) & "|" & CStr(LenB(value)) & "|" & encoded & "|" & CStr(Seek(1)) & "|" & CStr(EOF(1)) & "|" & CStr(Loc(1))
+ Close #1
+End Function
+"#;
+        for (count, expected) in [
+            (0, "0|String|0||1|False|0"), (1, "0|String|1|41|2|False|1"),
+            (2, "0|String|2|4100|3|False|2"), (3, "0|String|3|410042|4|False|3"),
+            (7, "0|String|7|410042FF801A00|8|False|7"),
+        ] {
+            let (value, bytes) = run_file_state_probe(source, vec![Value::Integer(count)], &[65,0,66,255,128,26,0]);
+            assert_eq!(value, Value::String(expected.into()), "count {count}");
+            assert_eq!(bytes, [65,0,66,255,128,26,0]);
+        }
+    }
+
+    #[test]
+    fn file_input_eof_peeks_skip_nuls_and_update_the_reported_position() {
+        let source = r#"
+Public Function Probe() As String
+ Dim before As Long, after As Long, ended As Boolean, value As Variant
+ Open "C:\work\state.bin" For Input As #1
+ before = Seek(1)
+ ended = EOF(1)
+ after = Seek(1)
+ value = InputB(0, 1)
+ Probe = CStr(before) & "|" & CStr(ended) & "|" & CStr(after) & "|" & CStr(LenB(value)) & "|" & CStr(Seek(1))
+ Close #1
+End Function
+"#;
+        for (seed, expected) in [
+            (vec![26], "1|True|3|0|3"), (vec![0,26,0], "1|True|6|0|6"),
+            (vec![0,65], "1|False|2|0|2"), (vec![65,0,66], "1|False|1|0|1"),
+            (vec![0,0], "1|True|3|0|3"), (vec![65,26,66], "1|False|1|0|1"),
+        ] {
+            let (actual, _) = run_file_state_probe(source, vec![], &seed);
+            assert_eq!(actual, Value::String(expected.into()), "seed {seed:?}");
+        }
+    }
+
+    #[test]
+    fn file_input_ctrl_z_tracks_buffer_origin_after_seek() {
+        let source = r#"
+Public Function Probe(ByVal position As Long) As String
+ Dim value As Variant, n As Long
+ Open "C:\work\state.bin" For Input As #1
+ Seek #1, position
+ On Error Resume Next
+ value = InputB(2048, 1)
+ n = Err.Number
+ Probe = CStr(n) & "|" & CStr(Seek(1)) & "|" & CStr(EOF(1))
+ Close #1
+End Function
+"#;
+        for (length, end, start, expected) in [
+            (1, 0, 1, "62|3|True"), (7, 0, 1, "62|9|True"),
+            (7, 3, 1, "62|12|True"), (513, 256, 1, "62|770|True"),
+            (513, 512, 1, "62|515|True"), (1024, 700, 128, "62|1087|True"),
+            (1024, 700, 600, "62|1127|True"), (1024, 512, 600, "62|1025|True"),
+        ] {
+            let mut seed = vec![65; length]; seed[end] = 26;
+            let (actual, _) = run_file_state_probe(source, vec![Value::Integer(start)], &seed);
+            assert_eq!(actual, Value::String(expected.into()), "length {length}, end {end}, Seek {start}");
+        }
+    }
+
+    #[test]
+    fn file_input_coerces_channel_before_count_and_checks_modes() {
+        let source = r#"
+Public Function Probe(ByVal channel As Variant, ByVal count As Variant, ByVal mode As String) As Long
+ Select Case mode
+ Case "Binary": Open "C:\work\state.bin" For Binary As #1
+ Case "Random": Open "C:\work\state.bin" For Random As #1 Len = 4
+ Case "Output": Open "C:\work\state.bin" For Output As #1
+ Case "Append": Open "C:\work\state.bin" For Append As #1
+ End Select
+ On Error Resume Next
+ Dim value As Variant
+ value = InputB$(count, channel)
+ Probe = Err.Number
+ Close #1
+End Function
+"#;
+        for (channel, count, mode, expected) in [
+            (Value::Integer(1), Value::Integer(0), "Random", 54),
+            (Value::Integer(1), Value::Integer(0), "Output", 54),
+            (Value::Integer(1), Value::Integer(0), "Append", 54),
+            (Value::Integer(1), Value::Integer(-1), "Closed", 5),
+            (Value::Null, Value::String("bad".into()), "Binary", 94),
+            (Value::Integer(32768), Value::Null, "Binary", 6),
+            (Value::Integer(0), Value::String("bad".into()), "Binary", 13),
+            (Value::Integer(1), Value::Double(2147483648.0), "Binary", 6),
+        ] {
+            let (value, _) = run_file_state_probe(source, vec![channel,count,Value::String(mode.into())], b"A");
+            assert_eq!(value, Value::Integer(expected));
+        }
+    }
+
+    #[test]
+    fn file_input_text_skips_nuls_and_preserves_failed_read_state() {
+        let source = r#"
+Public Function Probe(ByVal count As Long) As String
+ Dim value As Variant, n As Long, i As Long, encoded As String
+ Open "C:\work\state.bin" For Input As #1
+ On Error Resume Next
+ value = InputB(count, 1)
+ n = Err.Number
+ If VarType(value) = vbString Then
+  For i = 1 To LenB(value)
+   encoded = encoded & Right$("0" & Hex$(AscB(MidB$(value, i, 1))), 2)
+  Next
+ End If
+ Probe = CStr(n) & "|" & TypeName(value) & "|" & encoded & "|" & CStr(Seek(1)) & "|" & CStr(EOF(1)) & "|" & CStr(Loc(1))
+ Close #1
+End Function
+"#;
+        for (count, expected) in [
+            (0, "0|String||1|False|1"), (1, "0|String|41|2|False|1"),
+            (2, "0|String|4142|4|False|1"), (3, "0|String|4142FF|5|False|1"),
+            (7, "62|Empty||14|True|1"),
+        ] {
+            let (value, _) = run_file_state_probe(source, vec![Value::Integer(count)], &[65,0,66,255,128,26,0]);
+            assert_eq!(value, Value::String(expected.into()), "count {count}");
+        }
     }
 
     #[test]
