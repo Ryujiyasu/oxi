@@ -2223,20 +2223,79 @@ impl<'a> TableFitLayouter<'a> {
                 // TNR 8-14pt: Word splits with one line box + border of room).
                 if (self.doc_body_has_real_cjk || !crate::env_flag!("OXI_S1485_DISABLE"))
                     && !crate::env_flag!("OXI_S1424_DISABLE") {
+                    // OXI_ROWSPLIT_ORPHAN (2026-11-16, default ON, opt-out _DISABLE): a cell
+                    // whose first paragraph is widow-controlled and wraps to two or more
+                    // lines cannot leave one line at the page foot (S1530's rule, applied
+                    // to the FIRST split as well): it needs two lines of room. The row
+                    // splits only when some cell can place its legal minimum. blind-EN
+                    // educational__0079c94e p13: 15.06pt free under row 6 (Word's rule
+                    // 512.64 = Oxi's), every CPD7 cell opens with a 2+ line paragraph;
+                    // Word starts the row on p14, Oxi stranded one line of each cell.
+                    // compat 15 only: `_pb_cpd7_slice4_gen.py` (0079c94e's CPD7 row, the same
+                    // document with only compatibilityMode changed) needs 43.16pt of room at
+                    // compat 15 (the 3-line cell paragraph kept whole) but splits after one
+                    // line at 15.06 under compat 14 and 12; widowControl absent everywhere in
+                    // both. en/reference__00acfeb3 (compat 14): Word splits its 2-line cell
+                    // paragraphs 1+1 at the p156 foot.
+                    let orphan_on = !crate::env_flag!("OXI_ROWSPLIT_ORPHAN_DISABLE")
+                        && self.compat_mode >= 15 && self.compat_mode_explicit; // a doc without settings.xml is not compat 15 to Word (en/reports__001f1397; the fresh-doc probes)
                     let one_line = row
                         .cells
                         .iter()
                         .filter_map(|c| c.blocks.iter().find_map(|b| match b {
-                            Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.trim().is_empty()) => Some(p),
+                            Block::Paragraph(p) if p.runs.iter().any(|r| !r.text.trim().is_empty()) => Some((c, p)),
                             _ => None,
                         }))
-                        .map(|p| self.estimate_para_height(
-                            p, 1.0e6, row_line_pitch, table.style.para_style.as_ref(), true,
-                            grid_char_pitch, grid_char_cw_ratio,
-                        ))
-                        .filter(|h| *h > 0.5)
-                        .fold(f32::INFINITY, f32::min);
-                    if one_line.is_finite() { legacy.min(one_line) } else { legacy }
+                        .map(|(c, p)| {
+                            let h1 = self.estimate_para_height(
+                                p, 1.0e6, row_line_pitch, table.style.para_style.as_ref(), true,
+                                grid_char_pitch, grid_char_cw_ratio,
+                            );
+                            if orphan_on && p.style.widow_control && h1 > 0.5 {
+                                let pad = c.margins.as_ref().map_or(10.8, |m| m.left.unwrap_or(5.4) + m.right.unwrap_or(5.4));
+                                let w = c.width.unwrap_or(0.0) - pad;
+                                if w > 20.0 {
+                                    let hn = self.estimate_para_height(
+                                        p, w, row_line_pitch, table.style.para_style.as_ref(), true,
+                                        grid_char_pitch, grid_char_cw_ratio,
+                                    );
+                                    if crate::env_flag!("OXI_DBG_ROWORPHAN") {
+                                        eprintln!("[ROWORPHAN] row={} w={:.1} h1={:.2} hn={:.2}", row_idx, w, h1, hn);
+                                    }
+                                    // a 3-line paragraph cannot split (2+1 strands a widow,
+                                    // 1+2 an orphan); 2 lines need both; 4+ need two
+                                    // h1 / hn carry the paragraph's spacing once: count lines on
+                                    // the bare line height. en/reference__0052ba53 (cells with
+                                    // before/after ~7pt): h1 18.5 = 11.5 + 7, a 3-line paragraph
+                                    // 41.5 read as 2 lines and asked 55.5 (Word keeps 3 lines
+                                    // of the row in 61.8).
+                                    let sp_b = p.style.space_before.unwrap_or(0.0).max(0.0);
+                                    let sp_a = p.style.space_after.unwrap_or(0.0).max(0.0);
+                                    let line = (h1 - sp_b - sp_a).max(1.0);
+                                    let n = ((hn - sp_b - sp_a) / line).round();
+                                    if n >= 2.0 {
+                                        let k = if n == 3.0 { 3.0 } else { 2.0 };
+                                        return (h1, sp_b + line * k);
+                                    }
+                                }
+                            }
+                            (h1, 0.0)
+                        })
+                        .filter(|h| h.0 > 0.5)
+                        .fold((f32::INFINITY, 0.0_f32), |a, b| (a.0.min(b.0), a.1.max(b.1)));
+                    // every cell needs two lines: that is the row's floor, not the grid pitch
+                    let (one_line, orphan_req) = one_line;
+                    if crate::env_flag!("OXI_DBG_ROWORPHAN") {
+                        eprintln!("[ROWORPHAN] row={} one_line={:.2} req={:.2} legacy={:.2}", row_idx, one_line, orphan_req, legacy);
+                    }
+                    // EVERY cell must place its legal minimum: educational__0079c94e row 8
+                    // (29pt free on p16) has a 1-line «Migration Policy Institute:» cell yet
+                    // Word starts the row on p17 -- its «University of Wisconsin-Madison
+                    // School of Education» cell is a 3-line paragraph.
+                    let base_fit = if one_line.is_finite() { legacy.min(one_line) } else { legacy };
+                    if orphan_on && orphan_req > base_fit + 0.01 {
+                        orphan_req
+                    } else { base_fit }
                 } else {
                     legacy
                 }
@@ -2385,7 +2444,27 @@ impl<'a> TableFitLayouter<'a> {
                         .count()
                         >= 2
                 })
-                && (page_bottom - cursor.cursor_y) >= table_grid_pitch.unwrap_or(14.0);
+                && (page_bottom - cursor.cursor_y) >= table_grid_pitch.unwrap_or(14.0)
+                // OXI_S864_CONTENT_FITS (2026-11-16, default ON, opt-out _DISABLE): the
+                // rule is for a row whose CONTENT fits and only its empty tail crosses
+                // the page; a row whose text itself overflows is not an empty-tail
+                // split. blind-EN educational__0079c94e row 7 (CPD7, 1240pt of text,
+                // two trailing empties in a cell) started with one line per cell in
+                // the 15pt left at the foot of p13; Word starts it on p14.
+                && (crate::env_flag!("OXI_S864_CONTENT_FITS_DISABLE") || {
+                    let tail = row.cells.iter().map(|cell| {
+                        cell.blocks.iter().rev()
+                            .take_while(|b| matches!(b, Block::Paragraph(p) if p.runs.iter().all(|r| r.text.is_empty())))
+                            .map(|b| match b {
+                                Block::Paragraph(p) => self.estimate_para_height(
+                                    p, 1.0e6, row_line_pitch, table.style.para_style.as_ref(), true,
+                                    grid_char_pitch, grid_char_cw_ratio),
+                                _ => 0.0,
+                            })
+                            .sum::<f32>()
+                    }).fold(0.0_f32, f32::max);
+                    row_height - tail <= (page_bottom - cursor.cursor_y) + 0.5
+                });
             // S941 (2026-07-19, ★BUNDLE MEMBER — fires only with OXI_S940;
             // opt-out OXI_S941_DISABLE): a NON-BINDING atLeast trHeight row
             // splits when the free space clears the single-column widow
@@ -14803,7 +14882,15 @@ impl<'a> TableFitLayouter<'a> {
                     // rest of the table and the three −1 paragraphs downstream.
                     // Floor the cursor at the measured continuation text bottom
                     // when the continuation stays on this one page.
-                    if !crate::env_flag!("OXI_S1526_DISABLE") && pages_used == 0 {
+                    // OXI_S1526_MULTIPAGE (2026-11-16, default ON, opt-out _DISABLE): the floor
+                    // holds for a row that runs over more than one page too -- `elements` is
+                    // the last continuation. blind-EN educational__0079c94e row 7 (CPD7,
+                    // pushed whole to p14, then p14 -> p15 -> p16): the remainder put the
+                    // cursor at 382.8 while the Tip cell's last lines run to 471, and row 8
+                    // was drawn over them.
+                    if !crate::env_flag!("OXI_S1526_DISABLE")
+                        && (pages_used == 0 || !crate::env_flag!("OXI_S1526_MULTIPAGE_DISABLE"))
+                    {
                         let cont_text_bottom = elements
                             .iter()
                             .filter(|e| matches!(&e.content, LayoutContent::Text { text, .. } if !text.trim().is_empty()))
@@ -14820,6 +14907,47 @@ impl<'a> TableFitLayouter<'a> {
                                 eprintln!("[SPLIT-CURSOR] s1526 floor {:.2} -> {:.2}", cursor.cursor_y, cont_row_bottom);
                             }
                             cursor.set(cont_row_bottom);
+                        }
+                    }
+                    // OXI_SPLIT_TRAIL_EMPTY on the geometric branch as well (a row pushed whole and
+                    // then split carries no S754 flag): the last continuation still owns its
+                    // trailing empty paragraphs. 0079c94e row 7 ends on p16 with the Tip cell's
+                    // «…edicion…» + empties; Word closes the row below them and starts row 8 on p17.
+                    if !crate::env_flag!("OXI_SPLIT_TRAIL_EMPTY_DISABLE") && !crate::env_flag!("OXI_SPLIT_TRAIL_GEOM_DISABLE") && !is_single_cell_row {
+                        let mut best: Option<f32> = None;
+                        for (ci, cell) in row.cells.iter().enumerate() {
+                            if cell.v_merge.is_some() { continue; }
+                            let paras: Vec<&crate::ir::Paragraph> = cell.blocks.iter().filter_map(|b| match b {
+                                Block::Paragraph(p) => Some(p), _ => None }).collect();
+                            if paras.len() != cell.blocks.len() { continue; }
+                            let trailing = paras.iter().rev().take_while(|p| p.runs.iter().all(|r| r.text.is_empty())).count();
+                            if trailing == 0 || trailing >= paras.len() { continue; }
+                            let last_content = paras.len() - trailing - 1;
+                            let trailing = if cell.hide_mark { trailing - 1 } else { trailing };
+                            if trailing == 0 { continue; }
+                            let last = elements.iter().filter(|e| e.cell_row_index == Some(row_idx)
+                                && e.cell_ancestor_path.is_empty()
+                                && e.cell_col_index == Some(ci)
+                                && e.cell_paragraph_index == Some(last_content)
+                                && matches!(&e.content, LayoutContent::Text { .. }))
+                                .map(|e| {
+                                    let lh = e.flow_line_height.unwrap_or(e.height);
+                                    (e.y - e.flow_line_offset + lh, lh)
+                                })
+                                .fold(None, |a: Option<(f32, f32)>, b| match a { Some(x) if x.0 >= b.0 => Some(x), _ => Some(b) });
+                            if let Some((bottom, lh)) = last {
+                                let pad = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(row_default_pad_b);
+                                let fl = bottom + lh * trailing as f32 + pad;
+                                best = Some(best.map_or(fl, |b: f32| b.max(fl)));
+                            }
+                        }
+                        if let Some(fl) = best {
+                            if fl > cursor.cursor_y + 0.5 && fl <= page_top + content_height + 0.5 {
+                                if crate::env_flag!("OXI_DBG_SPLIT") {
+                                    eprintln!("[SPLIT-TRAIL] geom floor {:.2} -> {:.2}", cursor.cursor_y, fl);
+                                }
+                                cursor.set(fl);
+                            }
                         }
                     }
                     if crate::env_flag!("OXI_DBG_SPLIT") {
