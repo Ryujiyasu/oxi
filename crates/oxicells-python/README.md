@@ -30,6 +30,29 @@ print(report.unresolved_calls)  # Computed CreateObject/GetObject targets.
 
 Parse errors and unread constructs remain visible. `analysis_complete` means the parser read the source; it does not mean dynamic targets were resolved, that the code is safe, or that its runtime features are implemented. `compatibility_verified` remains false. Automatic entrypoints describe Office behavior; opening or inspecting a workbook in OxiCells does not invoke them.
 
+Procedure entries expose `kind`, effective `visibility`, and `parameters`. Each parameter includes its name, declared `type`, `mode` (`ByRef`, `ByVal` or `ParamArray`), `optional`, `is_array`, and `has_default`. `required_arguments` counts parameters that must be supplied; a `ParamArray` may be empty. Functions and Property Get procedures also report their `return_type`. A module that cannot be parsed retains `parse_error` and an empty `procedures` list.
+
+```python
+for module in report.modules:
+    for procedure in module["procedures"]:
+        print(module["name"], procedure["name"], procedure["kind"],
+              procedure["visibility"], procedure["required_arguments"])
+```
+
+### VBA source code pages
+
+The default reads the code page recorded in the VBA project. Some workbooks record a code page that differs from their source bytes. If the actual source encoding is known, pass `source_code_page` to `open()` or `inspect_macros()`; for Japanese Windows source in CP932:
+
+```python
+report = oxicells.inspect_macros("received.xlsm", source_code_page=932)
+with oxicells.open("received.xlsm", source_code_page=932) as wb:
+    result = wb.run("集計.Probe")
+```
+
+A wrong code page can corrupt names and produce a syntax error. The engine preserves the original error and adds a code-page hint when non-ASCII source fails to parse. Reopen the workbook with the appropriate override. This option does not change the encoding of Python strings.
+
+Unexpected engine exits include the exit code and a bounded tail of engine stderr in `OxiCellsError`, so startup failures and panics retain their diagnostic text.
+
 ## Values and objects
 
 Python integers use VBA Long or LongLong according to their range. `Byte`, `Integer`, `Long`, `LongLong`, `Single`, `Date` (OLE date serial) and `Currency` wrappers allow explicit subtypes. Python `decimal.Decimal` values retain their exact 96-bit VBA Decimal representation within its supported range and scale. `EMPTY`, `MISSING`, `NOTHING`, `NULL_STRING` and Python `None` (VBA Null) are distinct.
@@ -80,3 +103,20 @@ with oxicells.open("帳票.xlsm", timeout=60) as wb:
 `oxicells.inspect_macros("受領ファイル.xlsm")` または `wb.inspect_macros()` で、マクロを動かさずにソースを調べられます。`auto_run` はソースにある自動実行の入口、`external_calls` は外部呼び出しの兆候、`unresolved_calls` は呼び出し先が実行時まで決まらない箇所です。モジュール名とエクスポートしたソースの行番号も返します。読み取れなかったコードや解析エラーは隠しません。
 
 `analysis_complete` はソースを解析できたという意味です。安全性や、Oxi で使われる全機能を実行できることの保証ではなく、`compatibility_verified` は false のままです。調査のためにマクロを実行したり、実行中の変数をリセットしたりはしません。
+
+
+### プロシージャー情報と文字コード
+
+`report.modules` の各モジュールには、解析に失敗した場合も `procedures` のリストがあります。解析できないモジュールでは空のリストとなり、`parse_error` に原因が残ります。各プロシージャーには `kind`（Sub・Function・Property Get/Let/Set）、有効な `visibility`、`parameters`、`required_arguments` を返します。引数ごとの名前・宣言型 `type`・渡し方 `mode`・省略可否 `optional`・配列かどうか `is_array`・既定値の有無 `has_default` を調べられます。ParamArray は空でも呼び出せます。Function と Property Get では戻り値の型 `return_type` も返します。
+
+VBA ソースは、標準ではプロジェクトに記録されたコードページで読みます。記録と実際の文字コードが異なるファイルでは、文字化けした名前や構文エラーになることがあります。実際のソースが日本語 Windows の CP932 だと分かっている場合は、次のように指定します。
+
+```python
+report = oxicells.inspect_macros(受領ファイル.xlsm, source_code_page=932)
+with oxicells.open(受領ファイル.xlsm, source_code_page=932) as wb:
+    result = wb.run(集計.Probe)
+```
+
+非 ASCII 文字を含むソースを解析できなかった場合は、元のエラーに `source_code_page` の案内を添えます。適切な文字コードを指定して開き直してください。この指定は Python 文字列の文字コードを変更するものではありません。
+
+エンジンが異常終了したときは、終了コードと長さを制限した stderr の末尾を `OxiCellsError` に含めます。起動失敗や panic の原因を Python 側でも確認できます。
