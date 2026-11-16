@@ -109661,7 +109661,9 @@ End Sub
         let expected=serde_json::to_value(&initial.result).unwrap();
         for facts in [vec![file_io::FileModifiedTime {path:r"C:\work\data.bin".into(),value:f64::NAN}],
             vec![file_io::FileModifiedTime {path:r"C:\work\data.bin".into(),value:1.0},file_io::FileModifiedTime {path:"c:/WORK/DATA.bin".into(),value:2.0}],
-            vec![file_io::FileModifiedTime {path:r"C:\absent.bin".into(),value:2.0}]] {
+            vec![file_io::FileModifiedTime {path:r"C:\absent.bin".into(),value:2.0}],
+            vec![file_io::FileModifiedTime {path:r"C:\work\data.bin".into(),value:-657435.0}],
+            vec![file_io::FileModifiedTime {path:r"C:\work\data.bin".into(),value:2958466.0}]] {
             let mut invalid=context();invalid.file_context.as_mut().unwrap().modified_times=facts;
             assert!(execute_workbook_action_in_session(initial.workbook.clone(),source,Some("Probe"),vec![],0,invalid,&mut session).is_err());
             let valid=execute_workbook_action_in_session(initial.workbook.clone(),source,Some("Probe"),vec![],0,context(),&mut session).unwrap();

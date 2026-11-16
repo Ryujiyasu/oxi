@@ -467,7 +467,7 @@ impl Files {
 
     /// Seed a mounted entry's real modification time without writing its bytes.
     pub fn set_modified_time(&mut self, path: &str, serial: f64) -> Result<(), FileError> {
-        if !serial.is_finite() || !(-657435.0..2958466.0).contains(&serial) { return Err(FileError::InvalidArgument); }
+        if !serial.is_finite() || !(serial > -657435.0 && serial < 2958466.0) { return Err(FileError::InvalidArgument); }
         let path = self.normalize_snapshot_path(path)?;
         let key = path.to_lowercase().trim_end_matches('\\').to_string();
         if !self.contents.contains_key(&key) && !self.folder_exists(&path) { return Err(FileError::InvalidArgument); }
@@ -1600,7 +1600,8 @@ mod tests {
         restored.restore_modified_facts(&times).unwrap();
         assert_eq!(restored.modified_facts(),times);
         for facts in [vec![(r"C:\missing".into(),old)],vec![(r"C:\work\data.bin".into(),f64::NAN)],
-            vec![(r"C:\work\data.bin".into(),old),(r"c:/WORK/DATA.bin".into(),current)]] {
+            vec![(r"C:\work\data.bin".into(),old),(r"c:/WORK/DATA.bin".into(),current)],
+            vec![(r"C:\work\data.bin".into(),-657435.0)],vec![(r"C:\work\data.bin".into(),2958466.0)]] {
             assert_eq!(restored.restore_modified_facts(&facts),Err(FileError::InvalidArgument));
             assert_eq!(restored.modified_facts(),times);
         }

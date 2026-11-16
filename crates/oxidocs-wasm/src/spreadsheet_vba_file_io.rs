@@ -2291,7 +2291,7 @@ impl WorkbookFiles {
             let path=self.files.normalize_snapshot_path(&fact.path)
                 .map_err(|e|format!("invalid VBA modifiedTimes path: {}",e.description()))?;
             let key=path.trim_end_matches('\\').to_lowercase();
-            if !seen.insert(key.clone()) || !fact.value.is_finite() || !(-657435.0..2958466.0).contains(&fact.value) {
+            if !seen.insert(key.clone()) || !fact.value.is_finite() || !(fact.value > -657435.0 && fact.value < 2958466.0) {
                 return Err("invalid VBA modifiedTimes: duplicate path or invalid local OLE date".into());
             }
             let preserve=consumed.contains(&key) || existing.contains(&key);
@@ -2391,7 +2391,7 @@ fn validate_modified_times_js(owner: &JsValue) -> Result<(), JsError> {
         }
         let path=js_sys::Reflect::get(&entry,&JsValue::from_str("path")).map_err(|_|JsError::new("invalid VBA modification time path"))?;
         let value=js_sys::Reflect::get(&entry,&JsValue::from_str("value")).map_err(|_|JsError::new("invalid VBA modification time value"))?;
-        if !path.is_string() || !value.as_f64().is_some_and(|value|value.is_finite() && (-657435.0..2958466.0).contains(&value)) {
+        if !path.is_string() || !value.as_f64().is_some_and(|value|value.is_finite() && value > -657435.0 && value < 2958466.0) {
             return Err(JsError::new("invalid VBA modification time path/value"));
         }
     }

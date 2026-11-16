@@ -116,6 +116,7 @@ End Function
   workbook=out.workbook;
   const invalid=[null,0,{},[null],[{path,value:NaN}],[{path,value:Infinity}],
    [{path,value:true}],[{path,value:'43890'}],[{path}],[{path,value:old,unknown:1}],
+   [{path,value:-657435}],[{path,value:2958466}],
    [{path,value:old},{path:'c:/WORK/DATA.bin',value:old}],
    [{path:'C:\\work\\absent.bin',value:old}]];
   for(let index=0;index<invalid.length;index++){
