@@ -140,6 +140,32 @@ class NativeWorkbook(unittest.TestCase):
         self.assertEqual(value[0], value[1])
         self.assertEqual(value[2:], ("Single", 4))
 
+    def test_legacy_protocol_keeps_its_timestamp_and_live_mode_is_explicit(self):
+        messages = [
+            {"id": 1, "op": "open", "path": str(self.fixture), "seed": 1},
+            {"id": 2, "op": "run", "procedure": "PythonBridge.ClockParts", "args": []},
+            {"id": 3, "op": "run", "procedure": "PythonBridge.ClockParts", "args": [], "clockMode": True},
+            {"id": 4, "op": "run", "procedure": "PythonBridge.ClockParts", "args": []},
+            {"id": 5, "op": "run", "procedure": "PythonBridge.ClockProgress", "args": [], "clockMode": "live"},
+            {"id": 6, "op": "close"},
+        ]
+        data = "".join(json.dumps({"currentTime": 46343.5, **message}) + "\n" for message in messages)
+        result = subprocess.run([self.wb._process.args[0], "serve"], input=data,
+                                capture_output=True, text=True, encoding="utf-8", timeout=60,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        replies = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(len(replies), len(messages))
+        self.assertFalse(replies[2]["ok"])
+        for index in [1, 3]:
+            self.assertTrue(replies[index]["ok"], replies[index])
+            value = ox._decode(replies[index]["outcome"]["result"], self.wb).values
+            self.assertEqual(value[:4], (46343.5, 46343.5, 0.5, 0.5))
+        self.assertTrue(replies[4]["ok"], replies[4])
+        value = ox._decode(replies[4]["outcome"]["result"], self.wb).values
+        self.assertGreater((value[1] - value[0]) % 86400, 0)
+        self.assertTrue(replies[5]["ok"], replies[5])
+
     def test_clock_parts_are_native_whole_seconds_without_losing_timer_type(self):
         answer = self.wb.run("PythonBridge.ClockParts")
         self.assertIsInstance(answer, ox.Array)

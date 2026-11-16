@@ -84,7 +84,7 @@ fn clock(request: &Value) -> Result<f64, String> {
 
 fn advancing_clock(request: &Value) -> Result<bool, String> {
     match request.get("clockMode") {
-        None => Ok(true),
+        None => Ok(false),
         Some(Value::String(mode)) if mode == "live" => Ok(true),
         Some(Value::String(mode)) if mode == "fixed" => Ok(false),
         _ => Err("clockMode must be live or fixed".into()),

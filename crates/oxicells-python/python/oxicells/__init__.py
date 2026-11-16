@@ -332,7 +332,7 @@ class Workbook:
             fraction = (now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1_000_000) / 86400
             local = days + (-fraction if days < 0 else fraction)
             request = {"id": self._sequence, "op": operation, "currentTime": local, **fields}
-            if self._clock_mode == "fixed": request["clockMode"] = "fixed"
+            request["clockMode"] = self._clock_mode
             data = json.dumps(request, ensure_ascii=True, allow_nan=False)
             try:
                 assert self._process.stdin is not None
