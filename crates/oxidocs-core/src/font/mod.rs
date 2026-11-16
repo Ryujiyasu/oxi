@@ -1441,6 +1441,17 @@ impl FontMetricsRegistry {
             latin_kern.extend(meiryo_pairs);
         }
 
+        // OXI_APTOS_KERN (2026-11-17): Aptos / Aptos Display / Aptos Narrow GPOS kern pairs
+        // (`tools/metrics/_gen_aptos_kern_pairs.py`, from the Office cloud-font cache).
+        // en/forms__006d1fbe (Aptos 12, w:kern 2): Word sets «have» v->e at 5.26pt, hmtx
+        // 5.43 less the v,e pair -20/2048 em.
+        if !crate::env_flag!("OXI_APTOS_KERN_DISABLE") {
+            let aptos_pairs: HashMap<String, HashMap<String, i32>> =
+                serde_json::from_str(include_str!("data/aptos_kern_pairs.json"))
+                    .expect("valid bundled Aptos kerning metrics");
+            latin_kern.extend(aptos_pairs);
+        }
+
         if crate::env_flag!("OXI_YU_GOTHIC_KERN") {
             // GPOS kern-feature advances, in the same 2048-unit coordinates
             // as the corresponding font metrics. Used by layout and painting.

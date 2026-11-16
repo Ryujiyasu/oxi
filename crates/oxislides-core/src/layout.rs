@@ -436,13 +436,18 @@ pub fn line_width_pt(
 /// `"e-mail"` can break as `"e-"` + `"mail"`. A trailing hyphen does not split,
 /// which would leave an empty tail piece.
 pub fn break_pieces(text: &str, hyphen_breaks: bool) -> Vec<&str> {
+    break_pieces_k(text, hyphen_breaks, true)
+}
+
+/// `break_pieces` with East Asian kinsoku switched by `kinsoku` (`eaLnBrk`).
+pub fn break_pieces_k(text: &str, hyphen_breaks: bool, kinsoku: bool) -> Vec<&str> {
     let mut out = Vec::new();
     for chunk in text.split_inclusive(' ') {
         let mut start = 0usize;
         let mut prev: Option<char> = None;
         for (i, ch) in chunk.char_indices() {
             if let Some(p) = prev {
-                if cjk_break_between(p, ch) && i > start {
+                if cjk_break_between(p, ch, kinsoku) && i > start {
                     out.push(&chunk[start..i]);
                     start = i;
                 }
@@ -467,9 +472,13 @@ pub fn break_pieces(text: &str, hyphen_breaks: bool) -> Vec<&str> {
 /// except before a character that may not start a line (、。）」 small kana
 /// ...) or after one that may not end it (（「 ...). `OXI_CJKBREAK_DISABLE=1`
 /// breaks at spaces only again.
-fn cjk_break_between(a: char, b: char) -> bool {
+fn cjk_break_between(a: char, b: char, kinsoku: bool) -> bool {
     if !cjkbreak_on() {
         return false;
+    }
+    if !kinsoku {
+        // eaLnBrk="0": any boundary next to a CJK character, spaces aside.
+        return (is_cjk(a) || is_cjk(b)) && !(a == ' ' || b == ' ');
     }
     // An ideographic space (U+3000) behaves like a space: it stays with the
     // text before it and the line may break only after it (252cbc8c s48:
@@ -562,6 +571,14 @@ mod wrap_tests {
         assert_eq!(break_pieces("e-mail x-", true), vec!["e-", "mail ", "x-"]);
         assert_eq!(break_pieces("e-mail", false), vec!["e-mail"]);
     }
+
+    #[test]
+    fn ea_ln_brk_off_lets_prohibited_characters_start_a_line() {
+        // gen_pptx_kinsoku.py: with kinsoku the long vowel mark and 、 stay
+        // glued to the character before them; eaLnBrk="0" breaks anywhere.
+        assert_eq!(break_pieces_k("デー、ア", false, true), vec!["デー、", "ア"]);
+        assert_eq!(break_pieces_k("デー、ア", false, false), vec!["デ", "ー", "、", "ア"]);
+    }
 }
 
 /// What a wrap is allowed to do, beyond breaking at spaces.
@@ -586,6 +603,9 @@ pub struct WrapOpts {
     /// (19.87pt) stays whole in a 19.6pt cell, `Nox` / `No!` / `No)` / `No」`
     /// break, `No..` breaks, and hangingPunct="0" breaks `No.` too.
     pub hang_punct: bool,
+    /// East Asian kinsoku (`eaLnBrk`, default on). Off, any CJK boundary is a
+    /// break site and nothing hangs.
+    pub kinsoku: bool,
 }
 
 /// The characters `hangingPunct` lets stand past the line end.
@@ -646,7 +666,7 @@ where
         }
         false
     };
-    for word in break_pieces(text, opts.hyphen_breaks) {
+    for word in break_pieces_k(text, opts.hyphen_breaks, opts.kinsoku) {
         let ok = if opts.trim_trailing_space {
             let mut candidate = current.clone();
             candidate.push_str(word);
@@ -723,6 +743,7 @@ mod wrap_loop_tests {
         char_wrap: true,
         hyphen_breaks: false,
         hang_punct: false,
+        kinsoku: true,
     };
 
     /// Every character is one point wide, so a width in points is a character
@@ -932,6 +953,7 @@ fn break_segment(
         // after it fell one line low.
         hyphen_breaks: true,
         hang_punct: false,
+        kinsoku: true,
     };
     Some(wrap_lines(
         text,
@@ -1599,6 +1621,7 @@ mod size_tests {
             indent: None,
             bullet: crate::ir::SlideBullet::default(),
             hanging_punct: None,
+            ea_ln_brk: None,
             ea_lang: false,
         }
     }
@@ -1732,6 +1755,9 @@ pub fn resolve_level(
         }
         if l.hanging_punct.is_some() {
             m.hanging_punct = l.hanging_punct;
+        }
+        if l.ea_ln_brk.is_some() {
+            m.ea_ln_brk = l.ea_ln_brk;
         }
         if l.tab_stops.is_some() {
             m.tab_stops = l.tab_stops.clone();
@@ -2483,6 +2509,7 @@ mod shape_tests {
             indent: None,
             bullet: crate::ir::SlideBullet::default(),
             hanging_punct: None,
+            ea_ln_brk: None,
             ea_lang: false,
         }
     }
