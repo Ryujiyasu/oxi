@@ -7479,6 +7479,40 @@ impl<'a> TableFitLayouter<'a> {
                                                         && self.compat_mode >= 15
                                                         && self.compat_mode_explicit
                                                         && !matches!(para.alignment, Alignment::Justify | Alignment::Distribute);
+                                                    // OXI_CELL_BOTH_PUSH (2026-11-16): a justified cell line takes ONE
+                                                    // overflowing closing mark (S1583's probe: jc=both +1 mark), but not
+                                                    // when the line before the mark already passes the edge -- on hung
+                                                    // ideographic spaces or a bracket it squeezed to fit. Word then
+                                                    // pushes the mark down with the character before it, a space run
+                                                    // going with the character it follows. `_pb_zenspace_wrap_slice.py`
+                                                    // (ja/legal__10f9c779 p5, ＭＳ 明朝 10, 355.25pt): orig
+                                                    // «□ＦＡＸ（_7－_6 | －_16）», kanji_sp 35 characters, noclose 36.
+                                                    let cell_both_push = !s1583_left
+                                                        && (!crate::env_flag!("OXI_CELL_BOTH_PUSH_DISABLE")
+                                                            && self.doc_body_has_real_cjk
+                                                            && self.compat_mode >= 15
+                                                            && self.compat_mode_explicit
+                                                            && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                                                            && !matches!(ch, '、' | '。' | '，' | '．' | '\u{FF61}' | '\u{FF64}')
+                                                            && {
+                                                                // the line with the mark does not fit even with every
+                                                                // bracket / comma / period on it set at half width
+                                                                // (`_pb_zenspace_email_slice.py` at_nosp: 364.8 - 10 <=
+                                                                // 355.25 stays one line; orig with its ASCII space 369.8
+                                                                // - 10 is pushed; ja/administrative__108cf895's «（内会員
+                                                                // 12名、GREEN 2名）» fits in Word)
+                                                                let n_comp = current_line
+                                                                    .iter()
+                                                                    .flat_map(|f| f.0.chars())
+                                                                    .chain(buf.chars())
+                                                                    .chain(std::iter::once(ch))
+                                                                    .filter(|c| kinsoku::is_cjk_compressible(*c)
+                                                                        && !matches!(*c, '\u{FF1A}' | '\u{FF1B}' | '\u{FF1F}' | '\u{FF01}'))
+                                                                    .count();
+                                                                line_x + buf_w + cw - n_comp as f32 * font_size * 0.5
+                                                                    > effective_wrap + 0.01
+                                                            });
+                                                    let s1583_left = s1583_left || cell_both_push;
                                                     if !crate::env_flag!("OXI_S421_DISABLE")
                                                         && (s412_cellmar_subtract
                                                             || (std::env::var("OXI_S443_DISABLE")
@@ -7518,8 +7552,20 @@ impl<'a> TableFitLayouter<'a> {
                                                                     None
                                                                 }
                                                             });
+                                                            let tail = if cell_both_push {
+                                                                let mut left: Vec<char> = current_line
+                                                                    .iter()
+                                                                    .flat_map(|f| f.0.chars())
+                                                                    .chain(buf.chars())
+                                                                    .collect();
+                                                                while left.last().is_some_and(|c| *c == '\u{3000}' || *c == ' ') {
+                                                                    left.pop();
+                                                                }
+                                                                left.last().copied()
+                                                            } else { tail };
                                                             let need =
-                                                                kinsoku::is_line_start_prohibited(
+                                                                (cell_both_push && head == ' ')
+                                                                || kinsoku::is_line_start_prohibited(
                                                                     head,
                                                                 ) || tail.map_or(
                                                                     false,
@@ -9328,7 +9374,29 @@ impl<'a> TableFitLayouter<'a> {
                                                     } else {
                                                         0.0
                                                     };
-                                                    if has_cjk && slack_ratio > 0.10 {
+                                                    // OXI_CELL_BOTH_PUSH: a Latin word is one unit -- the slack goes
+                                                    // to the break opportunities only. `_pb_zenspace_email_slice.py`
+                                                    // orig line 1 «□e-mail» (pushed, jc=both): Word sets «□» at the
+                                                    // left and «e-mail» unspaced flush right (501.8..527.4).
+                                                    let latin_word = |t: &str| t.chars().count() > 1 && t.chars().all(|c| c.is_ascii_graphic());
+                                                    let latin_units = true
+                                                        && !crate::env_flag!("OXI_CELL_BOTH_PUSH_DISABLE")
+                                                        && line.iter().any(|f| latin_word(&f.0))
+                                                        && line.iter().all(|f| f.0.chars().count() <= 1 || latin_word(&f.0));
+                                                    let latin_bounds: Vec<usize> = if latin_units {
+                                                        (0..line.len() - 1)
+                                                            .filter(|&i| !(line[i].0.chars().last().is_some_and(|c| c.is_ascii_graphic())
+                                                                && line[i + 1].0.chars().next().is_some_and(|c| c.is_ascii_graphic())))
+                                                            .collect()
+                                                    } else { Vec::new() };
+                                                    if latin_units {
+                                                        if has_cjk && slack_ratio > 0.10 && !latin_bounds.is_empty() {
+                                                            let per = slack / latin_bounds.len() as f32;
+                                                            for i in latin_bounds {
+                                                                frag_spacing[i] += per;
+                                                            }
+                                                        }
+                                                    } else if has_cjk && slack_ratio > 0.10 {
                                                         let total_chars: usize = line.iter()
                                                 .map(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().count())
                                                 .sum();
