@@ -92,6 +92,9 @@ struct ParseContext {
 struct ParseField {
     instruction: String,
     result: bool,
+    /// OXI_EQ_RUBY: where each instrText piece starts in `instruction`, with
+    /// its run's direct size -- an EQ reading is drawn at its own run's size.
+    piece_sizes: Vec<(usize, Option<f32>)>,
 }
 
 /// The text an `EQ` field instruction draws, or `None` for any other field.
@@ -132,6 +135,16 @@ fn eq_text(chars: &[char], at: &mut usize) -> String {
                     *at += 1;
                     let name: String = chars[*at..].iter().take_while(|c| c.is_ascii_alphabetic()).collect();
                     *at += name.chars().count();
+                    // OXI_EQ_RUBY: `\* jc2`, `\* "Font:メイリオ"`, `\* hps10` are the
+                    // general formatting switches Word's phonetic guide writes in front
+                    // of its `\o\ad(\s\up 9(reading),base)`; they draw nothing.
+                    if name.is_empty() && chars.get(*at) == Some(&'*')
+                        && !crate::env_flag!("OXI_EQ_RUBY_DISABLE")
+                    {
+                        *at += 1;
+                        eq_skip_format_arg(chars, at);
+                        continue;
+                    }
                     if name.is_empty() {
                         // An escaped character: `\(` or `\,` is the character itself.
                         if let Some(&c) = chars.get(*at) {
@@ -166,6 +179,123 @@ fn eq_text(chars: &[char], at: &mut usize) -> String {
         }
     }
     out
+}
+
+/// Past the argument of a `\*` switch: blanks, then a quoted string or a word.
+fn eq_skip_format_arg(chars: &[char], at: &mut usize) {
+    while chars.get(*at) == Some(&' ') {
+        *at += 1;
+    }
+    if chars.get(*at) == Some(&'"') {
+        *at += 1;
+        while *at < chars.len() && chars[*at] != '"' {
+            *at += 1;
+        }
+        *at = (*at + 1).min(chars.len());
+    } else {
+        while *at < chars.len() && !matches!(chars[*at], ' ' | '\\' | '(' | ')' | ',') {
+            *at += 1;
+        }
+    }
+}
+
+/// OXI_EQ_RUBY (2026-11-17, default ON, opt-out _DISABLE): the phonetic guide
+/// Word writes as a field, `EQ \* jc2 \* "Font:メイリオ" \* hps10
+/// \o\ad(\s\up 9(いつとせ),五年)`, is a ruby: the base is the run's text and
+/// the reading is set over it at hps / 2 pt, raised `\up` pt, aligned by jc.
+/// ja/educational__047ff775 p2 para 16: Word draws «五年» with «いつとせ» beside
+/// it like the paragraph's w:ruby runs (hps 10, hpsRaise 18, distributeSpace);
+/// Oxi drew «* jc2 * "Font:メイリオ" * hps10 いつとせ五年» at full size, a column
+/// too long, and the document ran a page over.
+fn eq_ruby(instruction: &str, piece_sizes: &[(usize, Option<f32>)]) -> Option<Ruby> {
+    if crate::env_flag!("OXI_EQ_RUBY_DISABLE") {
+        return None;
+    }
+    let t = instruction.trim();
+    if !t.get(..2).is_some_and(|n| n.eq_ignore_ascii_case("eq")) {
+        return None;
+    }
+    let chars: Vec<char> = t[2..].chars().collect();
+    let mut at = 0usize;
+    let (mut hps, mut jc, mut font) = (None::<u32>, None::<u32>, None::<String>);
+    loop {
+        while chars.get(at) == Some(&' ') {
+            at += 1;
+        }
+        if chars.get(at) == Some(&'\\') && chars.get(at + 1) == Some(&'*') {
+            at += 2;
+            let start = {
+                while chars.get(at) == Some(&' ') {
+                    at += 1;
+                }
+                at
+            };
+            eq_skip_format_arg(&chars, &mut at);
+            let arg: String = chars[start..at].iter().collect::<String>().trim_matches('"').to_string();
+            let lower = arg.to_ascii_lowercase();
+            if let Some(v) = lower.strip_prefix("hps") {
+                hps = v.parse().ok();
+            } else if let Some(v) = lower.strip_prefix("jc") {
+                jc = v.parse().ok();
+            } else if let Some(v) = arg.strip_prefix("Font:") {
+                font = Some(v.to_string());
+            }
+            continue;
+        }
+        break;
+    }
+    // \o\ad( \s\up N( reading ), base )
+    let rest: String = chars[at..].iter().collect();
+    let rest = rest.trim_end();
+    let mut tail = None;
+    // `\ad` spreads the reading over the base when no jc says otherwise
+    // (0054fa53: «フリガナ» from 133.0 to 179.2 over «氏　　名» 133.0..185.7).
+    let spread = rest.starts_with("\\o\\ad(");
+    for head in ["\\o\\ad(", "\\o\\ac(", "\\o\\al(", "\\o\\ar(", "\\o("] {
+        if let Some(r) = rest.strip_prefix(head) {
+            tail = Some(r);
+            break;
+        }
+    }
+    let r = tail?.strip_prefix("\\s\\up")?;
+    let digits: String = r.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+    let raise: u32 = digits.parse().ok()?;
+    let r = r.trim_start()[digits.len()..].trim_start().strip_prefix('(')?;
+    let close = r.find(')')?;
+    let reading = &r[..close];
+    let base = r[close + 1..].trim_start().strip_prefix(',')?.strip_suffix(')')?;
+    if reading.is_empty() || base.is_empty() || reading.contains(['\\', '(', ',']) || base.contains(['\\', '(', ',']) {
+        return None;
+    }
+    // Without `\* hps` the reading is drawn at its own run's size: blind-B
+    // forms__0054fa53 `eq \o\ad(\s\up 10(フリガナ),氏　　名)`, the reading run
+    // sz 14 -> Word's «フリガナ» are 6.96pt over the 11pt «氏　　名».
+    let reading_size = instruction
+        .rfind(&format!("({})", reading))
+        .and_then(|at| piece_sizes.iter().rev().find(|(start, _)| *start <= at + 1))
+        .and_then(|(_, size)| *size);
+    let hps = hps.or(reading_size.map(|s| (s * 2.0).round() as u32));
+    Some(Ruby {
+        annotation_fonts: font.into_iter().collect(),
+        base: base.to_string(),
+        text: reading.to_string(),
+        font_size: hps.map(|h| h as f32 / 2.0),
+        align: Some(match jc.unwrap_or(0) {
+            1 => RubyAlign::DistributeLetter,
+            2 => RubyAlign::DistributeSpace,
+            3 => RubyAlign::Left,
+            4 => RubyAlign::Right,
+            5 => RubyAlign::RightVertical,
+            0 if jc.is_none() && spread => RubyAlign::DistributeLetter,
+            _ => RubyAlign::Center,
+        }),
+        hps_halfpt: hps,
+        hps_raise_halfpt: Some(raise * 2),
+        hps_base_text_halfpt: None,
+        lang: None,
+        text_scale: None,
+        annotation_style: None,
+    })
 }
 
 /// What one EQ construct shows, from its switch names and argument texts.
@@ -333,7 +463,8 @@ impl ParseContext {
             && self.fields.borrow().iter().any(|f| !f.result)
     }
 
-    fn field_control(&self, e: &quick_xml::events::BytesStart<'_>, text: &mut String) {
+    fn field_control(&self, e: &quick_xml::events::BytesStart<'_>, text: &mut String) -> Option<Ruby> {
+        let mut eq_ruby_out = None;
         for attr in e.attributes().flatten() {
             if local_name(attr.key.as_ref()) != "fldCharType" { continue; }
             let mut fields = self.fields.borrow_mut();
@@ -366,7 +497,10 @@ impl ParseContext {
                     // sample 24 of the 988 Japanese ones lost labels this
                     // way. The text goes after the field, outside it.
                     if let Some(field) = field.filter(|f| visible && !f.result) {
-                        if let Some(shown) = eq_field_text(&field.instruction) {
+                        if let Some(r) = eq_ruby(&field.instruction, &field.piece_sizes).filter(|_| !crate::env_flag!("OXI_EQ_DISABLE")) {
+                            text.push_str(&r.base);
+                            eq_ruby_out = Some(r);
+                        } else if let Some(shown) = eq_field_text(&field.instruction) {
                             if !crate::env_flag!("OXI_EQ_DISABLE") {
                                 text.push_str(&shown);
                             }
@@ -376,6 +510,7 @@ impl ParseContext {
                 _ => {}
             }
         }
+        eq_ruby_out
     }
 
     fn separate_story<T>(&self, parse: impl FnOnce() -> Result<T, ParseError>) -> Result<T, ParseError> {
@@ -7445,7 +7580,11 @@ fn parse_run(
         match ev {
             Event::Start(e) => {
                 let local = local_name(e.name().as_ref());
-                if local == "fldChar" && depth == 0 { ctx.field_control(&e, &mut text); }
+                if local == "fldChar" && depth == 0 {
+                    if let Some(r) = ctx.field_control(&e, &mut text) {
+                        ruby.get_or_insert(r);
+                    }
+                }
                 match local.as_str() {
                     "rPr" if depth == 0 => {
                         let (s, c) = parse_run_properties(reader, ctx, styles, false)?;
@@ -7678,6 +7817,7 @@ fn parse_run(
                     instr_text.push_str(&content);
                     if let Some(f) = ctx.fields.borrow_mut().last_mut() {
                         if !f.result {
+                            f.piece_sizes.push((f.instruction.len(), style.font_size));
                             f.instruction.push_str(&content);
                             accumulated_instruction = Some(f.instruction.clone());
                         }
@@ -7807,7 +7947,11 @@ fn parse_run(
                             has_last_rendered_page_break = true;
                         }
                     }
-                    "fldChar" => ctx.field_control(&e, &mut text),
+                    "fldChar" => {
+                        if let Some(r) = ctx.field_control(&e, &mut text) {
+                            ruby.get_or_insert(r);
+                        }
+                    }
                     "footnoteReference" => {
                         custom_note_reference = e.attributes().flatten().any(|attr|
                             local_name(attr.key.as_ref()) == "customMarkFollows"
@@ -19972,5 +20116,21 @@ mod eq_field_tests {
         assert_eq!(eq_field_text("eq \\o\\ad(　,　)"), None);
         assert_eq!(eq_field_text("SEQ Figure"), None);
         assert_eq!(eq_field_text("equation"), None);
+        // \* switches are formatting, not text
+        assert_eq!(eq_field_text("eq \\* jc2 \\* \"Font:メイリオ\" \\* hps10 \\o\\ac(○,印)").as_deref(), Some("㊞"));
+    }
+
+    #[test]
+    fn eq_phonetic_guide_is_a_ruby() {
+        let r = super::eq_ruby(&["EQ \\* jc2 \\* \"Font:メイリオ\" \\* hps10 \\o\\ad(\\s\\up 9(いつとせ),五年)"].concat(), &[]).unwrap();
+        assert_eq!((r.base.as_str(), r.text.as_str()), ("五年", "いつとせ"));
+        assert_eq!((r.hps_halfpt, r.hps_raise_halfpt, r.font_size), (Some(10), Some(18), Some(5.0)));
+        assert_eq!(r.align, Some(crate::ir::RubyAlign::DistributeSpace));
+        assert_eq!(r.annotation_fonts, vec!["メイリオ".to_string()]);
+        assert!(super::eq_ruby("eq \\o\\ad(事業所所在地,　　　　)", &[]).is_none());
+        assert!(super::eq_ruby("eq \\o\\ac(○,印)", &[]).is_none());
+        // no \* hps: the reading's own run size (0054fa53)
+        let r = super::eq_ruby(" eq \\o\\ad(\\s\\up 10(フリガナ),氏　　名)", &[(0, Some(11.0)), (17, Some(7.0)), (29, Some(11.0))]).unwrap();
+        assert_eq!((r.font_size, r.hps_raise_halfpt), (Some(7.0), Some(20)));
     }
 }
