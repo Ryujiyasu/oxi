@@ -55,10 +55,10 @@ for (const inserted of [false, true]) {
 for (const axis of [0, 1]) {
     const before = wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsheet(original), source, 'AddBandFormat', [axis], 0, 'rows.xlsx', {});
     assert.equal(before.error, undefined, 'band before save');
-    assert.deepEqual(before.result, {type: 'integer', value: 255}, 'band before save');
+    assert.deepEqual(before.result, {type: 'long', value: 255}, 'band before save');
     const reopened = wasm.parse_spreadsheet(wasm.edit_xlsx_from_workbook(original, JSON.parse(JSON.stringify(before.workbook))));
     const after = wasm.run_spreadsheet_vba_with_outcome(reopened, source, 'ReadBandFormat', [axis], 0, 'rows.xlsx', {});
-    if (after.error || after.result?.type !== 'integer' || after.result?.value !== 255) {
+    if (after.error || after.result?.type !== 'long' || after.result?.value !== 255) {
         failures.push({case: 'band_format', axis, result: after.result, error: after.error});
     }
 }
@@ -95,7 +95,7 @@ const copy = wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsheet(origin
 assert.equal(copy.error, undefined, 'SaveCopyAs with row format');
 assert.equal(copy.files?.length, 1, 'SaveCopyAs output');
 const copyRead = wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsheet(new Uint8Array(copy.files[0].bytes)), copySource, 'ReadBand', [], 0, 'copy.xlsm', {});
-if (copyRead.error || copyRead.result?.type !== 'integer' || copyRead.result?.value !== 255) {
+if (copyRead.error || copyRead.result?.type !== 'long' || copyRead.result?.value !== 255) {
     failures.push({case: 'save_copy_band_format', result: copyRead.result, error: copyRead.error});
 }
 // Excel 16.0 build 20527: later row/column formatting wins at the

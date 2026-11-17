@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use crate::vba_automation::AnsiCodePage;
 
+#[cfg(test)]
+#[path = "spreadsheet_vba_value_transport_tests.rs"]
+mod value_transport_tests;
+
 #[path = "spreadsheet_vba_shapes.rs"]
 mod shapes;
 #[path = "spreadsheet_vba_shapes_members.rs"]
@@ -46822,6 +46826,21 @@ fn decode_typed_scalar(input: &serde_json::Value) -> Result<oxivba_core::Value, 
         return Ok(value);
     }
     let payload = object.get("value").ok_or("typed scalar has no value")?;
+    if matches!(tag, "single" | "double" | "date") && payload.is_object() {
+        let fields = payload.as_object().ok_or("floating bits must be an object")?;
+        let text = fields.get("bits").and_then(|value| value.as_str())
+            .ok_or("floating bits must be hexadecimal")?;
+        let width = if tag == "single" { 8 } else { 16 };
+        if fields.len() != 1 || text.len() != width || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("floating bits have invalid width or digits".into());
+        }
+        let bits = u64::from_str_radix(text, 16).map_err(|_| "floating bits are out of range")?;
+        return Ok(match tag {
+            "single" => Value::Single(f32::from_bits(bits as u32)),
+            "date" => Value::Date(f64::from_bits(bits)),
+            _ => Value::Double(f64::from_bits(bits)),
+        });
+    }
     let integral = || payload.as_i64().ok_or_else(|| "expected an exact integral payload".to_string());
     let decimal = || payload.as_str().ok_or_else(|| "expected a decimal string".to_string())
         .and_then(exact_input_decimal);
@@ -47050,7 +47069,7 @@ fn decode_vba_input_array(value: &JsValue, ancestors: &mut Vec<JsValue>,
     references: Option<&ExternalReferences>) -> Result<Value, JsError> {
     vba_input_fields(value, &["type", "value"], &[])?;
     let payload = vba_input_property(value, "value")?;
-    vba_input_fields(&payload, &["dimensions", "element_type", "values"], &["resizable"])?;
+    vba_input_fields(&payload, &["dimensions", "element_type", "values"], &["resizable", "lower_bound"])?;
     let kind = vba_input_property(&payload, "element_type")?.as_string()
         .ok_or_else(|| JsError::new("invalid VBA argument: array element type must be a string"))?;
     let bounds = vba_input_property(&payload, "dimensions")?;
@@ -47076,6 +47095,13 @@ fn decode_vba_input_array(value: &JsValue, ancestors: &mut Vec<JsValue>,
                 && *value >= 0.0 && *value <= f64::from(u32::MAX))
             .ok_or_else(|| JsError::new("invalid VBA argument: array length is out of range"))?;
         dimensions.push(serde_json::json!({"lower_bound": lower as i64, "length": length as u64}));
+    }
+    let legacy_lower_bound = vba_input_property(&payload, "lower_bound")?;
+    if !legacy_lower_bound.is_undefined() {
+        let expected = dimensions.first().and_then(|bound| bound["lower_bound"].as_i64()).unwrap_or(0);
+        if legacy_lower_bound.as_f64() != Some(expected as f64) {
+            return Err(JsError::new("invalid VBA argument: array lower_bound disagrees with dimensions"));
+        }
     }
     let items = js_sys::Array::from(&items);
     let metadata = serde_json::json!({"dimensions": dimensions, "element_type": kind, "resizable": resizable});
@@ -47168,8 +47194,15 @@ fn decode_vba_input_argument_inner(value: JsValue, ancestors: &mut Vec<JsValue>,
                 }
                 return Ok(bstr(payload));
             }
-            let number = payload.as_f64().and_then(serde_json::Number::from_f64)
-                .ok_or_else(|| JsError::new("invalid VBA argument: expected a finite number"))?;
+            let number = if payload.is_object() && !payload.is_null() {
+                vba_input_fields(&payload, &["bits"], &[])?;
+                let bits = vba_input_property(&payload, "bits")?.as_string()
+                    .ok_or_else(|| JsError::new("invalid VBA argument: floating bits must be hexadecimal"))?;
+                serde_json::json!({"bits": bits})
+            } else {
+                serde_json::Value::Number(payload.as_f64().and_then(serde_json::Number::from_f64)
+                    .ok_or_else(|| JsError::new("invalid VBA argument: expected a finite number"))?)
+            };
             let descriptor = serde_json::json!({"type": tag, "value": number});
             return decode_typed_scalar(&descriptor)
                 .map_err(|error| JsError::new(&format!("invalid VBA argument: {error}")));
@@ -47207,8 +47240,14 @@ enum OutputValue {
     Nothing,
     Null,
     Boolean(bool),
-    Integer(#[serde(serialize_with = "serialize_vba_signed_integer")] i64),
-    Double(f64),
+    Byte(u8),
+    Integer(i16),
+    Long(#[serde(serialize_with = "serialize_vba_signed_integer")] i64),
+    LongLong(String),
+    Single(OutputFloat),
+    Double(OutputFloat),
+    Date(OutputFloat),
+    NullString,
     Currency(String),
     Decimal(String),
     Error(i64),
@@ -47217,6 +47256,7 @@ enum OutputValue {
     Bstr(Vec<u8>),
     Array {
         lower_bound: i64,
+        element_type: &'static str,
         dimensions: Vec<OutputArrayDimension>,
         resizable: bool,
         values: Vec<OutputValue>,
@@ -47318,6 +47358,45 @@ fn serialize_vba_outcome<T:Serialize + VbaWorkbookPayloads>(outcome:&T)->Result<
     Ok(js)
 }
 
+#[derive(Serialize)]
+#[serde(untagged)]
+enum OutputFloat {
+    Number(f64),
+    Bits { bits: String },
+}
+
+impl OutputFloat {
+    fn single(value: f32) -> Self {
+        if value.is_finite() && !(value == 0.0 && value.is_sign_negative()) { Self::Number(f64::from(value)) }
+        else { Self::Bits { bits: format!("{:08x}", value.to_bits()) } }
+    }
+
+    fn double(value: f64) -> Self {
+        if value.is_finite() && !(value == 0.0 && value.is_sign_negative()) { Self::Number(value) }
+        else { Self::Bits { bits: format!("{:016x}", value.to_bits()) } }
+    }
+}
+
+fn output_array_element_type(value: &Value) -> &'static str {
+    match value {
+        Value::Boolean(_) => "boolean",
+        Value::Byte(_) => "byte",
+        Value::Int16(_) => "integer",
+        Value::Integer(_) => "long",
+        Value::LongLong(_) => "long_long",
+        Value::Single(_) => "single",
+        Value::Double(_) => "double",
+        Value::Date(_) => "date",
+        Value::Currency(_) => "currency",
+        Value::Decimal(_) => "decimal",
+        Value::Error(_) => "error",
+        Value::String(_) | Value::NullString | Value::Utf16(_) | Value::ByteString(_) => "string",
+        Value::Nothing | Value::Object(_) => "object",
+        Value::Record(_) => "record",
+        _ => "variant",
+    }
+}
+
 impl From<Value> for OutputValue {
     fn from(value: Value) -> Self {
         match value {
@@ -47326,11 +47405,11 @@ impl From<Value> for OutputValue {
             Value::Nothing => Self::Nothing,
             Value::Null => Self::Null,
             Value::Boolean(value) => Self::Boolean(value),
-            Value::Int16(value) => Self::Integer(value as i64),
-            Value::Byte(value) => Self::Integer(value as i64),
-            Value::Integer(value) => Self::Integer(value),
-            Value::LongLong(value) => Self::Integer(value),
-            Value::Single(value) => Self::Double(value as f64),
+            Value::Int16(value) => Self::Integer(value),
+            Value::Byte(value) => Self::Byte(value),
+            Value::Integer(value) => Self::Long(value),
+            Value::LongLong(value) => Self::LongLong(value.to_string()),
+            Value::Single(value) => Self::Single(OutputFloat::single(value)),
             Value::Currency(value) => Self::Currency(
                 oxivba_core::decimal::Dec {
                     negative: value < 0,
@@ -47340,15 +47419,16 @@ impl From<Value> for OutputValue {
                 .to_string(),
             ),
             Value::Decimal(value) => Self::Decimal(value.to_string()),
-            Value::Date(value) => Self::Double(value),
-            Value::Double(value) => Self::Double(value),
+            Value::Date(value) => Self::Date(OutputFloat::double(value)),
+            Value::Double(value) => Self::Double(OutputFloat::double(value)),
             Value::Error(value) => Self::Error(value),
             Value::String(value) => Self::String(value),
-            Value::NullString=>Self::String(String::new()),
+            Value::NullString=>Self::NullString,
             Value::Utf16(units)=>Self::Utf16(units),
             Value::ByteString(bytes)=>Self::Bstr(bytes),
             Value::Array(value) => Self::Array {
                 lower_bound: value.lower_bound(1).unwrap_or(0),
+                element_type: output_array_element_type(&value.element_default),
                 dimensions: value
                     .dimensions
                     .iter()

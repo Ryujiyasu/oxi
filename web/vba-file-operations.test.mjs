@@ -220,7 +220,7 @@ async function verifyEndOwnership(route){
       assert.deepEqual(execution.result,{type:'string',value:mode===0?'0|term-A-done':'5|term-A-done'});
       assert.equal(execution.status_bar,'term-A-done');
      }
-     assert.deepEqual(await run('OwnerDriver.ReadTrace'),{type:'string',value:mode===1?'':'I1;T1;'});
+     assert.deepEqual(await run('OwnerDriver.ReadTrace'),mode===1?{type:'null_string'}:{type:'string',value:'I1;T1;'});
     }
    }else{
     await run('IOOwner.Counter',[10]);
@@ -237,12 +237,12 @@ async function verifyEndOwnership(route){
     const ended=await execute('run','IOOwner.TriggerStop',[1]);
     assert.equal(ended.error.kind,'terminated');
     for(const object of [old,stream,collection,dictionary])assert.ok(ended.reference_state.tokens.includes(object.value.reference));
-    assert.deepEqual(await run('IOOwner.Counter',[-1]),{type:'integer',value:0});
+    assert.deepEqual(await run('IOOwner.Counter',[-1]),{type:'long',value:0});
     assert.deepEqual(await run('IOOwner.FileState',[0,input,1,'']),{type:'string',value:'free|1|256'});
     assert.deepEqual(await run('IOOwner.DirectoryProbe',['']),{type:'string',value:'error|5|'+textStreamDescriptions[5]+'|VBAProject|vba-help.chm|1000005'});
     assert.deepEqual(await invoke(stream,'ReadLine'),{type:'string',value:'second'});
-    assert.deepEqual(await invoke(collection,'Count'),{type:'integer',value:3});
-    assert.deepEqual(await invoke(dictionary,'Count',2),{type:'integer',value:3});
+    assert.deepEqual(await invoke(collection,'Count'),{type:'long',value:3});
+    assert.deepEqual(await invoke(dictionary,'Count',2),{type:'long',value:3});
     for(const[container,index]of[[collection,2],[dictionary,'item']]){
      const alias=await invoke(container,'Item',1,[index]);
      assert.equal(alias.value.handle,old.value.handle);
@@ -332,7 +332,7 @@ async function verifyWorkbookSelection(mode){
    :await runner.invokeVbaMemberInWorker(book,source,reference,'Data',2,[],0,fileName,{projectName});
   calls++;book=held.workbook;
   assert.equal(held.error,undefined);
-  assert.deepEqual(held.result,{type:'integer',value:101});
+  assert.deepEqual(held.result,{type:'long',value:101});
   if(!session){
    assert.ok(runner.getVbaObjectReferences().includes(reference));
    const edited=source+"\n' pending edit in B\n";
