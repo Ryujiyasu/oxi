@@ -771,6 +771,19 @@ pub fn execute_with_host(
     Runtime::new(module).with_host(host).call(procedure, args)
 }
 
+#[derive(Debug)]
+struct FileReadFailure {
+    error: crate::files::FileError,
+    partial: Option<Value>,
+    restore_position: bool,
+}
+
+impl From<crate::files::FileError> for FileReadFailure {
+    fn from(error: crate::files::FileError) -> Self {
+        Self { error, partial: None, restore_position: false }
+    }
+}
+
 pub struct Runtime<'a> {
     /// The Err object is the program's, not a procedure's: what a caller
     /// has in it is what the procedure it calls starts with, and what that
@@ -6231,12 +6244,23 @@ impl<'a> Runtime<'a> {
                 Ok(())
             }
             FileTransferKind::Get => {
-                let read = self.value_from_file(&current, variant, fixed, random, number, 0);
-                if read.is_err() { self.files.abort_get_record(number); }
-                permission_refused=matches!(read,Err(crate::files::FileError::PermissionDenied|crate::files::FileError::PathFileAccess));
-                let read=read.map_err(|failure| file_failure(failure, line))?;
-                self.files.finish_record(number);
-                self.assign(&transfer.value, read, frame, line)
+                match self.value_from_file(&current, variant, fixed, random, number, 0) {
+                    Ok(read) => {
+                        self.files.finish_record(number);
+                        self.assign(&transfer.value, read, frame, line)
+                    }
+                    Err(failure) => {
+                        self.files.abort_get_record(number);
+                        permission_refused=matches!(failure.error,crate::files::FileError::PermissionDenied|crate::files::FileError::PathFileAccess);
+                        if failure.restore_position {
+                            self.files.restore_get_position(number, &saved.path, saved.position, saved_cursor.clone());
+                        }
+                        if let Some(partial) = failure.partial {
+                            self.assign(&transfer.value, partial, frame, line)?;
+                        }
+                        Err(file_failure(failure.error, line))
+                    }
+                }
             }
         }
         })();
@@ -6348,32 +6372,105 @@ impl<'a> Runtime<'a> {
         Ok(())
     }
 
-    fn value_from_file(&mut self, current: &Value, variant: bool, fixed: bool, random: bool, number: i64, depth: usize) -> Result<Value, crate::files::FileError> {
-        let mut take = |files: &mut crate::files::Files, count: usize| files.get(number, count);
-        if variant && !matches!(current, Value::Array(_) | Value::Record(_)) {
+    fn file_type_template(kind: u16) -> Option<Value> {
+        Some(match kind {
+            0 | 12 => Value::Empty,
+            1 => Value::Null,
+            2 => Value::Int16(0),
+            3 => Value::Integer(0),
+            4 => Value::Single(0.0),
+            5 => Value::Double(0.0),
+            6 => Value::Currency(0),
+            7 => Value::Date(0.0),
+            8 => Value::String(String::new()),
+            9 => Value::Nothing,
+            10 => Value::Error(0),
+            11 => Value::Boolean(false),
+            14 => Value::Decimal(crate::decimal::Dec::zero()),
+            17 => Value::Byte(0),
+            20 => Value::LongLong(0),
+            _ => return None,
+        })
+    }
+
+    fn file_string(&mut self, number: i64, count: usize) -> Result<Value, FileReadFailure> {
+        let bytes = self.files.get(number, count)?;
+        let units = utf16::decode_ansi(self.host.as_deref(), &bytes, None, None)
+            .map_err(|_| crate::files::FileError::InvalidArgument)?;
+        Ok(Value::from_utf16(units))
+    }
+
+    fn file_array_descriptor(&mut self, number: i64, default: Value) -> Result<ArrayValue, FileReadFailure> {
+        use crate::files::FileError;
+        let raw = self.files.get(number, 2)?;
+        let rank = usize::from(u16::from_le_bytes([raw[0], raw[1]]));
+        let mut dimensions = Vec::with_capacity(rank);
+        for _ in 0..rank {
+            let raw = self.files.get(number, 8)?;
+            dimensions.push(ArrayDimension {
+                length: u32::from_le_bytes(raw[..4].try_into().unwrap()) as usize,
+                lower_bound: i64::from(i32::from_le_bytes(raw[4..].try_into().unwrap())),
+            });
+        }
+        dimensions.reverse();
+        let length = if dimensions.is_empty() || dimensions.iter().any(|d| d.length == 0) { 0 }
+            else { dimensions.iter().try_fold(1usize, |n, d| n.checked_mul(d.length)).ok_or(FileError::OutOfMemory)? };
+        if length > 1_000_000 { return Err(FileError::OutOfMemory.into()); }
+        Ok(ArrayValue { dimensions, values: vec![default.clone(); length], element_default: Box::new(default), resizable: true })
+    }
+
+    fn file_string_overlay(&mut self, current: &Value, number: i64, count: usize) -> Result<Value, FileReadFailure> {
+        let decoded = self.file_string(number, count)?;
+        if count == 0 { return Ok(current.clone()); }
+        let mut target = current.string_bytes().expect("string destination").into_owned();
+        let decoded = decoded.string_bytes().expect("decoded string");
+        let copied = target.len().min(decoded.len());
+        target[..copied].copy_from_slice(&decoded[..copied]);
+        Ok(Value::from_bstr_bytes(target))
+    }
+
+    fn value_from_file(&mut self, current: &Value, variant: bool, fixed: bool, random: bool, number: i64, depth: usize) -> Result<Value, FileReadFailure> {
+        use crate::files::FileError;
+        let take = |files: &mut crate::files::Files, count: usize| files.get(number, count);
+        if depth > self.max_depth { return Err(FileError::OutOfMemory.into()); }
+        if variant && !matches!(current, Value::Record(_)) {
             let head = take(&mut self.files, 2)?;
             let kind = u16::from_le_bytes([head[0], head[1]]);
-            let template = match kind {
-                2 => Value::Int16(0),
-                3 => Value::Integer(0),
-                4 => Value::Single(0.0),
-                5 => Value::Double(0.0),
-                6 => Value::Currency(0),
-                7 => Value::Date(0.0),
-                8 => {
-                    let size = take(&mut self.files, 2)?;
-                    let size = u16::from_le_bytes([size[0], size[1]]) as usize;
-                    return Ok(Value::String(ansi_text(&take(&mut self.files, size)?)));
+            let element_kind = kind & !8192;
+            if element_kind == 9 {
+                return Err(FileReadFailure { error: FileError::TypeMismatch, partial: None, restore_position: true });
+            }
+            if kind & 8192 != 0 {
+                let default = Self::file_type_template(element_kind).ok_or(FileError::UnsupportedType)?;
+                let mut array = self.file_array_descriptor(number, default)?;
+                if element_kind == 20 {
+                    return Err(FileReadFailure { error: if random { FileError::BadRecordLength } else { FileError::BadNumber }, partial: Some(Value::Array(array)), restore_position: true });
                 }
-                11 => Value::Boolean(false),
-                17 => Value::Byte(0),
-                20 => Value::LongLong(0),
-                0 => return Ok(Value::Empty),
-                1 => return Ok(Value::Null),
-                _ if random => return Err(crate::files::FileError::UnsupportedType),
-                _ => return Ok(Value::Empty),
+                let offsets = array.first_subscript_fastest_offsets().collect::<Vec<_>>();
+                for index in offsets {
+                    let template = array.values[index].clone();
+                    match self.value_from_file(&template, element_kind == 12, false, true, number, depth + 1) {
+                        Ok(value) => array.values[index] = value,
+                        Err(mut failure) => {
+                            if let Some(partial) = failure.partial.take() { array.values[index] = partial; }
+                            failure.partial = Some(Value::Array(array));
+                            return Err(failure);
+                        }
+                    }
+                }
+                return Ok(Value::Array(array));
+            }
+            if kind == 8 {
+                let size = take(&mut self.files, 2)?;
+                let size = usize::from(u16::from_le_bytes([size[0], size[1]]));
+                return if size == 0 { Ok(Value::NullString) } else { self.file_string(number, size) };
+            }
+            if kind == 0 { return Ok(Value::Empty); }
+            if kind == 1 { return Ok(Value::Null); }
+            let Some(template) = (if kind == 12 { None } else { Self::file_type_template(kind) }) else {
+                return if random { Err(FileError::UnsupportedType.into()) } else { Ok(Value::Empty) };
             };
-            return self.value_from_file(&template, false, false, random, number, depth);
+            return self.value_from_file(&template, false, false, random, number, depth + 1);
         }
         Ok(match current {
             Value::Byte(_) => Value::Byte(take(&mut self.files, 1)?[0]),
@@ -6387,36 +6484,52 @@ impl<'a> Runtime<'a> {
             }
             Value::Integer(_) => {
                 let raw = take(&mut self.files, 4)?;
-                Value::Integer(i64::from(i32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]])))
+                Value::Integer(i64::from(i32::from_le_bytes(raw.try_into().unwrap())))
             }
             Value::LongLong(_) | Value::Currency(_) => {
                 let raw = take(&mut self.files, 8)?;
-                let n = i64::from_le_bytes(raw.try_into().unwrap_or([0; 8]));
+                let n = i64::from_le_bytes(raw.try_into().unwrap());
                 if matches!(current, Value::Currency(_)) { Value::Currency(n) } else { Value::LongLong(n) }
             }
-            Value::Single(_) => {
-                let raw = take(&mut self.files, 4)?;
-                Value::Single(f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
-            }
+            Value::Single(_) => Value::Single(f32::from_le_bytes(take(&mut self.files, 4)?.try_into().unwrap())),
             Value::Double(_) | Value::Date(_) => {
-                let raw = take(&mut self.files, 8)?;
-                let n = f64::from_le_bytes(raw.try_into().unwrap_or([0; 8]));
+                let n = f64::from_le_bytes(take(&mut self.files, 8)?.try_into().unwrap());
                 if matches!(current, Value::Date(_)) { Value::Date(n) } else { Value::Double(n) }
             }
-            Value::String(held) => {
-                let count = if random && !fixed {
+            Value::Error(_) => {
+                let code = u32::from_le_bytes(take(&mut self.files, 4)?.try_into().unwrap());
+                Value::Error(if code == 0x8002_0004 { 448 }
+                    else if code & 0xffff_0000 == 0x800a_0000 { i64::from(code & 0xffff) }
+                    else { i64::from(code as i32) })
+            }
+            Value::Decimal(_) => {
+                let raw = take(&mut self.files, 16)?;
+                if raw[2] > 28 || raw[3] & 0x7f != 0 { return Err(FileError::InvalidArgument.into()); }
+                let high = u128::from(u32::from_le_bytes(raw[4..8].try_into().unwrap()));
+                let low = u128::from(u64::from_le_bytes(raw[8..].try_into().unwrap()));
+                Value::Decimal(crate::decimal::Dec { negative: raw[3] != 0, scale: raw[2], magnitude: (high << 64) | low })
+            }
+            Value::String(_) | Value::Utf16(_) | Value::ByteString(_) | Value::NullString => {
+                if random && !fixed {
                     let size = take(&mut self.files, 2)?;
-                    u16::from_le_bytes([size[0], size[1]]) as usize
-                } else {
-                    held.chars().count()
-                };
-                Value::String(ansi_text(&take(&mut self.files, count)?))
+                    let count = usize::from(u16::from_le_bytes([size[0], size[1]]));
+                    if count == 0 { Value::NullString } else { self.file_string(number, count)? }
+                } else { self.file_string_overlay(current, number, string_width(current))? }
             }
             Value::Array(array) => {
-                let mut array = array.clone();
-                for index in 0..array.values.len() {
+                if matches!(array.element_default.as_ref(), Value::Nothing | Value::Object(_)) {
+                    self.files.get(number, 0)?;
+                    return Err(FileReadFailure { error: FileError::TypeMismatch, partial: None, restore_position: true });
+                }
+                let mut array = if random && array.resizable {
+                    self.file_array_descriptor(number, *array.element_default.clone())?
+                } else { array.clone() };
+                let element_variant = matches!(array.element_default.as_ref(), Value::Empty | Value::Missing | Value::Null | Value::Array(_));
+                let element_fixed = matches!(array.element_default.as_ref(), Value::String(text) if !text.is_empty());
+                let offsets = array.first_subscript_fastest_offsets().collect::<Vec<_>>();
+                for index in offsets {
                     let one = array.values[index].clone();
-                    array.values[index] = self.value_from_file(&one, false, false, random, number, depth)?;
+                    array.values[index] = self.value_from_file(&one, element_variant, element_fixed, true, number, depth + 1)?;
                 }
                 Value::Array(array)
             }
@@ -6427,8 +6540,7 @@ impl<'a> Runtime<'a> {
                         let is_fixed = declared.type_name.fixed_length.is_some();
                         let is_variant = declared.array_bounds.is_none()
                             && matches!(declared.type_name.name.to_ascii_lowercase().as_str(), "variant" | "");
-                        let now = field.clone();
-                        *field = self.value_from_file(&now, is_variant, is_fixed, true, number, depth + 1)?;
+                        *field = self.value_from_file(field, is_variant, is_fixed, true, number, depth + 1)?;
                     }
                 }
                 Value::Record(record)
@@ -22396,6 +22508,9 @@ End Function
             fn encode_ansi(&self, units: &[u16], _: Option<i64>) -> Option<Vec<u8>> {
                 Some(crate::AnsiCodec::from_code_page(932).unwrap().encode(units))
             }
+            fn decode_ansi(&self, bytes: &[u8], _: Option<i64>) -> Option<Vec<u16>> {
+                Some(crate::AnsiCodec::from_code_page(932).unwrap().decode(bytes))
+            }
             fn call(&mut self, _: Option<&ObjectRef>, _: &str, _: &[Value]) -> Result<Option<Value>, String> { Ok(None) }
             fn get(&mut self, _: &ObjectRef, _: &str) -> Result<Option<Value>, String> { Ok(None) }
             fn set(&mut self, _: &ObjectRef, _: &str, _: Value) -> Result<bool, String> { Ok(false) }
@@ -22412,6 +22527,136 @@ End Function
             let bytes = runtime.file_system_mut().bytes("C:\\work\\state.bin").unwrap();
             let hex = bytes.iter().map(|b| format!("{b:02X}")).collect::<String>();
             assert_eq!(hex, expected_hex, "{source}");
+        }
+
+
+        fn read_probe(hex: &str, expected: Value, expected_state: &str) {
+            read_probe_mode(hex, expected, expected_state, false);
+        }
+
+        fn read_probe_mode(hex: &str, expected: Value, expected_state: &str, random: bool) {
+            let seed = hex.as_bytes().chunks_exact(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect::<Vec<_>>();
+            let source = r#"
+Private observation As String
+Public Function Probe() As Variant
+ Dim value As Variant, n As Long
+ Open "C:\work\state.bin" For Binary Access Read As #1
+ On Error Resume Next
+ Get #1,,value
+ n=Err.Number
+ observation=CStr(n) & "|" & CStr(Seek(1)) & "|" & CStr(Loc(1)) & "|" & CStr(EOF(1)) & "|" & CStr(LOF(1))
+ Probe=value
+ Close #1
+End Function
+Public Function State() As String
+ State=observation
+End Function
+"#;
+            let source = if random { source.replace("For Binary Access Read As #1", "For Random Access Read As #1 Len=512") } else { source.to_owned() };
+            let module = crate::parse_module(&source).unwrap();
+            let mut host=JapaneseHost;
+            let mut runtime=Runtime::new(&module).with_host(&mut host);
+            runtime.file_system_mut().mount_folder("C:\\work").unwrap();
+            runtime.file_system_mut().replace_bytes("C:\\work\\state.bin",seed.clone()).unwrap();
+            let value=runtime.call("Probe",vec![]).unwrap();
+            match (&value,&expected) {
+                (Value::Single(a),Value::Single(b))=>assert_eq!(a.to_bits(),b.to_bits()),
+                (Value::Double(a),Value::Double(b)) | (Value::Date(a),Value::Date(b))=>assert_eq!(a.to_bits(),b.to_bits()),
+                _=>assert_eq!(value,expected,"{hex}"),
+            }
+            assert_eq!(runtime.call("State",vec![]).unwrap(),Value::String(expected_state.into()),"{hex}");
+            assert_eq!(runtime.file_system_mut().bytes("C:\\work\\state.bin").unwrap(),seed,"read-only {hex}");
+        }
+
+        #[test]
+        fn variant_get_restores_native_scalar_types_bits_and_ansi_strings() {
+            for (hex,value) in [
+                ("0000",Value::Empty), ("0100",Value::Null),
+                ("08000000",Value::NullString), ("0800040093FA3F3F",Value::String("日??".into())),
+                ("1100FF",Value::Byte(255)), ("02000080",Value::Int16(-32768)),
+                ("030000000080",Value::Integer(-2147483648)),
+                ("14000000000000000080",Value::LongLong(i64::MIN)),
+                ("04004200C07F",Value::Single(f32::from_bits(0x7fc00042))),
+                ("05000000000000000080",Value::Double(-0.0)),
+                ("0700420000000000F87F",Value::Date(f64::from_bits(0x7ff8000000000042))),
+                ("0600FFFFFFFFFFFFFF7F",Value::Currency(i64::MAX)),
+                ("0E000E000000FFFFFFFFFFFFFFFFFFFFFFFF",Value::Decimal(crate::decimal::Dec::parse("79228162514264337593543950335").unwrap())),
+                ("0E000E001C80EB35FD034EF338BE917A796D",Value::Decimal(crate::decimal::Dec::parse("-0.1234567890123456789012345678").unwrap())),
+                ("0A0000000000",Value::Error(0)), ("0A00D7070A80",Value::Error(2007)),
+                ("0A00FFFF0A80",Value::Error(65535)), ("0A0004000280",Value::Error(448)),
+                ("0B00FFFF",Value::Boolean(true)),
+            ] {
+                let size=hex.len()/2;
+                read_probe(hex,value,&format!("0|{}|{size}|False|{size}",size+1));
+            }
+        }
+
+        fn array(dimensions: &[(i64,usize)], values: Vec<Value>, default: Value) -> Value {
+            Value::Array(ArrayValue { dimensions:dimensions.iter().map(|&(lower_bound,length)|ArrayDimension{lower_bound,length}).collect(), values, element_default:Box::new(default), resizable:true })
+        }
+
+        #[test]
+        fn variant_get_reads_descriptors_and_column_major_payloads() {
+            for (hex,value) in [
+                ("0220010003000000FEFFFFFFF9FF00000D00",array(&[(-2,3)],vec![Value::Int16(-7),Value::Int16(0),Value::Int16(13)],Value::Int16(0))),
+                ("03200200020000000200000002000000FFFFFFFF01000000020000000300000004000000",array(&[(-1,2),(2,2)],vec![Value::Integer(1),Value::Integer(3),Value::Integer(2),Value::Integer(4)],Value::Integer(0))),
+                ("08200100020000000000000003006F6E650000",array(&[(0,2)],vec![Value::String("one".into()),Value::String(String::new())],Value::String(String::new()))),
+                ("0C2001000000000000000000",array(&[(0,0)],vec![],Value::Empty)),
+                ("082001000000000000000000",array(&[(0,0)],vec![],Value::String(String::new()))),
+                ("02200000",array(&[],vec![],Value::Int16(0))),
+                ("0C20010003000000000000000C20010002000000000000001100010400000020400C2001000100000000000000070000000000406EE54008000000",
+                    array(&[(0,3)],vec![array(&[(0,2)],vec![Value::Byte(1),Value::Single(2.5)],Value::Empty),array(&[(0,1)],vec![Value::Date(43890.0)],Value::Empty),Value::String(String::new())],Value::Empty)),
+            ] {
+                let size=hex.len()/2;
+                read_probe(hex,value,&format!("0|{}|{size}|False|{size}",size+1));
+            }
+        }
+
+        #[test]
+        fn variant_get_failure_preserves_partial_value_and_original_position() {
+            read_probe("0900",Value::Empty,"13|1|0|False|2");
+            read_probe("0920",Value::Empty,"13|1|0|False|2");
+            read_probe("142001000200000001000000FFFFFFFFFFFFFF7FF9FFFFFFFFFFFFFF",
+                array(&[(1,2)],vec![Value::LongLong(0),Value::LongLong(0)],Value::LongLong(0)),"52|1|0|False|28");
+        }
+
+
+        #[test]
+        fn random_variant_get_keeps_eof_on_failure_and_uses_record_errors() {
+            read_probe_mode("0800040093FA3F3F",Value::String("日??".into()),"0|2|1|True|8",true);
+            read_probe_mode("0A00D7070A80",Value::Error(2007),"0|2|1|True|6",true);
+            read_probe_mode("0900",Value::Empty,"13|1|0|True|2",true);
+            read_probe_mode("0920",Value::Empty,"13|1|0|True|2",true);
+            read_probe_mode("142001000200000001000000FFFFFFFFFFFFFF7FF9FFFFFFFFFFFFFF",
+                array(&[(1,2)],vec![Value::LongLong(0),Value::LongLong(0)],Value::LongLong(0)),"59|1|0|True|28",true);
+        }
+
+
+        #[test]
+        fn typed_get_preserves_buffer_tails_and_reads_dynamic_array_descriptors() {
+            let cases = [
+                ("", "Dim target As String * 4", "target=\"zzzz\"", "Binary Access Read", "93FA412020", "target & \"|\" & CStr(Seek(1)) & \"|\" & CStr(Loc(1))", "日A z|5|4"),
+                ("", "Dim target As String * 4", "target=\"zzzz\"", "Random Access Read", "93FA412020", "target & \"|\" & CStr(Seek(1)) & \"|\" & CStr(Loc(1))", "日A z|2|1"),
+                ("", "Dim target As String", "target=\"XX\"", "Binary Access Read", "93FA41", "target & \"|\" & CStr(Seek(1))", "日X|3"),
+                ("", "Dim target(0 To 1) As String * 4", "target(0)=\"zzzz\":target(1)=\"zzzz\"", "Binary Access Read", "93FA412041422020", "target(0) & \"|\" & target(1) & \"|\" & CStr(Seek(1))", "日A z|AB  |9"),
+                ("", "Dim target() As Integer", "ReDim target(-2 To 0):target(-2)=99:target(-1)=99:target(0)=99", "Random Access Read", "010003000000FEFFFFFFF9FF00000D00", "CStr(target(-2)) & \"|\" & CStr(target(-1)) & \"|\" & CStr(target(0)) & \"|\" & CStr(Seek(1))", "-7|0|13|2"),
+                ("", "Dim target(0 To 1) As Variant", "target(0)=\"old\":target(1)=\"old\"", "Binary Access Read", "110001040000002040", "CStr(VarType(target(0))) & \"|\" & CStr(target(0)) & \"|\" & CStr(VarType(target(1))) & \"|\" & CStr(target(1)) & \"|\" & CStr(Seek(1))", "17|1|4|2.5|10"),
+                ("", "Dim target() As LongLong", "ReDim target(1 To 2):target(1)=99:target(2)=99", "Random Access Read", "01000200000001000000FFFFFFFFFFFFFF7FF9FFFFFFFFFFFFFF", "CStr(target(1)) & \"|\" & CStr(target(2)) & \"|\" & CStr(Seek(1))", "9223372036854775807|-7|2"),
+                ("Private Type Entry\nlabel As String * 4\ncount As Long\nnote As Variant\nEnd Type", "Dim target As Entry", "target.label=\"zzzz\":target.count=99:target.note=\"old\"", "Binary Access Read", "93FA4120020100000A00D7070A80", "target.label & \"|\" & CStr(target.count) & \"|\" & CStr(VarType(target.note)) & \"|\" & CStr(Seek(1))", "日A z|258|10|15"),
+                ("", "Dim target As String, raw(0 To 2) As Byte", "raw(0)=65:raw(2)=216:target=raw", "Binary Access Read", "41", "CStr(LenB(target)) & \"|\" & Hex$(AscB(MidB$(target,3,1))) & \"|\" & CStr(Seek(1))", "3|D8|2"),
+            ];
+            for (declarations, local, initialize, mode, hex, expression, expected) in cases {
+                let source=format!("{declarations}\nPublic Function Probe() As String\n{local}\n{initialize}\nOpen \"C:\\work\\state.bin\" For {mode} As #1\nGet #1,,target\nProbe={expression}\nClose #1\nEnd Function\n");
+                let module=crate::parse_module(&source).unwrap();
+                let mut host=JapaneseHost;
+                let mut runtime=Runtime::new(&module).with_host(&mut host);
+                let seed=hex.as_bytes().chunks_exact(2).map(|pair|u8::from_str_radix(std::str::from_utf8(pair).unwrap(),16).unwrap()).collect::<Vec<_>>();
+                runtime.file_system_mut().mount_folder("C:\\work").unwrap();
+                runtime.file_system_mut().replace_bytes("C:\\work\\state.bin",seed.clone()).unwrap();
+                assert_eq!(runtime.call("Probe",vec![]).unwrap(),Value::String(expected.into()),"{mode} {local}");
+                assert_eq!(runtime.file_system_mut().bytes("C:\\work\\state.bin").unwrap(),seed);
+            }
         }
 
         fn probe(declarations: &str, initialize: &str, mode: &str, transfer: &str) -> String {
@@ -30197,9 +30442,7 @@ fn read_input_field(field: &str) -> Value {
 
 /// Text as a file holds it: a byte a character, the ANSI way, `?` for what
 /// has no byte.
-fn ansi_text(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| char::from(*byte)).collect()
-}
+
 
 #[cfg(test)]
 mod date_boundary_native_regressions {

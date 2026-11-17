@@ -99,6 +99,8 @@ pub enum FileError {
     InvalidArgument = 5,
     /// 7, Out of memory.
     OutOfMemory = 7,
+    /// 13, Type mismatch in a file value.
+    TypeMismatch = 13,
     /// 52, Bad file name or number.
     BadNumber = 52,
     /// 53, File not found.
@@ -136,6 +138,7 @@ impl FileError {
         match self {
             FileError::InvalidArgument => "Invalid procedure call or argument",
             FileError::OutOfMemory => "Out of memory",
+            FileError::TypeMismatch => "Type mismatch",
             FileError::BadNumber => "Bad file name or number",
             FileError::NotFound => "File not found",
             FileError::BadMode => "Bad file mode",
@@ -1131,6 +1134,15 @@ impl Files {
         if let Some(handle) = self.open.get_mut(&channel_key(self.project_scope, number)).filter(|handle| handle.path == path) {
             handle.position = position;
             if let Some(cursor) = cursor { self.cursors.insert(channel_key(self.project_scope, number), cursor); }
+        }
+    }
+
+    pub(crate) fn restore_get_position(&mut self, number: i64, path: &str, position: usize, cursor: Option<FileCursor>) {
+        let key = channel_key(self.project_scope, number);
+        let eof = self.cursors.get(&key).map(|cursor| cursor.read_eof);
+        self.restore_byte_position(number, path, position, cursor);
+        if self.open.get(&key).is_some_and(|handle| handle.path == path) {
+            if let (Some(cursor), Some(eof)) = (self.cursors.get_mut(&key), eof) { cursor.read_eof = eof; }
         }
     }
 
