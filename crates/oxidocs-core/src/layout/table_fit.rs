@@ -9411,7 +9411,16 @@ impl<'a> TableFitLayouter<'a> {
                                                                 frag_spacing[i] += per;
                                                             }
                                                         }
-                                                    } else if has_cjk && slack_ratio > 0.10 {
+                                                    // OXI_CELL_CJK_SLACK (2026-11-18, default ON, opt-out _DISABLE):
+                                                    // a justified CJK cell line spreads ANY slack. The 10% floor's
+                                                    // evidence (b35 «法令の理解») is a paragraph with no jc -- left, so
+                                                    // Word never spreads it. `_pb_gridcell_just_gen.py` (linesAndChars
+                                                    // charSpace 6338, Normal Table): a 1.6%-slack cell line is
+                                                    // 12.192 apart (jc=both) vs 12.033 (left); ja/reports__136d1ce5 p3
+                                                    // 12.26 vs Oxi 12.047.
+                                                    } else if has_cjk && (slack_ratio > 0.10
+                                                        || (slack > 0.0 && !crate::env_flag!("OXI_CELL_CJK_SLACK_DISABLE")))
+                                                    {
                                                         let total_chars: usize = line.iter()
                                                 .map(|(text, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| text.chars().count())
                                                 .sum();
