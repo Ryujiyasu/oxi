@@ -12133,11 +12133,23 @@ impl<'a> Runtime<'a> {
                 None => Err(error(RuntimeErrorKind::ArgumentCount, format!("FileSystemObject.{name} wants an argument"), Some(line))),
             }
         };
-        let number_at = |index: usize, default: i64| -> i64 {
-            args.get(index)
-                .filter(|value| !matches!(value, Value::Missing | Value::Empty))
-                .and_then(|value| number(value).ok())
-                .map_or(default, |held| held as i64)
+        let number_at = |index: usize, default: i64| -> Result<i64, RuntimeError> {
+            match args.get(index) {
+                None | Some(Value::Missing) => Ok(default),
+                Some(Value::Null | Value::Error(_) | Value::Nothing) => {
+                    Err(language_error(13, "invalid Automation integer argument", line))
+                }
+                Some(value) => convert_integer(value, i64::from(i32::MIN), i64::from(i32::MAX), Some(line)),
+            }
+        };
+        let stream_flag_at = |index: usize, default: bool| -> Result<bool, RuntimeError> {
+            match args.get(index) {
+                None | Some(Value::Missing) => Ok(default),
+                Some(Value::Null | Value::Error(_) | Value::Nothing) => {
+                    Err(language_error(13, "invalid Automation Boolean argument", line))
+                }
+                Some(value) => truthy(value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line))),
+            }
         };
         let flag_at = |index: usize, default: bool| -> bool {
             args.get(index)
@@ -12271,24 +12283,30 @@ impl<'a> Runtime<'a> {
             }
             "createtextfile" => {
                 let path = text_at(0)?;
-                if !flag_at(1, true) && self.files.exists(&path) {
+                let overwrite = stream_flag_at(1, true)?;
+                let unicode = stream_flag_at(2, false)?;
+                if !overwrite && self.files.exists(&path) {
                     return Err(file_failure(crate::files::FileError::AlreadyExists, line));
                 }
                 let number = self.files.open_stream(&path, OpenMode::Output).map_err(failure)?;
-                stream(self, number, if flag_at(2, false) { -1 } else { 0 })?
+                stream(self, number, if unicode { -1 } else { 0 })?
             }
             "opentextfile" => {
                 let path = text_at(0)?;
-                let mode = match number_at(1, 1) {
+                let requested_mode = number_at(1, 1)?;
+                let create = stream_flag_at(2, false)?;
+                let format = number_at(3, 0)?;
+                let mode = match requested_mode {
+                    1 => OpenMode::Input,
                     2 => OpenMode::Output,
                     8 => OpenMode::Append,
-                    _ => OpenMode::Input,
+                    _ => return Err(language_error(5, "invalid TextStream IOMode", line)),
                 };
-                if mode == OpenMode::Input && !self.files.exists(&path) && flag_at(2, false) {
+                if mode == OpenMode::Input && !self.files.exists(&path) && create {
                     self.files.open_stream(&path, OpenMode::Output).map_err(failure).map(|number| self.files.close(&[number]))?;
                 }
                 let number = self.files.open_stream(&path, mode).map_err(failure)?;
-                stream(self, number, number_at(3, 0))?
+                stream(self, number, format)?
             }
             _ => {
                 return Err(no_such_member(format!("FileSystemObject has no member {name}"), Some(line)));
