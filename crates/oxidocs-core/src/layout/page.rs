@@ -11399,6 +11399,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                 // block, whose top the cursor has already left.
                 let mut prev_block_top = header_y;
                 let mut header_float_indices: Vec<(u32, usize)> = Vec::new();
+                // OXI_HDR_BEHIND_DOC (2026-11-17): element indices of header pictures
+                // anchored behindDoc -- painted under the body, not after it.
+                let mut hdr_behind_idx: Vec<usize> = Vec::new();
                 let header_text_flow = !self.doc_body_has_real_cjk
                     && crate::env_flag!("OXI_HEADER_TEXT_FLOW");
                 let mut previous_header_para: Option<&Paragraph> = None;
@@ -11612,6 +11615,9 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             if (std::env::var("OXI_HEADER_FLOAT_BANDS").ok().as_deref() == Some("1") || !crate::env_flag!("OXI_HEADER_FLOAT_BANDS_DISABLE")) {
                                 header_float_indices.push((img.relative_height, lp.elements.len()));
                             }
+                            if img.behind_doc {
+                                hdr_behind_idx.push(lp.elements.len());
+                            }
                             lp.elements.push(LayoutElement::new(
                                 paint_x,
                                 paint_y,
@@ -11692,6 +11698,24 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     .map(|(_, index)| lp.elements[*index].clone()).collect();
                 for (index, paint) in slots.into_iter().zip(paints) {
                     lp.elements[index] = paint;
+                }
+                // OXI_HDR_BEHIND_DOC: a behindDoc header picture is drawn under the page's
+                // text. blind-A ja/educational__05a78ecd: a full-page parchment background
+                // (header, behindDoc=1) was appended after the body and covered every line
+                // of the page in both renderers and the PDF.
+                if !hdr_behind_idx.is_empty() && !crate::env_flag!("OXI_HDR_BEHIND_DOC_DISABLE") {
+                    // the stacking-order shuffle above keeps the slot set; take the
+                    // pictures that now sit in those slots, in slot order
+                    hdr_behind_idx.sort_unstable();
+                    let behind_set: std::collections::HashSet<usize> = hdr_behind_idx.iter().copied().collect();
+                    let mut moved: Vec<LayoutElement> = Vec::new();
+                    let mut kept: Vec<LayoutElement> = Vec::with_capacity(lp.elements.len());
+                    for (i, e) in std::mem::take(&mut lp.elements).into_iter().enumerate() {
+                        if behind_set.contains(&i) { moved.push(e); } else { kept.push(e); }
+                    }
+                    let at = usize::from(page.watermark.is_some()).min(kept.len());
+                    kept.splice(at..at, moved);
+                    lp.elements = kept;
                 }
             }
             if !ftr_blocks.is_empty() {
