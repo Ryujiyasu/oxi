@@ -631,6 +631,7 @@ dependencies = [
  "serde-wasm-bindgen",
  "serde_json",
  "sha2",
+ "subsetter",
  "ttf-parser",
  "typed-arena",
  "uuid",
