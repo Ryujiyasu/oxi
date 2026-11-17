@@ -598,6 +598,8 @@ pub struct ForEachStmt {
     pub collection: Expr,
     pub body: Vec<Statement>,
     pub next_counter: Option<Expr>,
+    /// The shared terminator location for combined Next counters.
+    pub next_span: Span,
     pub span: Span,
 }
 
