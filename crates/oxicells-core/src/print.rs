@@ -144,6 +144,8 @@ struct Settings {
     center_y: bool,
     over: bool,
     grid: bool,
+    /// pageSetup blackAndWhite: fills left out, text and rules in black.
+    mono: bool,
     row_breaks: BTreeSet<u32>,
     col_breaks: BTreeSet<u32>,
     unsupported: BTreeSet<String>,
@@ -165,6 +167,7 @@ impl Default for Settings {
             center_y: false,
             over: false,
             grid: false,
+            mono: false,
             row_breaks: BTreeSet::new(),
             col_breaks: BTreeSet::new(),
             unsupported: BTreeSet::new(),
@@ -208,7 +211,8 @@ impl Settings {
                             s.fit_w = number(&a, "fitToWidth", 1.).clamp(0., 10000.) as usize;
                             s.fit_h = number(&a, "fitToHeight", 1.).clamp(0., 10000.) as usize;
                             s.over = a.get("pageOrder").is_some_and(|v| v == "overThenDown");
-                            if yes(&a, "blackAndWhite") || yes(&a, "draft") {
+                            s.mono = yes(&a, "blackAndWhite");
+                            if yes(&a, "draft") {
                                 s.unsupported.insert("print-color-mode".into());
                             }
                             if a.get("cellComments").is_some_and(|v| v != "none") {
@@ -401,6 +405,66 @@ fn line(canvas: &mut impl PrintCanvas, x: f64, y: f64, x2: f64, y2: f64, width: 
         fill: None,
     }));
 }
+/// A cell border as Excel prints its style: the width, a dash pattern drawn
+/// as separate segments (in pixels at 96 dpi, as Excel defines them), or two
+/// parallel lines for "double".
+fn rule(canvas: &mut impl PrintCanvas, from: (f64, f64), to: (f64, f64), style: &str, scale: f64, color: Color) {
+    let px = 0.75 * scale;
+    let width = match style {
+        "medium" | "mediumDashed" | "mediumDashDot" | "mediumDashDotDot" | "slantDashDot" => 1.5,
+        "thick" => 2.25,
+        "hair" => 0.25,
+        _ => 0.75,
+    } * scale;
+    let pattern: &[f64] = match style {
+        "dotted" => &[1., 1.],
+        "hair" => &[1., 1.],
+        "dashed" => &[3., 1.],
+        "mediumDashed" => &[9., 3.],
+        "dashDot" | "mediumDashDot" | "slantDashDot" => &[9., 3., 3., 3.],
+        "dashDotDot" | "mediumDashDotDot" => &[9., 3., 3., 3., 3., 3.],
+        _ => &[],
+    };
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let length = (dx * dx + dy * dy).sqrt();
+    if length <= 0. {
+        return;
+    }
+    let (ux, uy) = (dx / length, dy / length);
+    let stroke = |operations: Vec<PathOp>, width: f64| ContentElement::Path(PathData {
+        operations,
+        stroke: Some(StrokeStyle { color, width, line_cap: LineCap::Butt, line_join: LineJoin::Miter }),
+        fill: None,
+    });
+    if style == "double" {
+        // Two thin rules a pixel and a half to either side of the edge.
+        let (nx, ny) = (-uy * 1.5 * px, ux * 1.5 * px);
+        let mut operations = Vec::new();
+        for side in [-1., 1.] {
+            operations.push(PathOp::MoveTo(from.0 + nx * side, from.1 + ny * side));
+            operations.push(PathOp::LineTo(to.0 + nx * side, to.1 + ny * side));
+        }
+        canvas.element(stroke(operations, 0.5 * scale));
+        return;
+    }
+    if pattern.is_empty() {
+        canvas.element(stroke(vec![PathOp::MoveTo(from.0, from.1), PathOp::LineTo(to.0, to.1)], width));
+        return;
+    }
+    let mut operations = Vec::new();
+    let (mut at, mut i) = (0., 0);
+    while at < length {
+        let run = pattern[i % pattern.len()] * px;
+        if i % 2 == 0 {
+            let end = (at + run).min(length);
+            operations.push(PathOp::MoveTo(from.0 + ux * at, from.1 + uy * at));
+            operations.push(PathOp::LineTo(from.0 + ux * end, from.1 + uy * end));
+        }
+        at += run;
+        i += 1;
+    }
+    canvas.element(stroke(operations, width));
+}
 fn text(value: &CellValue, style: &CellStyle) -> String {
     match value {
         CellValue::Empty => String::new(),
@@ -424,8 +488,12 @@ fn cell(
     scale: f64,
     grid: bool,
     spill: (f64, f64),
+    mono: bool,
 ) {
-    if let Some(bg) = style.bg_color.as_deref() {
+    // Printed in black and white, Excel leaves fills out and draws text and
+    // rules in black.
+    let ink = |color: Option<&str>| if mono { Color::Gray(0.) } else { rgb(color, Color::Gray(0.)) };
+    if let Some(bg) = style.bg_color.as_deref().filter(|_| !mono) {
         canvas.element(ContentElement::Path(PathData {
             operations: rectangle(x, y, w, h),
             stroke: None,
@@ -440,21 +508,7 @@ fn cell(
     ];
     for (border, x, y, x2, y2) in edges {
         if let Some(border) = border {
-            let width = match border.style.as_str() {
-                "medium" => 1.5,
-                "thick" => 2.25,
-                "hair" => 0.25,
-                _ => 0.75,
-            };
-            line(
-                canvas,
-                x,
-                y,
-                x2,
-                y2,
-                width * scale,
-                rgb(border.color.as_deref(), Color::Gray(0.)),
-            );
+            rule(canvas, (x, y), (x2, y2), &border.style, scale, ink(border.color.as_deref()));
         } else if grid {
             line(canvas, x, y, x2, y2, 0.25 * scale, Color::Gray(0.7));
         }
@@ -530,17 +584,26 @@ fn cell(
             _ => x + 2. * scale + f64::from(style.indent) * size,
         };
         let baseline = top + size + i as f64 * line_h;
-        let color = rgb(style.font_color.as_deref(), Color::Gray(0.));
-        canvas.text(
-            text,
-            family,
-            size,
-            style.bold,
-            style.italic,
-            at,
-            baseline,
-            color,
-        );
+        let color = ink(style.font_color.as_deref());
+        // 均等割り付け: the characters spread over the cell's width with equal
+        // gaps, half a gap before the first and after the last, as Excel
+        // prints it; a single character sits in the middle.
+        let chars: Vec<char> = text.chars().collect();
+        let room = w - 4. * scale - 2. * f64::from(style.indent) * size;
+        let (at, width) = if align == "distributed" && chars.len() > 1 && width < room {
+            let gap = (room - width) / chars.len() as f64;
+            let mut pen = x + 2. * scale + f64::from(style.indent) * size + gap / 2.;
+            for ch in &chars {
+                let one = ch.to_string();
+                canvas.text(&one, family, size, style.bold, style.italic, pen, baseline, color);
+                pen += canvas.width(&one, family, size, style.bold, style.italic) + gap;
+            }
+            (x + 2. * scale + f64::from(style.indent) * size, room)
+        } else {
+            let at = if align == "distributed" { x + (w - width) / 2. } else { at };
+            canvas.text(text, family, size, style.bold, style.italic, at, baseline, color);
+            (at, width)
+        };
         if style.underline {
             line(
                 canvas,
@@ -638,7 +701,12 @@ pub fn pages(data: &[u8], canvas: &mut impl PrintCanvas) -> Result<Vec<Unsupport
                 .into_iter()
                 .flatten()
                 {
-                    if !matches!(border.style.as_str(), "thin" | "medium" | "thick" | "hair") {
+                    if !matches!(
+                        border.style.as_str(),
+                        "thin" | "medium" | "thick" | "hair" | "dotted" | "dashed" | "double"
+                            | "mediumDashed" | "dashDot" | "mediumDashDot" | "dashDotDot"
+                            | "mediumDashDotDot" | "slantDashDot"
+                    ) {
                         kinds.insert("complex-cell-border".into());
                     }
                 }
@@ -655,7 +723,7 @@ pub fn pages(data: &[u8], canvas: &mut impl PrintCanvas) -> Result<Vec<Unsupport
                 if c.style
                     .horizontal_align
                     .as_deref()
-                    .is_some_and(|v| matches!(v, "distributed" | "justify" | "fill"))
+                    .is_some_and(|v| matches!(v, "justify" | "fill"))
                 {
                     kinds.insert("complex-cell-alignment".into());
                 }
@@ -950,6 +1018,7 @@ fn render_area(
                     scale,
                     s.grid,
                     spill,
+                    s.mono,
                 );
             }
         }
