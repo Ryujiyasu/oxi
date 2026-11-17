@@ -2,6 +2,7 @@ mod font_program;
 mod model_map;
 mod runtime_fonts;
 mod font_catalog_api;
+mod field_boxes;
 #[cfg(feature = "suite")]
 mod xlsx_pdf;
 pub use font_catalog_api::{font_catalog_missing, font_catalog_register};
