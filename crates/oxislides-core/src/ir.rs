@@ -1177,6 +1177,12 @@ pub struct SlideRun {
     /// already reduced to 2/3 (see `parser::superscript_size`).
     #[serde(default)]
     pub baseline_shift: Option<f32>,
+    /// `a:rPr/@baseline` as a fraction (30000 -> 0.3), kept ONLY for a run
+    /// that states no size of its own: its 2/3 size and shift depend on the
+    /// size it inherits, which the parser does not know. A consumer resolves
+    /// the inherited size and sets `font_size` / `baseline_shift` from it.
+    #[serde(default)]
+    pub baseline_pct: Option<f32>,
 }
 
 static BZERO_OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

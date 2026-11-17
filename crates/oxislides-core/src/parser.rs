@@ -167,6 +167,17 @@ fn superscript_size(size: Option<f32>, baseline: Option<f32>) -> Option<f32> {
         _ => size,
     }
 }
+/// The raw `@baseline` of a run with no size of its own (see
+/// `SlideRun::baseline_pct`). 252cbc8c s27's "※1" / "※2" are `baseline=30000`
+/// runs inheriting the 16pt level size, and were drawn full size on the line.
+fn superscript_pct(size: Option<f32>, baseline: Option<f32>) -> Option<f32> {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let on = *ON.get_or_init(|| std::env::var("OXI_UNSIZEDSUP_DISABLE").is_err());
+    match (size, baseline) {
+        (None, Some(b)) if on && superscript_on() && b != 0.0 => Some(b),
+        _ => None,
+    }
+}
 fn superscript_shift(size: Option<f32>, baseline: Option<f32>) -> Option<f32> {
     match (size, baseline) {
         (Some(s), Some(b)) if superscript_on() => Some(b * s),
@@ -1588,6 +1599,19 @@ fn parse_slide(
     // slide 38's "and many more..." is white on dk1 and Oxi drew it dk1 on
     // nothing.
     let s_softbreak = std::env::var("OXI_SOFTBREAK_DISABLE").is_err();
+    // A soft break's OWN `a:rPr` sizes the break (and so the line a run of
+    // breaks leaves empty). It is a child of `a:br`, read after the Start
+    // event, and only an `a:r`'s rPr was read -- so a break took the size of
+    // the run before it. abde73e7 s1's title sets two `sz=1400` breaks after
+    // 36pt text, and the empty line between stood 36pt: the title sat 24pt
+    // too high under its bottom anchor (PowerPoint PDF: 182.5 -> 224.5 across
+    // the empty 14pt line; Oxi stepped a 36pt one). OXI_BRRPR_DISABLE.
+    let s_brrpr = std::env::var("OXI_BRRPR_DISABLE").is_err();
+    let s_lndefw = std::env::var("OXI_LNDEFW_DISABLE").is_err();
+    let mut ln_w_stated = false;
+    let mut ln_color_before = false;
+    let mut in_br = false;
+    let mut br_size: Option<f32> = None;
     let mut in_highlight = false;
     let mut run_highlight: Option<String> = None;
     let mut run_font_family: Option<String> = None;
@@ -1600,6 +1624,13 @@ fn parse_slide(
     // Table state (a:graphicFrame -> a:tbl)
     let mut in_graphic_frame = false;
     let mut in_table = false;
+    // Inside <a:tblPr>. A table carries its drop shadow there
+    // (`a:tblPr/a:effectLst/a:outerShdw`), not in a p:spPr it does not have:
+    // 252cbc8c s96's six category tables each cast a 3pt 40% black shadow
+    // that PowerPoint draws and Oxi dropped. OXI_TBLSHDW_DISABLE=1 drops it.
+    let mut in_tbl_pr = false;
+    let s_tblshdw = std::env::var("OXI_TBLSHDW_DISABLE").is_err();
+    let s_tblbg = std::env::var("OXI_TBLBG_DISABLE").is_err();
     let mut tbl_col_widths: Vec<f32> = Vec::new();
     let mut tbl_row_heights: Vec<f32> = Vec::new();
     let mut tbl_rows: Vec<Vec<TableCell>> = Vec::new();
@@ -1985,7 +2016,10 @@ fn parse_slide(
                     // a:gradFill on the SHAPE (not the background, not inside
                     // a:ln). Same ramp model as the slide background, which is
                     // already derived; only the paint area differs.
-                    "gradFill" if in_sp_pr && !in_ln && s_shapegrad => {
+                    // S-TBLBG: a table's own background (`a:tblPr/a:gradFill`)
+                    // paints under its cells -- 640d s106's banded rows let
+                    // it show through, and over the table shadow.
+                    "gradFill" if ((in_sp_pr && !in_ln) || (in_tbl_pr && s_tblbg)) && s_shapegrad => {
                         sg_in = true;
                         sg_stops.clear();
                         sg_angle = None;
@@ -2119,7 +2153,10 @@ fn parse_slide(
                     "effectLst" => {
                         in_effect_lst = true;
                     }
-                    "outerShdw" if in_sp_pr && in_effect_lst => {
+                    "tblPr" if in_table && (s_tblshdw || s_tblbg) => {
+                        in_tbl_pr = true;
+                    }
+                    "outerShdw" if (in_sp_pr || (in_tbl_pr && s_tblshdw)) && in_effect_lst => {
                         in_outer_shdw = true;
                         let emu = |name: &str| {
                             get_attr(&e, name)
@@ -2133,6 +2170,8 @@ fn parse_slide(
                     }
                     "ln" if in_sp_pr => {
                         in_ln = true;
+                        ln_w_stated = get_attr(&e, "w").is_some();
+                        ln_color_before = shape_border_color.is_some();
                         shape_border_dash = None;
                         shape_head_end = None;
                         shape_tail_end = None;
@@ -2460,6 +2499,9 @@ fn parse_slide(
                     "hlinkClr" if in_run => {
                         run_hlink_tx = get_attr(&e, "val").as_deref() == Some("tx");
                     }
+                    "rPr" if in_br => {
+                        br_size = get_attr(&e, "sz").and_then(|v| v.parse::<f32>().ok()).map(|v| v / 100.0);
+                    }
                     "rPr" if in_run => {
                         for k in ["lang", "altLang"] {
                             if get_attr(&e, k).is_some_and(|v| {
@@ -2560,6 +2602,10 @@ fn parse_slide(
                     // instructions are one paragraph with three of them, and
                     // ignoring them ran "quality." into "How?" with no space.
                     // 76 across 11 dev decks.
+                    "br" if in_paragraph && s_softbreak && s_brrpr => {
+                        in_br = true;
+                        br_size = None;
+                    }
                     "br" if in_paragraph && s_softbreak => {
                         para_runs.push(SlideRun {
                             text: "
@@ -2575,6 +2621,7 @@ fn parse_slide(
                             spacing: run_spacing,
                             kern: run_kern,
                             baseline_shift: superscript_shift(run_font_size, run_baseline),
+                            baseline_pct: superscript_pct(run_font_size, run_baseline),
                         });
                     }
                     "t" if in_run => {
@@ -2601,7 +2648,7 @@ fn parse_slide(
                     // attributes); the schema's default colour is black. The
                     // Start-arm handler never sees it, so it completes here in
                     // one step.
-                    "outerShdw" if in_sp_pr && in_effect_lst => {
+                    "outerShdw" if (in_sp_pr || (in_tbl_pr && s_tblshdw)) && in_effect_lst => {
                         let emu = |name: &str| {
                             get_attr(&e, name)
                                 .and_then(|v| v.parse::<f32>().ok())
@@ -2685,6 +2732,7 @@ fn parse_slide(
                                 spacing: run_spacing,
                                 kern: run_kern,
                             baseline_shift: superscript_shift(run_font_size, run_baseline),
+                            baseline_pct: superscript_pct(run_font_size, run_baseline),
                             });
                         }
                     }
@@ -2712,6 +2760,7 @@ fn parse_slide(
                             spacing: run_spacing,
                             kern: run_kern,
                             baseline_shift: superscript_shift(run_font_size, run_baseline),
+                            baseline_pct: superscript_pct(run_font_size, run_baseline),
                         });
                     }
                     // `<a:endParaRPr sz="1400"/>` normally has no children, so it
@@ -3090,6 +3139,9 @@ fn parse_slide(
                     "hlinkClr" if in_run => {
                         run_hlink_tx = get_attr(&e, "val").as_deref() == Some("tx");
                     }
+                    "rPr" if in_br => {
+                        br_size = get_attr(&e, "sz").and_then(|v| v.parse::<f32>().ok()).map(|v| v / 100.0);
+                    }
                     "rPr" if in_run => {
                         for k in ["lang", "altLang"] {
                             if get_attr(&e, k).is_some_and(|v| {
@@ -3399,9 +3451,26 @@ fn parse_slide(
                     }
                     "ln" if in_ln => {
                         in_ln = false;
+                        // An outline that names a colour but no @w is 0.75pt
+                        // (probe lnnow: rect and picture, no p:style, COM
+                        // Line.Weight 0.75 and PDF stroke 0.75 -- the same as
+                        // w=9525). abde73e7 s1's QR code is framed that way;
+                        // Oxi read no width and drew no frame. A style's
+                        // width arrives as @w (normalize merges lnRef).
+                        if s_lndefw
+                            && !ln_w_stated
+                            && shape_border_width.is_none()
+                            && !ln_color_before
+                            && shape_border_color.is_some()
+                        {
+                            shape_border_width = Some(0.75);
+                        }
                     }
                     "effectLst" if in_effect_lst => {
                         in_effect_lst = false;
+                    }
+                    "tblPr" if in_tbl_pr => {
+                        in_tbl_pr = false;
                     }
                     "outerShdw" if in_outer_shdw => {
                         in_outer_shdw = false;
@@ -3924,7 +3993,18 @@ fn parse_slide(
                             shape_type: shape_prst.take(),
                             adjustments: std::mem::take(&mut shape_adjustments),
                             ph_type: None,
-                            gradient: None,
+                            gradient: if sg_stops.len() >= 2 && s_tblbg {
+                                Some(SlideGradient {
+                                    stops: std::mem::take(&mut sg_stops),
+                                    angle_deg: sg_angle,
+                                    scaled: sg_scaled,
+                                    focus: sg_focus,
+                                    rot_with_shape: sg_rot_with_shape,
+                                })
+                            } else {
+                                sg_stops.clear();
+                                None
+                            },
                             ph_levels: Vec::new(),
                             content,
                             fill_color: shape_fill_color.take(),
@@ -3961,6 +4041,43 @@ fn parse_slide(
                             ),
                             shadow: shape_shadow.take(),
                             norm_autofit: None,
+                        });
+                    }
+                    "br" if in_br => {
+                        in_br = false;
+                        // S-BRRPR (gen_pptx_brsz): a br that ends a line
+                        // holding text adds nothing to that line (40pt and 8pt
+                        // breaks after 14pt text both give a 16.8pt pitch), so
+                        // it keeps the run before it; a br alone on its line
+                        // sets that line at its own sz, and at the inherited
+                        // size when it states none (18pt, not the run before).
+                        let after_text = para_runs.last().map_or(false, |r| r.text != "\n");
+                        let br_own = br_size.take();
+                        let br_own = if after_text { None } else { br_own };
+                        para_runs.push(SlideRun {
+                            text: "
+".to_string(),
+                            // An a:br whose rPr states no sz ends its line at
+                            // the size of the run before it, not the inherited
+                            // list size (SlidesCarnival team slides: 12pt name,
+                            // unsized br, 8pt title -- PowerPoint keeps the
+                            // 12pt line).
+                            font_size: if after_text {
+                                superscript_size(run_font_size, run_baseline)
+                            } else {
+                                br_own
+                            },
+                            bold: None,
+                            italic: false,
+                            underline: false,
+                            color: None,
+                            color_alpha: None,
+                            highlight: None,
+                            font_family: run_font_family.clone(),
+                            spacing: run_spacing,
+                            kern: run_kern,
+                            baseline_shift: if after_text { superscript_shift(run_font_size, run_baseline) } else { None },
+                            baseline_pct: if after_text { superscript_pct(run_font_size, run_baseline) } else { None },
                         });
                     }
                     "r" | "fld" if in_run => {
@@ -4007,6 +4124,7 @@ fn parse_slide(
                                 spacing: run_spacing,
                                 kern: run_kern,
                             baseline_shift: superscript_shift(run_font_size, run_baseline),
+                            baseline_pct: superscript_pct(run_font_size, run_baseline),
                             });
                             let (lf, ef) = (run_latin_face.take(), run_ea_face.take());
                             if let Some(last) = para_runs.pop() {
@@ -6870,6 +6988,51 @@ fn scheme_color_to_hex(scheme: &str) -> String {
 /// shape's placeholder chain over the master txStyles list for its kind), else
 /// 18pt -- and written back as the run's explicit size, so no consumer has to
 /// know about the shrink. `OXI_AUTOFIT_DISABLE` leaves the text unshrunk.
+/// Size and raise the superscript / subscript runs that state no size.
+///
+/// The parser sets a raised run at 2/3 of its size and lifts it by
+/// `baseline * size` (`superscript_size` / `superscript_shift`), but a run
+/// that INHERITS its size kept only the raw fraction (`baseline_pct`).
+/// Resolved here from the level the run inherits from -- the shape's own
+/// placeholder levels over the master's -- before normAutofit scales it.
+/// 252cbc8c s27's "※1" / "※2" (baseline=30000, no sz, 16pt level) were
+/// drawn full size on the line; PowerPoint draws them small and raised.
+fn apply_unsized_superscript(pres: &mut Presentation) {
+    let styles = pres.master_styles.clone();
+    for slide in &mut pres.slides {
+        for sh in &mut slide.shapes {
+            let master: &[MasterStyleLevel] = match sh.ph_type.as_deref() {
+                Some("title") | Some("ctrTitle") => &styles.title,
+                Some("dt") | Some("ftr") | Some("sldNum") | Some("hdr") if !styles.footer.is_empty() => {
+                    &styles.footer
+                }
+                Some(_) => &styles.body,
+                None => &styles.other,
+            };
+            let ph_levels = sh.ph_levels.clone();
+            let paragraphs = match &mut sh.content {
+                ShapeContent::TextBox { paragraphs } | ShapeContent::AutoShape { paragraphs } => {
+                    paragraphs
+                }
+                _ => continue,
+            };
+            for para in paragraphs.iter_mut() {
+                if !para.runs.iter().any(|r| r.baseline_pct.is_some()) {
+                    continue;
+                }
+                let m = crate::layout::resolve_level(master, &ph_levels, para.lvl);
+                let base = m.font_size.unwrap_or(18.0);
+                for run in para.runs.iter_mut() {
+                    if let (None, Some(b)) = (run.font_size, run.baseline_pct.take()) {
+                        run.font_size = Some(base * 2.0 / 3.0);
+                        run.baseline_shift = Some(b * base);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn apply_norm_autofit(pres: &mut Presentation) {
     if std::env::var("OXI_AUTOFIT_DISABLE").is_ok() {
         return;
@@ -7049,6 +7212,7 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
         embedded_fonts,
         default_hanging_punct: parse_default_hanging_punct(&pres_xml),
     };
+    apply_unsized_superscript(&mut pres);
     apply_norm_autofit(&mut pres);
     Ok(pres)
 }

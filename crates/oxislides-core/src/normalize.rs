@@ -245,6 +245,8 @@ pub(crate) struct ThemeInfo {
     pub fill_styles: Vec<Elem>,
     pub ln_styles: Vec<Elem>,
     pub bg_fill_styles: Vec<Elem>,
+    /// `a:effectStyleLst/a:effectStyle`, in order (effectRef idx 1..).
+    pub effect_styles: Vec<Elem>,
     /// (latin, ea, cs) of majorFont / minorFont
     pub major: (String, String, String),
     pub minor: (String, String, String),
@@ -291,6 +293,7 @@ pub(crate) fn parse_theme_info(xml: &str) -> Option<ThemeInfo> {
     t.fill_styles = list("fillStyleLst");
     t.ln_styles = list("lnStyleLst");
     t.bg_fill_styles = list("bgFillStyleLst");
+    t.effect_styles = list("effectStyleLst");
     let fonts = |name: &str| -> (String, String, String) {
         let f = find_desc(&dom, name);
         let face = |s: &str| {
@@ -777,6 +780,7 @@ fn apply_shape_style(shape: &mut Elem, cx: &ColorCtx) {
     };
     let fill_ref = idx("fillRef");
     let ln_ref = idx("lnRef");
+    let effect_ref = idx("effectRef");
     let font_ref = style.child("fontRef").cloned();
 
     if let Some(sp_pr) = shape.child_mut("spPr") {
@@ -811,6 +815,30 @@ fn apply_shape_style(shape: &mut Elem, cx: &ColorCtx) {
                                 &["effectLst", "effectDag", "scene3d", "sp3d", "extLst"],
                             );
                         }
+                    }
+                }
+            }
+        }
+        // Effects. `effectRef idx=N` (N >= 1) names the theme's Nth
+        // effectStyle; its effectLst applies where spPr states none.
+        // 252cbc8c s92's callouts say effectRef idx=1 over a theme whose first
+        // effectStyle is a 4pt-blur 3pt-down 35% black outerShdw, and
+        // PowerPoint draws that shadow under each; Oxi read no effect at all.
+        // OXI_EFFECTREF_DISABLE.
+        if std::env::var("OXI_EFFECTREF_DISABLE").is_err()
+            && !sp_pr.has_child_in(&["effectLst", "effectDag"])
+        {
+            if let Some((i, rc)) = &effect_ref {
+                if let Some(lst) = (*i >= 1)
+                    .then(|| cx.theme.effect_styles.get(*i as usize - 1))
+                    .flatten()
+                    .and_then(|st| st.child("effectLst"))
+                    .filter(|l| l.child_elems().next().is_some())
+                {
+                    let mut v = vec![Node::Elem(lst.clone())];
+                    bind_ph_clr(&mut v, rc.as_ref());
+                    if let Some(Node::Elem(e)) = v.pop() {
+                        sp_pr.insert_before(Node::Elem(e), &["scene3d", "sp3d", "extLst"]);
                     }
                 }
             }

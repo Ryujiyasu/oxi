@@ -528,6 +528,7 @@ mod wrap_tests {
             spacing: None,
             kern: None,
             baseline_shift: None,
+            baseline_pct: None,
         }
     }
 
@@ -1001,6 +1002,7 @@ mod paragraph_tests {
             spacing: None,
             kern: None,
             baseline_shift: None,
+            baseline_pct: None,
         }
     }
 
@@ -1466,12 +1468,19 @@ pub fn paragraph_font_size(
     // collapsed). OXI_RUNINHFS_DISABLE counts only the stated sizes.
     static INH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let inh = *INH.get_or_init(|| std::env::var("OXI_RUNINHFS_DISABLE").is_err());
+    // With nothing to inherit, an unsized run is PowerPoint's 18pt -- not
+    // absent: 252cbc8c's defaultTextStyle names no size, and s65's paragraph
+    // opens with a raised (2/3-size) run before its unsized text, which then
+    // took the raised run's 12pt. OXI_RUNINH18_DISABLE skips it.
+    static INH18: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let inh18 = *INH18.get_or_init(|| std::env::var("OXI_RUNINH18_DISABLE").is_err());
+    let inherited_run = if inh18 { inherited.or(Some(18.0)) } else { inherited };
     let explicit = para
         .runs
         .iter()
         .filter_map(|r| {
             if inh && !r.text.is_empty() {
-                r.font_size.or(inherited)
+                r.font_size.or(inherited_run)
             } else {
                 r.font_size
             }
@@ -1640,6 +1649,7 @@ mod size_tests {
             spacing: None,
             kern: None,
             baseline_shift: None,
+            baseline_pct: None,
         }
     }
 
@@ -2487,6 +2497,7 @@ mod shape_tests {
             spacing: None,
             kern: None,
             baseline_shift: None,
+            baseline_pct: None,
         }
     }
 

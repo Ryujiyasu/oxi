@@ -2502,7 +2502,16 @@ unsafe fn draw_preset_shape_gdi(dc: windows::Win32::Graphics::Gdi::HDC, sh: &Sha
         if let Some(brush) = fill_brush { let _ = DeleteObject(brush); }
         return false;
     }
-    let _ = StrokeAndFillPath(dc);
+    // StrokeAndFillPath CLOSES every open figure before stroking, so an open
+    // preset (leftBrace / rightBrace) gained a rule down its open side:
+    // 252cbc8c s92's 2.25pt brace drew as a box. With nothing to fill, a
+    // stroke alone is the same ink for closed figures and keeps open ones
+    // open.
+    if fill_brush.is_none() && openstroke_on() {
+        let _ = StrokePath(dc);
+    } else {
+        let _ = StrokeAndFillPath(dc);
+    }
     // `can` / `flowChartMagneticDisk` paint the lid as a second, LIGHTENED
     // ellipse (`path fill="lighten"`) and stroke its front edge.
     if preset2_on() && matches!(sh.shape_type.as_deref(), Some("can") | Some("flowChartMagneticDisk")) {
@@ -5676,6 +5685,12 @@ fn cellwrappt_on() -> bool {
     std::env::var("OXI_CELLWRAPPT_DISABLE").is_err()
 }
 
+/// A column-span continuation cell (hMerge) is left out of its row's height
+/// unless this is set.
+fn hmergeh_on() -> bool {
+    std::env::var("OXI_HMERGEH_DISABLE").is_err()
+}
+
 /// An empty paragraph is sized by its paragraph mark unless this is set,
 /// which restores the pre-S-EMPTYPARA fallback to the inherited level default.
 fn emptypara_on() -> bool {
@@ -6777,8 +6792,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                             // The MASTER text style's level colour comes last:
                             // 640d6e4e's titleStyle says `bg1` (white) and the
                             // layout title only names the face.
+                            // A PLAIN box's level is `p:defaultTextStyle`
+                            // (already through the master's clrMap). 252cbc8c
+                            // maps tx1 -> lt1, so its uncoloured box text is
+                            // WHITE -- s102's "（G空間情報センターへの登録の
+                            // メリット）" banner, which Oxi drew black on blue.
                             let lvl_m_color = m
-                                .filter(|_| sh.ph_type.is_some())
+                                .filter(|_| sh.ph_type.is_some() || plaincolor_on())
                                 .and_then(|mm| mm.color.clone())
                                 .filter(|_| std::env::var("OXI_TXCOLORDRAW_DISABLE").is_err());
                             let color = p
@@ -7175,6 +7195,19 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                     // A cell spanning rows (or continuing one)
                                     // does not size the row it starts in.
                                     if vmerge_on() && (cell.row_span > 1 || cell.v_merge) {
+                                        continue;
+                                    }
+                                    // A column-span continuation (hMerge) is
+                                    // inside the cell to its left and sizes
+                                    // nothing either. Probe hmergeh
+                                    // (gen_pptx_hmergeh.py): a continuation
+                                    // holding an empty 12/24/40pt paragraph or
+                                    // 40pt text leaves a 10pt row at 19.20pt,
+                                    // while the same 12pt paragraph in a plain
+                                    // cell grows it to 21.60. 252cbc8c s96's
+                                    // category headers (gridSpan 2 over an
+                                    // sz=1200 continuation) stood 2.4pt tall.
+                                    if hmergeh_on() && cell.h_merge {
                                         continue;
                                     }
                                     let mut text = 0.0f32;
@@ -15120,21 +15153,42 @@ unsafe fn paint_shape_gradient(
     // Clip first (the region is captured in device space), then shift the
     // origin so the background painter's 0..w,0..h maps onto the shape box.
     let clipped = clip_to_geometry_gdi(dc, sh, scale);
+    let (mut gx, mut gy, mut w, mut h) = ((ox * scale).round() as i32, (oy * scale).round() as i32, w, h);
+    // ★S-TAILGRAD: a preset whose PATH reaches outside the shape box (a
+    // callout's tail) takes its gradient over the path's bounds, not the
+    // box. Probe tailgrad (gen_pptx_tailgrad.py, black->white lin 0/45/90
+    // on wedgeRectCallouts with the tail pushed down / right / both): the
+    // ramp ends at the tail's tip, the box itself stops short of white
+    // (lin 90 with the tail 1.5h below: box bottom grey 182, tail tip
+    // white), and lin 0 with the tail straight down leaves the box's
+    // horizontal ramp untouched. Painting the box only left 252cbc8c s92's
+    // three tails unfilled. Unrotated presets only -- the clip box of a
+    // rotated or custGeom path is not what this probe measured.
+    if clipped
+        && tailgrad_on()
+        && sh.rotation == 0.0
+        && drawable_geometry(sh).is_none()
+    {
+        let mut rc = windows::Win32::Foundation::RECT::default();
+        if GetClipBox(dc, &mut rc) != GDI_REGION_TYPE(0)
+            && (rc.left < gx - 1 || rc.top < gy - 1 || rc.right > gx + w + 1 || rc.bottom > gy + h + 1)
+        {
+            let (l, t) = (rc.left.min(gx), rc.top.min(gy));
+            let (r, b) = (rc.right.max(gx + w), rc.bottom.max(gy + h));
+            gx = l;
+            gy = t;
+            w = r - l;
+            h = b - t;
+        }
+    }
     let mut clip_rgn = None;
     if !clipped {
-        let x = (ox * scale).round() as i32;
-        let y = (oy * scale).round() as i32;
-        let rgn = CreateRectRgn(x, y, x + w, y + h);
+        let rgn = CreateRectRgn(gx, gy, gx + w, gy + h);
         let _ = SelectClipRgn(dc, rgn);
         clip_rgn = Some(rgn);
     }
     let mut old_org = windows::Win32::Foundation::POINT::default();
-    let _ = SetViewportOrgEx(
-        dc,
-        (ox * scale).round() as i32,
-        (oy * scale).round() as i32,
-        Some(&mut old_org),
-    );
+    let _ = SetViewportOrgEx(dc, gx, gy, Some(&mut old_org));
     paint_bg_gradient(dc, w, h, turned.as_ref().unwrap_or(g));
     let _ = SetViewportOrgEx(dc, old_org.x, old_org.y, None);
     let _ = SelectClipRgn(dc, None);
@@ -15201,6 +15255,22 @@ fn gradstroke_on() -> bool {
 
 /// A preset shape hands a gradient-only fill to the ramp painter unless this
 /// is set.
+fn openstroke_on() -> bool {
+    std::env::var("OXI_OPENSTROKE_DISABLE").is_err()
+}
+
+fn plaincolor_on() -> bool {
+    std::env::var("OXI_PLAINCOLOR_DISABLE").is_err()
+}
+
+fn runinh18_on() -> bool {
+    std::env::var("OXI_RUNINH18_DISABLE").is_err()
+}
+
+fn tailgrad_on() -> bool {
+    std::env::var("OXI_TAILGRAD_DISABLE").is_err()
+}
+
 fn presetgrad_on() -> bool {
     std::env::var("OXI_PRESETGRAD_DISABLE").is_err()
 }
@@ -20198,7 +20268,10 @@ fn layout_paragraph_baselines(
                 if seen < at + len && at < seen + run_len {
                     // A run with no sz is set at the level's size and counts
                     // (252cbc8c slide 2: 16pt text beside an 11pt run).
-                    let inherited = if runinhfs_on() && run_len > 0 { m.font_size } else { None };
+                    // Nothing to inherit = PowerPoint's 18pt (see
+                    // `layout::paragraph_font_size`, OXI_RUNINH18_DISABLE).
+                    let lvl = if runinh18_on() { m.font_size.or(Some(18.0)) } else { m.font_size };
+                    let inherited = if runinhfs_on() && run_len > 0 { lvl } else { None };
                     if let Some(size) = run.font_size.or(inherited) {
                         best = Some(best.map_or(size, |b: f32| b.max(size)));
                     }
