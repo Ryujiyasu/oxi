@@ -40,6 +40,13 @@ mod tests {
     use super::*;
     use std::io::{Cursor, Write};
     fn package(sheets: &[(&str, &str, &str)], names: &str) -> Vec<u8> {
+        package_with_styles(
+            sheets,
+            names,
+            r#"<styleSheet><fonts count="1"><font><sz val="11"/><name val="Arial"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellXfs count="2"><xf fontId="0" fillId="0" borderId="0" numFmtId="0"/><xf fontId="0" fillId="0" borderId="0" numFmtId="4"/></cellXfs></styleSheet>"#,
+        )
+    }
+    fn package_with_styles(sheets: &[(&str, &str, &str)], names: &str, styles: &str) -> Vec<u8> {
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let mut part = |name: &str, value: &str| {
             zip.start_file(name, zip::write::SimpleFileOptions::default())
@@ -64,10 +71,7 @@ mod tests {
         rels.push_str("<Relationship Id='styles' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles' Target='styles.xml'/></Relationships>");
         part("xl/workbook.xml", &book);
         part("xl/_rels/workbook.xml.rels", &rels);
-        part(
-            "xl/styles.xml",
-            r#"<styleSheet><fonts count="1"><font><sz val="11"/><name val="Arial"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellXfs count="2"><xf fontId="0" fillId="0" borderId="0" numFmtId="0"/><xf fontId="0" fillId="0" borderId="0" numFmtId="4"/></cellXfs></styleSheet>"#,
-        );
+        part("xl/styles.xml", styles);
         zip.finish().unwrap().into_inner()
     }
     fn strings(doc: &PdfDocument) -> Vec<String> {
@@ -157,6 +161,28 @@ mod tests {
         assert!(unsupported
             .iter()
             .any(|u| u.kind == "merge-across-print-boundary"));
+    }
+    #[test]
+    fn xlsx_pdf_general_alignment_puts_numbers_right() {
+        // horizontal="general" (LibreOffice writes it for the default) must
+        // align like no setting: numbers right, text left.
+        let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellXfs count="2"><xf fontId="0" fillId="0" borderId="0"/><xf fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="general"/></xf></cellXfs></styleSheet>"#;
+        let xml = r#"<worksheet><sheetData><row r="1"><c r="A1" s="1"><v>7</v></c><c r="B1" s="1" t="inlineStr"><is><t>x</t></is></c></row></sheetData></worksheet>"#;
+        let bytes = package_with_styles(&[("Printed", "visible", xml)], "", styles);
+        let (doc, _) = pages(&bytes).unwrap();
+        let clips: Vec<(f64, f64)> = doc.pages[0].contents.iter().filter_map(|e| match e {
+            ContentElement::ClipPath(c) => match (&c.operations[0], &c.operations[1]) {
+                (PathOp::MoveTo(x0, _), PathOp::LineTo(x1, _)) => Some((*x0, *x1)),
+                _ => None,
+            },
+            _ => None,
+        }).collect();
+        let xs: Vec<f64> = doc.pages[0].contents.iter().filter_map(|e| e.text_span()).map(|s| s.x).collect();
+        // clips: page, A1, B1; the number sits in the right half of A1, the text in the left half of B1
+        let (a0, a1) = clips[1];
+        let (b0, b1) = clips[2];
+        assert!(xs[0] > (a0 + a1) / 2., "{xs:?} {clips:?}");
+        assert!(xs[1] < (b0 + b1) / 2., "{xs:?} {clips:?}");
     }
     #[test]
     fn xlsx_pdf_text_runs_on_over_empty_neighbours() {

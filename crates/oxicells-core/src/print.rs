@@ -510,10 +510,13 @@ fn cell(
     }));
     for (i, text) in lines.iter().enumerate() {
         let width = canvas.width(text, family, size, style.bold, style.italic);
+        // "general" is what LibreOffice (and some generators) write for
+        // Excel's default: it aligns by the value's type, like no setting.
         let align =
             style
                 .horizontal_align
                 .as_deref()
+                .filter(|a| *a != "general")
                 .unwrap_or(if matches!(value, CellValue::Number(_)) {
                     "right"
                 } else if matches!(value, CellValue::Boolean(_) | CellValue::Error(_)) {
