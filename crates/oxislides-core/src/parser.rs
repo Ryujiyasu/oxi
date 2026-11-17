@@ -1179,6 +1179,8 @@ fn parse_slide(
     // their own switch. OXI_BGINHERIT_DISABLE turns the whole walk off, which
     // keeps it usable as "inherit nothing from layout/master".
     let lmshapes_on = std::env::var("OXI_LMSHAPES_DISABLE").is_err();
+    // The text-only shapes of the layout/master (inherited_text_shapes_xml).
+    let lmtext_on = std::env::var("OXI_LMTEXT_DISABLE").is_err();
     let mut inherited_shapes: Vec<Shape> = Vec::new();
     let (inherited_bg, inherited_grad, inherited_img): (
         Option<String>,
@@ -1267,6 +1269,21 @@ fn parse_slide(
                                     archive,
                                     colors,
                                 ));
+                                if lmtext_on {
+                                    if let Some(syn) = inherited_text_shapes_xml(&mx) {
+                                        if let Ok(ts) = parse_slide(
+                                            &syn,
+                                            SlidePos { index: slide_index, first_slide_num },
+                                            archive,
+                                            &master_rels,
+                                            master_ph_geoms,
+                                            master_ph_anchors,
+                                            colors,
+                                        ) {
+                                            inherited_shapes.extend(ts.shapes);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1276,6 +1293,21 @@ fn parse_slide(
                         archive,
                         colors,
                     ));
+                    if lmtext_on {
+                        if let Some(syn) = inherited_text_shapes_xml(&layout_xml) {
+                            if let Ok(ts) = parse_slide(
+                                &syn,
+                                SlidePos { index: slide_index, first_slide_num },
+                                archive,
+                                &layout_rels,
+                                master_ph_geoms,
+                                master_ph_anchors,
+                                colors,
+                            ) {
+                                inherited_shapes.extend(ts.shapes);
+                            }
+                        }
+                    }
                 }
 
                 found = parse_bg_solid_fill(&layout_xml, colors);
@@ -4365,6 +4397,112 @@ fn media_has_alpha(data: &[u8]) -> bool {
         return false;
     }
     true
+}
+
+/// The text-only shapes a slideLayout / slideMaster draws for itself, wrapped
+/// as a bare `p:sld` so the ordinary slide walker can lay them out.
+///
+/// `parse_inherited_shapes` paints geometry only, so a layout's own text box
+/// lost its text: SlidesCarnival's quote layouts set the opening mark as a
+/// 96pt "“" in a non-placeholder txBox (d04 d06 d08 d16 d24 d35 d42 d54, one
+/// slide each), and PowerPoint draws it on every slide using the layout. Only
+/// top-level `p:sp` that carry real text and paint NOTHING themselves -- no
+/// fill, no outline, no `p:style` -- are taken, which are exactly the shapes
+/// the geometry walk drops, so nothing is drawn twice.
+fn inherited_text_shapes_xml(xml: &str) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut depth: i32 = -1; // depth below p:spTree; -1 = outside it
+    let mut start_at: Option<usize> = None;
+    let mut picked: Vec<&str> = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                let name = local_name(e.name().as_ref());
+                if depth < 0 {
+                    if name == "spTree" {
+                        depth = 0;
+                    }
+                } else {
+                    if depth == 0 && name == "sp" {
+                        start_at = Some(before);
+                    }
+                    depth += 1;
+                }
+            }
+            Ok(Event::End(e)) => {
+                if depth >= 0 {
+                    let name = local_name(e.name().as_ref());
+                    if depth == 0 && name == "spTree" {
+                        break;
+                    }
+                    depth -= 1;
+                    if depth == 0 && name == "sp" {
+                        if let Some(a) = start_at.take() {
+                            let end = reader.buffer_position() as usize;
+                            let sp = &xml[a..end];
+                            if lm_text_only_sp(sp) {
+                                picked.push(sp);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    if picked.is_empty() {
+        return None;
+    }
+    let mut out = String::from(
+        "<p:sld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" \
+         xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" \
+         xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">\
+         <p:cSld><p:spTree>",
+    );
+    for sp in picked {
+        out.push_str(sp);
+    }
+    out.push_str("</p:spTree></p:cSld></p:sld>");
+    Some(out)
+}
+
+/// A layout/master `p:sp` that is not a placeholder, holds real text, and
+/// paints no fill or outline of its own (see `inherited_text_shapes_xml`).
+fn lm_text_only_sp(sp: &str) -> bool {
+    if sp.contains("<p:ph") || sp.contains("<p:style") || sp.contains("hidden=\"1\"") {
+        return false;
+    }
+    let has_text = sp.split("<a:t>").skip(1).any(|rest| {
+        rest.split("</a:t>")
+            .next()
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false)
+    });
+    if !has_text {
+        return false;
+    }
+    let sppr = match (sp.find("<p:spPr"), sp.find("</p:spPr>")) {
+        (Some(a), Some(b)) if b > a => &sp[a..b],
+        _ => return true, // no spPr body at all: nothing painted
+    };
+    let (fill_part, ln_part) = match sppr.find("<a:ln") {
+        Some(i) => (&sppr[..i], Some(&sppr[i..])),
+        None => (sppr, None),
+    };
+    if ["solidFill", "gradFill", "blipFill", "pattFill"]
+        .iter()
+        .any(|k| fill_part.contains(k))
+    {
+        return false;
+    }
+    match ln_part {
+        Some(l) if !l.contains("noFill") && !l.starts_with("<a:ln/>") => false,
+        _ => true,
+    }
 }
 
 /// The non-placeholder shapes a slideLayout / slideMaster draws for ITSELF.
