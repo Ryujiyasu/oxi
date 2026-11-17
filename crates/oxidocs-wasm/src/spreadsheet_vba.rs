@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use crate::vba_automation::AnsiCodePage;
 
+#[cfg(test)]
+#[path = "spreadsheet_vba_value_transport_tests.rs"]
+mod value_transport_tests;
+
 #[path = "spreadsheet_vba_shapes.rs"]
 mod shapes;
 #[path = "spreadsheet_vba_shapes_members.rs"]
@@ -46822,6 +46826,21 @@ fn decode_typed_scalar(input: &serde_json::Value) -> Result<oxivba_core::Value, 
         return Ok(value);
     }
     let payload = object.get("value").ok_or("typed scalar has no value")?;
+    if matches!(tag, "single" | "double" | "date") && payload.is_object() {
+        let fields = payload.as_object().ok_or("floating bits must be an object")?;
+        let text = fields.get("bits").and_then(|value| value.as_str())
+            .ok_or("floating bits must be hexadecimal")?;
+        let width = if tag == "single" { 8 } else { 16 };
+        if fields.len() != 1 || text.len() != width || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("floating bits have invalid width or digits".into());
+        }
+        let bits = u64::from_str_radix(text, 16).map_err(|_| "floating bits are out of range")?;
+        return Ok(match tag {
+            "single" => Value::Single(f32::from_bits(bits as u32)),
+            "date" => Value::Date(f64::from_bits(bits)),
+            _ => Value::Double(f64::from_bits(bits)),
+        });
+    }
     let integral = || payload.as_i64().ok_or_else(|| "expected an exact integral payload".to_string());
     let decimal = || payload.as_str().ok_or_else(|| "expected a decimal string".to_string())
         .and_then(exact_input_decimal);
@@ -47050,7 +47069,7 @@ fn decode_vba_input_array(value: &JsValue, ancestors: &mut Vec<JsValue>,
     references: Option<&ExternalReferences>) -> Result<Value, JsError> {
     vba_input_fields(value, &["type", "value"], &[])?;
     let payload = vba_input_property(value, "value")?;
-    vba_input_fields(&payload, &["dimensions", "element_type", "values"], &["resizable"])?;
+    vba_input_fields(&payload, &["dimensions", "element_type", "values"], &["resizable", "lower_bound"])?;
     let kind = vba_input_property(&payload, "element_type")?.as_string()
         .ok_or_else(|| JsError::new("invalid VBA argument: array element type must be a string"))?;
     let bounds = vba_input_property(&payload, "dimensions")?;
@@ -47076,6 +47095,13 @@ fn decode_vba_input_array(value: &JsValue, ancestors: &mut Vec<JsValue>,
                 && *value >= 0.0 && *value <= f64::from(u32::MAX))
             .ok_or_else(|| JsError::new("invalid VBA argument: array length is out of range"))?;
         dimensions.push(serde_json::json!({"lower_bound": lower as i64, "length": length as u64}));
+    }
+    let legacy_lower_bound = vba_input_property(&payload, "lower_bound")?;
+    if !legacy_lower_bound.is_undefined() {
+        let expected = dimensions.first().and_then(|bound| bound["lower_bound"].as_i64()).unwrap_or(0);
+        if legacy_lower_bound.as_f64() != Some(expected as f64) {
+            return Err(JsError::new("invalid VBA argument: array lower_bound disagrees with dimensions"));
+        }
     }
     let items = js_sys::Array::from(&items);
     let metadata = serde_json::json!({"dimensions": dimensions, "element_type": kind, "resizable": resizable});
@@ -47168,8 +47194,15 @@ fn decode_vba_input_argument_inner(value: JsValue, ancestors: &mut Vec<JsValue>,
                 }
                 return Ok(bstr(payload));
             }
-            let number = payload.as_f64().and_then(serde_json::Number::from_f64)
-                .ok_or_else(|| JsError::new("invalid VBA argument: expected a finite number"))?;
+            let number = if payload.is_object() && !payload.is_null() {
+                vba_input_fields(&payload, &["bits"], &[])?;
+                let bits = vba_input_property(&payload, "bits")?.as_string()
+                    .ok_or_else(|| JsError::new("invalid VBA argument: floating bits must be hexadecimal"))?;
+                serde_json::json!({"bits": bits})
+            } else {
+                serde_json::Value::Number(payload.as_f64().and_then(serde_json::Number::from_f64)
+                    .ok_or_else(|| JsError::new("invalid VBA argument: expected a finite number"))?)
+            };
             let descriptor = serde_json::json!({"type": tag, "value": number});
             return decode_typed_scalar(&descriptor)
                 .map_err(|error| JsError::new(&format!("invalid VBA argument: {error}")));
@@ -47207,8 +47240,14 @@ enum OutputValue {
     Nothing,
     Null,
     Boolean(bool),
-    Integer(#[serde(serialize_with = "serialize_vba_signed_integer")] i64),
-    Double(f64),
+    Byte(u8),
+    Integer(i16),
+    Long(#[serde(serialize_with = "serialize_vba_signed_integer")] i64),
+    LongLong(String),
+    Single(OutputFloat),
+    Double(OutputFloat),
+    Date(OutputFloat),
+    NullString,
     Currency(String),
     Decimal(String),
     Error(i64),
@@ -47217,6 +47256,7 @@ enum OutputValue {
     Bstr(Vec<u8>),
     Array {
         lower_bound: i64,
+        element_type: &'static str,
         dimensions: Vec<OutputArrayDimension>,
         resizable: bool,
         values: Vec<OutputValue>,
@@ -47318,6 +47358,45 @@ fn serialize_vba_outcome<T:Serialize + VbaWorkbookPayloads>(outcome:&T)->Result<
     Ok(js)
 }
 
+#[derive(Serialize)]
+#[serde(untagged)]
+enum OutputFloat {
+    Number(f64),
+    Bits { bits: String },
+}
+
+impl OutputFloat {
+    fn single(value: f32) -> Self {
+        if value.is_finite() && !(value == 0.0 && value.is_sign_negative()) { Self::Number(f64::from(value)) }
+        else { Self::Bits { bits: format!("{:08x}", value.to_bits()) } }
+    }
+
+    fn double(value: f64) -> Self {
+        if value.is_finite() && !(value == 0.0 && value.is_sign_negative()) { Self::Number(value) }
+        else { Self::Bits { bits: format!("{:016x}", value.to_bits()) } }
+    }
+}
+
+fn output_array_element_type(value: &Value) -> &'static str {
+    match value {
+        Value::Boolean(_) => "boolean",
+        Value::Byte(_) => "byte",
+        Value::Int16(_) => "integer",
+        Value::Integer(_) => "long",
+        Value::LongLong(_) => "long_long",
+        Value::Single(_) => "single",
+        Value::Double(_) => "double",
+        Value::Date(_) => "date",
+        Value::Currency(_) => "currency",
+        Value::Decimal(_) => "decimal",
+        Value::Error(_) => "error",
+        Value::String(_) | Value::NullString | Value::Utf16(_) | Value::ByteString(_) => "string",
+        Value::Nothing | Value::Object(_) => "object",
+        Value::Record(_) => "record",
+        _ => "variant",
+    }
+}
+
 impl From<Value> for OutputValue {
     fn from(value: Value) -> Self {
         match value {
@@ -47326,11 +47405,11 @@ impl From<Value> for OutputValue {
             Value::Nothing => Self::Nothing,
             Value::Null => Self::Null,
             Value::Boolean(value) => Self::Boolean(value),
-            Value::Int16(value) => Self::Integer(value as i64),
-            Value::Byte(value) => Self::Integer(value as i64),
-            Value::Integer(value) => Self::Integer(value),
-            Value::LongLong(value) => Self::Integer(value),
-            Value::Single(value) => Self::Double(value as f64),
+            Value::Int16(value) => Self::Integer(value),
+            Value::Byte(value) => Self::Byte(value),
+            Value::Integer(value) => Self::Long(value),
+            Value::LongLong(value) => Self::LongLong(value.to_string()),
+            Value::Single(value) => Self::Single(OutputFloat::single(value)),
             Value::Currency(value) => Self::Currency(
                 oxivba_core::decimal::Dec {
                     negative: value < 0,
@@ -47340,15 +47419,16 @@ impl From<Value> for OutputValue {
                 .to_string(),
             ),
             Value::Decimal(value) => Self::Decimal(value.to_string()),
-            Value::Date(value) => Self::Double(value),
-            Value::Double(value) => Self::Double(value),
+            Value::Date(value) => Self::Date(OutputFloat::double(value)),
+            Value::Double(value) => Self::Double(OutputFloat::double(value)),
             Value::Error(value) => Self::Error(value),
             Value::String(value) => Self::String(value),
-            Value::NullString=>Self::String(String::new()),
+            Value::NullString=>Self::NullString,
             Value::Utf16(units)=>Self::Utf16(units),
             Value::ByteString(bytes)=>Self::Bstr(bytes),
             Value::Array(value) => Self::Array {
                 lower_bound: value.lower_bound(1).unwrap_or(0),
+                element_type: output_array_element_type(&value.element_default),
                 dimensions: value
                     .dimensions
                     .iter()
@@ -50423,6 +50503,17 @@ fn execute_workbook_invocation_capturing(
 mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
+
+    // The Native COM corpus represents both null and empty BSTRs as JSON text.
+    // Typed result tests separately assert that the transport keeps them apart.
+    fn native_com_scalar(value: &serde_json::Value) -> serde_json::Value {
+        if value["type"] == "null_string" {
+            serde_json::Value::String(String::new())
+        } else {
+            value["value"].clone()
+        }
+    }
+
 
     #[test]
     fn conditional_stop_defaults_match_native_followup() {
@@ -60433,15 +60524,21 @@ End Function"####;
             (value["type"] == kind).then(|| value["value"].clone())
         }
         fn geometry(value: &Json) -> Option<Json> {
-            let value=scalar(value,"double")?.as_f64()?;
+            let payload=scalar(value,"double")?;
+            let value=payload.as_f64().or_else(|| {
+                let fields=payload.as_object()?;
+                let text=fields.get("bits")?.as_str()?;
+                if fields.len()!=1 || text.len()!=16 { return None; }
+                u64::from_str_radix(text,16).ok().map(f64::from_bits)
+            })?;
             if !value.is_finite() || value != f64::from(value as f32) { return None; }
             Some(json!(format!("0x{:08x}",(value as f32).to_bits())))
         }
         fn shape(value: &Json) -> Option<Json> {
             let row=array(value)?;if row.len()!=12 { return None; }
-            let mut result=json!({"id":scalar(&row[0],"integer")?,"name":scalar(&row[1],"string")?,
-                "type":scalar(&row[2],"integer")?,"z":scalar(&row[3],"integer")?,
-                "child":scalar(&row[4],"integer")?,"placement":scalar(&row[5],"integer")?,
+            let mut result=json!({"id":scalar(&row[0],"long")?,"name":scalar(&row[1],"string")?,
+                "type":scalar(&row[2],"long")?,"z":scalar(&row[3],"long")?,
+                "child":scalar(&row[4],"long")?,"placement":scalar(&row[5],"long")?,
                 "geometry":{"Left":geometry(&row[6])?,"Top":geometry(&row[7])?,
                 "Width":geometry(&row[8])?,"Height":geometry(&row[9])?,"Rotation":geometry(&row[10])?}});
             let children=array(&row[11])?;
@@ -108517,7 +108614,7 @@ End Sub
         let added = invoke(book, &token, "Add", 1, vec![Value::String("held".into())], &mut state);
         assert!(added.error.is_none());
         let count = invoke(added.workbook, &token, "Count", 1, vec![], &mut state);
-        assert_eq!(serde_json::to_value(&count.result).unwrap(), serde_json::json!({"type":"integer","value":1}));
+        assert_eq!(serde_json::to_value(&count.result).unwrap(), serde_json::json!({"type":"long","value":1}));
         let object = state.as_ref().unwrap().external_references.values[&token].clone();
         let echoed = execute_workbook_action_in_session(count.workbook, SOURCE, Some("EchoObject"),
             vec![Value::Object(object)], 0, failure_context(), &mut state).unwrap();
@@ -108535,7 +108632,7 @@ End Sub
         assert!(invalid.err().unwrap().contains("released, stale, or foreign"));
         assert_eq!(state.as_ref().unwrap().external_references.values.len(),1);
         let still_alive = invoke(item.workbook, &alias, "Count", 1, vec![], &mut state);
-        assert_eq!(serde_json::to_value(&still_alive.result).unwrap(), serde_json::json!({"type":"integer","value":1}));
+        assert_eq!(serde_json::to_value(&still_alive.result).unwrap(), serde_json::json!({"type":"long","value":1}));
     }
 
 
@@ -108600,7 +108697,7 @@ End Sub
             action:Some(ExternalObjectAction::Invoke {reference:tokens[1].clone(),member:"Count".into(),kind:1}) },
             0,failure_context(),&mut state).unwrap();
         assert!(observed.error.is_none());
-        assert_eq!(serde_json::to_value(&observed.result).unwrap(),serde_json::json!({"type":"integer","value":0}));
+        assert_eq!(serde_json::to_value(&observed.result).unwrap(),serde_json::json!({"type":"long","value":0}));
         let references=state.as_ref().unwrap().external_references.tokens_in_release_order();
         let released=execute_workbook_invocation(observed.workbook,SOURCE,VbaInvocation {procedure:None,args:vec![],
             action:Some(ExternalObjectAction::Release {references})},0,failure_context(),&mut state).unwrap();
@@ -109758,16 +109855,16 @@ End Sub
         assert!(initial.error.is_none());
         let wire=serde_json::to_value(&initial.result).unwrap();
         assert_eq!(wire["value"]["values"][1],serde_json::json!({"type":"string","value":"Date"}));
-        assert_eq!(wire["value"]["values"][2],serde_json::json!({"type":"integer","value":7}));
-        assert_eq!(wire["value"]["values"][3],serde_json::json!({"type":"double","value":old}));
+        assert_eq!(wire["value"]["values"][2],serde_json::json!({"type":"long","value":7}));
+        assert_eq!(wire["value"]["values"][3],serde_json::json!({"type":"date","value":old}));
         let wrote=execute_workbook_action_in_session(initial.workbook,source,Some("FileDates.WriteDate"),args(),0,context(),&mut session).unwrap();
         assert!(wrote.error.is_none());
         let read=execute_workbook_action_in_session(wrote.workbook,source,Some("FileDates.InspectDate"),args(),0,context(),&mut session).unwrap();
         assert!(read.error.is_none());
         let wire=serde_json::to_value(&read.result).unwrap();
         assert_eq!(wire["value"]["values"][1],serde_json::json!({"type":"string","value":"Date"}));
-        assert_eq!(wire["value"]["values"][2],serde_json::json!({"type":"integer","value":7}));
-        assert_eq!(wire["value"]["values"][3],serde_json::json!({"type":"double","value":current}));
+        assert_eq!(wire["value"]["values"][2],serde_json::json!({"type":"long","value":7}));
+        assert_eq!(wire["value"]["values"][3],serde_json::json!({"type":"date","value":current}));
         let state: file_io::FileSystemState=serde_json::from_value(serde_json::to_value(&read.file_system_state).unwrap()).unwrap();
         let resume_context=|| {let mut next=context();next.current_time=current+10.0;next};
         let restored=|| {let mut next=resume_context();next.file_system_state=Some(state.clone());next};
@@ -109777,14 +109874,14 @@ End Sub
         assert!(resumed.error.is_none());
         let wire=serde_json::to_value(&resumed.result).unwrap();
         assert_eq!(wire["value"]["values"][1],serde_json::json!({"type":"string","value":"Date"}));
-        assert_eq!(wire["value"]["values"][2],serde_json::json!({"type":"integer","value":7}));
-        assert_eq!(wire["value"]["values"][3],serde_json::json!({"type":"double","value":current}));
+        assert_eq!(wire["value"]["values"][2],serde_json::json!({"type":"long","value":7}));
+        assert_eq!(wire["value"]["values"][3],serde_json::json!({"type":"date","value":current}));
         let deleted=execute_workbook_action_in_session(resumed.workbook,&edited,Some("FileDates.DeleteDate"),args(),0,resume_context(),&mut replacement).unwrap();
         assert!(deleted.error.is_none());
         let missing=execute_workbook_action_in_session(deleted.workbook,&edited,Some("FileDates.InspectDate"),args(),0,resume_context(),&mut replacement).unwrap();
         assert!(missing.error.is_none());
         let wire=serde_json::to_value(&missing.result).unwrap();
-        assert_eq!(wire["value"]["values"][0],serde_json::json!({"type":"integer","value":53}));
+        assert_eq!(wire["value"]["values"][0],serde_json::json!({"type":"long","value":53}));
         let state=serde_json::to_value(&missing.file_system_state).unwrap();
         assert!(state["modifiedTimes"].as_array().unwrap().iter().all(|entry|entry["path"].as_str().unwrap().to_lowercase()!=path.to_lowercase()));
     }
@@ -128077,13 +128174,13 @@ End Function
         let source = "Public Function Check() As Long\nDim i As Long, c As Object\nFor i=1 To 52\nSet c=Cells(2,i).FormatConditions(1)\nIf c.IconCriteria(2).Icon<>i Then Check=i: Exit Function\nNext i\nSet c=Range(\"BA2\").FormatConditions.AddIconSetCondition\nFor i=1 To 52\nc.IconCriteria(2).Icon=i\nIf c.IconCriteria(2).Icon<>i Then Check=100+i: Exit Function\nNext i\nEnd Function";
         let result = execute_workbook_action_in_session(oxicells_core::parse_xlsx(bytes).unwrap(), source, Some("Check"), vec![], 0, failure_context(), &mut None).unwrap();
         assert!(result.error.is_none(), "{:?}", result.error.as_ref().map(|error| &error.message));
-        assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"integer", "value":0}));
+        assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"long", "value":0}));
         let mut editor = oxicells_core::XlsxEditor::new(bytes).unwrap(); editor.apply_workbook(&result.workbook).unwrap();
         let saved = editor.save().unwrap();
         let source = "Public Function Check() As Long\nCheck=Range(\"BA2\").FormatConditions(1).IconCriteria(2).Icon\nEnd Function";
         let result = execute_workbook_action_in_session(oxicells_core::parse_xlsx(&saved).unwrap(), source, Some("Check"), vec![], 0, failure_context(), &mut None).unwrap();
         assert!(result.error.is_none(), "{:?}", result.error.as_ref().map(|error| &error.message));
-        assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"integer", "value":52}));
+        assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"long", "value":52}));
     }
 
     #[test]
@@ -144888,7 +144985,7 @@ End Function"#;
                 args,0,context,&mut None).unwrap();
             assert!(result.error.is_none(),"{} {case}: {}",group["id"],serde_json::to_value(&result.error).unwrap());
             let value=serde_json::to_value(result.result).unwrap();
-            let actual:Vec<serde_json::Value>=value["value"]["values"].as_array().unwrap().iter().map(|v|v["value"].clone()).collect();
+            let actual:Vec<serde_json::Value>=value["value"]["values"].as_array().unwrap().iter().map(native_com_scalar).collect();
             assert_eq!(serde_json::to_value(actual).unwrap(),case["expected"],"{} {case}",group["id"]);
         }
     }
@@ -144939,7 +145036,7 @@ End Function"#;
                 vec![Value::Integer(mode),Value::String(r"C:\work\input.xlsx".into())],0,context,&mut None).unwrap();
             assert!(result.error.is_none(),"mode {mode}: {}",serde_json::to_value(&result.error).unwrap());
             let value=serde_json::to_value(result.result).unwrap();
-            let actual:Vec<serde_json::Value>=value["value"]["values"].as_array().unwrap().iter().map(|v|v["value"].clone()).collect();
+            let actual:Vec<serde_json::Value>=value["value"]["values"].as_array().unwrap().iter().map(native_com_scalar).collect();
             assert_eq!(serde_json::to_value(actual).unwrap(),case["expected"],"mode {mode}");
         }
     }
@@ -144991,7 +145088,7 @@ End Function"#;
             assert!(result.error.is_none(),"{label} mode {mode}: {}",serde_json::to_value(&result.error).unwrap());
             let value=serde_json::to_value(result.result).unwrap();
             let states:Vec<Vec<serde_json::Value>>=value["value"]["values"].as_array().unwrap().iter().map(|state|
-                state["value"]["values"].as_array().unwrap().iter().map(|cell|cell["value"].clone()).collect()
+                state["value"]["values"].as_array().unwrap().iter().map(native_com_scalar).collect()
             ).collect();
             assert_eq!(serde_json::to_value(states).unwrap(),case["expected"],"{label} mode {mode}");
             assert!(result.files.iter().any(|file|file.path==r"C:\work\copy.xlsx"),"{label} mode {mode}: no exported copy");
@@ -145056,7 +145153,7 @@ End Function"####;
         assert!(!base.contains_key("xl/styles.xml"));
         let state_values=|value:serde_json::Value|->serde_json::Value {
             value["value"]["values"].as_array().unwrap().iter().map(|state|
-                state["value"]["values"].as_array().unwrap().iter().map(|v|v["value"].clone()).collect::<Vec<_>>()
+                state["value"]["values"].as_array().unwrap().iter().map(native_com_scalar).collect::<Vec<_>>()
             ).collect::<Vec<_>>().into()
         };
         let run=|bytes:&[u8],source:&str,mode:usize| {
@@ -152184,7 +152281,7 @@ End Sub"#;
             let mut session = None;
             let result = execute_workbook_action_in_session(book, source, Some("PutFormat"), vec![Value::Integer(axis)], 0, failure_context(), &mut session).unwrap();
             assert!(result.error.is_none(), "axis={axis}");
-            assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"integer", "value":255}));
+            assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"long", "value":255}));
             let mut editor = oxicells_core::XlsxEditor::new(bytes).unwrap();
             editor.apply_workbook(&result.workbook).unwrap();
             let saved = editor.save().unwrap();
@@ -152192,7 +152289,7 @@ End Sub"#;
             let mut session = None;
             let result = execute_workbook_action_in_session(reopened, source, Some("ReadFormat"), vec![Value::Integer(axis)], 0, failure_context(), &mut session).unwrap();
             assert!(result.error.is_none(), "axis={axis}");
-            assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"integer", "value":255}), "axis={axis}");
+            assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"long", "value":255}), "axis={axis}");
             let cleared = execute_workbook_action_in_session(result.workbook, source, Some("ClearFormat"), vec![Value::Integer(axis)], 0, failure_context(), &mut session).unwrap();
             assert!(cleared.error.is_none(), "axis={axis}");
             let mut editor = oxicells_core::XlsxEditor::new(&saved).unwrap();
@@ -152201,7 +152298,7 @@ End Sub"#;
             let mut session = None;
             let result = execute_workbook_action_in_session(reopened, source, Some("ReadFormat"), vec![Value::Integer(axis)], 0, failure_context(), &mut session).unwrap();
             assert!(result.error.is_none(), "axis={axis}");
-            assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"integer", "value":16777215}), "cleared axis={axis}");
+            assert_eq!(serde_json::to_value(&result.result).unwrap(), serde_json::json!({"type":"long", "value":16777215}), "cleared axis={axis}");
         }
     }
 

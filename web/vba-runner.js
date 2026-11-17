@@ -235,11 +235,16 @@ export function parseVbaArguments(text) {
                 case 'error': return Number.isSafeInteger(payload);
                 case 'single':
                 case 'double':
-                case 'date': return typeof payload === 'number' && Number.isFinite(payload);
+                case 'date': return (typeof payload === 'number' && Number.isFinite(payload))
+                    || (payload && typeof payload === 'object' && !Array.isArray(payload)
+                        && Object.keys(payload).length === 1 && typeof payload.bits === 'string'
+                        && (value.type === 'single' ? /^[0-9a-f]{8}$/i : /^[0-9a-f]{16}$/i).test(payload.bits));
                 case 'long_long': return typeof payload === 'string' && /^-?\d+$/.test(payload);
                 case 'currency':
                 case 'decimal': return typeof payload === 'string' && /^-?\d+(?:\.\d+)?$/.test(payload);
                 case 'string': return typeof payload === 'string';
+                case 'bstr': return Array.isArray(payload)
+                    && payload.every(byte => Number.isInteger(byte) && byte >= 0 && byte <= 255);
                 case 'utf16': return Array.isArray(payload)
                     && payload.every(unit => Number.isInteger(unit) && unit >= 0 && unit <= 65535);
                 case 'object':
@@ -251,7 +256,7 @@ export function parseVbaArguments(text) {
                             || (typeof payload.handle === 'string' && /^\d+$/.test(payload.handle)));
                 case 'array': {
                     if (!payload || typeof payload !== 'object' || Array.isArray(payload)
-                        || Object.keys(payload).some(key => !['dimensions', 'values', 'element_type', 'resizable'].includes(key))
+                        || Object.keys(payload).some(key => !['dimensions', 'values', 'element_type', 'resizable', 'lower_bound'].includes(key))
                         || !Array.isArray(payload.dimensions) || !Array.isArray(payload.values)
                         || payload.dimensions.length > 65535
                         || !['variant', 'boolean', 'byte', 'integer', 'long', 'long_long', 'single', 'double', 'currency', 'date', 'error', 'string', 'object'].includes(payload.element_type)
@@ -263,6 +268,8 @@ export function parseVbaArguments(text) {
                             || !Number.isInteger(dimension.lower_bound) || dimension.lower_bound < -2147483648 || dimension.lower_bound > 2147483647
                             || !Number.isInteger(dimension.length) || dimension.length < 0 || dimension.length > 4294967295) return false;
                     }
+                    if (Object.hasOwn(payload, 'lower_bound')
+                        && payload.lower_bound !== (payload.dimensions[0]?.lower_bound ?? 0)) return false;
                     const count = !payload.dimensions.length || payload.dimensions.some(dimension => dimension.length === 0)
                         ? 0 : payload.dimensions.reduce((total, dimension) => total * dimension.length, 1);
                     return Number.isSafeInteger(count) && count === payload.values.length && payload.values.every(supportedValue);

@@ -86,7 +86,7 @@ async function verifyResultBoundaries(invoke) {
     ['BoundaryMaximum', '9223372036854775807'],
   ];
   for (const [procedure, value] of integerCases) {
-    assert.deepEqual(await run(procedure), {type:'integer', value}, procedure);
+    assert.deepEqual(await run(procedure), {type:'long_long', value:String(value)}, procedure);
   }
   assert.deepEqual(await run('BoundaryDouble'), {type:'double', value:9007199254740992});
   const workbook = await run('BoundaryWorkbook');
@@ -107,16 +107,16 @@ async function verifyResultBoundaries(invoke) {
   const array = await run('BoundaryArray');
   assert.equal(array.type, 'array');
   assert.equal(array.value.lower_bound, 0);
-  assert.deepEqual(array.value.values[0], {type:'integer',value:'9007199254740992'});
+  assert.deepEqual(array.value.values[0], {type:'long_long',value:'9007199254740992'});
   assert.notEqual(collection(array.value.values[1]), collection(array.value.values[2]),
     'distinct runtime objects keep distinct 64-bit handles');
-  assert.deepEqual(array.value.values[3], {type:'integer',value:42});
+  assert.deepEqual(array.value.values[3], {type:'long_long',value:'42'});
   const record = await run('BoundaryRecordResult');
   assert.equal(record.type, 'record');
   assert.match(record.value.type_name, /(^|\.)BoundaryRecord$/i);
   const fields = new Map(record.value.fields.map(([name, value]) => [name.toLowerCase(), value]));
-  assert.deepEqual(fields.get('safevalue'), {type:'integer',value:42});
-  assert.deepEqual(fields.get('largevalue'), {type:'integer',value:'9007199254740992'});
+  assert.deepEqual(fields.get('safevalue'), {type:'long_long',value:'42'});
+  assert.deepEqual(fields.get('largevalue'), {type:'long_long',value:'9007199254740992'});
   assert.deepEqual(await run('DescribeBoundaryRecord'), {type:'string',value:'42|9007199254740992'});
 }
 {
@@ -157,7 +157,7 @@ async function verifyExactNumericResults(invoke) {
   assert.deepEqual(array.value.values,[
     {type:'currency',value:'922337203685477.5807'},
     {type:'decimal',value:'7922816251426433759354395033.5'},
-    {type:'integer',value:42},
+    {type:'long_long',value:'42'},
     {type:'double',value:9007199254740992},
   ]);
   const record=await run('ExactNumericRecordResult');
@@ -213,7 +213,7 @@ async function verifyNativeInputAndDateCases(invoke) {
   }
   for(const entry of nativeRawInputCases) {
     const value=await run(nativeRawInputSource,'EchoArgument',[entry.number]);
-    assert.equal(value.type,entry.native_vt===3?'integer':'double',entry.name+': Native argument subtype');
+    assert.equal(value.type,entry.native_vt===3?'long':'double',entry.name+': Native argument subtype');
     assert.ok(Object.is(value.value,entry.number),entry.name+': exact Native numeric payload');
     assert.deepEqual(await run(nativeRawInputSource,'DescribeArgument',[entry.number]),
       {type:'string',value:entry.describe},entry.name+': Native TypeName/VarType/CStr');
@@ -512,7 +512,7 @@ async function verifyExternalInvocation(api) {
   book=result.workbook;return result;
  };
  assert.equal((await invoke('Add',1,['held'])).error,undefined);
- assert.deepEqual((await invoke('Count',1)).result,{type:'integer',value:1});
+ assert.deepEqual((await invoke('Count',1)).result,{type:'long',value:1});
  const alias=await run('EchoObject',[returned]);
  assert.notEqual(alias.value.reference,token);
  assert.equal(alias.value.handle,returned.value.handle);
@@ -526,10 +526,10 @@ async function verifyExternalInvocation(api) {
   await assert.rejects(async()=>api.run(book,externalCollectionSource,'EchoObject',[value]),/invalid VBA (argument|object reference)/);calls++;
  }
  await assert.rejects(async()=>api.invoke(book,externalCollectionSource,token,'Count',2.5,[]),/Invalid VBA member invocation|invalid VBA call kind/);calls++;
- assert.deepEqual((await invoke('Count',1)).result,{type:'integer',value:1});
+ assert.deepEqual((await invoke('Count',1)).result,{type:'long',value:1});
  const rejected=await api.invoke(book,externalCollectionSource,token,'Missing',2,[]);calls++;
  assert.equal(rejected.error.kind,'runtime');book=rejected.workbook;
- assert.deepEqual((await invoke('Count',1)).result,{type:'integer',value:1});
+ assert.deepEqual((await invoke('Count',1)).result,{type:'long',value:1});
  const released=await api.release(book,externalCollectionSource,[token]);calls++;
  assert.equal(released.error,undefined);book=released.workbook;
  await assert.rejects(async()=>api.invoke(book,externalCollectionSource,token,'Count',1,[]),/released, stale, or foreign/);calls++;
@@ -537,7 +537,7 @@ async function verifyExternalInvocation(api) {
  assert.equal(item.error,undefined);assert.deepEqual(item.result,{type:'string',value:'held'});book=item.workbook;
  const finished=await api.release(book,externalCollectionSource,[alias.value.reference]);calls++;
  assert.equal(finished.error,undefined);book=finished.workbook;
- assert.deepEqual(await run('Alive'),{type:'integer',value:42});
+ assert.deepEqual(await run('Alive'),{type:'long',value:42});
  return calls;
 }
 const referenceSession=new wasm.SpreadsheetVbaSession();
@@ -616,7 +616,7 @@ try{
  for(let owner=0;owner<2;owner++){
   assert.throws(()=>api[owner].invoke(created[owner].workbook,created[1-owner].result.value.reference),/released, stale, or foreign/);
   const own=api[owner].invoke(created[owner].workbook,created[owner].result.value.reference);
-  assert.equal(own.error,undefined);assert.deepEqual(own.result,{type:'integer',value:0});
+  assert.equal(own.error,undefined);assert.deepEqual(own.result,{type:'long',value:0});
   assert.equal(own.reference_state.tokens.length,1);
   assert.deepEqual(api[owner].all(own.workbook).reference_state.tokens,[]);
  }
@@ -635,14 +635,14 @@ try{
  await assert.rejects(workerInvoke(held.workbook,own.result.value.reference),/released, stale, or foreign/);
  const copy=runner.getVbaObjectReferences();copy.length=0;
  assert.equal(runner.getVbaObjectReferences().length,1,'consumers receive a copy of the registry snapshot');
- assert.deepEqual(ownInvoke(own.workbook,own.result.value.reference).result,{type:'integer',value:0});
- assert.deepEqual((await workerInvoke(held.workbook,held.result.value.reference)).result,{type:'integer',value:0});
+ assert.deepEqual(ownInvoke(own.workbook,own.result.value.reference).result,{type:'long',value:0});
+ assert.deepEqual((await workerInvoke(held.workbook,held.result.value.reference)).result,{type:'long',value:0});
  runner.closeVbaProject();assert.deepEqual(runner.getVbaObjectReferences(),[]);
  const restarted=await workerRun();
  assert.equal(restarted.result.value.handle,held.result.value.handle);
  await assert.rejects(workerInvoke(restarted.workbook,held.result.value.reference),/released, stale, or foreign/);
  const alive=await workerInvoke(restarted.workbook,restarted.result.value.reference);
- assert.deepEqual(alive.result,{type:'integer',value:0});
+ assert.deepEqual(alive.result,{type:'long',value:0});
  const released=await countedReferenceCall(book=>runner.releaseAllVbaObjectsInWorker(book,0,'ForeignWorker.xlsm',{}))(alive.workbook);
  assert.deepEqual(released.reference_state.tokens,[]);assert.deepEqual(runner.getVbaObjectReferences(),[]);
  assert.deepEqual(countedReferenceCall(book=>foreignWorkerSession.release_all_objects(book,0,'ForeignWorker.xlsm',{}))(own.workbook).reference_state.tokens,[]);
@@ -691,4 +691,103 @@ try{
 }finally{returnedRangeOwner.free();}
 
 
-console.log(JSON.stringify({boundary_calls:726+automationDirectCalls+automationWorkerCalls+externalReferenceCalls,external_reference_calls:externalReferenceCalls,automation_calls:automationDirectCalls+automationWorkerCalls,typed_argument_rejections:138,excel_cases:cases.length,value_sequences:cases.filter(item=>item.outcome==='values').length,compile_cases:cases.filter(item=>item.outcome==='compile').length,value_steps:cases.filter(item=>item.outcome==='values').reduce((sum,item)=>sum+item.steps.length,0),direct_and_worker:true,passed:true}));
+const transportSource = `Public Function TransportEcho(Optional value As Variant) As Variant
+ If IsObject(value) Then
+  Set TransportEcho=value
+ Else
+  TransportEcho=value
+ End If
+End Function
+Public Function TransportType(Optional value As Variant) As String
+ TransportType=TypeName(value) & ":" & CStr(VarType(value))
+ If VarType(value)=vbString Then TransportType=TransportType & ":null=" & CStr(StrPtr(value)=0)
+End Function`;
+const transportCases = [
+ [{type:'empty'}, 'Empty:0'],
+ [{type:'null'}, 'Null:1'],
+ [{type:'nothing'}, 'Nothing:9'],
+ [{type:'null_string'}, 'String:8:null=True'],
+ [{type:'string',value:''}, 'String:8:null=False'],
+ [{type:'string',value:'\u65e5\ud83d\ude00\ud800'}, 'String:8:null=False'],
+ [{type:'bstr',value:[65]}, 'String:8:null=False'],
+ [{type:'byte',value:255}, 'Byte:17'],
+ [{type:'integer',value:-32768}, 'Integer:2'],
+ [{type:'long',value:-2147483648}, 'Long:3'],
+ [{type:'long',value:2147483647}, 'Long:3'],
+ [{type:'long_long',value:'42'}, 'LongLong:20'],
+ [{type:'long_long',value:'-9223372036854775808'}, 'LongLong:20'],
+ [{type:'long_long',value:'9223372036854775807'}, 'LongLong:20'],
+ [{type:'single',value:1.25}, 'Single:4'],
+ [{type:'single',value:{bits:'80000000'}}, 'Single:4'],
+ [{type:'double',value:{bits:'8000000000000000'}}, 'Double:5'],
+ [{type:'date',value:{bits:'8000000000000000'}}, 'Date:7'],
+ [{type:'single',value:{bits:'7f800000'}}, 'Single:4'],
+ [{type:'single',value:{bits:'ff800000'}}, 'Single:4'],
+ [{type:'single',value:{bits:'7fc00042'}}, 'Single:4'],
+ [{type:'double',value:1.2345678901234567}, 'Double:5'],
+ [{type:'double',value:{bits:'7ff0000000000000'}}, 'Double:5'],
+ [{type:'double',value:{bits:'fff0000000000000'}}, 'Double:5'],
+ [{type:'double',value:{bits:'7ff8000000000042'}}, 'Double:5'],
+ [{type:'date',value:-0.5}, 'Date:7'],
+ [{type:'date',value:43890.50283564815}, 'Date:7'],
+ [{type:'date',value:{bits:'7ff8000000000042'}}, 'Date:7'],
+ [{type:'date',value:{bits:'7ff0000000000000'}}, 'Date:7'],
+ [{type:'currency',value:'922337203685477.5807'}, 'Currency:6'],
+ [{type:'decimal',value:'79228162514264337593543950335'}, 'Decimal:14'],
+ [{type:'error',value:2007}, 'Error:10'],
+ [{type:'array',value:{lower_bound:-2,element_type:'integer',dimensions:[{lower_bound:-2,length:2}],resizable:false,values:[{type:'integer',value:-7},{type:'integer',value:13}]}}, 'Integer():8194'],
+ [{type:'array',value:{lower_bound:-1,element_type:'single',dimensions:[{lower_bound:-1,length:2}],resizable:true,values:[{type:'single',value:1.25},{type:'single',value:{bits:'7fc00042'}}]}}, 'Single():8196'],
+ [{type:'array',value:{lower_bound:0,element_type:'date',dimensions:[],resizable:true,values:[]}}, 'Date():8199'],
+ [{type:'array',value:{lower_bound:0,element_type:'string',dimensions:[{lower_bound:0,length:0}],resizable:true,values:[]}}, 'String():8200'],
+ [{type:'array',value:{lower_bound:-1,element_type:'variant',dimensions:[{lower_bound:-1,length:2},{lower_bound:2,length:1}],resizable:false,values:[{type:'byte',value:7},{type:'date',value:43890}]}}, 'Variant():8204'],
+ [{type:'array',value:{lower_bound:0,element_type:'variant',dimensions:[{lower_bound:0,length:4}],resizable:true,values:[
+  {type:'string',value:'\u65e5\ud83d\ude00\ud800'},
+  {type:'bstr',value:[65]},
+  {type:'array',value:{lower_bound:-1,element_type:'single',dimensions:[{lower_bound:-1,length:2}],resizable:true,values:[{type:'single',value:{bits:'80000000'}},{type:'single',value:{bits:'7fc00042'}}]}},
+  {type:'array',value:{lower_bound:0,element_type:'string',dimensions:[{lower_bound:0,length:2}],resizable:true,values:[{type:'null_string'},{type:'string',value:''}]}},
+ ]}}, 'Variant():8204'],
+];
+async function verifyResultTransport(invoke) {
+ let book=emptyBook(),calls=0;
+ async function run(procedure,args) {
+  const execution=await invoke(book,transportSource,procedure,args);calls++;
+  assert.equal(execution.error,undefined,procedure);book=execution.workbook;return execution.result;
+ }
+ for(const [input,type] of transportCases) {
+  // VBA copies an array assigned to a Variant result into a resizable array.
+  const expected=input.type==='array'?{...input,value:{...input.value,resizable:true}}:input;
+  const initial=await run('TransportEcho',runner.parseVbaArguments(JSON.stringify([input])));
+  assert.deepEqual(initial,expected,'complete typed result: '+type);
+  const returned=await run('TransportEcho',runner.parseVbaArguments(JSON.stringify([initial])));
+  assert.deepEqual(returned,expected,'reuse complete result as argument: '+type);
+  assert.deepEqual(await run('TransportType',[returned]),{type:'string',value:type});
+ }
+ for(const tag of ['single','double','date']) {
+  const returned=await run('TransportEcho',[{type:tag,value:{bits:tag==='single'?'80000000':'8000000000000000'}}]);
+  const expected={type:tag,value:{bits:tag==='single'?'80000000':'8000000000000000'}};
+  assert.deepEqual(returned,expected);
+  const again=await run('TransportEcho',runner.parseVbaArguments(JSON.stringify([returned])));
+  assert.deepEqual(again,expected);
+ }
+ for(const invalid of [
+  {type:'single',value:{bits:'7ff8000000000042'}},
+  {type:'double',value:{bits:'7fc00042'}},
+  {type:'date',value:{bits:'0000000000000000',extra:1}},
+  {type:'array',value:{lower_bound:0,element_type:'integer',dimensions:[{lower_bound:-2,length:0}],values:[]}},
+ ]) {
+  assert.throws(()=>runner.parseVbaArguments(JSON.stringify([invalid])));
+  await assert.rejects(async()=>invoke(book,transportSource,'TransportEcho',[invalid]),/invalid VBA argument/);
+ }
+ return calls;
+}
+let resultTransportCalls=0;
+const transportSession=new wasm.SpreadsheetVbaSession();
+try {
+ resultTransportCalls+=await verifyResultTransport((book,source,procedure,args)=>transportSession.run(book,source,procedure,args,0,'Transport.xlsm',{}));
+}finally{transportSession.free();}
+try {
+ globalThis.Worker=BrowserWorker;runner.closeVbaProject();
+ resultTransportCalls+=await verifyResultTransport((book,source,procedure,args)=>runner.runVbaInWorker(book,source,procedure,args,0,'Transport.xlsm',{}));
+}finally{runner.closeVbaProject();globalThis.Worker=priorWorker;}
+
+console.log(JSON.stringify({result_transport_cases:transportCases.length,result_transport_calls:resultTransportCalls,boundary_calls:726+automationDirectCalls+automationWorkerCalls+externalReferenceCalls,external_reference_calls:externalReferenceCalls,automation_calls:automationDirectCalls+automationWorkerCalls,typed_argument_rejections:138,excel_cases:cases.length,value_sequences:cases.filter(item=>item.outcome==='values').length,compile_cases:cases.filter(item=>item.outcome==='compile').length,value_steps:cases.filter(item=>item.outcome==='values').reduce((sum,item)=>sum+item.steps.length,0),direct_and_worker:true,passed:true}));
