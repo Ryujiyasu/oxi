@@ -15249,11 +15249,16 @@ pub(crate) fn call_builtin(
                 Value::Null => Ok(Value::Null),
                 _ => {
                     let value = number(value).map_err(mismatch)?;
+                    if name != "atn" && value.abs() >= 9.223372e18 {
+                        return Err(invalid_procedure_call(
+                            format!("argument outside the domain of {name}"), line));
+                    }
                     Ok(Value::Double(match name.as_str() {
                         "atn" => value.atan(),
                         "cos" => value.cos(),
                         "sin" => value.sin(),
-                        "tan" => value.tan(),
+                        // Tan divides the separately rounded Double results.
+                        "tan" => value.sin() / value.cos(),
                         _ => unreachable!(),
                     }))
                 }
@@ -27672,6 +27677,60 @@ Attribute VB_Name = "TextStream"
         .unwrap_err();
 
         assert_eq!(failure.kind, RuntimeErrorKind::ArgumentCount);
+    }
+
+
+    #[test]
+    fn trigonometric_domain_errors_preserve_targets_and_leave_atn_available() {
+        let source = r#"Public Function Probe(ByVal x As Double) As String
+  Dim value As Double, answer As String
+  On Error Resume Next
+  value = 7: Err.Clear
+  value = Sin(x)
+  answer = Err.Number & "|" & value
+  value = 7: Err.Clear
+  value = Cos(x)
+  answer = answer & "|" & Err.Number & "|" & value
+  value = 7: Err.Clear
+  value = Tan(x)
+  answer = answer & "|" & Err.Number & "|" & value
+  Err.Clear
+  value = Atn(x)
+  Probe = answer & "|" & Err.Number & "|" & TypeName(value)
+End Function
+"#;
+        for bits in [0x43df_ffff_fdda_d230, 0x43df_ffff_fdda_d231,
+                     0x43e0_0000_0000_0000, 0x7fef_ffff_ffff_ffff] {
+            for sign in [1.0, -1.0] {
+                let value = f64::from_bits(bits) * sign;
+                assert_eq!(run(source, "Probe", vec![Value::Double(value)]).unwrap(),
+                    Value::String("5|7|5|7|5|7|0|Double".to_string()), "input {value}");
+            }
+        }
+        for bits in [0x43df_ffff_fdda_d22e, 0x43df_ffff_fdda_d22f] {
+            for sign in [1.0, -1.0] {
+                let value = f64::from_bits(bits) * sign;
+                let result = run(source, "Probe", vec![Value::Double(value)]).unwrap();
+                let Value::String(text) = result else { panic!("expected a descriptor") };
+                let fields: Vec<_> = text.split('|').collect();
+                assert_eq!(fields.len(), 8);
+                for index in [0, 2, 4, 6] { assert_eq!(fields[index], "0", "input {value}"); }
+            }
+        }
+    }
+
+    #[test]
+    fn trigonometric_tangent_retains_native_quotient_bits() {
+        let source = "Public Function Probe(ByVal x As Double) As Double\n  Probe = Tan(x)\nEnd Function\n";
+        for (input, expected) in [(0.1, 0x3fb9_af88_7743_0b7f_u64),
+                                  (0.2, 0x3fc9_f267_068a_55eb),
+                                  (-0.2, 0xbfc9_f267_068a_55eb),
+                                  (1.5, 0x402c_33ed_50b8_8778),
+                                  (-0.0, 0x8000_0000_0000_0000)] {
+            let result = run(source, "Probe", vec![Value::Double(input)]).unwrap();
+            let Value::Double(value) = result else { panic!("Tan must return a Double") };
+            assert_eq!(value.to_bits(), expected, "input {input}");
+        }
     }
 
     #[test]
