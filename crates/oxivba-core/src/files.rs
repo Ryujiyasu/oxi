@@ -1356,8 +1356,10 @@ impl Files {
         let start = cursor.physical;
         let end = start.checked_add(bytes.len()).ok_or(FileError::BadRecordNumber)?;
         let logical = handle.position.checked_add(bytes.len()).ok_or(FileError::BadRecordNumber)?;
-        if file.1.len() < end { file.1.resize(end, 0); }
-        file.1[start..end].copy_from_slice(bytes);
+        if !bytes.is_empty() {
+            if file.1.len() < end { file.1.resize(end, 0); }
+            file.1[start..end].copy_from_slice(bytes);
+        }
         cursor.physical = end;
         cursor.record = None;
         handle.position = logical;
