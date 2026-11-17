@@ -41,6 +41,18 @@ End Function
 Public Function ReadNewSheetFormat() As String
 ReadNewSheetFormat = CStr(Range("Z2").Interior.Color) & "|" & CStr(Range("B100").Interior.Color) & "|" & CStr(Range("C10").Validation.Type)
 End Function`;
+// Project tagged values to the scalar values recorded by the COM fixtures.
+// The public transport tests separately retain BSTR and floating-point tags.
+const nativeComScalar = value => {
+    if (value.type === 'null_string') return '';
+    if (['single', 'double', 'date'].includes(value.type) && typeof value.value === 'object') {
+        assert.deepEqual(Object.keys(value.value), ['bits']);
+        assert.match(value.value.bits, value.type === 'single' ? /^[0-9a-f]{8}$/i : /^[0-9a-f]{16}$/i);
+        const bytes = Buffer.from(value.value.bits, 'hex');
+        return value.type === 'single' ? bytes.readFloatBE() : bytes.readDoubleBE();
+    }
+    return value.value;
+};
 const failures = [];
 for (const inserted of [false, true]) {
     const before = wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsheet(original), source, 'AddRule', [inserted], 0, 'rows.xlsx', {});
@@ -2064,7 +2076,7 @@ Dim rule As Object
 Set rule=Range("A1").FormatConditions(1)
 ReadIcons=Array(rule.IconSet.ID,rule.IconCriteria.Count)
 End Function`;
-    const values = outcome => outcome.result.value.values.map(value => ['empty','null'].includes(value.type) ? null : value.value);
+    const values = outcome => outcome.result.value.values.map(value => ['empty','null'].includes(value.type) ? null : nativeComScalar(value));
     for (const control of controls) for (const item of control.cases) {
         const label = `IconSet ${control.entry} ${item.args}`;
         const outcome = wasm.run_spreadsheet_vba_with_outcome(wasm.parse_spreadsheet(original), control.source, control.entry, item.args, 0, undefined, {errorLanguage: 'ja-JP'});
@@ -2099,7 +2111,7 @@ End Function`;
                 : wasm.run_spreadsheet_vba_with_outcome(book, cases.program, 'Probe', args, 0, fullName, options);
             const label = `Worksheets.Add Count mode ${item.mode} ${route}`;
             assert.equal(outcome.error, undefined, label);
-            assert.deepEqual(outcome.result.value.values.map(v => v.value), item.expected, label);
+            assert.deepEqual(outcome.result.value.values.map(nativeComScalar), item.expected, label);
         } finally {
             session?.free();
         }
@@ -2137,7 +2149,7 @@ let nativeSheetAddObservations = 0;
             const label = `${group.id} ${item.receiver} ${item.mode} ${item.binding ?? '-'} ${route}`;
             assert.equal(outcome.error, undefined, label);
             assert.equal(outcome.result.type, 'array', label);
-            assert.deepEqual(outcome.result.value.values.map(v => v.value), item.expected, label);
+            assert.deepEqual(outcome.result.value.values.map(nativeComScalar), item.expected, label);
             assert.equal(outcome.workbook_changed, false, label + ' caller unchanged');
             assert.deepEqual(outcome.files ?? [], [], label + ' no output files');
             nativeSheetAddObservations++;
@@ -2192,7 +2204,7 @@ let nativeConversionObservations = 0;
             const label = `${group.id} mode ${item.mode} binding ${item.binding} ${route}`;
             try {
                 const args = [item.mode, item.binding];
-                if (item.input_operand_bits) args.push({type: 'double', value: Buffer.from(item.input_operand_bits, 'hex').readDoubleBE()});
+                if (item.input_operand_bits) args.push({type: 'double', value: {bits: item.input_operand_bits.toLowerCase()}});
                 const outcome = session
                     ? session.run(book, group.program, procedure, args, 0, fullName, options)
                     : wasm.run_spreadsheet_vba_with_outcome(book, group.program, procedure, args, 0, fullName, options);
@@ -2209,7 +2221,7 @@ let nativeConversionObservations = 0;
                         assert.ok(Number.isInteger(value.value) && value.value >= 0 && value.value <= 65535);
                         return value.value | 0x800a0000;
                     }
-                    return value.value;
+                    return nativeComScalar(value);
                 });
                 const conversionControl = diagnostic && item.binding >= 8;
                 assert.deepEqual(actual, item.expected, label);
@@ -2253,7 +2265,7 @@ let nativeSavedViewReopens = 0;
     const check = (outcome, item, label) => {
         assert.equal(outcome.error, undefined, label);
         assert.equal(outcome.result.type, 'array', label);
-        assert.deepEqual(outcome.result.value.values.map(value => value.value), item.Native_runs[3].values, label);
+        assert.deepEqual(outcome.result.value.values.map(nativeComScalar), item.Native_runs[3].values, label);
         assert.equal(outcome.workbook_changed, false, label + ' no cell edits');
         assert.deepEqual(outcome.files ?? [], [], label + ' no exports');
         assert.deepEqual(outcome.deleted_files ?? [], [], label + ' no deletions');
