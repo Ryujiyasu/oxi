@@ -14,6 +14,8 @@ mod string_value;
 mod compatibility;
 mod rich_text;
 pub mod parser;
+#[cfg(feature = "print")]
+pub mod print;
 pub mod row_defaults;
 pub mod row_height;
 

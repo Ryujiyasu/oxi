@@ -15,7 +15,7 @@ subsetter = "0.2.6"
 oxidocs-core = { version = "0.9.0", path = "../oxidocs-core" }
 oxidocs-model = { version = "0.9.0", path = "../oxidocs-model" }
 oxidocs-fonts = { version = "0.9.0", path = "../oxidocs-fonts" }
-oxicells-core = { version = "0.9.0", path = "../oxicells-core", optional = true }
+oxicells-core = { version = "0.9.0", path = "../oxicells-core", features = ["print"], optional = true }
 oxicells-calc = { version = "0.9.0", path = "../oxicells-calc", optional = true }
 oxivba-core = { version = "0.9.0", path = "../oxivba-core", optional = true }
 oxislides-core = { version = "0.9.0", path = "../oxislides-core", optional = true }

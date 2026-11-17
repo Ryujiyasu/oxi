@@ -38,8 +38,9 @@ instantiate it.
 
 - **.docx** — parse, lay out, render, edit and export to PDF. Japanese
   typography included: kinsoku by JIS X 4051, ruby, vertical writing.
-- **.xlsx** — parse, draw, a formula engine, and a VBA host that runs a
-  workbook's own macros in the browser.
+- **.xlsx** — parse, draw, a formula engine, export of the print pages to
+  PDF (`xlsx_to_pdf`), and a VBA host that runs a workbook's own macros in
+  the browser.
 - **.pptx** — parse, draw, edit, present.
 - **Round-trip editing** — the original ZIP is kept and only the XML that
   changed is patched, so a save that changes nothing is byte-identical.
