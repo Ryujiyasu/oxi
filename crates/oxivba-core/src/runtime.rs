@@ -19,6 +19,7 @@ use std::{
 use crate::errors::{vba_error_description, ErrorEnvironment};
 mod utf16;
 mod bstr;
+mod text_stream;
 
 use crate::ast::{FileInputStmt, FileMode, FileOpenStmt, FileSeekStmt, FileTransferKind, FileTransferStmt, FileOutputKind, FileOutputSeparator, FileOutputStmt, FileSystemStmt, FileSystemUnaryKind, 
     AlignedAssignStmt, AlignmentKind, Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind,
@@ -258,6 +259,9 @@ pub trait Host {
     /// Encode complete UTF-16 units using the system ANSI page (`None`) or
     /// the requested conversion locale (`Some(0)` means the user locale).
     fn encode_ansi(&self, _units: &[u16], _locale: Option<i64>) -> Option<Vec<u8>> { None }
+
+    /// Portable system ANSI profile for stateful TextStream conversion.
+    fn ansi_codec(&self) -> Option<crate::AnsiCodec> { None }
 
     /// Decode raw ANSI bytes, preserving embedded NULs and incomplete leads.
     fn decode_ansi(&self, _bytes: &[u8], _locale: Option<i64>) -> Option<Vec<u16>> { None }
@@ -982,7 +986,7 @@ enum InternalObject {
     /// `Scripting.FileSystemObject`, over the run's kept files.
     FileSystem,
     /// A TextStream: the file it has open, and the line it stands on.
-    TextStream { number: i64, line: i64, mode: crate::files::OpenMode },
+    TextStream { number: i64, state: text_stream::Stream },
     /// FileSystemObject's File, Folder and a folder's Files, by path.
     FileItem(String),
     FolderItem(String),
@@ -12146,17 +12150,15 @@ impl<'a> Runtime<'a> {
             path.rsplit(['\\', '/']).next().unwrap_or("").to_string()
         };
         let lower = name.to_ascii_lowercase();
-        let stream = |this: &mut Self, number: i64| {
+        let stream = |this: &mut Self, number: i64, format: i64| -> Result<Value, RuntimeError> {
+            let codec = this.host.as_deref().and_then(Host::ansi_codec)
+                .unwrap_or_else(|| crate::AnsiCodec::from_code_page(1252).expect("built-in ANSI profile"));
+            let state = text_stream::Stream::open(&mut this.files, number, format, codec).map_err(|failure| file_failure(failure, line))?;
             let handle = this.next_internal_handle;
             this.next_internal_handle += 1;
-            let mode = this.files.handle(number).map_or(OpenMode::Input, |held| held.mode);
-            let at = if mode == OpenMode::Append {
-                this.files.handle(number).and_then(|held| this.files.bytes(&held.path))
-                    .map_or(1, |bytes| 1 + bytes.iter().filter(|byte| **byte == b'\n').count() as i64)
-            } else { 1 };
-            this.internal_objects.insert(handle, InternalObject::TextStream { number, line: at, mode });
+            this.internal_objects.insert(handle, InternalObject::TextStream { number, state });
             let life = Rc::new(LifeToken { handle, native_stream: true, due: Rc::clone(&this.due) });
-            Value::Object(ObjectRef { handle, kind: "TextStream".to_string(), life: Some(life),dispatch_view:None })
+            Ok(Value::Object(ObjectRef { handle, kind: "TextStream".to_string(), life: Some(life),dispatch_view:None }))
         };
         let failure = |failure: crate::files::FileError| file_failure(failure, line);
         Ok(match lower.as_str() {
@@ -12273,7 +12275,7 @@ impl<'a> Runtime<'a> {
                     return Err(file_failure(crate::files::FileError::AlreadyExists, line));
                 }
                 let number = self.files.open_stream(&path, OpenMode::Output).map_err(failure)?;
-                stream(self, number)
+                stream(self, number, if flag_at(2, false) { -1 } else { 0 })?
             }
             "opentextfile" => {
                 let path = text_at(0)?;
@@ -12286,7 +12288,7 @@ impl<'a> Runtime<'a> {
                     self.files.open_stream(&path, OpenMode::Output).map_err(failure).map(|number| self.files.close(&[number]))?;
                 }
                 let number = self.files.open_stream(&path, mode).map_err(failure)?;
-                stream(self, number)
+                stream(self, number, number_at(3, 0))?
             }
             _ => {
                 return Err(no_such_member(format!("FileSystemObject has no member {name}"), Some(line)));
@@ -12375,9 +12377,9 @@ impl<'a> Runtime<'a> {
 
     /// A TextStream's members: WriteLine ends a line with CR LF, ReadLine
     /// and ReadAll read on from where the stream stands, Line counts from 1.
-    fn text_stream_call(&mut self, receiver: &ObjectRef, stream: (i64, i64, crate::files::OpenMode),
+    fn text_stream_call(&mut self, receiver: &ObjectRef, mut stream: text_stream::Stream,
         name: &str, args: &[Value], line: u32) -> Result<Value, RuntimeError> {
-        let (number, at, mode) = stream;
+        let (number, mode) = (stream.number, stream.mode);
         use crate::files::OpenMode;
         let member = name.to_ascii_lowercase();
         let property = matches!(member.as_str(), "atendofstream" | "atendofline" | "line" | "column");
@@ -12400,8 +12402,8 @@ impl<'a> Runtime<'a> {
         let written = if matches!(member.as_str(), "write" | "writeline") {
             match args.first() {
                 Some(Value::Null | Value::Error(_)) => return Err(language_error(13, "TextStream text requires a string", line)),
-                Some(value) => Some(text(value).map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))?),
-                None => Some(String::new()),
+                Some(value) => Some(utf16::units(value, Some(line))?),
+                None => Some(Vec::new()),
             }
         } else { None };
         let closed = self.files.handle(number).is_err();
@@ -12432,61 +12434,41 @@ impl<'a> Runtime<'a> {
             return Err(language_error(54, "TextStream was not opened for writing", line));
         }
         let failure = |failure| file_failure(failure, line);
-        let set_line = |this: &mut Self, next| {
-            if let Some(InternalObject::TextStream { line: held, .. }) = this.internal_objects.get_mut(&receiver.handle) { *held = next; }
+        let save_stream = |this: &mut Self, stream| {
+            if let Some(InternalObject::TextStream { state, .. }) = this.internal_objects.get_mut(&receiver.handle) { *state = stream; }
         };
         let value = match member.as_str() {
             "readline" | "skipline" => {
-                let value = self.files.read_line(number).map_err(failure)?;
-                set_line(self, at + 1);
-                if member == "readline" { Value::String(value) } else { Value::Empty }
+                let value = stream.read(&mut self.files, None, true).map_err(failure)?;
+                if member == "readline" { Value::from_utf16(value) } else { Value::Empty }
             }
             "readall" => {
-                let value = self.files.read_rest(number).map_err(failure)?;
-                set_line(self, at + value.matches('\n').count() as i64);
-                Value::String(value)
+                Value::from_utf16(stream.read(&mut self.files, None, false).map_err(failure)?)
             }
             "read" | "skip" => {
-                let held = self.files.handle(number).map_err(failure)?;
-                let remaining = self.files.bytes(&held.path).map_err(failure)?.len().saturating_sub(held.position);
-                let count = (count.expect("count-bearing member") as usize).min(remaining);
-                let value = self.files.read_characters(number, count).map_err(failure)?;
-                set_line(self, at + value.matches('\n').count() as i64);
-                if member == "read" { Value::String(value) } else { Value::Empty }
+                let count = count.expect("count-bearing member") as usize;
+                let value = stream.read(&mut self.files, Some(count), false).map_err(failure)?;
+                if member == "read" { Value::from_utf16(value) } else { Value::Empty }
             }
             "write" | "writeline" => {
                 let mut value = written.expect("text-bearing member");
-                if member == "writeline" { value.push_str("\r\n"); }
-                self.files.write(number, &value).map_err(failure)?;
-                set_line(self, at + value.matches('\n').count() as i64);
+                if member == "writeline" { value.extend_from_slice(&[13, 10]); }
+                stream.write(&mut self.files, &value).map_err(failure)?;
                 Value::Empty
             }
             "writeblanklines" => {
                 let count = count.expect("count-bearing member");
                 if count < 0 { return Err(language_error(5, "negative TextStream line count", line)); }
-                self.files.write(number, &"\r\n".repeat(count as usize)).map_err(failure)?;
-                set_line(self, at + count);
+                stream.write(&mut self.files, &[13, 10].repeat(count as usize)).map_err(failure)?;
                 Value::Empty
             }
-            "atendofstream" => Value::Boolean(self.files.at_end(number).map_err(failure)?),
-            "atendofline" => {
-                let held = self.files.handle(number).map_err(failure)?;
-                let bytes = self.files.bytes(&held.path).map_err(failure)?;
-                Value::Boolean(bytes.get(held.position).is_none_or(|byte| matches!(*byte, b'\r' | b'\n')))
-            }
-            "line" => Value::Integer(at),
-            "column" => {
-                let held = self.files.handle(number).map_err(failure)?;
-                let column = if mode == OpenMode::Input {
-                    let bytes = self.files.bytes(&held.path).map_err(failure)?;
-                    let prefix = &bytes[..held.position.min(bytes.len())];
-                    let start = prefix.iter().rposition(|byte| matches!(*byte, b'\r' | b'\n')).map_or(0, |at| at + 1);
-                    String::from_utf8_lossy(&prefix[start..]).encode_utf16().count()
-                } else { held.column };
-                Value::Integer(column as i64 + 1)
-            }
+            "atendofstream" => Value::Boolean(stream.at_end(&self.files).map_err(failure)?),
+            "atendofline" => Value::Boolean(stream.at_end_of_line(&self.files).map_err(failure)?),
+            "line" => Value::Integer(stream.line),
+            "column" => Value::Integer(stream.column),
             _ => unreachable!("validated TextStream member"),
         };
+        save_stream(self, stream);
         if !args.is_empty() && (property || matches!(member.as_str(), "readline" | "readall")) {
             return Err(language_error(if member == "readall" { 440 } else { 451 }, "TextStream getter result cannot be indexed", line));
         }
@@ -12517,9 +12499,9 @@ impl<'a> Runtime<'a> {
         }
         match object {
             InternalObject::FileSystem => return self.file_system_call(name, args, line),
-            InternalObject::TextStream { number, line: at, mode } => {
-                let (number, at, mode) = (*number, *at, *mode);
-                return self.text_stream_call(receiver, (number, at, mode), name, args, line);
+            InternalObject::TextStream { state, .. } => {
+                let state = state.clone();
+                return self.text_stream_call(receiver, state, name, args, line);
             }
             InternalObject::FileItem(path) => {
                 let path = path.clone();

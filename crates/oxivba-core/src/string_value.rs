@@ -103,6 +103,35 @@ impl AnsiCodec {
         output
     }
 
+    /// Encode without substituting an unrepresentable UTF-16 unit.
+    pub fn encode_checked(self, units: &[u16]) -> Option<Vec<u8>> {
+        let table = ansi_u32(self.descriptor + 4) as usize;
+        let count = ansi_u32(self.descriptor + 8) as usize;
+        for &unit in units {
+            if unit < 128 { continue; }
+            let mut low = 0;
+            let mut high = count;
+            while low < high {
+                let middle = (low + high) / 2;
+                if ansi_u16(table + middle * 4) < unit { low = middle + 1; }
+                else { high = middle; }
+            }
+            if low == count || ansi_u16(table + low * 4) != unit { return None; }
+        }
+        Some(self.encode(units))
+    }
+
+    /// Decode one complete ANSI character and report its byte width.
+    pub fn decode_prefix(self, bytes: &[u8]) -> (Vec<u16>, usize) {
+        let Some(&first) = bytes.first() else { return (Vec::new(), 0); };
+        let leads = ansi_u32(self.descriptor + 16) as usize;
+        let width = if ansi_u16(leads + first as usize * 2) != u16::MAX {
+            if bytes.len() < 2 { return (Vec::new(), 0); }
+            2
+        } else { 1 };
+        (self.decode(&bytes[..width]), width)
+    }
+
     pub fn decode(self, bytes: &[u8]) -> Vec<u16> {
         let singles = ansi_u32(self.descriptor + 12) as usize;
         let leads = ansi_u32(self.descriptor + 16) as usize;
