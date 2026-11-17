@@ -2818,6 +2818,21 @@ impl<'a> TableFitLayouter<'a> {
                     } else { outer };
                     page_top + outer
                 } else { page_top };
+                // OXI_FLOAT_RELOC_TBLPY (2026-11-17): a paragraph-anchored float that
+                // could not place a single row at its anchor moves whole and keeps its
+                // vertical offset on the new page. `_pb_floatreloc_gen.py`: anchor at
+                // 804 -> row 0 on p2 at margin + tblpY (48.19 for 323tw, 82.05 for
+                // 1000tw); a float whose first rows fit splits instead. blind-A ja/
+                // administrative__031662ee p2: Word 48.75 = 31.2 + 16.15 (+glyph).
+                let table_restart_top = table_restart_top
+                    + if row_idx == 0
+                        && true
+                        && !crate::env_flag!("OXI_FLOAT_RELOC_TBLPY_DISABLE")
+                    {
+                        table.style.position.as_ref()
+                            .filter(|p| p.v_anchor.as_deref() == Some("text") && p.y > 0.0 && p.y_spec.is_none())
+                            .map_or(0.0, |p| p.y)
+                    } else { 0.0 };
                 // S1621 (2026-10-01, default ON, opt-out OXI_S1621_DISABLE): the
                 // continued table's top rule is drawn AT the page top; only the
                 // row content sits `outer` lower. EN reports__0013bcb8 p3 (a
