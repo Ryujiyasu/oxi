@@ -11270,10 +11270,14 @@ impl<'a> Runtime<'a> {
         // moment, and asked of Excel `VarType(Timer)` is 4, a Single, where
         // Now, Date and Time are all 7.
         Ok(match name.to_ascii_lowercase().as_str() {
-            "now" => Value::Date(self.current_time),
-            "date" => Value::Date(self.current_time.floor()),
-            "time" => Value::Date(self.current_time.rem_euclid(1.0)),
-            "timer" => Value::Single((self.current_time.rem_euclid(1.0) * 86_400.0) as f32),
+            "now" => Value::Date(crate::files::whole_second_date(self.current_time)),
+            "date" => Value::Date(self.current_time.trunc()),
+            "time" => {
+                let now = crate::files::whole_second_date(self.current_time);
+                let seconds = (now.abs().fract() * 86_400.0).round();
+                Value::Date(seconds / 86_400.0)
+            },
+            "timer" => Value::Single((self.current_time.abs().fract() * 86_400.0) as f32),
             _ => unreachable!(),
         })
     }
@@ -12307,6 +12311,12 @@ impl<'a> Runtime<'a> {
             "attributes" => Value::Integer(self.files.query_attributes(path).map_err(|failure|file_failure(failure,line))?),
             "datelastmodified" => Value::Date(self.files.fresh_modified_time(path).map_err(|failure|file_failure(failure,line))?),
             "parentfolder" => self.fso_object("Folder", InternalObject::FolderItem(parent)),
+            "copy" => {
+                if !(1..=2).contains(&args.len()) { return Err(language_error(450, "Copy accepts Destination and optional Overwrite", line)); }
+                let mut parameters = vec![Value::String(path.to_string())];
+                parameters.extend_from_slice(args);
+                self.file_system_call("CopyFile", &parameters, line)?
+            },
             "delete" => {
                 self.files.delete_files(path,Self::fso_delete_force(args,line)?).map_err(|failure| file_failure(failure, line))?;
                 Value::Empty
@@ -12327,6 +12337,12 @@ impl<'a> Runtime<'a> {
                 let parent = path.rsplit_once(['\\', '/']).map_or(String::new(), |(parent, _)| parent.to_string());
                 self.fso_object("Folder", InternalObject::FolderItem(parent))
             }
+            "copy" => {
+                if !(1..=2).contains(&args.len()) { return Err(language_error(450, "Copy accepts Destination and optional Overwrite", line)); }
+                let mut parameters = vec![Value::String(path.to_string())];
+                parameters.extend_from_slice(args);
+                self.file_system_call("CopyFolder", &parameters, line)?
+            },
             "delete" => {
                 self.files.delete_folder_with_force(path,Self::fso_delete_force(args,line)?).map_err(|failure| file_failure(failure, line))?;
                 Value::Empty
@@ -21924,6 +21940,50 @@ End Function
     }
 
 
+
+    #[test]
+    fn file_and_folder_copy_aliases_use_native_argument_errors() {
+        let source = r#"
+Public Function Probe(ByVal mode As Long) As Variant
+ Dim fs As Object
+ Set fs=CreateObject("Scripting.FileSystemObject")
+ On Error Resume Next
+ Select Case mode
+ Case 0: fs.GetFolder("C:\work\source").Copy "C:\work\target",True
+ Case 1: fs.GetFile("C:\work\source\data.bin").Copy "C:\work\copied.bin",True
+ Case 2: fs.GetFolder("C:\work\source").Copy
+ Case 3: fs.GetFile("C:\work\source\data.bin").Copy
+ Case 4: fs.GetFolder("C:\work\source").Copy Null
+ Case 5: fs.GetFile("C:\work\source\data.bin").Copy Null
+ Case 6: fs.GetFolder("C:\work\source").Copy "C:\work\target",True,True
+ Case 7: fs.GetFile("C:\work\source\data.bin").Copy "C:\work\copied.bin",True,True
+ End Select
+ Probe=Array(Err.Number,fs.FolderExists("C:\work\target"),fs.FileExists("C:\work\copied.bin"))
+End Function
+"#;
+        let (module, _) = crate::parser::parse_project(source).unwrap();
+        for (mode, number) in [(0,0), (1,0), (2,450), (3,450), (4,13), (5,13), (6,450), (7,450)] {
+            let mut runtime = Runtime::new(&module);
+            runtime.file_system_mut().mount_folder(r"C:\work\source").unwrap();
+            runtime.file_system_mut().replace_bytes(r"C:\work\source\data.bin", b"ABC".to_vec()).unwrap();
+            let Value::Array(answer) = runtime.call("Probe", vec![Value::Integer(mode)]).unwrap() else { panic!("array required"); };
+            assert_eq!(answer.values, [Value::Integer(number), Value::Boolean(mode == 0), Value::Boolean(mode == 1)], "mode {mode}");
+        }
+    }
+
+    #[test]
+    fn clock_values_use_native_whole_seconds_and_independent_time_fractions() {
+        let source = "Public Function Probe() As Variant\n Probe=Array(Now,Date,Time,Timer)\nEnd Function";
+        let (module, _) = crate::parser::parse_project(source).unwrap();
+        let mut runtime = Runtime::new(&module).with_current_time(46343.2899537037 + 0.123 / 86_400.0);
+        let Value::Array(answer) = runtime.call("Probe", vec![]).unwrap() else { panic!("array required"); };
+        assert_eq!(answer.values[..3], [Value::Date(46343.2899537037), Value::Date(46343.0), Value::Date(0.2899537037037037)]);
+        let Value::Single(timer) = answer.values[3] else { panic!("Timer must retain Single precision"); };
+        assert!(timer > 25052.0 && timer < 25053.0);
+        let mut runtime = Runtime::new(&module).with_current_time(-1.5);
+        let Value::Array(answer) = runtime.call("Probe", vec![]).unwrap() else { panic!("array required"); };
+        assert_eq!(answer.values, [Value::Date(-1.5), Value::Date(-1.0), Value::Date(0.5), Value::Single(43200.0)]);
+    }
 
     #[test]
     fn filedatetime_retained_handles_close_using_the_new_invocation_clock() {

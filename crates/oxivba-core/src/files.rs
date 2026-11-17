@@ -193,7 +193,7 @@ impl Default for Files {
 }
 
 
-fn whole_second_date(serial: f64) -> f64 {
+pub(crate) fn whole_second_date(serial: f64) -> f64 {
     let seconds = serial.abs().fract() * 86_400.0;
     let whole = |seconds| serial.trunc() + serial.signum() * seconds / 86_400.0;
     // Whole-second DATEs can land below their second after the fractional
@@ -1511,8 +1511,9 @@ impl Files {
             if self.contents.contains_key(&target_key) || !overwrite && self.folder_exists(&target_key) { return Err(FileError::AlreadyExists); }
             if source == target_key { continue; }
             if target_key.starts_with(&format!("{source}\\")) { return Err(FileError::PermissionDenied); }
-            self.copy_directory_tree(&source, &target, overwrite)?;
+            let result = self.copy_directory_tree(&source, &target, overwrite);
             self.publish_parent_entry(self.key(destination).trim_end_matches('\\'));
+            result?;
         }
         Ok(())
     }
@@ -1526,11 +1527,11 @@ impl Files {
             self.attributes.insert(target.clone(), attributes);
             // CopyFolder leaves nested directory entries cached until queried.
         } else if !overwrite { return Err(FileError::AlreadyExists); }
-        let mut entries: BTreeMap<String, bool> = self.child_folders(source).into_iter().map(|path| (path, true)).collect();
+        let mut entries: BTreeMap<String, (String, bool)> = self.child_folders(source).into_iter().map(|path| (path.clone(), (path, true))).collect();
         for (key, (path, _)) in &self.contents {
-            if key.rsplit_once('\\').is_some_and(|(parent, _)| parent == source) { entries.insert(path.clone(), false); }
+            if key.rsplit_once('\\').is_some_and(|(parent, _)| parent == source) { entries.insert(key.clone(), (path.clone(), false)); }
         }
-        for (path, folder) in entries {
+        for (_, (path, folder)) in entries {
             let target = format!("{}\\{}", destination.trim_end_matches(['\\', '/']), file_name(&path));
             if folder { self.copy_directory_tree(&path, &target, overwrite)?; }
             else { self.copy_one(&path, &target, true, overwrite, false)?; }
@@ -1674,6 +1675,43 @@ mod tests {
         assert_eq!(files.copy_folder(r"C:\work\source\", r"C:\work\another", true), Err(FileError::PathNotFound));
         files.copy_folder(r"C:\work\s*", r"C:\work\existing\", false).unwrap();
         assert_eq!(files.bytes(r"C:\work\existing\source\data.bin"), Ok(b"ABC".as_slice()));
+    }
+
+    #[test]
+    fn copy_folder_partial_failure_follows_name_order_and_retains_completed_entries() {
+        let mut files = Files::default();
+        files.mount_folder(r"C:\work\source\middle").unwrap();
+        files.mount_folder(r"C:\work\target\middle").unwrap();
+        for (path, bytes) in [(r"C:\work\source\a.bin", b"A".as_slice()),
+            (r"C:\work\source\z.bin", b"Z".as_slice()),
+            (r"C:\work\source\middle\locked.bin", b"NEW".as_slice()),
+            (r"C:\work\target\middle\locked.bin", b"OLD".as_slice())] {
+            files.replace_bytes(path, bytes.to_vec()).unwrap();
+        }
+        files.set_attributes(r"C:\work\target\middle\locked.bin", 1).unwrap();
+        files.set_modified_time(r"C:\work\target", 43890.50283564815).unwrap();
+        files.set_current_time(47485.89925925926);
+        assert_eq!(files.copy_folder(r"c:\WORK\source", r"C:\work\target", true), Err(FileError::PermissionDenied));
+        assert_eq!(files.bytes(r"C:\work\target\a.bin"), Ok(b"A".as_slice()));
+        assert!(!files.exists(r"C:\work\target\z.bin"));
+        assert_eq!(files.bytes(r"C:\work\target\middle\locked.bin"), Ok(b"OLD".as_slice()));
+        assert_eq!(files.date_modified(r"C:\work\target"), Ok(43890.50283564815));
+    }
+
+    #[test]
+    fn copy_folder_failure_after_creation_publishes_the_destination_parent_date() {
+        let mut files = Files::default();
+        files.mount_folder(r"C:\work\source").unwrap();
+        files.replace_bytes(r"C:\work\source\a.bin", b"A".to_vec()).unwrap();
+        files.replace_bytes(r"C:\work\source\blocked.bin", b"B".to_vec()).unwrap();
+        files.set_modified_time(r"C:\work", 43890.50283564815).unwrap();
+        files.set_current_time(47485.89925925926);
+        files.open_with_options(r"C:\work\source\blocked.bin", OpenMode::Binary, 1,
+            Some(crate::ast::FileAccess::Read), Some(crate::ast::FileLock::ReadWrite)).unwrap();
+        assert_eq!(files.copy_folder(r"C:\work\source", r"C:\work\new", true), Err(FileError::PermissionDenied));
+        assert_eq!(files.date_modified(r"C:\work"), Ok(47485.89925925926));
+        assert_eq!(files.bytes(r"C:\work\new\a.bin"), Ok(b"A".as_slice()));
+        assert!(!files.exists(r"C:\work\new\blocked.bin"));
     }
 
     fn directory_date_fixture() -> Files {

@@ -90,6 +90,8 @@ fn python_runs_the_native_workbook_contract() {
             " bytes = bytes & \"|\"\n encoded = StrConv(ChrW(12354), vbFromUnicode, 2048)\n",
             " For i = 1 To LenB(encoded)\n bytes = bytes & Right$(\"0\" & Hex$(AscB(MidB$(encoded, i, 1))), 2)\n Next\n",
             " Environment = Array(n, d, s, h, c, bytes, Err.Number)\nEnd Function\n",
+            "Public Function ClockParts() As Variant\n Dim stamp As Variant, clock As Variant\n stamp=Now: clock=Time\n",
+            " ClockParts=Array(CDbl(stamp),CDbl(DateSerial(Year(stamp),Month(stamp),Day(stamp))+TimeSerial(Hour(stamp),Minute(stamp),Second(stamp))),CDbl(clock),CDbl(TimeSerial(Hour(clock),Minute(clock),Second(clock))),TypeName(stamp),VarType(stamp),TypeName(Timer),VarType(Timer))\nEnd Function\n",
             "Public Function ModifiedDate() As Variant\n",
             " Dim value As Variant\n value=FileDateTime(ThisWorkbook.FullName)\n",
             " ModifiedDate=Array(TypeName(value),VarType(value),CDbl(value),Year(value),Month(value),Day(value),Hour(value),Minute(value),Second(value),value)\nEnd Function\n",
