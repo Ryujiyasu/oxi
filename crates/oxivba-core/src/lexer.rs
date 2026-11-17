@@ -507,6 +507,20 @@ impl<'a> Lexer<'a> {
             return Ok(());
         }
 
+        let channel = self.out.last().is_some_and(|token| {
+            let TokenKind::Ident(word) = &token.kind else { return false; };
+            let member = self.out.iter().rev().nth(1)
+                .is_some_and(|token| matches!(token.kind, TokenKind::Punct(Punct::Dot)));
+            !member && ["close", "print", "write", "input", "get", "put", "seek", "lock", "unlock", "as"]
+                .iter().any(|keyword| word.eq_ignore_ascii_case(keyword))
+        });
+        if channel {
+            self.push_here(TokenKind::Punct(Punct::Hash), start, start + 1);
+            self.pos = start + 1;
+            self.at_line_start = false;
+            return Ok(());
+        }
+
         let mut i = self.pos + 1;
         while let Some(&b) = self.bytes.get(i) {
             if b == b'#' {
@@ -943,6 +957,23 @@ mod tests {
             kinds("#If Win64 Then"),
             vec![TokenKind::Directive("#If Win64 Then".to_string())]
         );
+    }
+
+
+    #[test]
+    fn inline_file_branches_keep_channel_hashes_and_date_arguments() {
+        for source in [
+            "If flag Then Close #1 Else Close #2",
+            "If flag Then Open \"a\" For Binary As #1 Else Open \"b\" For Binary As #2",
+        ] {
+            let tokens = kinds(source);
+            assert_eq!(tokens.iter().filter(|kind| matches!(kind, TokenKind::Punct(Punct::Hash))).count(), 2, "{source}");
+            assert!(!tokens.iter().any(|kind| matches!(kind, TokenKind::DateLit(_))), "{source}");
+        }
+        for source in ["Debug.Print #January 1, 2003#", ".Print #1:02#", "Print #1, #1/2/2003#"] {
+            let tokens = kinds(source);
+            assert_eq!(tokens.iter().filter(|kind| matches!(kind, TokenKind::DateLit(_))).count(), 1, "{source}");
+        }
     }
 
     #[test]

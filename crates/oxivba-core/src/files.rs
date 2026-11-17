@@ -153,6 +153,12 @@ impl FileError {
     }
 }
 
+#[derive(Debug, Clone)]
+struct PendingWrite {
+    written: f64,
+    buffered: usize,
+}
+
 /// The files of a run and the numbers they are open under.
 #[derive(Debug, Clone)]
 pub struct Files {
@@ -175,7 +181,7 @@ pub struct Files {
     directory_entries: BTreeMap<String, f64>,
     current_time: f64,
     clock: Option<crate::clock::Clock>,
-    pending_writes: std::collections::BTreeSet<(u64, i64)>,
+    pending_writes: BTreeMap<(u64, i64), PendingWrite>,
 }
 
 impl Default for Files {
@@ -589,14 +595,40 @@ impl Files {
         Ok(self.modified.get(key.trim_end_matches('\\')).copied().unwrap_or_else(|| self.current_time()))
     }
 
-    fn mark_handle_written(&mut self, number: i64, path: &str, nonempty: bool) {
+    fn publish_write_time(&mut self, path: &str, written: f64) {
+        for (key, pending) in &mut self.pending_writes {
+            if self.open.get(key).is_some_and(|handle| handle.path == path) {
+                pending.written = written;
+            }
+        }
+    }
+
+    fn mark_handle_written(&mut self, number: i64, path: &str, count: usize) {
         self.mark_written(path);
-        if nonempty { self.pending_writes.insert(channel_key(self.project_scope, number)); }
+        if count != 0 {
+            let key = channel_key(self.project_scope, number);
+            let sequential = number < 1000 && self.open.get(&key).is_some_and(|held|
+                matches!(held.mode, OpenMode::Output | OpenMode::Append));
+            let previous = self.pending_writes.get(&key).map_or(0, |pending| pending.buffered);
+            let buffered = if sequential && count < 1024 {
+                let total = previous.saturating_add(count);
+                if total > 512 { total % 512 } else { total }
+            } else { 0 };
+            let written = self.current_time();
+            self.pending_writes.insert(key, PendingWrite { written, buffered });
+            if !sequential || count >= 1024 || previous.saturating_add(count) > 512 {
+                self.publish_write_time(path, written);
+            }
+        }
     }
 
     fn close_key(&mut self, key: (u64, i64)) {
         if let Some(handle) = self.open.remove(&key) {
-            if self.pending_writes.remove(&key) { let current_time=self.current_time(); self.modified.insert(handle.path, current_time); }
+            if let Some(pending) = self.pending_writes.remove(&key) {
+                let written = if pending.buffered != 0 { self.current_time() } else { pending.written };
+                self.publish_write_time(&handle.path, written);
+                self.modified.insert(handle.path, written);
+            }
         }
         self.cursors.remove(&key);
     }
@@ -1047,7 +1079,7 @@ impl Files {
             None => handle.column += text.chars().count(),
         }
         let path=handle.path.clone();
-        self.mark_handle_written(number,&path,!text.is_empty());
+        self.mark_handle_written(number,&path,text.len());
         Ok(())
     }
 
@@ -1072,7 +1104,7 @@ impl Files {
             None => handle.column += text.chars().count(),
         }
         let path = handle.path.clone();
-        self.mark_handle_written(number,&path,!bytes.is_empty());
+        self.mark_handle_written(number,&path,bytes.len());
         Ok(())
     }
 
@@ -1105,6 +1137,34 @@ impl Files {
 
     pub fn column(&self, number: i64) -> Result<usize, FileError> {
         Ok(self.handle(number)?.column)
+    }
+
+    fn flush_pending_write(&mut self, number: i64) {
+        let key = channel_key(self.project_scope, number);
+        if self.pending_writes.get(&key).is_some_and(|pending| pending.buffered != 0) {
+            let written = self.current_time();
+            if let Some(pending) = self.pending_writes.get_mut(&key) {
+                pending.written = written;
+                pending.buffered = 0;
+            }
+            if let Some(path) = self.open.get(&key).map(|handle| handle.path.clone()) {
+                self.publish_write_time(&path, written);
+            }
+        }
+    }
+
+    /// VBA's LOF also flushes buffered sequential output.
+    pub fn query_length_of_open(&mut self, number: i64) -> Result<usize, FileError> {
+        let length = self.length_of_open(number)?;
+        self.flush_pending_write(number);
+        Ok(length)
+    }
+
+    /// Querying Seek flushes output without moving the next position.
+    pub fn query_next_position(&mut self, number: i64) -> Result<i64, FileError> {
+        let position = self.next_position(number)?;
+        self.flush_pending_write(number);
+        Ok(position)
     }
 
     /// `LOF`: the file's length in bytes.
@@ -1159,6 +1219,7 @@ impl Files {
             cursor.read_eof = false;
             cursor.record = None;
         }
+        self.flush_pending_write(number);
         Ok(())
     }
 
@@ -1192,7 +1253,7 @@ impl Files {
         cursor.record = None;
         handle.position = logical;
         let path = handle.path.clone();
-        self.mark_handle_written(number,&path,!bytes.is_empty());
+        self.mark_handle_written(number,&path,bytes.len());
         Ok(())
     }
 
@@ -1668,6 +1729,124 @@ impl Files {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn shared_writers_keep_the_last_write_time_in_either_close_order() {
+        for second_writes in [false, true] {
+            for first_closed in [1, 2] {
+                let mut files = Files::default();
+                files.mount_folder(r"C:\work").unwrap();
+                files.replace_bytes(r"C:\work\data.bin", b"OLD".to_vec()).unwrap();
+                files.set_modified_time(r"C:\work\data.bin", 43890.50283564815).unwrap();
+                files.open(r"C:\work\data.bin", OpenMode::Binary, 1).unwrap();
+                files.open(r"C:\work\data.bin", OpenMode::Binary, 2).unwrap();
+                files.set_current_time(46343.5);
+                files.put(1, b"AAA").unwrap();
+                files.set_current_time(46343.625);
+                if second_writes { files.put(2, b"BBB").unwrap(); }
+                files.set_current_time(46343.75);
+                files.close(&[first_closed]);
+                let written = if second_writes { 46343.625 } else { 46343.5 };
+                let published = if !second_writes && first_closed == 2 { 43890.50283564815 } else { written };
+                assert_eq!(files.date_modified(r"C:\work\data.bin"), Ok(published));
+                files.set_current_time(46344.5);
+                files.close(&[3 - first_closed]);
+                assert_eq!(files.date_modified(r"C:\work\data.bin"), Ok(written), "second_writes={second_writes}, first_closed={first_closed}");
+            }
+        }
+    }
+
+    #[test]
+    fn sequential_buffer_boundaries_keep_the_last_flush_time() {
+        let cases: &[(&[usize], bool)] = &[
+            (&[3], true), (&[513], true), (&[1024], false), (&[4096], false),
+            (&[256, 256], true), (&[256, 256, 256], true),
+            (&[512, 512], false), (&[512, 512, 512], true),
+            (&[513, 513], true), (&[1024, 1024], false),
+        ];
+        for mode in [OpenMode::Output, OpenMode::Append] {
+            for &(chunks, buffered) in cases {
+                let mut files = Files::default();
+                files.mount_folder(r"C:\work").unwrap();
+                files.replace_bytes(r"C:\work\data.bin", b"OLD".to_vec()).unwrap();
+                files.set_current_time(46343.5);
+                files.open(r"C:\work\data.bin", mode, 1).unwrap();
+                let mut written = 46343.5;
+                for (index, &count) in chunks.iter().enumerate() {
+                    written = 46343.5 + index as f64 / 8.0;
+                    files.set_current_time(written);
+                    let bytes = vec![b'A'; count];
+                    let text = String::from_utf8(bytes.clone()).unwrap();
+                    files.write_sequential(1, &text, &bytes).unwrap();
+                }
+                files.set_current_time(46344.5);
+                files.close(&[1]);
+                let expected = if buffered { 46344.5 } else { written };
+                assert_eq!(files.date_modified(r"C:\work\data.bin"), Ok(expected), "{mode:?} {chunks:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn sequential_queries_preserve_the_flush_time_at_later_close() {
+        for query in 0..4 {
+            let mut files = Files::default();
+            files.mount_folder(r"C:\work").unwrap();
+            files.set_current_time(46343.5);
+            files.open(r"C:\work\data.bin", OpenMode::Output, 1).unwrap();
+            files.write_sequential(1, "ABC", b"ABC").unwrap();
+            files.set_current_time(46343.625);
+            match query {
+                1 => { assert_eq!(files.query_length_of_open(1), Ok(3)); }
+                2 => { assert_eq!(files.query_next_position(1), Ok(4)); }
+                3 => { files.move_to(1, 1).unwrap(); }
+                _ => {}
+            }
+            files.set_current_time(46343.75);
+            files.close(&[1]);
+            let expected = if query == 0 { 46343.75 } else { 46343.625 };
+            assert_eq!(files.date_modified(r"C:\work\data.bin"), Ok(expected), "query={query}");
+        }
+    }
+
+    #[test]
+    fn refused_output_queries_do_not_flush_pending_writes() {
+        let mut files = Files::default();
+        files.mount_folder(r"C:\work").unwrap();
+        files.set_current_time(46343.5);
+        files.open(r"C:\work\data.bin", OpenMode::Output, 1).unwrap();
+        files.write_sequential(1, "ABC", b"ABC").unwrap();
+        files.set_current_time(46343.625);
+        assert_eq!(files.query_length_of_open(2), Err(FileError::BadNumber));
+        assert_eq!(files.query_next_position(2), Err(FileError::BadNumber));
+        assert_eq!(files.move_to(1, 0), Err(FileError::BadNumber));
+        files.set_current_time(46343.75);
+        files.close(&[1]);
+        assert_eq!(files.date_modified(r"C:\work\data.bin"), Ok(46343.75));
+    }
+
+    #[test]
+    fn flushed_writes_keep_the_write_time_when_closed_later() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        for (mode, stream) in [(OpenMode::Binary, false), (OpenMode::Random(16), false),
+            (OpenMode::Output, true), (OpenMode::Append, true)] {
+            let clock = Rc::new(Cell::new(46343.5));
+            let observed = Rc::clone(&clock);
+            let mut files = Files::default();
+            files.mount_folder(r"C:\work").unwrap();
+            files.replace_bytes(r"C:\work\data.bin", b"OLD".to_vec()).unwrap();
+            files.set_modified_time(r"C:\work\data.bin", 43890.50283564815).unwrap();
+            files.set_clock(Some(crate::clock::Clock::new(move || observed.get())));
+            let number = if stream { files.open_stream(r"C:\work\data.bin", mode).unwrap() }
+                else { files.open(r"C:\work\data.bin", mode, 1).unwrap(); 1 };
+            if stream { files.write(number, "ABC").unwrap(); }
+            else { files.put(number, b"ABC").unwrap(); }
+            clock.set(46343.75);
+            files.close(&[number]);
+            assert_eq!(files.date_modified(r"C:\work\data.bin"), Ok(46343.5), "{mode:?} stream={stream}");
+        }
+    }
 
     #[test]
     fn copy_folder_matches_native_target_and_overwrite_rules() {

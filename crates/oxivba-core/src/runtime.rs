@@ -6088,11 +6088,14 @@ impl<'a> Runtime<'a> {
                 written.push(',');
             }
         }
-        if !trailing {
-            written.push_str("\r\n");
-        }
         let bytes = utf16::encode_ansi(self.host.as_deref(), &written.encode_utf16().collect::<Vec<_>>(), None, Some(line))?;
-        self.files.write_sequential(number, &written, &bytes).map_err(|failure| file_failure(failure, line))
+        self.files.write_sequential(number, &written, &bytes).map_err(|failure| file_failure(failure, line))?;
+        if !trailing {
+            let newline = "\r\n";
+            let bytes = utf16::encode_ansi(self.host.as_deref(), &newline.encode_utf16().collect::<Vec<_>>(), None, Some(line))?;
+            self.files.write_sequential(number, newline, &bytes).map_err(|failure| file_failure(failure, line))?;
+        }
+        Ok(())
     }
 
     /// `Line Input #` and `Input #`. A field read by Input is the type it
@@ -6402,12 +6405,12 @@ impl<'a> Runtime<'a> {
                 .map(Value::Boolean),
             ("lof", [file]) => number_of(file)
                 .map_err(mismatch)
-                .and_then(|file| self.files.length_of_open(file).map_err(failure))
+                .and_then(|file| self.files.query_length_of_open(file).map_err(failure))
                 .map(|length| Value::Integer(length as i64)),
             ("input" | "input$" | "inputb" | "inputb$", args) => self.file_input_function(name, args, line),
             ("seek", [file]) => number_of(file)
                 .map_err(mismatch)
-                .and_then(|file| self.files.next_position(file).map_err(failure))
+                .and_then(|file| self.files.query_next_position(file).map_err(failure))
                 .map(Value::Integer),
             ("loc", [file]) => number_of(file)
                 .map_err(mismatch)
@@ -22045,8 +22048,41 @@ End Function
         assert_eq!(answer.values, [Value::Date(-1.5), Value::Date(-1.0), Value::Date(0.5), Value::Single(43200.0)]);
     }
 
+
     #[test]
-    fn filedatetime_retained_handles_close_using_the_new_invocation_clock() {
+    fn print_and_write_newlines_keep_their_own_pending_flush() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let source = r#"
+Public Sub StartOutput(ByVal quoted As Boolean)
+ Dim payload As String
+ payload=String$(1024,"A")
+ Open "C:\work\data.bin" For Output As #1
+ If quoted Then
+  Write #1,payload
+ Else
+  Print #1,payload
+ End If
+End Sub
+Public Function FinishOutput() As Date
+ Close #1
+ FinishOutput=FileDateTime("C:\work\data.bin")
+End Function
+"#;
+        let (module, _) = crate::parser::parse_project(source).unwrap();
+        for quoted in [false, true] {
+            let clock = Rc::new(Cell::new(46343.5));
+            let observed = Rc::clone(&clock);
+            let mut runtime = Runtime::new(&module).with_clock(crate::clock::Clock::new(move || observed.get()));
+            runtime.file_system_mut().mount_folder(r"C:\work").unwrap();
+            runtime.call("StartOutput", vec![Value::Boolean(quoted)]).unwrap();
+            clock.set(46343.75);
+            assert_eq!(runtime.call("FinishOutput", vec![]).unwrap(), Value::Date(46343.75), "quoted={quoted}");
+        }
+    }
+
+    #[test]
+    fn filedatetime_retained_binary_handles_keep_write_time_across_invocations() {
         let source=r#"
 Public Sub StartWrite()
  Dim b As Byte
@@ -22065,10 +22101,11 @@ End Function
         let mut first=Runtime::new(&module).with_current_time(old);
         first.file_system_mut().mount_folder(r"C:\work").unwrap();
         first.file_system_mut().replace_bytes(r"C:\work\data.bin",b"ABC".to_vec()).unwrap();
+        first.file_system_mut().set_modified_time(r"C:\work\data.bin", old - 1.0).unwrap();
         first.call("StartWrite",vec![]).unwrap();
         let state=first.into_project_state();
         let mut second=Runtime::new(&module).with_current_time(current).with_project_state(state);
-        assert_eq!(second.call("FinishWrite",vec![]).unwrap(),Value::Date(current));
+        assert_eq!(second.call("FinishWrite",vec![]).unwrap(),Value::Date(old));
     }
 
     #[test]
