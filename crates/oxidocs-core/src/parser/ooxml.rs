@@ -14632,6 +14632,29 @@ fn parse_table(
                 if style.left_border.is_none() {
                     style.left_border = tbl_style.left_border.clone();
                 }
+                // OXI_TBL_INSIDE_INHERIT (2026-11-17): a direct tblBorders that sets
+                // only the outer frame to none keeps the style's inside grid. blind-A
+                // en/reports__0018b88f: TableGrid + direct top/left/bottom/right none,
+                // no insideH/insideV -- Word draws every row and column rule inside
+                // and no frame; S930 left the table with no border at all.
+                let inside_live = |b: &Option<crate::ir::BorderDef>| b.as_ref().is_some_and(|b| b.style != "none" && b.style != "nil");
+                if !style.border
+                    && style.explicit_borders
+                    && true
+                    && !crate::env_flag!("OXI_TBL_INSIDE_INHERIT_DISABLE")
+                    && (inside_live(&style.inside_horizontal_border) || inside_live(&style.inside_vertical_border))
+                {
+                    style.border = true;
+                    if style.border_color.is_none() {
+                        style.border_color = tbl_style.border_color.clone();
+                    }
+                    if style.border_width.is_none() {
+                        style.border_width = tbl_style.border_width;
+                    }
+                    if style.border_style.is_none() {
+                        style.border_style = tbl_style.border_style.clone();
+                    }
+                }
             }
         }
     }
@@ -15030,6 +15053,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
     let mut depth = 0;
     let mut in_borders = false;
     let mut edge_mask: u8 = 0;
+    let mut none_mask: u8 = 0;
 
     loop {
         match reader.read_event()? {
@@ -15142,6 +15166,16 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 }
                                 _ => {}
                             }
+                        }
+                        if is_none && in_borders {
+                            none_mask |= match local.as_str() {
+                                "top" => 1,
+                                "left" | "start" => 2,
+                                "bottom" => 4,
+                                "right" | "end" => 8,
+                                "insideH" => 16,
+                                _ => 32,
+                            };
                         }
                         if !is_none && in_borders {
                             edge_mask |= match local.as_str() {
@@ -15376,6 +15410,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
 
     if style.explicit_borders && std::env::var_os("OXI_TBL_EDGE_MASK_DISABLE").is_none() {
         style.direct_edge_mask = Some(edge_mask);
+        style.direct_none_mask = Some(none_mask);
     }
     Ok(style)
 }

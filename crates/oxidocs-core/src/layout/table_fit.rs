@@ -5912,7 +5912,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 if !kern_active
                                                     && !crate::env_flag!("OXI_LATINEM_DISABLE")
                                                     && latinem_in_scope(self.doc_body_has_real_cjk)
-                                                    && !kinsoku::is_cjk(ch)
+                                                    && cell_latin_char(ch, self.doc_body_has_real_cjk)
                                                     && cell_has_em_advance(cm, ch)
                                                 {
                                                     cw = cm.char_width_em(ch) * font_size;
@@ -5939,7 +5939,7 @@ impl<'a> TableFitLayouter<'a> {
                                         // «WHOQOL-BREF» (Meiryo Italic 11, kern 2): Word kerns
                                         // L,hyphen -0.86 and keeps the word (82.5 in 83.06).
                                         && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_CJK_CELL_KERN_DISABLE"))
-                                        && !kinsoku::is_cjk(ch)
+                                        && cell_latin_char(ch, self.doc_body_has_real_cjk)
                                         && cell_has_em_advance(cm, ch)
                                                 {
                                                     cw = cm.char_width_em(ch) * font_size;
@@ -7440,7 +7440,7 @@ impl<'a> TableFitLayouter<'a> {
                                             {
                                                 // Kinsoku: line-start-prohibited chars (）。、etc.) stay on current line
                                                 if kinsoku::is_line_start_prohibited(ch)
-                        && !(ch.is_ascii() && !self.doc_body_has_real_cjk
+                        && !((ch.is_ascii() || (matches!(ch, '\u{2026}' | '\u{2025}') && true && !crate::env_flag!("OXI_CELL_LATIN_ELLIPSIS_DISABLE"))) && !self.doc_body_has_real_cjk
                             && !crate::env_flag!("OXI_ASCII_CELL_CLOSER_DISABLE"))
                     {
                                                     // S421 (2026-05-29): kinsoku OIKOMI (押し下げ).
@@ -11745,6 +11745,15 @@ impl<'a> TableFitLayouter<'a> {
                     // the sides its direct tblBorders declares.
                     let edge_none = BorderDef { style: "none".to_string(), width: 0.0, color: None, space: 0.0 };
                     let undeclared = |bit: u8| -> Option<&BorderDef> {
+                        // OXI_TBL_INSIDE_INHERIT: an outer side the direct tblBorders
+                        // declares none stays none under the inherited inside grid.
+                        if (bit & 15) != 0
+                            && table.style.direct_none_mask.is_some_and(|m| m & bit != 0)
+                            && true
+                            && !crate::env_flag!("OXI_TBL_INSIDE_INHERIT_DISABLE")
+                        {
+                            return Some(&edge_none);
+                        }
                         match table.style.direct_edge_mask {
                             Some(mask) if table.style.style_id.is_none() && mask & bit == 0 => Some(&edge_none),
                             _ => None,

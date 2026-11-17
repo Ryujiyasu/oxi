@@ -2311,6 +2311,9 @@ pub struct TableStyle {
     /// top/bottom-only appendix table).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct_edge_mask: Option<u8>,
+    /// Sides a direct `w:tblBorders` declares `none` / `nil` (same bits).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_none_mask: Option<u8>,
     /// Default row cohesion inherited from this table style.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_cant_split: Option<bool>,

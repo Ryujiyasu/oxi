@@ -58,6 +58,21 @@ fn fits_blank_float_lane(paragraph: &Paragraph) -> bool {
 // NBSP uses the ordinary space's measured advance even when the metrics table
 // stores only the latter. Keep cell wrapping and its height estimate on the
 // same unrounded advance, without changing NBSP's line-break semantics.
+/// OXI_CELL_LATIN_ELLIPSIS (2026-11-17): the cell wrapper and its line estimate measure a
+/// Latin character at its unrounded em advance; in a Latin document the ellipsis U+2026 /
+/// U+2025 is Latin text there too (S1442 for the body). blind-A en/educational__00187463:
+/// Bell MT 9 «I like this art/artist because…» -- the … (2048/2048 em = 9.0pt) took the
+/// 10tw-rounded fallback at 6.0, the line measured 108.0 in a 109.7 cell and stayed one
+/// line where Word wraps «because…»; the table lost a line and every later table title
+/// moved back a page.
+pub(crate) fn cell_latin_char(ch: char, doc_cjk: bool) -> bool {
+    !kinsoku::is_cjk(ch)
+        || (matches!(ch, '\u{2026}' | '\u{2025}')
+            && !doc_cjk
+            && !crate::env_flag!("OXI_CELL_LATIN_ELLIPSIS_DISABLE")
+            && true)
+}
+
 fn cell_has_em_advance(metrics: &FontMetrics, ch: char) -> bool {
     metrics.char_widths.contains_key(&ch)
         || (ch == '\u{00a0}'
@@ -6573,7 +6588,15 @@ impl LayoutEngine {
             || (!self.doc_body_has_real_cjk
                 && !crate::env_flag!("OXI_S1178_DISABLE")
                 && matches!(ch, '\u{00D7}' | '\u{00F7}'));
-        let cjk_class = self.ambiguous_symbol_east_asia(ch, run_style, para_style)
+        // OXI_CELL_LATIN_ELLIPSIS: in a Latin document the ellipsis takes the run's
+        // Latin face whatever the caller's CJK flag (the cell wrapper passes true):
+        // Word prices blind-A en/educational__00187463's Bell MT «…» at 9.0 (2048/2048),
+        // the eastAsia Calibri gave 6.0 after the 10tw round.
+        let latin_ellipsis = !self.doc_body_has_real_cjk
+            && matches!(ch, '\u{2026}' | '\u{2025}')
+            && true
+            && !crate::env_flag!("OXI_CELL_LATIN_ELLIPSIS_DISABLE");
+        let cjk_class = !latin_ellipsis && self.ambiguous_symbol_east_asia(ch, run_style, para_style)
             .unwrap_or_else(|| kinsoku::is_cjk(ch) && !(s763 && quote && !run_has_real_cjk));
         if cjk_class {
             if let Some(m) = self.metrics_for_cjk_script(
@@ -14588,6 +14611,14 @@ cells={} pitch={:.2} text={:?}",
                         // the paragraph by one line-plus-space interval.
                         && cursor_y + advance < b.2 - 0.5
                         && b.3 < right && b.4 > left).collect();
+                if let Some(pre) = std::env::var_os("OXI_DBG_WRAPBAND") {
+                    let head: String = para.runs.iter().flat_map(|r| r.text.chars()).take(20).collect();
+                    if head.starts_with(pre.to_string_lossy().as_ref()) {
+                        eprintln!("[WRAPBAND] {:?} cursor={:.2} before={:.2} line_top={:.2} lh={:.2} adv={:.2} left={:.1} right={:.1} overl={:?}",
+                            head, cursor_y, before, line_top, line_height, advance, left, right,
+                            overl.iter().map(|b| (b.1, b.2, b.3, b.4, b.5)).collect::<Vec<_>>());
+                    }
+                }
                 let required_lane = |policy: &BodyWrapPolicy| {
                     if policy.minimum_lane_width > 30.0 { policy.minimum_lane_width }
                     else { s1511_thr.min(policy.min_lane()) }
@@ -22367,7 +22398,7 @@ cells={} pitch={:.2} text={:?}",
                     if !kern_active
                         && !crate::env_flag!("OXI_LATINEM_DISABLE")
                         && latinem_in_scope(self.doc_body_has_real_cjk)
-                        && !kinsoku::is_cjk(ch)
+                        && cell_latin_char(ch, self.doc_body_has_real_cjk)
                         && cell_has_em_advance(cm, ch)
                     {
                         cw = cm.char_width_em(ch) * font_size;
@@ -22378,7 +22409,7 @@ cells={} pitch={:.2} text={:?}",
                         // three-pass lesson).
                         && !crate::env_flag!("OXI_S1017_DISABLE")
                         && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_CJK_CELL_KERN_DISABLE"))
-                        && !kinsoku::is_cjk(ch)
+                        && cell_latin_char(ch, self.doc_body_has_real_cjk)
                         && cell_has_em_advance(cm, ch)
                     {
                         cw = cm.char_width_em(ch) * font_size;
@@ -22839,7 +22870,7 @@ cells={} pitch={:.2} text={:?}",
                 ).unwrap_or(would_overflow);
                 if !is_space && would_overflow && !(!line_nonempty && !buf_nonempty) {
                     if kinsoku::is_line_start_prohibited(ch)
-                        && !(ch.is_ascii() && !self.doc_body_has_real_cjk
+                        && !((ch.is_ascii() || (matches!(ch, '\u{2026}' | '\u{2025}') && true && !crate::env_flag!("OXI_CELL_LATIN_ELLIPSIS_DISABLE"))) && !self.doc_body_has_real_cjk
                             && !crate::env_flag!("OXI_ASCII_CELL_CLOSER_DISABLE"))
                     {
                         buf_w += cw;

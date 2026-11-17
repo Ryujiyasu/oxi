@@ -1437,6 +1437,13 @@ const SUBSTITUTES: &[(&str, &str)] = &[
     // nothing and redistributes nothing — it is used when the machine already
     // has it, which most Linux distributions do.
     ("arial narrow", "Liberation Sans Narrow"),
+    // S1132: Word draws the Mac-only Avenir family in Tw Cen MT (the layout
+    // already measures it so); the PDF drew Avenir Book in the serif stand-in
+    // (its name holds «book») over Tw Cen MT positions -- blind-A
+    // en/creative__00d0925f came out in Cambria with the spaces swallowed.
+    ("avenir book", "Tw Cen MT"),
+    ("avenir next", "Tw Cen MT"),
+    ("avenir", "Tw Cen MT"),
 ];
 
 /// The machine's font index, built once. Every path that needs a font file
@@ -2337,12 +2344,23 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     // it -- its regular face, filled and stroked at fs/35 (Word's PDF: «2 Tr
                     // 0.51429 w» at 18pt) -- instead of a stand-in face. blind-J ja/reports__
                     // 77526bdb's bold ＭＳ Ｐゴシック «長野労働局» came out light.
+                    // OXI_PDF_FAKE_BOLD_LATIN (2026-11-17): a Latin family installed without a
+                    // bold member is drawn the same way. blind-J en/policies__00d0246e: the
+                    // «Job Title» / «Job Purpose» headings are bold Calibri Light (majorHAnsi);
+                    // Word's PDF draws Calibri-Light with «2 Tr 0.31543 w» at 11.04pt (= fs/35),
+                    // the CLI drew them regular.
+                    let latin_fake_bold = |f: &str| true
+                        && std::env::var_os("OXI_PDF_FAKE_BOLD_LATIN_DISABLE").is_none()
+                        && !is_cjk_family(f)
+                        && face_file_cached(f, false, false).is_some_and(|reg| {
+                            face_file_cached(f, true, false).map_or(true, |b| b == reg)
+                        });
                     let fake_bold = *bold
                         && std::env::var_os("OXI_PDF_FAKE_BOLD_DISABLE").is_none()
-                        && font_family.as_deref().is_some_and(|f| is_cjk_family(f)
-                            && face_file_cached(f, true, false).is_none());
+                        && font_family.as_deref().is_some_and(|f| (is_cjk_family(f)
+                            && face_file_cached(f, true, false).is_none()) || latin_fake_bold(f));
                     // Resolve font name for PDF (map to Type1 base fonts or CJK)
-                    let font_name = resolve_font_styled(font_family.as_deref(), *bold && !fake_bold, *italic);
+                    let font_name = resolve_font_styled(font_family.as_deref(), *bold && !(fake_bold && font_family.as_deref().is_some_and(is_cjk_family)), *italic);
                     let font_name = if *bold && !fake_bold && font_family.as_deref().is_some_and(is_cjk_family)
                         && font_name != "OxiCJK-Bold" && !embedded_fonts.contains_key(&font_name)
                     {

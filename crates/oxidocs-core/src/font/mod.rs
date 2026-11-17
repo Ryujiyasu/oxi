@@ -2762,6 +2762,12 @@ pub fn render_family_name(name: &str) -> &str {
         // reach today is zero: all 118 docs that name it do so only in latent
         // MacroText styles no paragraph applies. Correct, not load-bearing.
         "Courier New"
+    } else if matches!(name, "Avenir Book" | "Avenir Next" | "Avenir")
+        && !crate::env_flag!("OXI_S1132_DISABLE")
+        && !crate::env_flag!("OXI_AVENIR_RENDER_DISABLE")
+    {
+        // S1132: the face the metrics already use (Word's Tw Cen MT).
+        "Tw Cen MT"
     } else if name == "Times" && !crate::env_flag!("OXI_S1005_DISABLE") {
         // S1005: bare "Times" (PostScript) → Times New Roman (FontSubstitutes).
         "Times New Roman"
