@@ -740,6 +740,12 @@ const transportCases = [
  [{type:'array',value:{lower_bound:0,element_type:'date',dimensions:[],resizable:true,values:[]}}, 'Date():8199'],
  [{type:'array',value:{lower_bound:0,element_type:'string',dimensions:[{lower_bound:0,length:0}],resizable:true,values:[]}}, 'String():8200'],
  [{type:'array',value:{lower_bound:-1,element_type:'variant',dimensions:[{lower_bound:-1,length:2},{lower_bound:2,length:1}],resizable:false,values:[{type:'byte',value:7},{type:'date',value:43890}]}}, 'Variant():8204'],
+ [{type:'array',value:{lower_bound:0,element_type:'variant',dimensions:[{lower_bound:0,length:4}],resizable:true,values:[
+  {type:'string',value:'\u65e5\ud83d\ude00\ud800'},
+  {type:'bstr',value:[65]},
+  {type:'array',value:{lower_bound:-1,element_type:'single',dimensions:[{lower_bound:-1,length:2}],resizable:true,values:[{type:'single',value:{bits:'80000000'}},{type:'single',value:{bits:'7fc00042'}}]}},
+  {type:'array',value:{lower_bound:0,element_type:'string',dimensions:[{lower_bound:0,length:2}],resizable:true,values:[{type:'null_string'},{type:'string',value:''}]}},
+ ]}}, 'Variant():8204'],
 ];
 async function verifyResultTransport(invoke) {
  let book=emptyBook(),calls=0;

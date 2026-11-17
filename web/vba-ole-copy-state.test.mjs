@@ -37,7 +37,12 @@ function canonicalShapeViews(value){
     const array=v=>{assert.equal(v.type,'array');return v.value.values;};
     const scalar=(v,type)=>{assert.equal(v.type,type);return v.value;};
     const geometry=v=>{
-        const value=scalar(v,'single');assert(Number.isFinite(value));assert.equal(Math.fround(value),value);
+        const payload=scalar(v,'double');let value=payload;
+        if(payload&&typeof payload==='object'){
+            assert.equal(Object.keys(payload).length,1);assert.match(payload.bits,/^[0-9a-f]{16}$/i);
+            const encoded=new DataView(new ArrayBuffer(8));encoded.setBigUint64(0,BigInt('0x'+payload.bits),false);value=encoded.getFloat64(0,false);
+        }
+        assert(Number.isFinite(value));assert.equal(Math.fround(value),value);
         const bytes=new DataView(new ArrayBuffer(4));bytes.setFloat32(0,value,true);
         return '0x'+bytes.getUint32(0,true).toString(16).padStart(8,'0');
     };
