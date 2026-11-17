@@ -3761,7 +3761,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                     if (forced || argument.force_by_value)
-                        && parameter.is_some_and(|parameter| parameter.is_array)
+                        && parameter.is_some_and(|parameter| parameter.is_array && parameter.mode != crate::ast::ParamMode::ParamArray)
                     {
                         if let Some(value) = &argument.value {
                             if matches!(self.infer(value), Type::Array { .. }) {

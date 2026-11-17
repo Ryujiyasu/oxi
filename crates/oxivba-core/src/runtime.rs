@@ -3249,13 +3249,6 @@ impl<'a> Runtime<'a> {
                 if let Some(carried) = self.err_out.take() { frame.error_state = carried; }
             }
             let argument = &args[index];
-            let bound = match &argument.value {
-                Some(expression) if !force_by_value && !argument.force_by_value => {
-                    self.reference_argument(expression, frame, expression.span().line)?
-                }
-                Some(expression) => BoundArgument::Value(self.eval_expr(expression, frame)?),
-                None => BoundArgument::Value(Value::Missing),
-            };
             let parameter = parameters.and_then(|parameters| {
                 argument
                     .name
@@ -3272,6 +3265,17 @@ impl<'a> Runtime<'a> {
                             .filter(|p| p.mode == ParamMode::ParamArray)
                     })
             });
+            let variant = (source_binding || parameters.is_none())
+                && parameter.is_none_or(|parameter| self.variant_parameter(parameter));
+            let bound = match &argument.value {
+                Some(expression) if variant => self.variant_argument(expression,
+                    force_by_value || argument.force_by_value, frame)?,
+                Some(expression) if !force_by_value && !argument.force_by_value => {
+                    self.reference_argument(expression, frame, expression.span().line)?
+                }
+                Some(expression) => BoundArgument::Value(self.eval_expr(expression, frame)?),
+                None => BoundArgument::Value(Value::Missing),
+            };
             let line = argument
                 .value
                 .as_ref()
@@ -5419,7 +5423,7 @@ impl<'a> Runtime<'a> {
                 span,
             } => {
                 let evaluated=self.prepare_named_setter(target,frame,false)?;
-                let value = self.eval_expr(value, frame)?;
+                let value = self.assignment_variant_expression(target, value, frame)?;
                 if stands_on_the_with_subject(target)
                     && matches!(frame.with_objects.last(), Some(WithSubject::Value(_)))
                 {
@@ -10182,6 +10186,24 @@ impl<'a> Runtime<'a> {
                     if name.eq_ignore_ascii_case("array") && self.lookup_slot(frame, name).is_none() {
                         return self.eval_array_constructor(args, frame, self.option_base());
                     }
+                    if self.lookup_slot(frame, name).is_none() && !self.has_visible_procedure(name) {
+                        let intrinsic = key(name);
+                        if intrinsic == "iif" && args.len() == 3 {
+                            let parameters: Vec<_> = ["expr", "truepart", "falsepart"].into_iter().map(|name| crate::ast::Param {
+                                mode: ParamMode::ByVal, optional: false, name: name.into(), is_array: false,
+                                type_name: TypeName::implicit(), default: None,
+                            }).collect();
+                            let evaluated = self.evaluate_source_arguments(args, false, Some(&parameters), frame)?;
+                            let values = evaluated.iter().map(EvaluatedArgument::value).collect();
+                            let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                            return self.call_named(name, values, &names, Some(span.line), frame);
+                        }
+                        if intrinsic == "choose" || intrinsic == "switch" {
+                            let values = self.variadic_variant_values(args, frame)?;
+                            let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                            return self.call_named(name, values, &names, Some(span.line), frame);
+                        }
+                    }
                     if let Some(answer) = self.storage_size_asked_of(name, args, frame) {
                         return answer;
                     }
@@ -10299,9 +10321,20 @@ impl<'a> Runtime<'a> {
                 for (index,argument) in args.iter().enumerate() {
                     argument_names.push(argument.name.clone());
                     values.push(if let Some(evaluated)=&evaluated {evaluated[index].value()}else{match argument.value.as_ref() {
+                        Some(value) if expr_name(target).is_some_and(|name| matches!(key(name).as_str(),
+                            "typename" | "vartype" | "isarray" | "isobject" | "isempty" | "isnull" | "cvar")) =>
+                            self.variant_expression(value, frame)?,
                         Some(value) => self.eval_expr(value, frame)?,
                         None => Value::Missing,
                     }});
+                }
+                if early_macro {
+                    if let Some(evaluated) = evaluated.as_ref() {
+                        for (index, argument) in evaluated.iter().enumerate() {
+                            Self::evaluated_variant_array(argument, args[index].value.as_ref().is_some_and(|expression| self.typed_array_expression(expression, frame)));
+                            values[index] = argument.value();
+                        }
+                    }
                 }
                 let late_bound_receiver = match target.as_ref() {
                     Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
@@ -10563,22 +10596,124 @@ impl<'a> Runtime<'a> {
         self.call_resolved_source_body_with_defaults(module, procedure, receiver, args, force_by_value, evaluated, frame, line, false, true)
     }
 
-    fn eval_array_constructor(
-        &mut self, args: &[Argument], frame: &mut Frame, lower_bound: i64,
-    ) -> Result<Value, RuntimeError> {
+    fn materialize_variant_array_value(value: &mut Value) {
+        if let Value::Array(array) = value {
+            if array.dimensions.is_empty()
+                && matches!(array.element_default.as_ref(), Value::Nothing | Value::Object(_))
+            {
+                array.dimensions.push(ArrayDimension { lower_bound: 0, length: 0 });
+            }
+        }
+    }
+
+    fn materialize_variant_array_reference(slot: &ValueSlot) {
+        Self::materialize_variant_array_value(&mut slot.borrow_mut());
+    }
+
+    fn variant_parameter(&self, parameter: &crate::ast::Param) -> bool {
+        parameter.mode == ParamMode::ParamArray || (!parameter.is_array
+            && self.parameter_scalar_name(&parameter.type_name.name) == "variant")
+    }
+
+    fn typed_array_expression(&self, expression: &Expr, frame: &Frame) -> bool {
+        if let Expr::Group { expression, .. } = expression { return self.typed_array_expression(expression, frame); }
+        self.source_expression_type(expression, frame).is_some_and(|kind| kind.is_array)
+    }
+
+    fn array_expression(&self, expression: &Expr, frame: &Frame) -> bool {
+        if let Expr::Group { expression, .. } = expression { return self.array_expression(expression, frame); }
+        self.source_expression_type(expression, frame).is_some_and(|kind| kind.is_array)
+            || self.expression_slot(expression, frame).is_some_and(|slot|
+                matches!(&*slot.borrow(), Value::Array(_)))
+    }
+
+    fn variant_argument(&mut self, expression: &Expr, force_value: bool, frame: &mut Frame)
+        -> Result<BoundArgument, RuntimeError>
+    {
+        if let Expr::Group { expression: inner, .. } = expression {
+            if self.array_expression(inner, frame)
+                && self.prepared_source_argument_value(expression, frame).is_none()
+            {
+                let value = self.variant_argument(inner, true, frame)?;
+                return Ok(BoundArgument::Value(match value {
+                    BoundArgument::Reference(slot) => slot.snapshot(),
+                    BoundArgument::Value(value) => value,
+                }));
+            }
+        }
+        let mut argument = self.reference_argument(expression, frame, expression.span().line)?;
+        if self.typed_array_expression(expression, frame) {
+            match &mut argument {
+                BoundArgument::Reference(slot) => Self::materialize_variant_array_reference(slot),
+                BoundArgument::Value(value) => Self::materialize_variant_array_value(value),
+            }
+        }
+        Ok(match argument {
+            BoundArgument::Reference(slot) if force_value => BoundArgument::Value(slot.snapshot()),
+            other => other,
+        })
+    }
+
+    fn variant_expression(&mut self, expression: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        Ok(match self.variant_argument(expression, true, frame)? {
+            BoundArgument::Reference(slot) => slot.snapshot(),
+            BoundArgument::Value(value) => value,
+        })
+    }
+
+    fn assignment_variant_expression(&mut self, target: &Expr, expression: &Expr, frame: &mut Frame)
+        -> Result<Value, RuntimeError>
+    {
+        let declared = self.source_expression_type(target, frame);
+        let setter = match target {
+            Expr::Index { target, .. } => self.source_setter_signature(target, frame, false),
+            _ => self.source_setter_signature(target, frame, false),
+        };
+        let variant = setter.as_ref().and_then(|parameters| parameters.last())
+            .is_some_and(|parameter| self.variant_parameter(parameter))
+            || declared.as_ref().is_some_and(|kind| !kind.is_array && kind.name.eq_ignore_ascii_case("Variant"))
+            || (declared.is_none() && match target {
+                Expr::Ident(..) => true,
+                Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
+                Expr::Index { target, .. } => match target.as_ref() {
+                    Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
+                    _ => false,
+                },
+                Expr::WithMember(..) | Expr::WithBangMember(..) => matches!(frame.with_objects.last(),
+                    Some(WithSubject::Object { assignment_type: None, .. })),
+                _ => false,
+            });
+        if variant && (self.array_expression(expression, frame) || self.source_argument_array_place(expression, frame)) {
+            self.variant_expression(expression, frame)
+        } else { self.eval_expr(expression, frame) }
+    }
+
+    fn evaluated_variant_array(argument: &EvaluatedArgument, typed_array: bool) {
+        if !typed_array { return; }
+        if let Some(slot) = argument.reference.borrow().as_ref() {
+            Self::materialize_variant_array_reference(slot);
+        }
+        Self::materialize_variant_array_value(&mut argument.value.borrow_mut());
+    }
+
+    fn variadic_variant_values(&mut self, args: &[Argument], frame: &mut Frame) -> Result<Vec<Value>, RuntimeError> {
         let mut captured = Vec::with_capacity(args.len());
         for argument in args {
             captured.push(match &argument.value {
-                Some(expression) if !argument.force_by_value =>
-                    self.reference_argument(expression, frame, expression.span().line)?,
-                Some(expression) => BoundArgument::Value(self.eval_expr(expression, frame)?),
+                Some(expression) => self.variant_argument(expression, argument.force_by_value, frame)?,
                 None => BoundArgument::Value(Value::Missing),
             });
         }
-        let values: Vec<_> = captured.iter().map(|argument| match argument {
+        Ok(captured.into_iter().map(|argument| match argument {
             BoundArgument::Reference(slot) => slot.snapshot(),
-            BoundArgument::Value(value) => value.clone(),
-        }).collect();
+            BoundArgument::Value(value) => value,
+        }).collect())
+    }
+
+    fn eval_array_constructor(
+        &mut self, args: &[Argument], frame: &mut Frame, lower_bound: i64,
+    ) -> Result<Value, RuntimeError> {
+        let values = self.variadic_variant_values(args, frame)?;
         Ok(Value::Array(ArrayValue {
             dimensions: vec![ArrayDimension { lower_bound, length: values.len() }],
             values, element_default: Box::new(Value::Empty), resizable: true,
@@ -10783,6 +10918,18 @@ impl<'a> Runtime<'a> {
                         .and_then(|name| parameters.iter().find(|p| p.name.eq_ignore_ascii_case(name)))
                         .or_else(|| parameters.get(index))
                         .or_else(|| parameters.last().filter(|p| p.mode == ParamMode::ParamArray));
+                    if parameter.is_some_and(|parameter| parameter.mode == ParamMode::ParamArray) {
+                        let id = expression as *const Expr as usize;
+                        match self.variant_argument(expression, force_by_value || args[index].force_by_value, frame)? {
+                            BoundArgument::Reference(slot) => {
+                                self.source_argument_preparations[scope].references.insert(id, slot);
+                            }
+                            BoundArgument::Value(value) => {
+                                self.source_argument_preparations[scope].values.insert(id, value);
+                            }
+                        }
+                        continue;
+                    }
                     let reference = !force_by_value && !args[index].force_by_value
                         && parameter.is_some_and(|p| p.mode != ParamMode::ByVal)
                         && matches!(expression, Expr::Index { target, args, .. }
@@ -10942,7 +11089,8 @@ impl<'a> Runtime<'a> {
                                     ),
                                 }
                             } else {
-                                self.reference_argument(expression, frame, expression.span().line)?
+                                if self.variant_parameter(parameter) { self.variant_argument(expression, false, frame)? }
+                    else { self.reference_argument(expression, frame, expression.span().line)? }
                             })
                         }
                         _ => None,
@@ -11034,6 +11182,11 @@ impl<'a> Runtime<'a> {
                 bound.push(BoundArgument::Value(self.source_value_argument(Self::call_default_value(parameter, value, automation), parameter, frame, line.unwrap_or(0), automation_property)?));
                 continue;
             };
+            if self.variant_parameter(parameter) {
+                if let Some(argument) = evaluated.and_then(|values| values.get(argument_index)) {
+                    Self::evaluated_variant_array(argument, self.typed_array_expression(expression, frame));
+                }
+            }
             if let Some((prepared, conversion)) = evaluated.and_then(|values| {
                 values[argument_index]
                     .conversion
@@ -11094,7 +11247,8 @@ impl<'a> Runtime<'a> {
                         None => BoundArgument::Value(evaluated[argument_index].take_value()),
                     }
                 } else {
-                    self.reference_argument(expression, frame, expression.span().line)?
+                    if self.variant_parameter(parameter) { self.variant_argument(expression, false, frame)? }
+                    else { self.reference_argument(expression, frame, expression.span().line)? }
                 } {
                     BoundArgument::Reference(slot) => {
                         // A specific class passed as Object or Variant gets a converted reference.
@@ -11135,7 +11289,8 @@ impl<'a> Runtime<'a> {
             let value = if let Some(evaluated) = evaluated {
                 evaluated[argument_index].take_by_value()
             } else {
-                self.eval_expr(expression, frame)?
+                if self.variant_parameter(parameter) { self.variant_expression(expression, frame)? }
+                else { self.eval_expr(expression, frame)? }
             };
             bound.push(BoundArgument::Value(self.source_value_argument(value, parameter, frame, expression.span().line, automation_property)?));
         }
