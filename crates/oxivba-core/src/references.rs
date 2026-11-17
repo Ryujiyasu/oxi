@@ -34,6 +34,12 @@ pub struct CompileReferenceLibrary {
 }
 
 impl CompileReferenceLibrary {
+    /// The canonical object interface declared by a type or one of its aliases.
+    /// Scalar aliases are not object interfaces.
+    pub fn object_type_name(&self, name: &str) -> Option<String> {
+        self.resolve_type(name).map(|(name, _)| name)
+    }
+
     /// Declared names of a reference interface, resolving its type aliases.
     pub fn member_names<'a>(&'a self, owner: &str) -> impl Iterator<Item = &'a str> {
         let interface = self.resolve_type(owner).and_then(|(name, _)| self.interfaces.get(&name));
