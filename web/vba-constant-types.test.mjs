@@ -27,7 +27,10 @@ async function sequence(testCase,invoke,worker=false) {
       assert.ok(result.error.message.endsWith('コンパイル エラー: '+testCase.message),testCase.name);
     } else {
       assert.equal(result.error,undefined,testCase.name);
-      assert.deepEqual(result.result,{type:'string',value:step.value},testCase.name);
+      // Both Null expressions raise before assigning the String function result.
+      const unassigned = ['untyped_null', 'variant_null'].includes(testCase.name);
+      if (unassigned) assert.equal(step.value, '', testCase.name);
+      assert.deepEqual(result.result,unassigned ? {type:'null_string'} : {type:'string',value:step.value},testCase.name);
     }
     book=result.workbook;
   }
