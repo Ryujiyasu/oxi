@@ -106,6 +106,8 @@ class EngineDiagnostics(unittest.TestCase):
 class ExecutionEnvironmentValidation(unittest.TestCase):
     def test_invalid_environment_fails_before_starting_an_engine(self):
         for options, error in [
+            ({"clock_mode": False}, TypeError),
+            ({"clock_mode": "unsupported"}, ValueError),
             ({"error_language": 932}, TypeError),
             ({"error_language": "fr-FR"}, ValueError),
             ({"error_language": ""}, ValueError),
@@ -126,6 +128,43 @@ class NativeWorkbook(unittest.TestCase):
         self.fixture = Path(os.environ["OXICELLS_TEST_FIXTURE"])
         self.wb = ox.open(self.fixture, timeout=60)
         self.addCleanup(self.wb.close)
+
+    def test_timer_advances_while_a_macro_is_running(self):
+        value = self.wb.run("PythonBridge.ClockProgress").values
+        self.assertGreater((value[1] - value[0]) % 86400, 0)
+        self.assertEqual(value[2:], ("Single", 4))
+
+    def test_fixed_clock_mode_is_explicit_and_preserves_replay(self):
+        with ox.open(self.fixture, clock_mode="fixed", timeout=60) as book:
+            value = book.run("PythonBridge.ClockProgress").values
+        self.assertEqual(value[0], value[1])
+        self.assertEqual(value[2:], ("Single", 4))
+
+    def test_legacy_protocol_keeps_its_timestamp_and_live_mode_is_explicit(self):
+        messages = [
+            {"id": 1, "op": "open", "path": str(self.fixture), "seed": 1},
+            {"id": 2, "op": "run", "procedure": "PythonBridge.ClockParts", "args": []},
+            {"id": 3, "op": "run", "procedure": "PythonBridge.ClockParts", "args": [], "clockMode": True},
+            {"id": 4, "op": "run", "procedure": "PythonBridge.ClockParts", "args": []},
+            {"id": 5, "op": "run", "procedure": "PythonBridge.ClockProgress", "args": [], "clockMode": "live"},
+            {"id": 6, "op": "close"},
+        ]
+        data = "".join(json.dumps({"currentTime": 46343.5, **message}) + "\n" for message in messages)
+        result = subprocess.run([self.wb._process.args[0], "serve"], input=data,
+                                capture_output=True, text=True, encoding="utf-8", timeout=60,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        replies = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(len(replies), len(messages))
+        self.assertFalse(replies[2]["ok"])
+        for index in [1, 3]:
+            self.assertTrue(replies[index]["ok"], replies[index])
+            value = ox._decode(replies[index]["outcome"]["result"], self.wb).values
+            self.assertEqual(value[:4], (46343.5, 46343.5, 0.5, 0.5))
+        self.assertTrue(replies[4]["ok"], replies[4])
+        value = ox._decode(replies[4]["outcome"]["result"], self.wb).values
+        self.assertGreater((value[1] - value[0]) % 86400, 0)
+        self.assertTrue(replies[5]["ok"], replies[5])
 
     def test_clock_parts_are_native_whole_seconds_without_losing_timer_type(self):
         answer = self.wb.run("PythonBridge.ClockParts")

@@ -40,6 +40,7 @@ pub mod analysis;
 pub mod ast;
 pub mod case_table;
 pub mod compiler;
+pub mod clock;
 pub mod references;
 pub mod decimal;
 pub mod errors;
