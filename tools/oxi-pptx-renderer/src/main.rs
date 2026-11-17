@@ -489,8 +489,10 @@ fn compute_shape_anchor_off(
     // needs the block height, so a throwaway counter set is fine.
     let mut counters = std::collections::HashMap::<(u32, String), (Option<u32>, u32)>::new();
     let mut prev_fs: Option<f32> = None;
+    // S-ANCHORTAIL: the last line's baseline, size and face.
+    let mut tail: Option<(f32, f32, String)> = None;
     for (i, para) in paragraphs.iter().enumerate() {
-        let _ = layout_paragraph_baselines(
+        let (lines, _, family, _, _) = layout_paragraph_baselines(
             dc,
             para,
             &mut cursor_pt,
@@ -508,6 +510,9 @@ fn compute_shape_anchor_off(
             sh.wrap_text,
             sh.spc_first_last_para,
         );
+        tail = lines
+            .last()
+            .map(|l| (l.1, LAST_LINE_SIZE.with(|c| c.get()), family));
     }
     // block_h = the block's advance minus the first paragraph's first_off.
     let para = &paragraphs[0];
@@ -537,6 +542,34 @@ fn compute_shape_anchor_off(
         cursor_pt.max(0.0)
     } else {
         (cursor_pt - first_off).max(0.0)
+    };
+    // ★S-ANCHORTAIL. The block a "ctr" / "b" anchor places ends one FONT
+    // descent below the last baseline -- `(1.2 - e) * size` with `e` the
+    // face's own 1.2-em ascent split -- not at the last line box's bottom,
+    // and the last paragraph's spcAft is not part of it. Probe `anchorlnspc`
+    // (gen_pptx_anchorlnspc.py: 6 faces x t/ctr/b x lnSpc 80/100/130/150 x
+    // spcAft 0/12, two 11pt paragraphs in a 60pt box): the bottom-anchored
+    // last baseline + that descent lands on the inner bottom within 0.08pt in
+    // all 30 b-cells, and ctr centres the same block. The line box differs
+    // from it only when lnSpc != 100% (the 0.75-of-advance ascent leaves
+    // 0.25 of the advance below the baseline, not the face's descent): MS
+    // PGothic at 130% sat 2.6pt too high bottom-anchored, 1.3pt centred, and
+    // every spcAft-bearing box sat a whole spcAft too high. 54542be9 is set
+    // centred at 130% throughout.
+    // `a:bodyPr/@spcFirstLastPara="1"` (every Google Slides export) restores
+    // the line-box rule: the block then ends at the last line box's bottom
+    // PLUS the last paragraph's spcAft, i.e. the cursor end above. Same probe
+    // with that attribute (anchorlnspc_flp, and _flpover with the two lines
+    // overflowing a 15pt box): bottom-anchored 130% leaves 4.29pt below the
+    // last baseline for every face (0.25 of the 17.16pt advance), 100% the
+    // face's descent, spcAft 12 adds 12; ctr centres the same block and the
+    // overflow arms keep both rules unclamped.
+    let block_h = match tail {
+        Some((last_base, last_size, family)) if anchortail_on() && !sh.spc_first_last_para => {
+            let descent = 1.2 * last_size - first_baseline_off(&family, last_size, 1.0);
+            (last_base + descent).max(0.0)
+        }
+        _ => block_h,
     };
     if anchor == Some("ctr") {
         // ★A block TALLER than its box still centres on it: d24 slide 1's
@@ -15316,6 +15349,12 @@ fn shapegrad_on() -> bool {
     std::env::var("OXI_SHAPEGRAD_DISABLE").is_err()
 }
 
+/// A centred / bottom-anchored block ends one font descent below its last
+/// baseline (S-ANCHORTAIL) unless this is set.
+fn anchortail_on() -> bool {
+    std::env::var("OXI_ANCHORTAIL_DISABLE").is_err()
+}
+
 /// Fonts PowerPoint could not resolve are drawn in Calibri unless this is set.
 fn fontsub_on() -> bool {
     std::env::var("OXI_FONTSUB_DISABLE").is_err()
@@ -17332,6 +17371,9 @@ thread_local! {
     static HANG_PUNCT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The paragraph's East Asian kinsoku (`eaLnBrk`, resolved; default on).
     static EA_KINSOKU: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// The size of the last line `layout_paragraph_baselines` set, for the
+    /// anchor pass's block bottom (S-ANCHORTAIL).
+    static LAST_LINE_SIZE: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
 }
 
 /// `p:defaultTextStyle`'s `hangingPunct`, for paragraphs that say nothing.
@@ -20344,6 +20386,7 @@ fn layout_paragraph_baselines(
         out.push((line.clone(), baseline, base_off + align_off, line_w));
     }
     let _ = unsafe { SelectObject(dc, old_font) };
+    LAST_LINE_SIZE.with(|c| c.set(*line_sizes.last().unwrap_or(&fs)));
     // Leaving the paragraph, the cursor stops at the last line box's bottom --
     // one descent below the last baseline, which is `adv - first_off`.
     *cursor_pt = if mixed_lines {
