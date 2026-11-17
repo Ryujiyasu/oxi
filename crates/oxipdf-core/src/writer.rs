@@ -144,13 +144,13 @@ impl PdfWriter {
         self.begin_obj(info_num);
         write!(self.buf, "<<").unwrap();
         if let Some(ref title) = doc.info.title {
-            write!(self.buf, " /Title ({})", escape_pdf_string(title)).unwrap();
+            write!(self.buf, " /Title {}", text_string(title)).unwrap();
         }
         if let Some(ref author) = doc.info.author {
-            write!(self.buf, " /Author ({})", escape_pdf_string(author)).unwrap();
+            write!(self.buf, " /Author {}", text_string(author)).unwrap();
         }
         if let Some(ref subject) = doc.info.subject {
-            write!(self.buf, " /Subject ({})", escape_pdf_string(subject)).unwrap();
+            write!(self.buf, " /Subject {}", text_string(subject)).unwrap();
         }
         write!(
             self.buf,
@@ -723,6 +723,23 @@ fn write_color_op(buf: &mut Vec<u8>, color: &Color, stroke: bool) {
     }
 }
 
+/// A PDF text string for the info dictionary (ISO 32000-1 7.9.2.2): a literal
+/// string when the text is ASCII, otherwise UTF-16BE with a byte order mark,
+/// written in hex. Raw UTF-8 between parentheses reads as PDFDocEncoding, so
+/// a Japanese title would come out as mojibake in every viewer.
+fn text_string(s: &str) -> String {
+    if s.is_ascii() {
+        return format!("({})", escape_pdf_string(s));
+    }
+    let mut out = String::with_capacity(4 + s.len() * 4 + 2);
+    out.push_str("<FEFF");
+    for unit in s.encode_utf16() {
+        out.push_str(&format!("{unit:04X}"));
+    }
+    out.push('>');
+    out
+}
+
 fn escape_pdf_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -995,6 +1012,9 @@ mod tests {
         assert_eq!(escape_pdf_string("hello"), "hello");
         assert_eq!(escape_pdf_string("a(b)c"), "a\\(b\\)c");
         assert_eq!(escape_pdf_string("a\\b"), "a\\\\b");
+        assert_eq!(text_string("a(b)"), "(a\\(b\\))");
+        assert_eq!(text_string("見積書"), "<FEFF898B7A4D66F8>");
+        assert_eq!(text_string("𠀋"), "<FEFFD840DC0B>");
     }
 
     #[test]

@@ -2168,6 +2168,19 @@ fn elem_to_js(elem: oxidocs_core::layout::LayoutElement) -> LayoutElementJs {
 /// Parses the docx, runs layout, and converts positioned elements to PDF.
 #[wasm_bindgen]
 pub fn docx_to_pdf(data: &[u8]) -> Result<Vec<u8>, JsError> {
+    docx_to_pdf_titled(data, None)
+}
+
+/// Convert a .docx file to PDF bytes with `title` as the PDF's title, which
+/// viewers show in place of the file name or a blob URL. An empty title
+/// falls back to what `docx_to_pdf` uses.
+#[wasm_bindgen]
+pub fn docx_to_pdf_with_title(data: &[u8], title: &str) -> Result<Vec<u8>, JsError> {
+    let title = title.trim();
+    docx_to_pdf_titled(data, (!title.is_empty()).then(|| title.to_string()))
+}
+
+fn docx_to_pdf_titled(data: &[u8], title: Option<String>) -> Result<Vec<u8>, JsError> {
     let doc = oxidocs_core::parse_docx(data)
         .map_err(|e| JsError::new(&e.to_string()))?;
 
@@ -2175,24 +2188,25 @@ pub fn docx_to_pdf(data: &[u8]) -> Result<Vec<u8>, JsError> {
     let layout = engine.layout(&doc);
 
     runtime_fonts::validate_layout_glyphs(&layout).map_err(|e| JsError::new(&e))?;
-    let pdf_doc = layout_to_pdf(&layout, &doc);
+    let pdf_doc = layout_to_pdf(&layout, &doc, title);
     oxipdf_core::write_pdf_checked(&pdf_doc).map_err(|e| JsError::new(&format!("PDF glyph encoding: {e:?}")))
 }
 
 fn layout_to_pdf(
     layout: &oxidocs_core::layout::LayoutResult,
     doc: &oxidocs_core::Document,
+    title: Option<String>,
 ) -> oxipdf_core::ir::PdfDocument {
     use oxipdf_core::ir::*;
 
-    let title = doc.pages.first()
+    let title = title.or_else(|| doc.pages.first()
         .and_then(|p| p.blocks.first())
         .and_then(|b| match b {
             oxidocs_core::ir::Block::Paragraph(p) if p.style.heading_level == Some(1) => {
                 Some(p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
             }
             _ => None,
-        });
+        }));
 
     let pages = layout.pages.iter().map(|lp| {
         let width = lp.width as f64;
