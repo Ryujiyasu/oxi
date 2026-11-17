@@ -87,3 +87,59 @@ fn procedure_compilation_and_execution_order_match_excel() {
         failures.join("\n")
     );
 }
+
+
+fn pointer_compile_source(declaration: &str, expression: &str, helper: &str) -> String {
+    format!(r#"
+Attribute VB_Name = "PointerCompile"
+Option Explicit
+Public trace As Long
+{helper}
+Public Function Probe() As Boolean
+ {declaration}
+ trace=1
+ Probe=({expression})
+End Function
+Public Function ReadTrace() As Long
+ ReadTrace=trace
+End Function
+"#)
+}
+
+#[test]
+fn varptr_whole_array_arguments_fail_during_compilation() {
+    for (declaration, expression) in [
+        ("Dim values() As Object", "VarPtr(values)<>0"),
+        ("Dim values() As Long", "VarPtr(values)<>0"),
+        ("Dim values() As Variant", "VarPtr(values)<>0"),
+        ("Dim values() As Object", "VarPtr((values))<>0"),
+        ("Dim values() As Object", "VarPtr(values())<>0"),
+        ("Dim values() As Object", "VBA.VarPtr(values)<>0"),
+    ] {
+        let source = pointer_compile_source(declaration,expression,"");
+        let failure = oxivba_core::compile_project(&source).expect_err(expression);
+        assert_eq!(failure.error.kind, oxivba_core::CompileErrorKind::TypeMismatch, "{expression}");
+        let (module, classes) = parse_project(&source).unwrap();
+        let mut runtime = Runtime::new(&module).with_classes(&classes);
+        let failure = runtime.call("Probe",vec![]).expect_err(expression);
+        assert_eq!(failure.kind, RuntimeErrorKind::Compile, "{expression}");
+        assert_eq!(failure.vba_number, None, "{expression}");
+        assert_eq!(runtime.call("ReadTrace",vec![]).unwrap(), Value::Integer(0), "{expression}");
+    }
+}
+
+#[test]
+fn varptr_variant_slots_elements_and_source_shadows_remain_valid() {
+    for (declaration, expression, helper) in [
+        ("Dim values As Variant:values=Array(1,2)", "VarPtr(values)<>0", ""),
+        ("Dim values(0 To 0) As Object", "VarPtr(values(0))<>0", ""),
+        ("Dim values() As Object", "VarPtr(values)=77", "Private Function VarPtr(ByRef value() As Object) As Long\n VarPtr=77\nEnd Function\n"),
+    ] {
+        let source = pointer_compile_source(declaration,expression,helper);
+        oxivba_core::compile_project(&source).unwrap_or_else(|failure|panic!("{expression}: {failure:?}"));
+        let (module, classes) = parse_project(&source).unwrap();
+        let mut runtime = Runtime::new(&module).with_classes(&classes);
+        assert_eq!(runtime.call("Probe",vec![]).unwrap(), Value::Boolean(true), "{expression}");
+        assert_eq!(runtime.call("ReadTrace",vec![]).unwrap(), Value::Integer(1), "{expression}");
+    }
+}
