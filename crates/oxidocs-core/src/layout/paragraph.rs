@@ -6846,7 +6846,21 @@ impl<'a> ParagraphLayouter<'a> {
             // Justify/alignment uses indent-adjusted width. In charGrid mode,
             // break_into_lines may put more chars than fit in the indented area;
             // negative slack triggers punctuation compression to fit.
-            let render_width = content_width - indent_left - indent_right - s758_line_red;
+            // OXI_GRID_FLOOR_RENDER (2026-11-18, default ON, opt-out _DISABLE): the line
+            // is justified / aligned inside the same character-grid floor it was broken
+            // in (S1211C). `_pb_gridwidth_gen.py` (linesAndChars, pitch 10.5, text width
+            // 425.2 = 40.5 cells, compat 14): jc=both ends at 505.41 = margin + 40 cells,
+            // natural pitch; right-aligned text ends at 505.09, centred starts at 258.29
+            // (centre of the 420 floor); a 15pt right indent ends at 490.41 = floor - 15.
+            // compat 15 / a lines-only grid use the raw width (510.46 / 505.64).
+            // ja/correspondence__03ca64d7: Oxi broke at Word's 39 chars, then spread
+            // them to the raw edge 510.25 where Word ends at 505.35.
+            let render_content_width = if crate::env_flag!("OXI_GRID_FLOOR_RENDER_DISABLE") {
+                content_width
+            } else {
+                grid_content_width.min(content_width)
+            };
+            let render_width = render_content_width - indent_left - indent_right - s758_line_red;
             // OXI_ALIGN_TRAIL_WS (2026-11-04, default ON, opt-out _DISABLE): a right- or
             // centre-aligned line is placed by its width WITHOUT its trailing
             // whitespace -- ASCII spaces and «　» alike hang past the edge.
