@@ -6211,10 +6211,22 @@ impl<'a> Runtime<'a> {
         match transfer.kind {
             FileTransferKind::Put => {
                 let mut bytes = Vec::new();
-                self.value_bytes(&current, variant, fixed, random, &mut bytes, 0);
+                let encoded = self.value_bytes(&current, variant, fixed, random, &mut bytes, 0)
+                    .map_err(|mut failure| { failure.line = Some(line); failure });
+                // Random transfers stage a whole record before touching the file.
+                if random {
+                    if let Err(failure) = &encoded {
+                        self.files.restore_byte_position(number, &saved.path, saved.position, saved_cursor.clone());
+                        return Err(failure.clone());
+                    }
+                }
                 let written=self.files.put(number, &bytes);
                 permission_refused=matches!(written,Err(crate::files::FileError::PermissionDenied|crate::files::FileError::PathFileAccess));
                 written.map_err(|failure| file_failure(failure, line))?;
+                if let Err(failure) = encoded {
+                    self.files.restore_byte_position(number, &saved.path, saved.position, saved_cursor.clone());
+                    return Err(failure);
+                }
                 self.files.finish_record(number);
                 Ok(())
             }
@@ -6250,15 +6262,18 @@ impl<'a> Runtime<'a> {
             .map_err(|failure|file_failure(failure,line))
     }
 
-    fn value_bytes(&self, value: &Value, variant: bool, fixed: bool, random: bool, out: &mut Vec<u8>, depth: usize) {
-        if variant && !matches!(value, Value::Array(_) | Value::Record(_)) {
+    fn value_bytes(&self, value: &Value, variant: bool, fixed: bool, random: bool,
+        out: &mut Vec<u8>, depth: usize) -> Result<(), RuntimeError> {
+        if variant && !matches!(value, Value::Record(_)) {
             out.extend_from_slice(&(value_var_type(value) as u16).to_le_bytes());
-            if let Value::String(held) = value {
-                let bytes = ansi_bytes(held);
+        }
+        if let Some(units) = value.string_units() {
+            let bytes = utf16::encode_ansi(self.host.as_deref(), &units, None, None)?;
+            if variant || (random && !fixed) {
                 out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
-                out.extend_from_slice(&bytes);
-                return;
             }
+            out.extend_from_slice(&bytes);
+            return Ok(());
         }
         match value {
             Value::Byte(n) => out.push(*n),
@@ -6268,31 +6283,69 @@ impl<'a> Runtime<'a> {
             Value::LongLong(n) | Value::Currency(n) => out.extend_from_slice(&n.to_le_bytes()),
             Value::Single(n) => out.extend_from_slice(&n.to_le_bytes()),
             Value::Double(n) | Value::Date(n) => out.extend_from_slice(&n.to_le_bytes()),
-            Value::String(held) => {
-                let bytes = ansi_bytes(held);
-                if random && !fixed {
-                    out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
-                }
-                out.extend_from_slice(&bytes);
+            Value::Decimal(n) => {
+                out.extend_from_slice(&14u16.to_le_bytes());
+                out.push(n.scale);
+                out.push(if n.negative { 0x80 } else { 0 });
+                out.extend_from_slice(&((n.magnitude >> 64) as u32).to_le_bytes());
+                out.extend_from_slice(&(n.magnitude as u64).to_le_bytes());
             }
+            Value::Error(n) => {
+                let code = if (1..=65_535).contains(n) { 0x800a_0000 | *n as u32 } else { *n as u32 };
+                out.extend_from_slice(&code.to_le_bytes());
+            }
+            Value::Missing => out.extend_from_slice(&0x8002_0004u32.to_le_bytes()),
+            Value::Nothing | Value::Object(_) => return Err(error(RuntimeErrorKind::TypeMismatch, "Object cannot be written to a file", None)),
             Value::Array(array) => {
-                for one in &array.values {
-                    self.value_bytes(one, false, false, random, out, depth);
+                if matches!(array.element_default.as_ref(), Value::Nothing | Value::Object(_)) {
+                    return Err(error(RuntimeErrorKind::TypeMismatch, "Object array cannot be written to a file", None));
+                }
+                if variant || (random && array.resizable) {
+                    out.extend_from_slice(&(array.dimensions.len() as u16).to_le_bytes());
+                    for dimension in array.dimensions.iter().rev() {
+                        out.extend_from_slice(&(dimension.length as u32).to_le_bytes());
+                        out.extend_from_slice(&(dimension.lower_bound as i32).to_le_bytes());
+                    }
+                }
+                let element_variant = matches!(array.element_default.as_ref(), Value::Empty | Value::Missing | Value::Null | Value::Array(_));
+                let fixed_width = match array.element_default.as_ref() {
+                    Value::String(text) if !text.is_empty() => Some(text.encode_utf16().count()),
+                    _ => None,
+                };
+                for index in array.first_subscript_fastest_offsets() {
+                    let one = &array.values[index];
+                    if let Some(width) = fixed_width {
+                        self.fixed_file_string_bytes(one, width, out)?;
+                    } else {
+                        self.value_bytes(one, element_variant, false, true, out, depth)?;
+                    }
                 }
             }
             Value::Record(record) if depth < 16 => {
-                let Some(definition) = self.find_type(&record.type_name) else { return };
+                let Some(definition) = self.find_type(&record.type_name) else { return Ok(()) };
                 for (declared, (_, field)) in definition.fields.iter().zip(&record.fields) {
                     let is_fixed = declared.type_name.fixed_length.is_some();
                     let is_variant = declared.array_bounds.is_none()
                         && matches!(declared.type_name.name.to_ascii_lowercase().as_str(), "variant" | "");
-                    // A variable-length String inside a record carries its
-                    // length in front, as it does in a random file.
-                    self.value_bytes(field, is_variant, is_fixed, true, out, depth + 1);
+                    if is_fixed && field.is_string() {
+                        self.fixed_file_string_bytes(field, string_width(field), out)?;
+                    } else {
+                        self.value_bytes(field, is_variant, is_fixed, true, out, depth + 1)?;
+                    }
                 }
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn fixed_file_string_bytes(&self, value: &Value, width: usize, out: &mut Vec<u8>)
+        -> Result<(), RuntimeError> {
+        let units = utf16::units(value, None)?;
+        let mut bytes = utf16::encode_ansi(self.host.as_deref(), &units, None, None)?;
+        bytes.resize(width, 0);
+        out.extend_from_slice(&bytes);
+        Ok(())
     }
 
     fn value_from_file(&mut self, current: &Value, variant: bool, fixed: bool, random: bool, number: i64, depth: usize) -> Result<Value, crate::files::FileError> {
@@ -14471,7 +14524,10 @@ pub(crate) fn call_builtin(
                     line,
                 ));
             }
-            return Ok(Value::Boolean(matches!(args[0], Value::Missing)));
+            let empty_variants = matches!(&args[0], Value::Array(array)
+                if array.dimensions.len() == 1 && array.dimensions[0].length == 0
+                    && value_var_type(&args[0]) == 8204);
+            return Ok(Value::Boolean(matches!(args[0], Value::Missing) || empty_variants));
         }
         if name == "cverr" {
             if args.len() != 1 {
@@ -22331,6 +22387,156 @@ End Function
         assert_eq!(run(source, "DecodePair", vec![]).unwrap(), Value::String("\u{3042}".into()));
     }
 
+
+    mod file_put_native_tests {
+        use super::*;
+
+        struct JapaneseHost;
+        impl Host for JapaneseHost {
+            fn encode_ansi(&self, units: &[u16], _: Option<i64>) -> Option<Vec<u8>> {
+                Some(crate::AnsiCodec::from_code_page(932).unwrap().encode(units))
+            }
+            fn call(&mut self, _: Option<&ObjectRef>, _: &str, _: &[Value]) -> Result<Option<Value>, String> { Ok(None) }
+            fn get(&mut self, _: &ObjectRef, _: &str) -> Result<Option<Value>, String> { Ok(None) }
+            fn set(&mut self, _: &ObjectRef, _: &str, _: Value) -> Result<bool, String> { Ok(false) }
+        }
+
+        fn check(source: &str, args: Vec<Value>, expected_state: &str, expected_hex: &str) {
+            let module = crate::parse_module(source).unwrap();
+            let mut host = JapaneseHost;
+            let mut runtime = Runtime::new(&module).with_host(&mut host);
+            runtime.file_system_mut().mount_folder("C:\\work").unwrap();
+            runtime.file_system_mut().replace_bytes("C:\\work\\state.bin", vec![]).unwrap();
+            let actual = runtime.call("Probe", args).unwrap();
+            assert_eq!(actual, Value::String(expected_state.into()), "{source}");
+            let bytes = runtime.file_system_mut().bytes("C:\\work\\state.bin").unwrap();
+            let hex = bytes.iter().map(|b| format!("{b:02X}")).collect::<String>();
+            assert_eq!(hex, expected_hex, "{source}");
+        }
+
+        fn probe(declarations: &str, initialize: &str, mode: &str, transfer: &str) -> String {
+            format!(r#"
+{declarations}
+Public Function Probe(Optional ByVal value As Variant) As String
+ Dim n As Long
+ {initialize}
+ Open "C:\work\state.bin" For {mode} As #1
+ On Error Resume Next
+ {transfer}
+ n = Err.Number
+ Probe = CStr(n) & "|" & CStr(Seek(1)) & "|" & CStr(Loc(1)) & "|" & CStr(EOF(1)) & "|" & CStr(LOF(1))
+ Close #1
+End Function
+"#)
+        }
+
+        #[test]
+        fn variant_scalar_payloads_match_excel_binary_and_random_bytes() {
+            let cases = [
+                (vec![Value::Empty], "0000"),
+                (vec![Value::Null], "0100"),
+                (vec![Value::NullString], "08000000"),
+                (vec![Value::String(String::new())], "08000000"),
+                (vec![Value::String("日😀".into())], "0800040093FA3F3F"),
+                (vec![Value::Utf16(vec![0xd800])], "080001003F"),
+                (vec![Value::ByteString(vec![65])], "08000000"),
+                (vec![Value::ByteString(vec![65, 0, 216])], "0800010041"),
+                (vec![Value::Byte(255)], "1100FF"),
+                (vec![Value::Int16(-32768)], "02000080"),
+                (vec![Value::Integer(-2147483648)], "030000000080"),
+                (vec![Value::LongLong(i64::MIN)], "14000000000000000080"),
+                (vec![Value::Single(f32::from_bits(0x7fc00042))], "04004200C07F"),
+                (vec![Value::Double(-0.0)], "05000000000000000080"),
+                (vec![Value::Date(-0.5)], "0700000000000000E0BF"),
+                (vec![Value::Currency(i64::MAX)], "0600FFFFFFFFFFFFFF7F"),
+                (vec![Value::Error(0)], "0A0000000000"),
+                (vec![Value::Error(1)], "0A0001000A80"),
+                (vec![Value::Error(2007)], "0A00D7070A80"),
+                (vec![Value::Error(65535)], "0A00FFFF0A80"),
+                (vec![Value::Boolean(true)], "0B00FFFF"),
+                (vec![], "0A0004000280"),
+            ];
+            for (args, hex) in cases {
+                let length = hex.len() / 2;
+                for (mode, seek, loc) in [("Binary", length + 1, length), ("Random", 2, 1)] {
+                    check(&probe("", "", mode, "Put #1, , value"), args.clone(),
+                        &format!("0|{seek}|{loc}|False|{length}"), hex);
+                }
+            }
+            for (expression, hex) in [
+                ("CDec(\"79228162514264337593543950335\")", "0E000E000000FFFFFFFFFFFFFFFFFFFFFFFF"),
+                ("CDec(\"-0.1234567890123456789012345678\")", "0E000E001C80EB35FD034EF338BE917A796D"),
+            ] {
+                check(&probe("", &format!("value = {expression}"), "Binary", "Put #1, , value"),
+                    vec![], "0|19|18|False|18", hex);
+            }
+        }
+
+        #[test]
+        fn declared_arrays_and_records_keep_native_file_descriptors() {
+            for (declarations, initialize, value, binary, random) in [
+                ("Private a(-2 To 0) As Integer", "a(-2) = -7: a(0) = 13", "a", "F9FF00000D00", "F9FF00000D00"),
+                ("Private a() As Integer", "ReDim a(-2 To 0): a(-2) = -7: a(0) = 13", "a", "F9FF00000D00", "010003000000FEFFFFFFF9FF00000D00"),
+                ("Private a(0 To 1) As String", "a(0) = \"one\": a(1) = ChrW(&H65E5) & \"A\"", "a", "03006F6E65030093FA41", "03006F6E65030093FA41"),
+                ("Private a() As String", "ReDim a(0 To 1): a(0) = \"one\": a(1) = ChrW(&H65E5) & \"A\"", "a", "03006F6E65030093FA41", "0100020000000000000003006F6E65030093FA41"),
+                ("Private a(0 To 1) As String * 4", "a(0) = ChrW(&H65E5) & \"A\": a(1) = \"AB\"", "a", "93FA412041422020", "93FA412041422020"),
+                ("Private a(0 To 1) As Variant", "a(0) = CByte(1): a(1) = CSng(2.5)", "a", "110001040000002040", "110001040000002040"),
+                ("Private a As String * 4", "a = ChrW(&H65E5) & \"A\"", "a", "93FA412020", "93FA412020"),
+                ("Private Type Entry\n label As String * 4\n count As Long\n note As Variant\nEnd Type\nPrivate a As Entry", "a.label = ChrW(&H65E5) & \"A\": a.count = 258: a.note = CVErr(2007)", "a", "93FA4120020100000A00D7070A80", "93FA4120020100000A00D7070A80"),
+            ] {
+                for (mode, hex) in [("Binary", binary), ("Random", random)] {
+                    let length = hex.len() / 2;
+                    let (seek, loc) = if mode == "Binary" { (length + 1, length) } else { (2, 1) };
+                    check(&probe(declarations, initialize, mode, &format!("Put #1, , {value}")), vec![],
+                        &format!("0|{seek}|{loc}|False|{length}"), hex);
+                }
+            }
+            for (declarations, initialize, hex) in [
+                ("Private a(-2 To 0) As Integer", "a(-2) = -7: a(0) = 13: value = a", "0220010003000000FEFFFFFFF9FF00000D00"),
+                ("Private a(-1 To 0, 2 To 3) As Long", "a(-1,2)=1: a(0,2)=2: a(-1,3)=3: a(0,3)=4: value=a", "03200200020000000200000002000000FFFFFFFF01000000020000000300000004000000"),
+                ("Private a() As Integer", "value=a", "02200000"),
+                ("", "value=Array()", "0C2001000000000000000000"),
+                ("", "value=Array(Array(CByte(1),CSng(2.5)),Array(CDate(43890)),vbNullString)", "0C20010003000000000000000C20010002000000000000001100010400000020400C2001000100000000000000070000000000406EE54008000000"),
+            ] {
+                for mode in ["Binary", "Random"] {
+                    let length=hex.len()/2;
+                    let (seek,loc)=if mode=="Binary" {(length+1,length)} else {(2,1)};
+                    check(&probe(declarations, initialize, mode, "Put #1, , value"), vec![],
+                        &format!("0|{seek}|{loc}|False|{length}"), hex);
+                }
+            }
+        }
+
+        #[test]
+        fn invalid_objects_keep_partial_binary_bytes_and_original_cursor() {
+            for (initial, transfer, state, hex) in [
+                ("Set value=Nothing", "Put #1, , value", "13|1|0|False|2", "0900"),
+                ("Set value=Nothing", "Put #1, 5, value", "13|1|0|False|6", "000000000900"),
+                ("Set value=Nothing", "Seek #1,7: Put #1,5,value", "13|7|6|False|6", "000000000900"),
+                ("Set value=Nothing", "Seek #1,7: Put #1,,value", "13|7|6|False|8", "0000000000000900"),
+                ("value=Array(CByte(1),Nothing,CByte(2))", "Put #1,,value", "13|1|0|False|17", "0C20010003000000000000001100010900"),
+            ] {
+                check(&probe("", initial, "Binary", transfer), vec![], state, hex);
+                if !transfer.starts_with("Seek") {
+                    check(&probe("", initial, "Random", transfer), vec![], "13|1|0|False|0", "");
+                }
+            }
+            for (declarations, initialize, transfer, hex) in [
+                ("Private a(1 To 2) As Object", "", "Put #1,,a", ""),
+                ("Private a(1 To 2) As Object", "value=a", "Put #1,,value", "0920"),
+                ("Private a() As Object", "value=a", "Put #1,,value", "0920"),
+            ] {
+                let length=hex.len()/2;
+                check(&probe(declarations, initialize, "Binary", transfer), vec![],
+                    &format!("13|1|0|False|{length}"), hex);
+                check(&probe(declarations, initialize, "Random", transfer), vec![], "13|1|0|False|0", "");
+            }
+            check(&probe("", "Set value=Nothing", "Binary Access Read", "Put #1,5,value"), vec![], "75|1|0|False|0", "");
+            check(&probe("", "Set value=Nothing", "Random Access Read", "Put #1,5,value"), vec![], "13|1|0|False|0", "");
+            check(&probe("Private a As String", "a=\"\"", "Binary", "Put #1,5,a"), vec![], "0|5|4|False|0", "");
+        }
+    }
+
     fn run_file_state_probe(source: &str, args: Vec<Value>, seed: &[u8]) -> (Value, Vec<u8>) {
         let module = crate::parse_module(source).unwrap();
         let mut runtime = Runtime::new(&module);
@@ -25509,6 +25715,32 @@ Private stored As Long
         .unwrap();
 
         assert_eq!(value, Value::Integer(1016));
+    }
+
+
+    #[test]
+    fn ismissing_empty_variant_arrays_match_direct_optional_and_paramarray_contexts() {
+        let source = r#"
+Private Function ByValue(Optional ByVal item As Variant) As Boolean
+ ByValue=IsMissing(item)
+End Function
+Private Function ByReference(Optional ByRef item As Variant) As Boolean
+ ByReference=IsMissing(item)
+End Function
+Private Function Args(ParamArray items() As Variant) As Boolean
+ Args=IsMissing(items)
+End Function
+Public Function Probe() As String
+ Dim value As Variant, variants() As Variant, fixedVariants(0 To 1) As Variant
+ Dim dynamicVariants() As Variant, integers() As Integer, objects() As Object
+ value=Array():ReDim dynamicVariants(-2 To -1)
+ Probe=CStr(IsMissing(Array())) & "|" & CStr(IsMissing(value)) & "|" & CStr(IsMissing(Array(Empty))) & "|" & CStr(IsMissing(Split("",",")))
+ Probe=Probe & "|" & CStr(IsMissing(variants)) & "|" & CStr(IsMissing(fixedVariants)) & "|" & CStr(IsMissing(dynamicVariants)) & "|" & CStr(IsMissing(integers)) & "|" & CStr(IsMissing(objects))
+ Probe=Probe & "|" & CStr(ByValue(Array())) & "|" & CStr(ByReference(Array())) & "|" & CStr(ByValue()) & "|" & CStr(ByReference()) & "|" & CStr(Args()) & "|" & CStr(Args(Empty)) & "|" & CStr(Args(Array()))
+End Function
+"#;
+        assert_eq!(run(source, "Probe", vec![]).unwrap(),
+            Value::String("True|True|False|False|False|False|False|False|False|True|True|True|True|True|False|False".into()));
     }
 
     #[test]
@@ -29965,10 +30197,6 @@ fn read_input_field(field: &str) -> Value {
 
 /// Text as a file holds it: a byte a character, the ANSI way, `?` for what
 /// has no byte.
-fn ansi_bytes(text: &str) -> Vec<u8> {
-    text.chars().map(|one| u8::try_from(u32::from(one)).unwrap_or(b'?')).collect()
-}
-
 fn ansi_text(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| char::from(*byte)).collect()
 }
