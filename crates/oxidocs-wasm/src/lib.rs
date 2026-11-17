@@ -2202,7 +2202,8 @@ fn layout_to_pdf(
         for elem in &lp.elements {
             match &elem.content {
                 oxidocs_core::layout::LayoutContent::Text {
-                    text, font_size, font_family, bold, italic, color, character_spacing, ..
+                    text, font_size, font_family, bold, italic, color, character_spacing,
+                    underline, underline_style, strikethrough, ..
                 } => {
                     if text.is_empty() {
                         continue;
@@ -2218,21 +2219,55 @@ fn layout_to_pdf(
                     let fill_color = color.as_ref()
                         .and_then(|c| parse_hex_color(c))
                         .unwrap_or(Color::Gray(0.0));
+                    let fs = *font_size as f64;
+                    let baseline = (elem.y + canvas_baseline_offset(elem).unwrap_or(0.0)) as f64;
+
+                    // The bundled East Asian stand-ins have no bold member, so bold
+                    // East Asian text is drawn as Word draws a family without one:
+                    // the regular face filled and stroked at fs/35 (the CLI's
+                    // OXI_PDF_FAKE_BOLD; Word's PDF writes «2 Tr 0.51429 w» at 18pt).
+                    let fake_bold = *bold && !registered && font_name.starts_with("OxiCJK-");
 
                     let span = TextSpan {
                         x: elem.x as f64,
-                        y: (elem.y + canvas_baseline_offset(elem).unwrap_or(0.0)) as f64,
+                        y: baseline,
                         text: text.clone(),
                         font_name,
-                        font_size: *font_size as f64,
+                        font_size: fs,
                         fill_color,
-                        character_spacing: *character_spacing as f64, stroke_width: 0.0, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
+                        character_spacing: *character_spacing as f64,
+                        stroke_width: if fake_bold { fs / 35.0 } else { 0.0 },
+                        skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
                     };
                     contents.push(if let Some(glyph) = &elem.font_glyph {
                         ContentElement::GlyphRun(GlyphRun { span, glyph_indices: vec![glyph.index] })
                     } else {
                         ContentElement::Text(span)
                     });
+
+                    // Underline and strikethrough across the element's width, at the
+                    // positions and thicknesses the CLI's PDF export uses.
+                    let (x0, x1) = (elem.x as f64, (elem.x + elem.width) as f64);
+                    let rule = |y: f64, width: f64| ContentElement::Path(PathData {
+                        operations: vec![PathOp::MoveTo(x0, y), PathOp::LineTo(x1, y)],
+                        stroke: Some(StrokeStyle {
+                            color: fill_color, width,
+                            line_cap: LineCap::Butt, line_join: LineJoin::Miter,
+                        }),
+                        fill: None,
+                    });
+                    if *underline && x1 > x0 {
+                        let w = 0.5_f64.max(fs * 0.05);
+                        if underline_style.as_deref() == Some("double") {
+                            contents.push(rule(baseline + fs * 0.10, w));
+                            contents.push(rule(baseline + fs * 0.22, w));
+                        } else {
+                            contents.push(rule(baseline + fs * 0.15, w));
+                        }
+                    }
+                    if *strikethrough && x1 > x0 {
+                        contents.push(rule(elem.y as f64 + elem.height as f64 * 0.45, 0.5_f64.max(fs * 0.04)));
+                    }
                 }
                 oxidocs_core::layout::LayoutContent::Image { data, .. } => {
                     if data.is_empty() {
@@ -2377,6 +2412,34 @@ fn layout_to_pdf(
         }
     }
 
+    // Cut each embedded face down to the characters drawn with it, as the CLI
+    // export does. Whole faces made a one-page Japanese quotation 7.8 MB (all
+    // of OxiMincho) against 28 KB from the CLI. A face that is also drawn by
+    // glyph index keeps every glyph, since those indices are the original ones.
+    let mut drawn: std::collections::HashMap<&str, std::collections::BTreeSet<char>> = std::collections::HashMap::new();
+    let mut by_glyph: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for element in pages.iter().flat_map(|p| &p.contents) {
+        match element {
+            ContentElement::Text(span) => {
+                drawn.entry(span.font_name.as_str()).or_default().extend(span.text.chars());
+            }
+            ContentElement::GlyphRun(run) => {
+                by_glyph.insert(run.span.font_name.as_str());
+            }
+            _ => {}
+        }
+    }
+    for (key, font) in embedded_fonts.iter_mut() {
+        if by_glyph.contains(key.as_str()) {
+            continue;
+        }
+        if let Some(chars) = drawn.get(key.as_str()) {
+            if let Some(subset) = subset_embedded_font(font, chars) {
+                *font = subset;
+            }
+        }
+    }
+
     PdfDocument {
         version: PdfVersion::new(1, 7),
         info: DocumentInfo {
@@ -2388,6 +2451,57 @@ fn layout_to_pdf(
         outline: Vec::new(),
         embedded_fonts,
     }
+}
+
+/// A copy of a TrueType face holding only the glyphs of `chars`, renumbered,
+/// with the cmap and widths to match. None when the face is not TrueType,
+/// draws none of the characters, or the subsetter fails; the caller then keeps
+/// the whole face.
+fn subset_embedded_font(
+    font: &oxipdf_core::ir::EmbeddedFont,
+    chars: &std::collections::BTreeSet<char>,
+) -> Option<oxipdf_core::ir::EmbeddedFont> {
+    use oxipdf_core::font_util;
+    use oxipdf_core::ir::{EmbeddedFont, FontFormat};
+    if !matches!(font.format, FontFormat::TrueType) || font.data.starts_with(b"OTTO") {
+        return None;
+    }
+    let cmap = font_util::parse_cmap_table(&font.data);
+    let widths = font_util::parse_ttf_widths(&font.data);
+    let mut remapper = subsetter::GlyphRemapper::new();
+    let mut unicode_to_gid = std::collections::HashMap::new();
+    let mut cid_widths = std::collections::HashMap::new();
+    // A character the face lacks is drawn as glyph 0; keep that glyph's own
+    // width, or the viewer falls back to a full em and pushes the rest of the
+    // span along.
+    if let Some(&w) = widths.get(&0) {
+        cid_widths.insert(0, w);
+    }
+    for &c in chars {
+        let Some(&gid) = cmap.get(&(c as u32)) else { continue };
+        if gid == 0 {
+            continue;
+        }
+        let new = remapper.remap(gid);
+        unicode_to_gid.insert(c as u32, new);
+        if let Some(&w) = widths.get(&gid) {
+            cid_widths.insert(new, w);
+        }
+    }
+    if unicode_to_gid.is_empty() {
+        return None;
+    }
+    let data = subsetter::subset(&font.data, 0, &remapper).ok()?;
+    if data.starts_with(b"OTTO") {
+        return None;
+    }
+    Some(EmbeddedFont {
+        ps_name: font.ps_name.clone().or_else(|| font_util::parse_ps_name(&font.data)),
+        data,
+        format: FontFormat::TrueType,
+        unicode_to_gid,
+        cid_widths,
+    })
 }
 
 fn resolve_wasm_font(base_font: &str, bold: bool, italic: bool, text: &str) -> String {
