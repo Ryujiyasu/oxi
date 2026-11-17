@@ -12349,7 +12349,7 @@ impl<'a> Runtime<'a> {
                 Value::String(path.rsplit(['\\', '/']).next().unwrap_or(path).to_string())
             },
             "path" | "_default" => Value::String(path.to_string()),
-            "size" => Value::Integer(self.files.query_length(path).map_err(|failure| file_failure(failure, line))? as i64),
+            "size" => Value::Integer(self.files.fresh_length(path).map_err(|failure| file_failure(failure, line))? as i64),
             "attributes" => Value::Integer(self.files.query_attributes(path).map_err(|failure|file_failure(failure,line))?),
             "datelastmodified" => Value::Date(self.files.fresh_modified_time(path).map_err(|failure|file_failure(failure,line))?),
             "parentfolder" => self.fso_object("Folder", InternalObject::FolderItem(parent)),

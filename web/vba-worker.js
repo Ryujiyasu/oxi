@@ -24,7 +24,7 @@ self.addEventListener('message', async event => {
             if (typeof workbookIdentity !== 'string') throw new Error('Invalid workbook identity.');
             const selection = workbook === undefined ? session.select_workbook(workbookIdentity)
                 : session.select_workbook_with_edits(workbookIdentity, workbook, activeSheet, editRevision);
-            self.postMessage({ ok: true, selection });
+            self.postMessage({ ok: true, selection, fileSystemStateOnClose: session.closed_file_system_state() });
             return;
         }
         const { projectNameCodePage, projectSourceCodePage, ...runtimeOptions } = options || {};
@@ -84,7 +84,7 @@ self.addEventListener('message', async event => {
         if (action === 'compile-project') {
             const execution = session.compile_project(workbook, source, activeSheet, fileName, runtimeOptions);
             const compilation = execution.compilation;
-            self.postMessage({ ok: compilation.compiled, execution, compilation,
+            self.postMessage({ ok: compilation.compiled, execution, compilation, fileSystemStateOnClose: session.closed_file_system_state(),
                 error: compilation.error?.message });
             return;
         }
@@ -115,7 +115,7 @@ self.addEventListener('message', async event => {
         if (execution.workbook_closed && execution.active_workbook !== undefined) {
             execution.workbook_selection = session.select_workbook(execution.active_workbook);
         }
-        self.postMessage({ ok: !execution.error, execution, error: execution.error?.message });
+        self.postMessage({ ok: !execution.error, execution, fileSystemStateOnClose: session.closed_file_system_state(), error: execution.error?.message });
     } catch (error) {
         self.postMessage({
             ok: false,

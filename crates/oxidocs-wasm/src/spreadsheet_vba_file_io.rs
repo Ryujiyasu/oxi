@@ -47,6 +47,13 @@ pub(super) struct FileSystemState {
     directory_entry_times: Vec<FileModifiedTime>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ClosingFileSystemState {
+    file_system_state: FileSystemState,
+    modified_files: Vec<String>,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FileModifiedTime {
@@ -979,13 +986,27 @@ impl WorkbookFiles {
         zip.finish().map(|cursor| cursor.into_inner()).map_err(|error| error.to_string())
     }
     pub(super) fn snapshot(&self) -> FileSystemState {
-        let state=self.files.closed_snapshot();
+        self.snapshot_files(&self.files)
+    }
+
+    /// A host may retain this view before discarding its worker. The live
+    /// environment keeps its open handles and pending output unchanged.
+    pub(super) fn snapshot_after_close(&self) -> Option<ClosingFileSystemState> {
+        let modified_files = self.files.buffered_output_files();
+        if modified_files.is_empty() { return None; }
+        let mut files = self.files.clone();
+        files.close(&[]);
+        Some(ClosingFileSystemState { file_system_state: self.snapshot_files(&files), modified_files })
+    }
+
+    fn snapshot_files(&self, files: &Files) -> FileSystemState {
+        let state=files.closed_snapshot();
         FileSystemState {folders:state.folders,files:state.files.into_iter().map(|(path,bytes)|ProducedFile {path,bytes}).collect(),
             mounted_folders:self.mounted_folders.iter().cloned().collect(),mounted_files:self.mounted_files.iter().cloned().collect(),
             attributes:state.attributes.into_iter().map(|(path,value)|FileAttributes {path,value}).collect(),
-            volumes:self.files.volume_facts().into_iter().map(|(root,label)|VolumeInfo {root,label}).collect(),
-            modified_times:self.files.modified_facts().into_iter().map(|(path,value)|FileModifiedTime {path,value}).collect(),
-            directory_entry_times:self.files.directory_entry_facts().into_iter().map(|(path,value)|FileModifiedTime {path,value}).collect()}
+            volumes:files.volume_facts().into_iter().map(|(root,label)|VolumeInfo {root,label}).collect(),
+            modified_times:files.modified_facts().into_iter().map(|(path,value)|FileModifiedTime {path,value}).collect(),
+            directory_entry_times:files.directory_entry_facts().into_iter().map(|(path,value)|FileModifiedTime {path,value}).collect()}
     }
 
     pub(super) fn restore(&mut self, state: &FileSystemState) -> Result<(), String> {

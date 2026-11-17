@@ -9,6 +9,7 @@ let applicationState = initialVbaFontPreference.supported
 // Keep it for later macros, just as its cached application state is retained.
 let applicationStateIsExternal = false;
 let fileSystemState;
+let fileSystemStateOnClose;
 let projectWorker;
 let projectWorkerType;
 let compilationWorker;
@@ -50,6 +51,12 @@ function copyFileSystemState(state) {
         files: Array.isArray(state.files) ? state.files.map(file => file && typeof file === 'object' && !Array.isArray(file)
             ? {...file, bytes: Array.isArray(file.bytes) ? [...file.bytes] : ArrayBuffer.isView(file.bytes) && typeof file.bytes.slice === 'function' ? file.bytes.slice() : file.bytes}
             : file) : state.files};
+}
+
+function copyClosingFileSystemState(state) {
+    if (!state) return undefined;
+    return {fileSystemState: copyFileSystemState(state.fileSystemState),
+        modifiedFiles: [...state.modifiedFiles]};
 }
 
 function rememberProducedFiles(execution) {
@@ -136,7 +143,10 @@ function getProjectWorker(action = 'run') {
             applicationStateIsExternal ||= execution.explicitApplicationState;
         }
         if (event.data?.execution) {
-            if (event.data.execution.file_system_state) fileSystemState = copyFileSystemState(event.data.execution.file_system_state);
+            if (event.data.execution.file_system_state) {
+                fileSystemState = copyFileSystemState(event.data.execution.file_system_state);
+                fileSystemStateOnClose = copyClosingFileSystemState(event.data.fileSystemStateOnClose);
+            }
             rememberProducedFiles(event.data.execution);
             const live = new Set((event.data.execution.other_workbooks || []).map(book => book.identity));
             if (!event.data.execution.workbook_closed) live.add(selectedWorkbookIdentity);
@@ -165,6 +175,7 @@ function getProjectWorker(action = 'run') {
             if (sourceHistory) selection.selected.source = sourceHistory.source;
             applicationState = copyApplicationState(selection.application_state);
             fileSystemState = copyFileSystemState(selection.file_system_state);
+            fileSystemStateOnClose = copyClosingFileSystemState(event.data.fileSystemStateOnClose);
             workersWithFiles.add(worker);
         }
         if (event.data?.ok) {
@@ -473,6 +484,22 @@ function startVbaWorker(action, workbook, source, procedure, args, activeSheet, 
     });
 }
 
+function retainClosedFiles() {
+    if (fileSystemStateOnClose) {
+        const now = new Date(), calendar = new Date(0);
+        calendar.setUTCFullYear(now.getFullYear(), now.getMonth(), now.getDate());
+        calendar.setUTCHours(0, 0, 0, 0);
+        const days = calendar.getTime() / 86400000 + 25569;
+        const seconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+        const written = days + (days < 0 ? -seconds : seconds) / 86400;
+        fileSystemState = fileSystemStateOnClose.fileSystemState;
+        const dates = new Map((fileSystemState.modifiedTimes || []).map(entry => [fileKey(entry.path), entry]));
+        for (const path of fileSystemStateOnClose.modifiedFiles) dates.set(fileKey(path), {path, value: written});
+        fileSystemState.modifiedTimes = [...dates.values()];
+    }
+    fileSystemStateOnClose = undefined;
+}
+
 export function cancelActiveVbaExecution() {
     if (!activeExecution) return false;
     const { worker, reject, action } = activeExecution;
@@ -480,7 +507,7 @@ export function cancelActiveVbaExecution() {
     worker.terminate();
     if (projectWorker === worker) projectWorker = null;
     if (compilationWorker === worker) compilationWorker = null;
-    if (action !== 'compile') { sourceHistory = undefined; selectedWorkbookIdentity = '0'; workbookSourceHistory.clear(); objectReferences = []; }
+    if (action !== 'compile') { retainClosedFiles(); sourceHistory = undefined; selectedWorkbookIdentity = '0'; workbookSourceHistory.clear(); objectReferences = []; }
     const error = new Error(action === 'compile' ? 'VBA compilation cancelled.' : 'VBA execution cancelled.');
     error.name = 'AbortError';
     reject(error);
@@ -493,7 +520,7 @@ export function closeVbaProject() {
     workbookSourceHistory.clear();
     objectReferences = [];
     let closed = cancelActiveVbaExecution();
-    if (projectWorker) { projectWorker.terminate(); projectWorker = null; closed = true; }
+    if (projectWorker) { projectWorker.terminate(); projectWorker = null; retainClosedFiles(); closed = true; }
     if (compilationWorker) { compilationWorker.terminate(); compilationWorker = null; closed = true; }
     return closed;
 }
