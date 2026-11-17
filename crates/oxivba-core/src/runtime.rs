@@ -2148,6 +2148,7 @@ impl<'a> Runtime<'a> {
         let Some(class) = class else {
             return Ok(None);
         };
+        let source_binding = view.is_some();
         let view = view.or(receiver.dispatch_view.as_deref());
         let Some((module, procedure)) = self.source_class_procedure_view(
             &class,
@@ -2157,7 +2158,7 @@ impl<'a> Runtime<'a> {
         ) else {
             return Ok(None);
         };
-        let answer = self.call_resolved_source_body(
+        let answer = self.call_resolved_source_body_with_defaults(
             module,
             &procedure,
             Some(receiver),
@@ -2166,6 +2167,8 @@ impl<'a> Runtime<'a> {
             evaluated,
             frame,
             Some(line),
+            false,
+            source_binding,
         );
         let collected = self.collect_instances(line);
         if answer.is_ok() {
@@ -2601,6 +2604,9 @@ impl<'a> Runtime<'a> {
                     {
                         return Err(language_error(449, "Argument not optional", line));
                     }
+                    if automation && property_index_count > 0 {
+                        return Ok(Some(value));
+                    }
                     procedure.params.last().cloned()
                 } else {
                     (|| {
@@ -2624,8 +2630,15 @@ impl<'a> Runtime<'a> {
             _ => None,
         };
         let Some(parameter) = parameter else { return Ok(None); };
+        self.coerce_source_dispatch_value(value, &parameter, frame, line, automation).map(Some)
+    }
+
+    fn coerce_source_dispatch_value(
+        &mut self, value: Value, parameter: &crate::ast::Param,
+        frame: &Frame, line: u32, automation: bool,
+    ) -> Result<Value, RuntimeError> {
         if parameter.is_array || parameter.type_name.is_new || matches!(value, Value::Missing) {
-            return Ok(Some(value));
+            return Ok(value);
         }
         let kind = self.parameter_scalar_name(&parameter.type_name.name);
         let value = if matches!(kind.as_str(),
@@ -2640,7 +2653,6 @@ impl<'a> Runtime<'a> {
                 } else { failure })?
         } else { value };
         self.coerce_runtime(value, &parameter.type_name.name, line, self.this_year())
-            .map(Some)
             .map_err(|failure| if automation && matches!(runtime_error_number(&failure), 424 | 94) {
                 language_error(13, "Automation property value type mismatch", line)
             } else { failure })
@@ -3007,6 +3019,7 @@ impl<'a> Runtime<'a> {
             return Ok(false);
         };
         let class = instance.class.clone();
+        let source_binding = view.is_some();
         let view = view.or(receiver.dispatch_view.as_deref());
         let object_value = assignment_kind.map_or(matches!(value, Value::Object(_) | Value::Nothing), |kind| kind == ProcKind::PropertySet);
         let found = if object_value {
@@ -3029,6 +3042,7 @@ impl<'a> Runtime<'a> {
             value,
             frame,
             line,
+            source_binding,
         )
         .map(|_| true)
     }
@@ -3074,6 +3088,7 @@ impl<'a> Runtime<'a> {
         value: Value,
         frame: &mut Frame,
         line: u32,
+        source_binding: bool,
     ) -> Result<(), RuntimeError> {
         let parameter = procedure
             .params
@@ -3095,7 +3110,7 @@ impl<'a> Runtime<'a> {
         });
         let mut evaluated = evaluated.to_vec();
         evaluated.push(EvaluatedArgument::new(value, None));
-        let answer = self.call_resolved_source_body(
+        let answer = self.call_resolved_source_body_with_defaults(
             module,
             &procedure,
             receiver,
@@ -3104,6 +3119,8 @@ impl<'a> Runtime<'a> {
             Some(&evaluated),
             frame,
             Some(line),
+            false,
+            source_binding,
         );
         let collected = self.collect_instances(line);
         if answer.is_ok() {
@@ -3148,8 +3165,11 @@ impl<'a> Runtime<'a> {
     }
 
     fn source_value_argument(
-        &mut self, value: Value, parameter: &crate::ast::Param, frame: &Frame, line: u32,
+        &mut self, value: Value, parameter: &crate::ast::Param, frame: &Frame, line: u32, automation_property: bool,
     ) -> Result<Value, RuntimeError> {
+        if automation_property {
+            return self.coerce_source_dispatch_value(value, parameter, frame, line, true);
+        }
         let temporary = parameter.mode == ParamMode::ByRef
             && !matches!(value, Value::Nothing | Value::Array(_))
             && matches!(self.parameter_scalar_name(&parameter.type_name.name).as_str(),
@@ -3295,7 +3315,7 @@ impl<'a> Runtime<'a> {
                 BoundArgument::Value(value) => {
                     let value = match parameter {
                         Some(parameter) if source_binding =>
-                            self.source_value_argument(value, parameter, frame, line)?,
+                            self.source_value_argument(value, parameter, frame, line, false)?,
                         Some(parameter) if parameter.mode == ParamMode::ByVal =>
                             self.prepare_byval_argument(value, parameter, frame, line)?,
                         _ => value,
@@ -3788,7 +3808,7 @@ impl<'a> Runtime<'a> {
                 return Err(language_error(13, "Automation ByRef argument type mismatch", line.unwrap_or(0)));
             }
         }
-        self.call_resolved_source_body_with_defaults(self.module, procedure, receiver, arguments, forced, Some(evaluated), frame, line, true)
+        self.call_resolved_source_body_with_defaults(self.module, procedure, receiver, arguments, forced, Some(evaluated), frame, line, true, true)
     }
 
     fn call_macro_procedure_source(&mut self, requested: &str, args: Vec<Value>, line: Option<u32>,
@@ -9061,7 +9081,7 @@ impl<'a> Runtime<'a> {
                     .or(captured.as_deref())
                     .expect("setter arguments captured");
                 return self.call_resolved_set_source(
-                    module, &procedure, None, args, evaluated, value, frame, line,
+                    module, &procedure, None, args, evaluated, value, frame, line, true,
                 );
             }
 
@@ -10540,7 +10560,7 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
-        self.call_resolved_source_body_with_defaults(module, procedure, receiver, args, force_by_value, evaluated, frame, line, false)
+        self.call_resolved_source_body_with_defaults(module, procedure, receiver, args, force_by_value, evaluated, frame, line, false, true)
     }
 
     fn eval_array_constructor(
@@ -10725,17 +10745,17 @@ impl<'a> Runtime<'a> {
     fn call_resolved_source_body_with_defaults(
         &mut self, module: &'a Module, procedure: &Procedure, receiver: Option<&ObjectRef>,
         args: &[Argument], force_by_value: bool, evaluated: Option<&[EvaluatedArgument]>,
-        frame: &mut Frame, line: Option<u32>, automation: bool,
+        frame: &mut Frame, line: Option<u32>, automation: bool, source_binding: bool,
     ) -> Result<Value, RuntimeError> {
         if evaluated.is_some() || args.is_empty() {
             return self.call_resolved_source_body_after_preparation(
-                module, procedure, receiver, args, force_by_value, evaluated, frame, line, automation,
+                module, procedure, receiver, args, force_by_value, evaluated, frame, line, automation, source_binding,
             );
         }
         self.with_prepared_source_arguments(args, force_by_value, &procedure.params,
             frame, line.unwrap_or(0), |runtime, frame| {
                 runtime.call_resolved_source_body_after_preparation(
-                    module, procedure, receiver, args, force_by_value, evaluated, frame, line, automation,
+                    module, procedure, receiver, args, force_by_value, evaluated, frame, line, automation, source_binding,
                 )
             })
     }
@@ -10802,7 +10822,7 @@ impl<'a> Runtime<'a> {
     fn call_resolved_source_body_after_preparation(
         &mut self, module: &'a Module, procedure: &Procedure, receiver: Option<&ObjectRef>,
         args: &[Argument], force_by_value: bool, evaluated: Option<&[EvaluatedArgument]>,
-        frame: &mut Frame, line: Option<u32>, automation: bool,
+        frame: &mut Frame, line: Option<u32>, automation: bool, source_binding: bool,
     ) -> Result<Value, RuntimeError> {
         if self.indexes_procedure_result(procedure, args) {
             // Index operands are evaluated in the caller before invoking the
@@ -10901,7 +10921,11 @@ impl<'a> Runtime<'a> {
         let mut fixed_string_copybacks = Vec::<(usize, ValueSlot, usize, ValueSlot)>::new();
         let mut argument_objects = Vec::new();
         let mut converted_copybacks = Vec::<(usize, ValueSlot, ValueSlot)>::new();
-        for (parameter_index, parameter) in procedure.params.iter().enumerate().rev() {
+        let mut binding_order: Vec<_> = procedure.params.iter().enumerate().collect();
+        if source_binding { binding_order.reverse(); }
+        for (parameter_index, parameter) in binding_order {
+            let automation_property = !source_binding && procedure.kind == ProcKind::PropertyLet
+                && parameter_index + 1 == procedure.params.len();
             if let Some(carried) = self.err_out.take() { frame.error_state = carried; }
             if parameter.mode == ParamMode::ParamArray {
                 let mut values = Vec::with_capacity(param_array_args.len());
@@ -10996,18 +11020,18 @@ impl<'a> Runtime<'a> {
             }
             let Some(argument_index) = assigned[parameter_index] else {
                 let value = self.source_omitted_argument(module, receiver, parameter, line)?;
-                bound.push(BoundArgument::Value(self.source_value_argument(Self::call_default_value(parameter, value, automation), parameter, frame, line.unwrap_or(0))?));
+                bound.push(BoundArgument::Value(self.source_value_argument(Self::call_default_value(parameter, value, automation), parameter, frame, line.unwrap_or(0), automation_property)?));
                 continue;
             };
             let argument = &args[argument_index];
             if automation && parameter.optional && evaluated.and_then(|values| values.get(argument_index)).is_some_and(|value| matches!(value.value(), Value::Missing)) {
                 let value = self.source_omitted_argument(module, receiver, parameter, line)?;
-                bound.push(BoundArgument::Value(self.source_value_argument(Self::call_default_value(parameter, value, true), parameter, frame, line.unwrap_or(0))?));
+                bound.push(BoundArgument::Value(self.source_value_argument(Self::call_default_value(parameter, value, true), parameter, frame, line.unwrap_or(0), automation_property)?));
                 continue;
             }
             let Some(expression) = argument.value.as_ref() else {
                 let value = self.source_omitted_argument(module, receiver, parameter, line)?;
-                bound.push(BoundArgument::Value(self.source_value_argument(Self::call_default_value(parameter, value, automation), parameter, frame, line.unwrap_or(0))?));
+                bound.push(BoundArgument::Value(self.source_value_argument(Self::call_default_value(parameter, value, automation), parameter, frame, line.unwrap_or(0), automation_property)?));
                 continue;
             };
             if let Some((prepared, conversion)) = evaluated.and_then(|values| {
@@ -11059,7 +11083,7 @@ impl<'a> Runtime<'a> {
                 if parameter.mode == ParamMode::ByRef {
                     bound.push(BoundArgument::Reference(temporary));
                 } else {
-                    bound.push(BoundArgument::Value(self.source_value_argument(value, parameter, frame, expression.span().line)?));
+                    bound.push(BoundArgument::Value(self.source_value_argument(value, parameter, frame, expression.span().line, automation_property)?));
                 }
                 continue;
             }
@@ -11103,7 +11127,7 @@ impl<'a> Runtime<'a> {
                         continue;
                     }
                     BoundArgument::Value(value) => {
-                        bound.push(BoundArgument::Value(self.source_value_argument(value, parameter, frame, expression.span().line)?));
+                        bound.push(BoundArgument::Value(self.source_value_argument(value, parameter, frame, expression.span().line, automation_property)?));
                         continue;
                     }
                 }
@@ -11113,10 +11137,10 @@ impl<'a> Runtime<'a> {
             } else {
                 self.eval_expr(expression, frame)?
             };
-            bound.push(BoundArgument::Value(self.source_value_argument(value, parameter, frame, expression.span().line)?));
+            bound.push(BoundArgument::Value(self.source_value_argument(value, parameter, frame, expression.span().line, automation_property)?));
         }
 
-        bound.reverse();
+        if source_binding { bound.reverse(); }
         converted_copybacks.sort_by_key(|entry| entry.0);
         fixed_string_copybacks.sort_by_key(|entry| entry.0);
 
@@ -11777,7 +11801,7 @@ impl<'a> Runtime<'a> {
                         return Err(language_error(13, "Automation ByRef argument type mismatch", line));
                     }
                 }
-                self.call_resolved_source_body(module, &procedure, Some(receiver), &arguments, forced, Some(&evaluated), frame, Some(line))
+                self.call_resolved_source_body_with_defaults(module, &procedure, Some(receiver), &arguments, forced, Some(&evaluated), frame, Some(line), false, false)
             } else {
                 let mut values = args.to_vec();
                 let first = args.len().saturating_sub(1);
