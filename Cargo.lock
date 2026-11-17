@@ -501,6 +501,7 @@ dependencies = [
  "log",
  "oxicells-calc",
  "oxidocs-common",
+ "oxipdf-core",
  "quick-xml",
  "serde",
  "serde_json",
