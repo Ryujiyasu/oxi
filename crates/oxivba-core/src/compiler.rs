@@ -3110,6 +3110,22 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn intrinsic_varptr(&self, target: &Expr) -> bool {
+        if let Some(name) = bare_name(target) {
+            if !name.eq_ignore_ascii_case("VarPtr") { return false; }
+            let name = key(name);
+            return !self.variables.contains_key(&name) && !self.functions.contains_key(&name)
+                && !self.later_locals.contains(&name);
+        }
+        let Expr::Member { object, name, .. } = target else { return false; };
+        if !name.eq_ignore_ascii_case("VarPtr") { return false; }
+        let Some(root) = bare_name(object) else { return false; };
+        if !root.eq_ignore_ascii_case("VBA") { return false; }
+        let root = key(root);
+        !self.variables.contains_key(&root) && !self.functions.contains_key(&root)
+            && !self.later_locals.contains(&root) && self.standard_module_key(&root).is_none()
+    }
+
     fn record_conversion_error(&self, value: &Expr, target: &Type) -> Option<CompileErrorKind> {
         let source = self.infer(value);
         if !source.contains_record() { return None; }
@@ -3782,6 +3798,14 @@ impl<'a> Checker<'a> {
             {
                 failure = Some(self.failure(CompileErrorKind::SyntaxError, *span));
                 return;
+            }
+            if self.intrinsic_varptr(target) {
+                if let [Argument { value: Some(value), .. }] = args.as_slice() {
+                    if matches!(self.infer(value), Type::Array { .. }) {
+                        failure = Some(self.failure(CompileErrorKind::TypeMismatch, value.span()));
+                        return;
+                    }
+                }
             }
             let destination = if let Some(name) = bare_name(target).filter(|name|
                 !self.variables.contains_key(&key(name)) && !self.functions.contains_key(&key(name)))
