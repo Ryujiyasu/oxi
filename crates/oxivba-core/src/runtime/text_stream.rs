@@ -13,6 +13,50 @@ enum Encoding {
     Utf16 { big_endian: bool },
 }
 
+fn unicode_flags(bytes: &[u8]) -> u16 {
+    if bytes.len() < 2 { return 5; }
+    let first = u16::from_le_bytes([bytes[0], bytes[1]]);
+    if bytes.len() == 2 && first != 0 && first < 256 { return 5; }
+    let mut count = (bytes.len() / 2).min(256);
+    if bytes.len() > 2 && bytes.len() <= 512 && bytes.len() % 2 == 0 && bytes.last() == Some(&0) {
+        count -= 1;
+    }
+    let (mut low_delta, mut high_delta) = (0_u32, 0_u32);
+    let (mut previous_low, mut previous_high) = (0_u8, 0_u8);
+    let (mut zeros, mut crossed) = (0_i32, 0_usize);
+    let (mut controls, mut reverse_controls, mut illegal) = (false, false, false);
+    for pair in bytes[..count * 2].chunks_exact(2) {
+        let (low, high) = (pair[0], pair[1]);
+        let unit = u16::from_le_bytes([low, high]);
+        low_delta += u32::from(low.abs_diff(previous_low));
+        high_delta += u32::from(high.abs_diff(previous_high));
+        zeros += i32::from(low == 0) + i32::from(high == 0);
+        crossed += usize::from(matches!((previous_high, low), (13, 10) | (10, 13)));
+        controls |= matches!(unit, 9 | 10 | 13 | 32 | 0x3000);
+        reverse_controls |= matches!(unit, 0x900 | 0xa00 | 0xd00 | 0x2000);
+        illegal |= matches!(unit, 0 | 0xfffe | 0xffff | 0xa0d);
+        previous_low = low;
+        previous_high = high;
+    }
+    crossed += usize::from(matches!((previous_low, previous_high), (13, 10) | (10, 13)));
+    if previous_high == 0 { zeros -= 1; }
+    if previous_high == 26 { crossed += 1; }
+    illegal |= crossed != 0 && crossed >= bytes.len().min(512) / 40;
+    let mut flags = 0;
+    if low_delta < 127 && high_delta == 0 { flags |= 1; }
+    else if low_delta == 0 && high_delta != 0 { flags |= 16; }
+    if low_delta > 3 * high_delta { flags |= 2; }
+    if high_delta > 3 * low_delta { flags |= 32; }
+    if controls { flags |= 4; }
+    if reverse_controls { flags |= 64; }
+    if illegal { flags |= 0x100; }
+    if bytes.len() % 2 != 0 { flags |= 0x200; }
+    if zeros != 0 { flags |= 0x1000; }
+    if first == 0xfeff { flags |= 8; }
+    else if first == 0xfffe { flags |= 0x80; }
+    flags
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct Stream {
     pub number: i64,
@@ -32,10 +76,18 @@ impl Stream {
         let handle = files.handle(number)?;
         let mode = handle.mode;
         let bytes = files.bytes(&handle.path)?;
-        let unicode = format == -1 || format == -2 && bytes.starts_with(&[0xff, 0xfe]) && bytes.len() % 2 == 0;
-        let encoding = if unicode {
-            Encoding::Utf16 { big_endian: mode == OpenMode::Input && bytes.starts_with(&[0xfe, 0xff]) }
-        } else { Encoding::Ansi(codec) };
+        let flags = unicode_flags(&bytes[..bytes.len().min(128)]);
+        let detected = if flags & 15 != 0 { Some(false) }
+            else if flags & 0xf0 != 0 { Some(true) } else { None };
+        let big_endian = if format == -1 {
+            Some(if bytes.starts_with(&[0xfe, 0xff]) { true }
+                else if bytes.starts_with(&[0xff, 0xfe]) { false }
+                else { detected.unwrap_or(false) })
+        } else if format == -2 && bytes.len() >= 2 && bytes.len() % 2 == 0 && flags & 0xb00 == 0 {
+            detected
+        } else { None };
+        let unicode = big_endian.is_some();
+        let encoding = big_endian.map_or(Encoding::Ansi(codec), |big_endian| Encoding::Utf16 { big_endian });
         let has_bom = matches!(encoding, Encoding::Utf16 { .. })
             && (bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]));
         let empty = bytes.is_empty();
@@ -44,10 +96,18 @@ impl Stream {
             if has_bom { files.advance_stream(number, 2)?; }
         } else if unicode && empty {
             files.write_stream(number, &[0xff, 0xfe])?;
+        } else if unicode && bytes.len() % 2 != 0 {
+            files.write_stream(number, &[0])?;
         } else if mode == OpenMode::Append && !unicode {
             // ANSI append resumes its character position. Unicode append starts
             // a fresh character cursor while retaining the existing file bytes.
-            for unit in codec.decode(bytes) { stream.advance_character(unit); }
+            let mut position = 0;
+            while position < bytes.len() {
+                let (units, width) = codec.decode_prefix(&bytes[position..]);
+                if width == 0 { stream.column += 1; break; }
+                if let Some(&unit) = units.first() { stream.advance_character(unit); }
+                position += width;
+            }
         }
         Ok(stream)
     }
@@ -124,7 +184,9 @@ impl Stream {
     pub fn write(&mut self, files: &mut Files, units: &[u16]) -> Result<(), FileError> {
         let bytes = match self.encoding {
             Encoding::Ansi(codec) => codec.encode_checked(units).ok_or(FileError::InvalidArgument)?,
-            Encoding::Utf16 { .. } => units.iter().flat_map(|unit| unit.to_le_bytes()).collect(),
+            Encoding::Utf16 { big_endian } => units.iter().flat_map(|unit| {
+                if big_endian { unit.to_be_bytes() } else { unit.to_le_bytes() }
+            }).collect(),
         };
         files.write_stream(self.number, &bytes)?;
         for &unit in units { self.advance_character(unit); }
