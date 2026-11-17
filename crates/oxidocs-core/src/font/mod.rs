@@ -1095,6 +1095,21 @@ impl FontMetricsRegistry {
             }
         }
 
+        // OXI_HGPGOTHICE_WIDTHS (2026-11-17): the HGPｺﾞｼｯｸE entry carried only its
+        // 100 ASCII advances, so every kana was laid at a full em while the
+        // renderers drew the face's proportional glyphs. Word's PDF of
+        // ja/reference__0ae2d13d (22pt title in a 267.6pt text box): イ 17.6
+        // ン 19.7 タ 17.5 ... = the face's hmtx exactly; 13 chars fit on one line
+        // where the em-wide layout wrapped 方法. Table: gen_hgp_gothice_widths.py.
+        if !crate::env_flag!("OXI_HGPGOTHICE_WIDTHS_DISABLE") {
+            let widths: HashMap<u32, u16> = serde_json::from_str(
+                include_str!("data/hgp_gothice_widths.json")
+            ).expect("embedded HGPGothicE widths should be valid JSON");
+            if let Some(face) = raw_list.iter_mut().find(|face| face.family == "HGPｺﾞｼｯｸE") {
+                face.widths.extend(widths);
+            }
+        }
+
         if !crate::env_flag!("OXI_SOEI_FACE_METRICS_DISABLE") {
             let faces: Vec<RawFontMetrics> = serde_json::from_str(
                 include_str!("data/soei_face_metrics.json")
