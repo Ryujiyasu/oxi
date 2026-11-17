@@ -2343,6 +2343,9 @@ struct VertColumn {
     /// paragraph's after + this one's before), as a column that draws nothing
     /// and is dropped at a page edge instead of carried over.
     spacer: bool,
+    /// OXI_VERT_LIST_LABEL: the paragraph's numbering label on its first
+    /// column -- (label, label run style, top measured down from the band top).
+    marker: Option<(String, RunStyle, f32)>,
 }
 
 // Natural text coordinates are retained until the table's row boundaries
@@ -8903,6 +8906,7 @@ impl LayoutEngine {
                         if gap > 0.01 && !cols.is_empty() {
                             let recipe = cols.last().map(|c| c.recipe).unwrap_or(0);
                             cols.push(VertColumn {
+                                marker: None,
                                 recipe,
                                 text: String::new(),
                                 segs: Vec::new(),
@@ -8934,6 +8938,7 @@ impl LayoutEngine {
                         block_idx,
                     });
                     cols.push(VertColumn {
+                        marker: None,
                         recipe: recipes.len() - 1,
                         text: String::new(),
                         segs: Vec::new(),
@@ -9141,6 +9146,7 @@ cells={} pitch={:.2} text={:?}",
             // Empty paragraph: occupies one (blank) column of its own pitch.
             if para_text.chars().all(|c| c.is_whitespace()) {
                 cols.push(VertColumn {
+                    marker: None,
                     recipe,
                     text: String::new(),
                     segs: Vec::new(),
@@ -9202,6 +9208,53 @@ cells={} pitch={:.2} text={:?}",
             } else {
                 0.0
             };
+            // OXI_VERT_LIST_LABEL (2026-11-17, default ON, opt-out _DISABLE): a numbered
+            // paragraph in a vertical section draws its label at the first line's start
+            // (left + firstLine) and starts its text at the suffix stop -- the horizontal
+            // list rule turned on its side; the vertical writer dropped the label.
+            // `_pb_vert_list_gen.py` (tbRl, ＭＳ 明朝 10.5, List Paragraph leftChars 400,
+            // Word PDF glyph tops from the band top): level 420/420 and 840/420 -> label
+            // 42, text 63 (= left); «第1条» / «（１）» overrun the left -> text 72 / 108,
+            // the next default stop past the label; no hanging -> label 42, text 72;
+            // suff nothing -> right after the label. ja/educational__047ff775 (①, left
+            // 420 hanging 420): ① at the band top, text 21 down; ja/creative__9c1d5eb7
+            // (＊, level 1076/360, leftChars 0): ＊ at 35.8, text at 53.8.
+            let vert_label = if crate::env_flag!("OXI_VERT_LIST_LABEL_DISABLE")
+                || crate::env_flag!("OXI_VERTICAL_BREAKER_DISABLE")
+            {
+                None
+            } else {
+                para.style.list_marker.as_ref().filter(|m| !m.is_empty()).map(|label| {
+                    let lstyle = s1037_marker_style(para).cloned().unwrap_or_else(|| para.runs.first().map(|r| r.style.clone()).unwrap_or_default());
+                    let lfs = self.resolve_font_size(&lstyle, &para.style);
+                    let lm = &*self.metrics_for(&lstyle, &para.style);
+                    let width: f32 = label
+                        .chars()
+                        .map(|c| {
+                            if crate::font::is_fullwidth(c) && !lm.has_proportional_kana() {
+                                lfs
+                            } else {
+                                self.registry.char_width_pt_with_fallback(c, lfs, lm)
+                            }
+                        })
+                        .sum();
+                    let top = (s1331_left + s1331_first).max(0.0);
+                    let end = top + width;
+                    let dts = self.default_tab_stop;
+                    let text_at = match para.style.list_suff.as_deref().unwrap_or("tab") {
+                        "nothing" => end,
+                        "space" => end + self.registry.char_width_pt_with_fallback(' ', lfs, lm),
+                        _ if s1331_first < -0.01 && end <= s1331_left + 0.01 => s1331_left,
+                        _ if dts > 0.0 => ((end + 0.01) / dts).floor() * dts + dts,
+                        _ => end,
+                    };
+                    (label.clone(), lstyle, top, text_at)
+                })
+            };
+            let s1331_first = match &vert_label {
+                Some((_, _, _, text_at)) => text_at - s1331_left,
+                None => s1331_first,
+            };
             let mut buf: Vec<char> = Vec::new();
             if !crate::env_flag!("OXI_VERTICAL_BREAKER_DISABLE") {
                 let fragments: Vec<_> = para.runs.iter().enumerate()
@@ -9253,6 +9306,7 @@ cells={} pitch={:.2} text={:?}",
                     };
                     if let (Some(a), Some(b)) = (segs.first(), segs.last()) {
                         cols.push(VertColumn {
+                            marker: None,
                             recipe,
                             text: segs.iter().map(|(_, s)| s.as_str()).collect(),
                             pitch: col_pitch(a.0, b.0).max(tcy_w),
@@ -9262,6 +9316,11 @@ cells={} pitch={:.2} text={:?}",
                             hard_break: hard_break && li == 0,
                             image: false, spacer: false,
                         });
+                        if li == 0 {
+                            if let (Some(c), Some((label, lstyle, top, _))) = (cols.last_mut(), &vert_label) {
+                                c.marker = Some((label.clone(), lstyle.clone(), *top));
+                            }
+                        }
                     }
                 }
                 continue;
@@ -9275,6 +9334,7 @@ cells={} pitch={:.2} text={:?}",
                 let adv = if s1329_on { run_fs[char_run[ci]] } else { char_adv };
                 if cur_y + adv > band_h + 0.01 && !buf.is_empty() {
                     cols.push(VertColumn {
+                        marker: None,
                         recipe,
                         text: buf.drain(..).collect(),
                         segs: std::mem::take(&mut segs),
@@ -9301,6 +9361,7 @@ cells={} pitch={:.2} text={:?}",
             }
             if !buf.is_empty() {
                 cols.push(VertColumn {
+                    marker: None,
                     recipe,
                     text: buf.drain(..).collect(),
                     segs: std::mem::take(&mut segs),
@@ -9379,6 +9440,19 @@ cells={} pitch={:.2} text={:?}",
             _ => None,
         };
         let para_style = para.map(|p| p.style.clone()).unwrap_or_default();
+        // OXI_VERT_LIST_LABEL: the label, at its own place down the band.
+        let mut label_out: Vec<LayoutElement> = Vec::new();
+        if let Some((label, lstyle, top)) = &col.marker {
+            let lfs = self.resolve_font_size(lstyle, &para_style);
+            let lfam = self
+                .resolve_font_family_for_text(label, lstyle, &para_style)
+                .map(|f| f.to_string());
+            let n = label.chars().count() as f32;
+            label_out.push(self.vertical_line_element(
+                label.clone(), x, y + *top, col.pitch, n * lfs, lfs, 0.0,
+                &lfam, lstyle, &para_style, recipe.block_idx,
+            ));
+        }
         // S1329: a column of several runs is several stacked elements, each
         // advancing its own size (a single-run column is the one element it
         // always was).
@@ -9391,7 +9465,8 @@ cells={} pitch={:.2} text={:?}",
         let y = y + col.top;
         if !multi {
             let n = col.text.chars().count() as f32;
-            return vec![self.vertical_line_element(
+            let mut out = label_out;
+            out.push(self.vertical_line_element(
                 col.text.clone(),
                 x,
                 y,
@@ -9403,10 +9478,11 @@ cells={} pitch={:.2} text={:?}",
                 &recipe.style,
                 &para_style,
                 recipe.block_idx,
-            )];
+            ));
+            return out;
         }
         let para = para.unwrap();
-        let mut out = Vec::new();
+        let mut out = label_out;
         let mut cy = y;
         let vert_ruby = !crate::env_flag!("OXI_VERT_RUBY_DISABLE");
         // OXI_VERT_RUBY: a column carrying ruby sets its base LEFT of centre
