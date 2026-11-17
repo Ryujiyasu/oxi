@@ -156,7 +156,14 @@ impl FileError {
 #[derive(Debug, Clone)]
 struct PendingWrite {
     written: f64,
-    buffered: usize,
+    offset: usize,
+    buffered: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+struct FileEntry {
+    length: usize,
+    modified: f64,
 }
 
 /// The files of a run and the numbers they are open under.
@@ -179,6 +186,7 @@ pub struct Files {
     record_locks: Vec<RecordLock>,
     modified: BTreeMap<String, f64>,
     directory_entries: BTreeMap<String, f64>,
+    file_entries: BTreeMap<String, FileEntry>,
     current_time: f64,
     clock: Option<crate::clock::Clock>,
     pending_writes: BTreeMap<(u64, i64), PendingWrite>,
@@ -194,7 +202,7 @@ impl Default for Files {
             volume_labels: BTreeMap::new(),
             record_locks: Vec::new(),
             modified: BTreeMap::new(), directory_entries: BTreeMap::new(), current_time: 0.0, clock: None, pending_writes: Default::default(),
-            cursors: BTreeMap::new(),
+            cursors: BTreeMap::new(), file_entries: BTreeMap::new(),
         }
     }
 }
@@ -238,7 +246,7 @@ impl Files {
             && self.folders.is_empty() && self.attributes.is_empty()
             && self.volume_labels.is_empty() && self.record_locks.is_empty()
             && self.modified.is_empty() && self.directory_entries.is_empty() && self.pending_writes.is_empty()
-            && self.next_stream_number==1000 && self.current_drive=='C'
+            && self.file_entries.is_empty() && self.next_stream_number==1000 && self.current_drive=='C'
             && self.drive_directories.len()==1
             && self.drive_directories.get(&'C').is_some_and(|path|path=="C:\\")
     }
@@ -303,6 +311,7 @@ impl Files {
         let current_time=self.current_time();
         self.modified=self.contents.keys().chain(self.folders.iter()).map(|key|(key.clone(),current_time)).collect();
         self.pending_writes.clear();
+        self.file_entries.clear();
         self.directory_entries.clear();
         self.open.clear();
         self.cursors.clear();
@@ -535,7 +544,9 @@ impl Files {
             let parent = key.rsplit_once('\\').map_or("", |(parent, _)| parent);
             return Err(if self.folder_exists(parent) { FileError::NotFound } else { FileError::PathNotFound });
         }
-        Ok(self.directory_entries.get(&key).or_else(|| self.modified.get(&key)).copied().unwrap_or_else(|| self.current_time()))
+        Ok(self.file_entries.get(&key).map(|entry| entry.modified)
+            .or_else(|| self.directory_entries.get(&key).or_else(|| self.modified.get(&key)).copied())
+            .unwrap_or_else(|| self.current_time()))
     }
 
     /// Physical directory dates and the entry returned by FileDateTime can
@@ -580,19 +591,48 @@ impl Files {
     pub fn query_attributes(&mut self, path: &str) -> Result<i64, FileError> {
         let value = self.attributes(path)?;
         if value & 16 != 0 { self.directory_entries.remove(self.key(path).trim_end_matches('\\')); }
+        else { self.refresh_file_entry(path)?; }
         Ok(value)
     }
 
     pub fn query_length(&mut self, path: &str) -> Result<usize, FileError> {
+        let key = self.key(path);
+        self.publish_parent_entry(&key);
+        let length = self.length(path)?;
+        Ok(self.file_entries.get(&key).map_or(length, |entry| entry.length))
+    }
+
+    /// A handle-based metadata query refreshes the entry used by FileLen.
+    pub fn fresh_length(&mut self, path: &str) -> Result<usize, FileError> {
         self.publish_parent_entry(&self.key(path));
-        self.length(path)
+        self.refresh_file_entry(path)
+    }
+
+    fn refresh_file_entry(&mut self, path: &str) -> Result<usize, FileError> {
+        let key = self.key(path);
+        let length = self.length(path)?;
+        if self.open.values().any(|handle| handle.path == key) {
+            let modified = self.modified.get(&key).copied().unwrap_or_else(|| self.current_time());
+            let entry = self.file_entries.entry(key).or_insert(FileEntry { length, modified });
+            if entry.length != length { *entry = FileEntry { length, modified }; }
+        }
+        Ok(length)
+    }
+
+    fn cache_file_entry(&mut self, path: &str, truncate: bool) {
+        if truncate { self.file_entries.remove(path); }
+        let length = self.contents.get(path).map_or(0, |file| file.1.len());
+        let modified = self.modified.get(path).copied().unwrap_or_else(|| self.current_time());
+        self.file_entries.entry(path.into()).or_insert(FileEntry { length, modified });
     }
 
     pub fn fresh_modified_time(&mut self, path: &str) -> Result<f64, FileError> {
         self.query_attributes(path)?;
         self.publish_parent_entry(&self.key(path));
         let key = self.key(path);
-        Ok(self.modified.get(key.trim_end_matches('\\')).copied().unwrap_or_else(|| self.current_time()))
+        Ok(self.file_entries.get(key.trim_end_matches('\\')).map(|entry| entry.modified)
+            .or_else(|| self.modified.get(key.trim_end_matches('\\')).copied())
+            .unwrap_or_else(|| self.current_time()))
     }
 
     fn publish_write_time(&mut self, path: &str, written: f64) {
@@ -606,28 +646,74 @@ impl Files {
     fn mark_handle_written(&mut self, number: i64, path: &str, count: usize) {
         self.mark_written(path);
         if count != 0 {
-            let key = channel_key(self.project_scope, number);
-            let sequential = number < 1000 && self.open.get(&key).is_some_and(|held|
-                matches!(held.mode, OpenMode::Output | OpenMode::Append));
-            let previous = self.pending_writes.get(&key).map_or(0, |pending| pending.buffered);
-            let buffered = if sequential && count < 1024 {
-                let total = previous.saturating_add(count);
-                if total > 512 { total % 512 } else { total }
-            } else { 0 };
             let written = self.current_time();
-            self.pending_writes.insert(key, PendingWrite { written, buffered });
-            if !sequential || count >= 1024 || previous.saturating_add(count) > 512 {
-                self.publish_write_time(path, written);
+            self.pending_writes.insert(channel_key(self.project_scope, number),
+                PendingWrite { written, offset: 0, buffered: Vec::new() });
+            self.modified.insert(path.into(), written);
+            self.publish_write_time(path, written);
+        }
+    }
+
+    fn write_physical(&mut self, path: &str, offset: usize, bytes: &[u8]) {
+        let file = self.contents.get_mut(path).expect("open file contents");
+        let end = offset + bytes.len();
+        if file.1.len() < end { file.1.resize(end, 0); }
+        file.1[offset..end].copy_from_slice(bytes);
+    }
+
+    fn buffer_sequential(&mut self, key: (u64, i64), path: &str, offset: usize, bytes: &[u8]) {
+        self.mark_written(path);
+        if bytes.is_empty() { return; }
+        let written = self.current_time();
+        let mut pending = self.pending_writes.remove(&key)
+            .unwrap_or(PendingWrite { written, offset, buffered: Vec::new() });
+        if pending.buffered.is_empty() { pending.offset = offset; }
+        debug_assert_eq!(pending.offset + pending.buffered.len(), offset);
+        pending.buffered.extend_from_slice(bytes);
+        let total = pending.buffered.len();
+        let keep = if bytes.len() >= 1024 { 0 } else if total > 512 { total % 512 } else { total };
+        let count = total - keep;
+        if count != 0 {
+            self.write_physical(path, pending.offset, &pending.buffered[..count]);
+            pending.buffered.drain(..count);
+            pending.offset += count;
+            pending.written = written;
+            self.modified.insert(path.into(), written);
+            self.publish_write_time(path, written);
+        }
+        self.pending_writes.insert(key, pending);
+    }
+
+    fn flush_pending_key(&mut self, key: (u64, i64)) {
+        if let Some(mut pending) = self.pending_writes.remove(&key) {
+            if !pending.buffered.is_empty() {
+                let path = self.open.get(&key).expect("open buffered output").path.clone();
+                let written = self.current_time();
+                self.write_physical(&path, pending.offset, &pending.buffered);
+                pending.offset += pending.buffered.len();
+                pending.buffered.clear();
+                pending.written = written;
+                self.modified.insert(path.clone(), written);
+                self.publish_write_time(&path, written);
             }
+            self.pending_writes.insert(key, pending);
         }
     }
 
     fn close_key(&mut self, key: (u64, i64)) {
+        self.flush_pending_key(key);
         if let Some(handle) = self.open.remove(&key) {
-            if let Some(pending) = self.pending_writes.remove(&key) {
-                let written = if pending.buffered != 0 { self.current_time() } else { pending.written };
-                self.publish_write_time(&handle.path, written);
-                self.modified.insert(handle.path, written);
+            let written = if let Some(pending) = self.pending_writes.remove(&key) {
+                self.publish_write_time(&handle.path, pending.written);
+                self.modified.insert(handle.path.clone(), pending.written);
+                true
+            } else { false };
+            let resized = self.file_entries.get(&handle.path).is_some_and(|entry|
+                self.contents.get(&handle.path).is_some_and(|file| file.1.len() != entry.length));
+            if written { self.file_entries.remove(&handle.path); }
+            if written || resized { let _ = self.refresh_file_entry(&handle.path); }
+            if !self.open.values().any(|other| other.path == handle.path) {
+                self.file_entries.remove(&handle.path);
             }
         }
         self.cursors.remove(&key);
@@ -787,6 +873,7 @@ impl Files {
             }
             _ => 0,
         };
+        self.cache_file_entry(&name, mode == OpenMode::Output);
         self.open.insert(channel_key(self.project_scope, number), Handle { path: name, mode, position: 0, column,can_read,can_write,share_read,share_write });
         self.cursors.insert(channel_key(self.project_scope, number), FileCursor::default());
         Ok(())
@@ -822,6 +909,7 @@ impl Files {
             let start = bytes.iter().rposition(|byte| matches!(*byte, b'\r' | b'\n')).map_or(0, |at| at + 1);
             String::from_utf8_lossy(&bytes[start..]).encode_utf16().count()
         } else { 0 };
+        self.cache_file_entry(&name, mode == OpenMode::Output);
         self.open.insert(channel_key(self.project_scope, number), Handle { path: name, mode, position: 0, column,can_read,can_write,share_read,share_write });
         Ok(number)
     }
@@ -1086,6 +1174,9 @@ impl Files {
 
     /// Write text to a file open for output, keeping track of its column.
     pub fn write(&mut self, number: i64, text: &str) -> Result<(), FileError> {
+        if (1..=511).contains(&number) && matches!(self.handle(number)?.mode, OpenMode::Output | OpenMode::Append) {
+            return self.write_sequential(number, text, text.as_bytes());
+        }
         let handle = self.open.get_mut(&channel_key(self.project_scope, number)).ok_or(FileError::BadNumber)?;
         if handle.mode == OpenMode::Input {
             return Err(FileError::BadNumber);
@@ -1108,14 +1199,12 @@ impl Files {
         if !matches!(handle.mode, OpenMode::Output | OpenMode::Append) { return Err(FileError::BadMode); }
         if !handle.can_write { return Err(FileError::PathFileAccess); }
         let key = channel_key(self.project_scope, number);
+        let length = self.length_of_open(number)?;
         let handle = self.open.get_mut(&key).expect("checked handle");
         let cursor = self.cursors.get_mut(&key).ok_or(FileError::BadNumber)?;
-        let file = self.contents.get_mut(&handle.path).ok_or(FileError::BadNumber)?;
-        let start = if handle.mode == OpenMode::Append { file.1.len() } else { cursor.physical };
+        let start = if handle.mode == OpenMode::Append { length } else { cursor.physical };
         let end = start.checked_add(bytes.len()).ok_or(FileError::BadRecordNumber)?;
         let logical = handle.position.checked_add(bytes.len()).ok_or(FileError::BadRecordNumber)?;
-        if file.1.len() < end { file.1.resize(end, 0); }
-        file.1[start..end].copy_from_slice(bytes);
         handle.position = logical;
         cursor.physical = end;
         match text.rfind('\n') {
@@ -1123,7 +1212,7 @@ impl Files {
             None => handle.column += text.chars().count(),
         }
         let path = handle.path.clone();
-        self.mark_handle_written(number,&path,bytes.len());
+        self.buffer_sequential(key, &path, start, bytes);
         Ok(())
     }
 
@@ -1159,17 +1248,7 @@ impl Files {
     }
 
     fn flush_pending_write(&mut self, number: i64) {
-        let key = channel_key(self.project_scope, number);
-        if self.pending_writes.get(&key).is_some_and(|pending| pending.buffered != 0) {
-            let written = self.current_time();
-            if let Some(pending) = self.pending_writes.get_mut(&key) {
-                pending.written = written;
-                pending.buffered = 0;
-            }
-            if let Some(path) = self.open.get(&key).map(|handle| handle.path.clone()) {
-                self.publish_write_time(&path, written);
-            }
-        }
+        self.flush_pending_key(channel_key(self.project_scope, number));
     }
 
     /// VBA's LOF also flushes buffered sequential output.
@@ -1189,7 +1268,10 @@ impl Files {
     /// `LOF`: the file's length in bytes.
     pub fn length_of_open(&self, number: i64) -> Result<usize, FileError> {
         let handle = self.handle(number)?;
-        Ok(self.contents.get(&handle.path).map_or(0, |file| file.1.len()))
+        let length = self.contents.get(&handle.path).map_or(0, |file| file.1.len());
+        Ok(self.pending_writes.get(&channel_key(self.project_scope, number))
+            .filter(|pending| !pending.buffered.is_empty())
+            .map_or(length, |pending| length.max(pending.offset + pending.buffered.len())))
     }
 
     /// `EOF`: whether reading has reached the end.
@@ -2418,6 +2500,7 @@ mod tests {
         files.open(".\\value.txt",OpenMode::Output,2).unwrap();
         files.write(2,"second").unwrap();
         files.write(1,"!").unwrap();
+        files.close(&[1,2]);
         assert_eq!(files.bytes("..\\first\\value.txt").unwrap(),b"first!");
         assert_eq!(files.bytes("C:value.txt").unwrap(),b"second");
         assert_eq!(files.bytes("\\second\\value.txt").unwrap(),b"second");
