@@ -5670,6 +5670,12 @@ fn cellwrap_on() -> bool {
     std::env::var("OXI_CELLWRAP_DISABLE").is_err()
 }
 
+/// A cell's wrap measure is taken in points unless this is set (see the
+/// draw path's `inner_pt`).
+fn cellwrappt_on() -> bool {
+    std::env::var("OXI_CELLWRAPPT_DISABLE").is_err()
+}
+
 /// An empty paragraph is sized by its paragraph mark unless this is set,
 /// which restores the pre-S-EMPTYPARA fallback to the inherited level default.
 fn emptypara_on() -> bool {
@@ -7451,7 +7457,15 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // counting one line per paragraph makes the
                                 // block look short and pushes the text down by
                                 // half of every line it forgot.
-                                let cell_inner_pt = (right - left).max(1) as f64 / scale;
+                                // In points, like the draw pass's wrap measure
+                                // below (cellwrappt_on): the block height must be
+                                // counted from the same lines that get drawn.
+                                let cell_inner_pt = if cellwrappt_on() {
+                                    (w_pt - f64::from(cell.mar_l) - f64::from(cell.mar_r))
+                                        .max(1.0 / scale)
+                                } else {
+                                    (right - left).max(1) as f64 / scale
+                                };
                                 let n_tot = cell.paragraphs.len();
                                 let mut total: f64 = cell
                                     .paragraphs
@@ -7593,8 +7607,22 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         // paragraph as ONE line, so d25 slide 7's
                                         // 54-character body ran 297pt across a
                                         // 213.6pt column and over its neighbour.
-                                        let inner_pt =
-                                            (right - left).max(1) as f64 / scale;
+                                        // ★The wrap measure is the column's own
+                                        // width less the margins, in points -- the
+                                        // same measure the row-height pass uses --
+                                        // not the drawn pixel box divided back:
+                                        // snapping both cell edges to the pixel grid
+                                        // widened 919f s2's 454.76pt column to
+                                        // 454.88pt at 450dpi, and its 440.375pt line
+                                        // "...講演/提言" (master-unit sum) fitted the
+                                        // 440.48pt it was offered where PowerPoint,
+                                        // offered 440.36pt, breaks before 言.
+                                        let inner_pt = if cellwrappt_on() {
+                                            (w_pt - f64::from(cell.mar_l) - f64::from(cell.mar_r))
+                                                .max(1.0 / scale)
+                                        } else {
+                                            (right - left).max(1) as f64 / scale
+                                        };
                                         set_para_hang(p, None, None);
                                         // S-CELLRICH: a cell paragraph is a text frame paragraph:
                                         // its runs keep their own colour / weight / underline,
