@@ -1711,11 +1711,11 @@ impl<'a> Runtime<'a> {
         before
     }
 
-    fn invoke_in_module(&mut self, module: &'a Module, procedure: &Procedure, args: Vec<BoundArgument>, line: Option<u32>) -> Result<Value, RuntimeError> {
+    fn invoke_in_module(&mut self, module: &'a Module, procedure: &Procedure, args: Vec<BoundArgument>, line: Option<u32>, source_prepared: bool) -> Result<Value, RuntimeError> {
         if std::ptr::eq(module, self.module) {
-            return self.invoke_procedure(procedure, args, line);
+            return self.invoke_procedure(procedure, args, line, source_prepared);
         }
-        self.in_standard(module, |this| this.invoke_procedure(procedure, args, line))
+        self.in_standard(module, |this| this.invoke_procedure(procedure, args, line, source_prepared))
     }
 
     fn omitted_in_module(&mut self, module: &'a Module, parameter: &crate::ast::Param, line: Option<u32>) -> Result<Value, RuntimeError> {
@@ -2148,6 +2148,7 @@ impl<'a> Runtime<'a> {
         let Some(class) = class else {
             return Ok(None);
         };
+        let source_binding = view.is_some();
         let view = view.or(receiver.dispatch_view.as_deref());
         let Some((module, procedure)) = self.source_class_procedure_view(
             &class,
@@ -2157,7 +2158,7 @@ impl<'a> Runtime<'a> {
         ) else {
             return Ok(None);
         };
-        let answer = self.call_resolved_source_body(
+        let answer = self.call_resolved_source_body_with_defaults(
             module,
             &procedure,
             Some(receiver),
@@ -2166,6 +2167,8 @@ impl<'a> Runtime<'a> {
             evaluated,
             frame,
             Some(line),
+            false,
+            source_binding,
         );
         let collected = self.collect_instances(line);
         if answer.is_ok() {
@@ -2601,6 +2604,9 @@ impl<'a> Runtime<'a> {
                     {
                         return Err(language_error(449, "Argument not optional", line));
                     }
+                    if automation && property_index_count > 0 {
+                        return Ok(Some(value));
+                    }
                     procedure.params.last().cloned()
                 } else {
                     (|| {
@@ -2624,8 +2630,15 @@ impl<'a> Runtime<'a> {
             _ => None,
         };
         let Some(parameter) = parameter else { return Ok(None); };
+        self.coerce_source_dispatch_value(value, &parameter, frame, line, automation).map(Some)
+    }
+
+    fn coerce_source_dispatch_value(
+        &mut self, value: Value, parameter: &crate::ast::Param,
+        frame: &Frame, line: u32, automation: bool,
+    ) -> Result<Value, RuntimeError> {
         if parameter.is_array || parameter.type_name.is_new || matches!(value, Value::Missing) {
-            return Ok(Some(value));
+            return Ok(value);
         }
         let kind = self.parameter_scalar_name(&parameter.type_name.name);
         let value = if matches!(kind.as_str(),
@@ -2640,7 +2653,6 @@ impl<'a> Runtime<'a> {
                 } else { failure })?
         } else { value };
         self.coerce_runtime(value, &parameter.type_name.name, line, self.this_year())
-            .map(Some)
             .map_err(|failure| if automation && matches!(runtime_error_number(&failure), 424 | 94) {
                 language_error(13, "Automation property value type mismatch", line)
             } else { failure })
@@ -2849,7 +2861,7 @@ impl<'a> Runtime<'a> {
         if let Some(parameters) = setter {
             if args.len() < 2 { return Ok(None); }
             let source_preparation = self.with_prepared_source_arguments(args, *force_by_value,
-                &parameters, frame, target.span().line, |runtime, _frame| {
+                &parameters, frame, target.span().line, false, |runtime, _frame| {
                     Ok(std::mem::take(runtime.source_argument_preparations.last_mut()
                         .expect("source setter argument scope")))
                 })?;
@@ -2870,7 +2882,7 @@ impl<'a> Runtime<'a> {
             // the last supplied argument is read immediately before its call.
             order.pop();
             let values = self.evaluate_selected_arguments(args, *force_by_value, Some(&parameters), frame,
-                Some(ArgumentSelection { indices: &order, defer_byval_references: true }))?;
+                Some(ArgumentSelection { indices: &order, defer_byval_references: true }), false, false)?;
             return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters), source_preparation: None }));
         }
         let late_factory = factory.is_some();
@@ -2887,7 +2899,7 @@ impl<'a> Runtime<'a> {
                     .unwrap_or(index));
                 order.pop();
                 let values = self.evaluate_selected_arguments(args, *force_by_value, Some(&parameters), frame,
-                    Some(ArgumentSelection { indices: &order, defer_byval_references: true }))?;
+                    Some(ArgumentSelection { indices: &order, defer_byval_references: true }), false, false)?;
                 return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters), source_preparation: None }));
             }
             if self.lookup_slot(frame, name).is_some_and(|slot| !matches!(&*slot.borrow(), Value::Object(_) | Value::Nothing)) {
@@ -2919,7 +2931,7 @@ impl<'a> Runtime<'a> {
                     mode: ParamMode::ByRef, optional: true, name, is_array: false,
                     type_name: TypeName::implicit(), default: None,
                 }).collect::<Vec<_>>());
-        let mut values = self.evaluate_selected_arguments(args, *force_by_value, parameters.as_deref(), frame, None)?;
+        let mut values = self.evaluate_selected_arguments(args, *force_by_value, parameters.as_deref(), frame, None, false, false)?;
         if direct_indices || default_indices {
             for value in &mut values {
                 if let Some(captured) = value.take() { *value = Some(EvaluatedArgument::new(captured.value(), None)); }
@@ -2933,13 +2945,13 @@ impl<'a> Runtime<'a> {
         let Expr::Index { args, force_by_value, .. } = target else { unreachable!("prepared indexed assignment"); };
         if let Some(source_preparation) = prepared.source_preparation.take() {
             self.source_argument_preparations.push(source_preparation);
-            let result = self.evaluate_dispatch_arguments(args, *force_by_value, prepared.parameters.as_deref(), frame);
+            let result = self.evaluate_source_bindings(args, *force_by_value, prepared.parameters.as_deref(), frame);
             return self.release_source_argument_preparation(result, target.span().line).map(Some);
         }
         let missing: Vec<_> = prepared.values.iter().enumerate().filter_map(|(index, value)| value.is_none().then_some(index)).collect();
         if !missing.is_empty() {
             let remaining = self.evaluate_selected_arguments(args, *force_by_value, prepared.parameters.as_deref(), frame,
-                Some(ArgumentSelection { indices: &missing, defer_byval_references: false }))?;
+                Some(ArgumentSelection { indices: &missing, defer_byval_references: false }), false, false)?;
             for (index, value) in remaining.into_iter().enumerate() {
                 if value.is_some() { prepared.values[index] = value; }
             }
@@ -3007,6 +3019,7 @@ impl<'a> Runtime<'a> {
             return Ok(false);
         };
         let class = instance.class.clone();
+        let source_binding = view.is_some();
         let view = view.or(receiver.dispatch_view.as_deref());
         let object_value = assignment_kind.map_or(matches!(value, Value::Object(_) | Value::Nothing), |kind| kind == ProcKind::PropertySet);
         let found = if object_value {
@@ -3029,6 +3042,7 @@ impl<'a> Runtime<'a> {
             value,
             frame,
             line,
+            source_binding,
         )
         .map(|_| true)
     }
@@ -3074,6 +3088,7 @@ impl<'a> Runtime<'a> {
         value: Value,
         frame: &mut Frame,
         line: u32,
+        source_binding: bool,
     ) -> Result<(), RuntimeError> {
         let parameter = procedure
             .params
@@ -3095,7 +3110,7 @@ impl<'a> Runtime<'a> {
         });
         let mut evaluated = evaluated.to_vec();
         evaluated.push(EvaluatedArgument::new(value, None));
-        let answer = self.call_resolved_source_body(
+        let answer = self.call_resolved_source_body_with_defaults(
             module,
             &procedure,
             receiver,
@@ -3104,6 +3119,8 @@ impl<'a> Runtime<'a> {
             Some(&evaluated),
             frame,
             Some(line),
+            false,
+            source_binding,
         );
         let collected = self.collect_instances(line);
         if answer.is_ok() {
@@ -3114,7 +3131,7 @@ impl<'a> Runtime<'a> {
 
     fn prepare_byval_argument(
         &mut self,
-        value: Value,
+        mut value: Value,
         parameter: &crate::ast::Param,
         frame: &Frame,
         line: u32,
@@ -3123,6 +3140,9 @@ impl<'a> Runtime<'a> {
             return Ok(value);
         }
         let kind = self.parameter_scalar_name(&parameter.type_name.name);
+        if parameter.mode == ParamMode::ByVal && kind == "variant" {
+            if let Value::Array(array) = &mut value { array.prepare_variant_copy(); }
+        }
         let value = if matches!(
             kind.as_str(),
             "byte"
@@ -3144,6 +3164,23 @@ impl<'a> Runtime<'a> {
         self.coerce_runtime(value, &parameter.type_name.name, line, self.this_year())
     }
 
+    fn source_value_argument(
+        &mut self, value: Value, parameter: &crate::ast::Param, frame: &Frame, line: u32, automation_property: bool,
+    ) -> Result<Value, RuntimeError> {
+        if automation_property {
+            return self.coerce_source_dispatch_value(value, parameter, frame, line, true);
+        }
+        let temporary = parameter.mode == ParamMode::ByRef
+            && !matches!(value, Value::Nothing | Value::Array(_))
+            && matches!(self.parameter_scalar_name(&parameter.type_name.name).as_str(),
+                "byte" | "integer" | "long" | "longlong" | "longptr" | "single"
+                | "double" | "currency" | "date" | "boolean" | "string");
+        let value = if parameter.mode == ParamMode::ByVal || temporary {
+            self.prepare_byval_argument(value, parameter, frame, line)?
+        } else { value };
+        Ok(value)
+    }
+
     fn evaluate_source_arguments(
         &mut self,
         args: &[Argument],
@@ -3153,18 +3190,39 @@ impl<'a> Runtime<'a> {
     ) -> Result<Vec<EvaluatedArgument>, RuntimeError> {
         if let Some(parameters) = parameters.filter(|_| !args.is_empty()) {
             self.with_prepared_source_arguments(args, force_by_value, parameters, frame,
-                args.first().and_then(|a| a.value.as_ref()).map_or(0, |e| e.span().line),
-                |runtime, frame| runtime.evaluate_dispatch_arguments(args, force_by_value, Some(parameters), frame))
+                args.first().and_then(|a| a.value.as_ref()).map_or(0, |e| e.span().line), false,
+                |runtime, frame| runtime.evaluate_source_bindings(args, force_by_value, Some(parameters), frame))
         } else {
             self.evaluate_dispatch_arguments(args, force_by_value, parameters, frame)
         }
+    }
+
+    fn evaluate_call_by_name_arguments(
+        &mut self, args: &[Argument], force_by_value: bool, frame: &mut Frame,
+    ) -> Result<Vec<EvaluatedArgument>, RuntimeError> {
+        let parameters: Vec<_> = (0..args.len()).map(|index| crate::ast::Param {
+            mode: ParamMode::ByRef, optional: false, name: format!("arg{index}"),
+            is_array: false, type_name: TypeName::implicit(), default: None,
+        }).collect();
+        self.with_prepared_source_arguments(args, force_by_value, &parameters, frame,
+            args.first().and_then(|a| a.value.as_ref()).map_or(0, |e| e.span().line), true,
+            |runtime, frame| runtime.evaluate_selected_arguments(args, force_by_value, None, frame, None, false, false)
+                .map(|values| values.into_iter().map(Option::unwrap).collect()))
     }
 
     fn evaluate_dispatch_arguments(
         &mut self, args: &[Argument], force_by_value: bool,
         parameters: Option<&[crate::ast::Param]>, frame: &mut Frame,
     ) -> Result<Vec<EvaluatedArgument>, RuntimeError> {
-        self.evaluate_selected_arguments(args, force_by_value, parameters, frame, None)
+        self.evaluate_selected_arguments(args, force_by_value, parameters, frame, None, false, true)
+            .map(|values| values.into_iter().map(Option::unwrap).collect())
+    }
+
+    fn evaluate_source_bindings(
+        &mut self, args: &[Argument], force_by_value: bool,
+        parameters: Option<&[crate::ast::Param]>, frame: &mut Frame,
+    ) -> Result<Vec<EvaluatedArgument>, RuntimeError> {
+        self.evaluate_selected_arguments(args, force_by_value, parameters, frame, None, true, true)
             .map(|values| values.into_iter().map(Option::unwrap).collect())
     }
 
@@ -3175,6 +3233,8 @@ impl<'a> Runtime<'a> {
         parameters: Option<&[crate::ast::Param]>,
         frame: &mut Frame,
         selected: Option<ArgumentSelection<'_>>,
+        source_binding: bool,
+        preserve_byval_variant: bool,
     ) -> Result<Vec<Option<EvaluatedArgument>>, RuntimeError> {
         let mut order: Vec<_> = selected.map_or_else(|| (0..args.len()).collect(), |selection| selection.indices.to_vec());
         if let Some(parameters) = parameters {
@@ -3190,16 +3250,19 @@ impl<'a> Runtime<'a> {
                     .unwrap_or(*index)
             });
         }
+        if source_binding {
+            let tail = parameters.and_then(|parameters|
+                parameters.iter().position(|parameter| parameter.mode == ParamMode::ParamArray));
+            order.sort_by_key(|index| std::cmp::Reverse(args[*index].name.as_ref()
+                .and_then(|name| parameters?.iter().position(|parameter| parameter.name.eq_ignore_ascii_case(name)))
+                .unwrap_or(*index).min(tail.unwrap_or(usize::MAX))));
+        }
         let mut evaluated: Vec<Option<EvaluatedArgument>> = vec![None; args.len()];
         for index in order {
+            if source_binding {
+                if let Some(carried) = self.err_out.take() { frame.error_state = carried; }
+            }
             let argument = &args[index];
-            let bound = match &argument.value {
-                Some(expression) if !force_by_value && !argument.force_by_value => {
-                    self.reference_argument(expression, frame, expression.span().line)?
-                }
-                Some(expression) => BoundArgument::Value(self.eval_expr(expression, frame)?),
-                None => BoundArgument::Value(Value::Missing),
-            };
             let parameter = parameters.and_then(|parameters| {
                 argument
                     .name
@@ -3216,6 +3279,18 @@ impl<'a> Runtime<'a> {
                             .filter(|p| p.mode == ParamMode::ParamArray)
                     })
             });
+            let variant = (source_binding || parameters.is_none())
+                && parameter.is_none_or(|parameter| self.variant_parameter(parameter));
+            let bound = match &argument.value {
+                Some(expression) if variant => self.variant_argument(expression,
+                    force_by_value || argument.force_by_value,
+                    preserve_byval_variant && parameter.is_none_or(|p| source_binding && p.mode == ParamMode::ByVal), frame)?,
+                Some(expression) if !force_by_value && !argument.force_by_value => {
+                    self.reference_argument(expression, frame, expression.span().line)?
+                }
+                Some(expression) => BoundArgument::Value(self.eval_expr(expression, frame)?),
+                None => BoundArgument::Value(Value::Missing),
+            };
             let line = argument
                 .value
                 .as_ref()
@@ -3257,12 +3332,13 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 BoundArgument::Value(value) => {
-                    let value =
-                        if let Some(parameter) = parameter.filter(|p| p.mode == ParamMode::ByVal) {
-                            self.prepare_byval_argument(value, parameter, frame, line)?
-                        } else {
-                            value
-                        };
+                    let value = match parameter {
+                        Some(parameter) if source_binding =>
+                            self.source_value_argument(value, parameter, frame, line, false)?,
+                        Some(parameter) if parameter.mode == ParamMode::ByVal =>
+                            self.prepare_byval_argument(value, parameter, frame, line)?,
+                        _ => value,
+                    };
                     EvaluatedArgument::new(value, None)
                 }
             });
@@ -3751,7 +3827,7 @@ impl<'a> Runtime<'a> {
                 return Err(language_error(13, "Automation ByRef argument type mismatch", line.unwrap_or(0)));
             }
         }
-        self.call_resolved_source_body_with_defaults(self.module, procedure, receiver, arguments, forced, Some(evaluated), frame, line, true)
+        self.call_resolved_source_body_with_defaults(self.module, procedure, receiver, arguments, forced, Some(evaluated), frame, line, true, true)
     }
 
     fn call_macro_procedure_source(&mut self, requested: &str, args: Vec<Value>, line: Option<u32>,
@@ -4665,7 +4741,7 @@ impl<'a> Runtime<'a> {
         {
             return Err(argument_count_error(&procedure, received, line));
         }
-        self.invoke_in_module(module, &procedure, bound, line)
+        self.invoke_in_module(module, &procedure, bound, line, false)
     }
 
     fn invoke_procedure(
@@ -4673,6 +4749,7 @@ impl<'a> Runtime<'a> {
         procedure: &Procedure,
         args: Vec<BoundArgument>,
         line: Option<u32>,
+        source_prepared: bool,
     ) -> Result<Value, RuntimeError> {
         let callback_body_key = self.pending_callback_body.filter(|(_, module, start)|
             *module == self.module as *const Module as usize && *start == procedure.span.start).map(|(key, _, _)| key);
@@ -4769,7 +4846,7 @@ impl<'a> Runtime<'a> {
             let narrowed = !param.is_array
                 && (param.mode == ParamMode::ByVal || temporary)
                 && !param.type_name.is_new;
-            if narrowed {
+            if narrowed && !source_prepared {
                 let mut taken = value.borrow().clone();
                 let byval_variant = param.mode == ParamMode::ByVal
                     && self.parameter_scalar_name(&param.type_name.name) == "variant";
@@ -5361,7 +5438,7 @@ impl<'a> Runtime<'a> {
                 span,
             } => {
                 let evaluated=self.prepare_named_setter(target,frame,false)?;
-                let value = self.eval_expr(value, frame)?;
+                let value = self.assignment_variant_expression(target, value, frame)?;
                 if stands_on_the_with_subject(target)
                     && matches!(frame.with_objects.last(), Some(WithSubject::Value(_)))
                 {
@@ -8835,6 +8912,10 @@ impl<'a> Runtime<'a> {
         if slot.is_locked() {
             return Err(fixed_array_error("array", Some(line)));
         }
+        if variant_alias && slot.array_declared.borrow().is_some() {
+            let number = if matches!(value, Value::Object(_) | Value::Nothing) { 13 } else { 458 };
+            return Err(language_error(number, "typed array reference cannot be replaced", line));
+        }
         let declared = slot.declared.borrow().clone();
         let object_kind = if slot.object_let {
             Some("Object")
@@ -9023,7 +9104,7 @@ impl<'a> Runtime<'a> {
                     .or(captured.as_deref())
                     .expect("setter arguments captured");
                 return self.call_resolved_set_source(
-                    module, &procedure, None, args, evaluated, value, frame, line,
+                    module, &procedure, None, args, evaluated, value, frame, line, true,
                 );
             }
 
@@ -9271,7 +9352,7 @@ impl<'a> Runtime<'a> {
                 }
                 if frame.variants.contains(&key(name))
                     && self.lookup_slot(frame, name).is_some_and(|slot| {
-                        slot.declared
+                        (slot.array_declared.borrow().is_some() && !matches!(value, Value::Object(_) | Value::Nothing)) || slot.declared
                             .borrow()
                             .as_deref()
                             .is_some_and(|kind| kind.eq_ignore_ascii_case("LongLong"))
@@ -9629,7 +9710,9 @@ impl<'a> Runtime<'a> {
         if let Expr::Group { expression, .. } = expr {
             let id = expr as *const Expr as usize;
             let frame_id = frame as *const Frame as usize;
-            if self.source_argument_preparations.iter().rev().any(|prepared|
+            let variant = self.source_expression_type(expression, frame).is_some_and(|kind|
+                !kind.is_array && kind.name.eq_ignore_ascii_case("Variant"));
+            if variant || self.source_argument_preparations.iter().rev().any(|prepared|
                 prepared.frame == frame_id && prepared.grouped_values.contains(&id))
             {
                 return self.eval_expr(expression, frame);
@@ -10122,6 +10205,26 @@ impl<'a> Runtime<'a> {
                     if name.eq_ignore_ascii_case("array") && self.lookup_slot(frame, name).is_none() {
                         return self.eval_array_constructor(args, frame, self.option_base());
                     }
+                    if self.lookup_slot(frame, name).is_none() && !self.has_visible_procedure(name) {
+                        let intrinsic = key(name);
+                        if intrinsic == "iif" && args.len() == 3 {
+                            let parameters: Vec<_> = ["expr", "truepart", "falsepart"].into_iter().map(|name| crate::ast::Param {
+                                mode: ParamMode::ByVal, optional: false, name: name.into(), is_array: false,
+                                type_name: TypeName::implicit(), default: None,
+                            }).collect();
+                            let evaluated = self.with_prepared_source_arguments(args, false, &parameters, frame, span.line, false,
+                                |runtime, frame| runtime.evaluate_selected_arguments(args, false, Some(&parameters), frame, None, true, false)
+                                    .map(|values| values.into_iter().map(Option::unwrap).collect::<Vec<_>>()))?;
+                            let values = evaluated.iter().map(EvaluatedArgument::value).collect();
+                            let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                            return self.call_named(name, values, &names, Some(span.line), frame);
+                        }
+                        if intrinsic == "choose" || intrinsic == "switch" {
+                            let values = self.variadic_variant_values(args, frame)?;
+                            let names: Vec<_> = args.iter().map(|argument| argument.name.clone()).collect();
+                            return self.call_named(name, values, &names, Some(span.line), frame);
+                        }
+                    }
                     if let Some(answer) = self.storage_size_asked_of(name, args, frame) {
                         return answer;
                     }
@@ -10201,7 +10304,7 @@ impl<'a> Runtime<'a> {
                         evaluated.push(EvaluatedArgument::new(value, None));
                     }
                     if args.len() > 3 {
-                        evaluated.extend(self.evaluate_source_arguments(&args[3..], *force_by_value, None, frame)?);
+                        evaluated.extend(self.evaluate_call_by_name_arguments(&args[3..], *force_by_value, frame)?);
                     }
                     let values: Vec<_> = evaluated.iter().map(EvaluatedArgument::value).collect();
                     return self.call_by_name(&values, frame, Some(span.line), Some((args, &evaluated, *force_by_value)));
@@ -10239,9 +10342,20 @@ impl<'a> Runtime<'a> {
                 for (index,argument) in args.iter().enumerate() {
                     argument_names.push(argument.name.clone());
                     values.push(if let Some(evaluated)=&evaluated {evaluated[index].value()}else{match argument.value.as_ref() {
+                        Some(value) if expr_name(target).is_some_and(|name| matches!(key(name).as_str(),
+                            "typename" | "vartype" | "isarray" | "isobject" | "isempty" | "isnull" | "cvar")) =>
+                            self.variant_expression(value, frame)?,
                         Some(value) => self.eval_expr(value, frame)?,
                         None => Value::Missing,
                     }});
+                }
+                if early_macro {
+                    if let Some(evaluated) = evaluated.as_ref() {
+                        for (index, argument) in evaluated.iter().enumerate() {
+                            Self::evaluated_variant_array(argument, args[index].value.as_ref().is_some_and(|expression| self.typed_array_expression(expression, frame)));
+                            values[index] = argument.value();
+                        }
+                    }
                 }
                 let late_bound_receiver = match target.as_ref() {
                     Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
@@ -10500,25 +10614,134 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: Option<u32>,
     ) -> Result<Value, RuntimeError> {
-        self.call_resolved_source_body_with_defaults(module, procedure, receiver, args, force_by_value, evaluated, frame, line, false)
+        self.call_resolved_source_body_with_defaults(module, procedure, receiver, args, force_by_value, evaluated, frame, line, false, true)
+    }
+
+    fn materialize_variant_array_value(value: &mut Value) {
+        if let Value::Array(array) = value {
+            if array.dimensions.is_empty()
+                && matches!(array.element_default.as_ref(), Value::Nothing | Value::Object(_))
+            {
+                array.dimensions.push(ArrayDimension { lower_bound: 0, length: 0 });
+            }
+        }
+    }
+
+    fn materialize_variant_array_reference(slot: &ValueSlot) {
+        Self::materialize_variant_array_value(&mut slot.borrow_mut());
+    }
+
+    fn variant_parameter(&self, parameter: &crate::ast::Param) -> bool {
+        parameter.mode == ParamMode::ParamArray || (!parameter.is_array
+            && self.parameter_scalar_name(&parameter.type_name.name) == "variant")
+    }
+
+    fn typed_array_expression(&self, expression: &Expr, frame: &Frame) -> bool {
+        if let Expr::Group { expression, .. } = expression { return self.typed_array_expression(expression, frame); }
+        self.source_expression_type(expression, frame).is_some_and(|kind| kind.is_array)
+    }
+
+    fn array_expression(&self, expression: &Expr, frame: &Frame) -> bool {
+        if let Expr::Group { expression, .. } = expression { return self.array_expression(expression, frame); }
+        self.source_expression_type(expression, frame).is_some_and(|kind| kind.is_array)
+            || self.expression_slot(expression, frame).is_some_and(|slot|
+                matches!(&*slot.borrow(), Value::Array(_)))
+    }
+
+    fn variant_argument(&mut self, expression: &Expr, force_value: bool, preserve_grouped_variant: bool, frame: &mut Frame)
+        -> Result<BoundArgument, RuntimeError>
+    {
+        if let Expr::Group { expression: inner, .. } = expression {
+            if self.array_expression(inner, frame)
+                && self.prepared_source_argument_value(expression, frame).is_none()
+            {
+                let value = self.variant_argument(inner, true, preserve_grouped_variant, frame)?;
+                return Ok(BoundArgument::Value(match value {
+                    BoundArgument::Reference(slot) => slot.snapshot(),
+                    BoundArgument::Value(value) => value,
+                }));
+            }
+        }
+        let mut argument = self.reference_argument(expression, frame, expression.span().line)?;
+        if !preserve_grouped_variant && matches!(expression, Expr::Group { .. }) {
+            let value = match argument {
+                BoundArgument::Reference(slot) => slot.snapshot(),
+                BoundArgument::Value(value) => value,
+            };
+            argument = BoundArgument::Value(self.let_value(value, frame, expression.span().line)?);
+        }
+        if self.typed_array_expression(expression, frame) {
+            match &mut argument {
+                BoundArgument::Reference(slot) => Self::materialize_variant_array_reference(slot),
+                BoundArgument::Value(value) => Self::materialize_variant_array_value(value),
+            }
+        }
+        Ok(match argument {
+            BoundArgument::Reference(slot) if force_value => BoundArgument::Value(slot.snapshot()),
+            other => other,
+        })
+    }
+
+    fn variant_expression(&mut self, expression: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        Ok(match self.variant_argument(expression, true, true, frame)? {
+            BoundArgument::Reference(slot) => slot.snapshot(),
+            BoundArgument::Value(value) => value,
+        })
+    }
+
+    fn assignment_variant_expression(&mut self, target: &Expr, expression: &Expr, frame: &mut Frame)
+        -> Result<Value, RuntimeError>
+    {
+        let declared = self.source_expression_type(target, frame);
+        let setter = match target {
+            Expr::Index { target, .. } => self.source_setter_signature(target, frame, false),
+            _ => self.source_setter_signature(target, frame, false),
+        };
+        let variant = setter.as_ref().and_then(|parameters| parameters.last())
+            .is_some_and(|parameter| self.variant_parameter(parameter))
+            || declared.as_ref().is_some_and(|kind| !kind.is_array && kind.name.eq_ignore_ascii_case("Variant"))
+            || (declared.is_none() && match target {
+                Expr::Ident(..) => true,
+                Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
+                Expr::Index { target, .. } => match target.as_ref() {
+                    Expr::Member { object, .. } => self.assignment_receiver_type(object, frame).is_none(),
+                    _ => false,
+                },
+                Expr::WithMember(..) | Expr::WithBangMember(..) => matches!(frame.with_objects.last(),
+                    Some(WithSubject::Object { assignment_type: None, .. })),
+                _ => false,
+            });
+        if variant && (self.array_expression(expression, frame) || self.source_argument_array_place(expression, frame)) {
+            self.variant_expression(expression, frame)
+        } else { self.eval_expr(expression, frame) }
+    }
+
+    fn evaluated_variant_array(argument: &EvaluatedArgument, typed_array: bool) {
+        if !typed_array { return; }
+        if let Some(slot) = argument.reference.borrow().as_ref() {
+            Self::materialize_variant_array_reference(slot);
+        }
+        Self::materialize_variant_array_value(&mut argument.value.borrow_mut());
+    }
+
+    fn variadic_variant_values(&mut self, args: &[Argument], frame: &mut Frame) -> Result<Vec<Value>, RuntimeError> {
+        let mut captured = Vec::with_capacity(args.len());
+        for argument in args {
+            captured.push(match &argument.value {
+                Some(expression) => self.variant_argument(expression, argument.force_by_value, false, frame)?,
+                None => BoundArgument::Value(Value::Missing),
+            });
+        }
+        Ok(captured.into_iter().map(|argument| match argument {
+            BoundArgument::Reference(slot) => slot.snapshot(),
+            BoundArgument::Value(value) => value,
+        }).collect())
     }
 
     fn eval_array_constructor(
         &mut self, args: &[Argument], frame: &mut Frame, lower_bound: i64,
     ) -> Result<Value, RuntimeError> {
-        let mut captured = Vec::with_capacity(args.len());
-        for argument in args {
-            captured.push(match &argument.value {
-                Some(expression) if !argument.force_by_value =>
-                    self.reference_argument(expression, frame, expression.span().line)?,
-                Some(expression) => BoundArgument::Value(self.eval_expr(expression, frame)?),
-                None => BoundArgument::Value(Value::Missing),
-            });
-        }
-        let values: Vec<_> = captured.iter().map(|argument| match argument {
-            BoundArgument::Reference(slot) => slot.snapshot(),
-            BoundArgument::Value(value) => value.clone(),
-        }).collect();
+        let values = self.variadic_variant_values(args, frame)?;
         Ok(Value::Array(ArrayValue {
             dimensions: vec![ArrayDimension { lower_bound, length: values.len() }],
             values, element_default: Box::new(Value::Empty), resizable: true,
@@ -10685,24 +10908,24 @@ impl<'a> Runtime<'a> {
     fn call_resolved_source_body_with_defaults(
         &mut self, module: &'a Module, procedure: &Procedure, receiver: Option<&ObjectRef>,
         args: &[Argument], force_by_value: bool, evaluated: Option<&[EvaluatedArgument]>,
-        frame: &mut Frame, line: Option<u32>, automation: bool,
+        frame: &mut Frame, line: Option<u32>, automation: bool, source_binding: bool,
     ) -> Result<Value, RuntimeError> {
         if evaluated.is_some() || args.is_empty() {
             return self.call_resolved_source_body_after_preparation(
-                module, procedure, receiver, args, force_by_value, evaluated, frame, line, automation,
+                module, procedure, receiver, args, force_by_value, evaluated, frame, line, automation, source_binding,
             );
         }
         self.with_prepared_source_arguments(args, force_by_value, &procedure.params,
-            frame, line.unwrap_or(0), |runtime, frame| {
+            frame, line.unwrap_or(0), false, |runtime, frame| {
                 runtime.call_resolved_source_body_after_preparation(
-                    module, procedure, receiver, args, force_by_value, evaluated, frame, line, automation,
+                    module, procedure, receiver, args, force_by_value, evaluated, frame, line, automation, source_binding,
                 )
             })
     }
 
     fn with_prepared_source_arguments<T>(
         &mut self, args: &[Argument], force_by_value: bool, parameters: &[crate::ast::Param],
-        frame: &mut Frame, line: u32,
+        frame: &mut Frame, line: u32, dispatch_arrays: bool,
         operation: impl FnOnce(&mut Self, &mut Frame) -> Result<T, RuntimeError>,
     ) -> Result<T, RuntimeError> {
         let scope = self.source_argument_preparations.len();
@@ -10723,6 +10946,19 @@ impl<'a> Runtime<'a> {
                         .and_then(|name| parameters.iter().find(|p| p.name.eq_ignore_ascii_case(name)))
                         .or_else(|| parameters.get(index))
                         .or_else(|| parameters.last().filter(|p| p.mode == ParamMode::ParamArray));
+                    if parameter.is_some_and(|parameter| parameter.mode == ParamMode::ParamArray)
+                        || (dispatch_arrays && self.array_expression(expression, frame)) {
+                        let id = expression as *const Expr as usize;
+                        match self.variant_argument(expression, force_by_value || args[index].force_by_value, false, frame)? {
+                            BoundArgument::Reference(slot) => {
+                                self.source_argument_preparations[scope].references.insert(id, slot);
+                            }
+                            BoundArgument::Value(value) => {
+                                self.source_argument_preparations[scope].values.insert(id, value);
+                            }
+                        }
+                        continue;
+                    }
                     let reference = !force_by_value && !args[index].force_by_value
                         && parameter.is_some_and(|p| p.mode != ParamMode::ByVal)
                         && matches!(expression, Expr::Index { target, args, .. }
@@ -10762,7 +10998,7 @@ impl<'a> Runtime<'a> {
     fn call_resolved_source_body_after_preparation(
         &mut self, module: &'a Module, procedure: &Procedure, receiver: Option<&ObjectRef>,
         args: &[Argument], force_by_value: bool, evaluated: Option<&[EvaluatedArgument]>,
-        frame: &mut Frame, line: Option<u32>, automation: bool,
+        frame: &mut Frame, line: Option<u32>, automation: bool, source_binding: bool,
     ) -> Result<Value, RuntimeError> {
         if self.indexes_procedure_result(procedure, args) {
             // Index operands are evaluated in the caller before invoking the
@@ -10858,10 +11094,15 @@ impl<'a> Runtime<'a> {
         }
 
         let mut bound = Vec::with_capacity(procedure.params.len());
-        let mut fixed_string_copybacks = Vec::<(ValueSlot, usize, ValueSlot)>::new();
+        let mut fixed_string_copybacks = Vec::<(usize, ValueSlot, usize, ValueSlot)>::new();
         let mut argument_objects = Vec::new();
-        let mut converted_copybacks = Vec::<(ValueSlot, ValueSlot)>::new();
-        for (parameter_index, parameter) in procedure.params.iter().enumerate() {
+        let mut converted_copybacks = Vec::<(usize, ValueSlot, ValueSlot)>::new();
+        let mut binding_order: Vec<_> = procedure.params.iter().enumerate().collect();
+        if source_binding { binding_order.reverse(); }
+        for (parameter_index, parameter) in binding_order {
+            let automation_property = !source_binding && procedure.kind == ProcKind::PropertyLet
+                && parameter_index + 1 == procedure.params.len();
+            if let Some(carried) = self.err_out.take() { frame.error_state = carried; }
             if parameter.mode == ParamMode::ParamArray {
                 let mut values = Vec::with_capacity(param_array_args.len());
                 let mut aliases = BTreeMap::new();
@@ -10877,7 +11118,8 @@ impl<'a> Runtime<'a> {
                                     ),
                                 }
                             } else {
-                                self.reference_argument(expression, frame, expression.span().line)?
+                                if self.variant_parameter(parameter) { self.variant_argument(expression, false, false, frame)? }
+                    else { self.reference_argument(expression, frame, expression.span().line)? }
                             })
                         }
                         _ => None,
@@ -10900,6 +11142,7 @@ impl<'a> Runtime<'a> {
                                 let temporary = VariableSlot::new(value.clone());
                                 temporary.set_declared("String");
                                 fixed_string_copybacks.push((
+                                    parameter_index,
                                     slot.clone(),
                                     width,
                                     temporary.clone(),
@@ -10909,7 +11152,7 @@ impl<'a> Runtime<'a> {
                                 let temporary = VariableSlot::object_temporary(value.clone());
                                 temporary.set_declared("Variant");
                                 converted_copybacks
-                                    .push((slot.copyback_place(), temporary.clone()));
+                                    .push((parameter_index, slot.copyback_place(), temporary.clone()));
                                 temporary
                             } else {
                                 slot.clone()
@@ -10954,20 +11197,25 @@ impl<'a> Runtime<'a> {
             }
             let Some(argument_index) = assigned[parameter_index] else {
                 let value = self.source_omitted_argument(module, receiver, parameter, line)?;
-                bound.push(BoundArgument::Value(Self::call_default_value(parameter, value, automation)));
+                bound.push(BoundArgument::Value(self.source_value_argument(Self::call_default_value(parameter, value, automation), parameter, frame, line.unwrap_or(0), automation_property)?));
                 continue;
             };
             let argument = &args[argument_index];
             if automation && parameter.optional && evaluated.and_then(|values| values.get(argument_index)).is_some_and(|value| matches!(value.value(), Value::Missing)) {
                 let value = self.source_omitted_argument(module, receiver, parameter, line)?;
-                bound.push(BoundArgument::Value(Self::call_default_value(parameter, value, true)));
+                bound.push(BoundArgument::Value(self.source_value_argument(Self::call_default_value(parameter, value, true), parameter, frame, line.unwrap_or(0), automation_property)?));
                 continue;
             }
             let Some(expression) = argument.value.as_ref() else {
                 let value = self.source_omitted_argument(module, receiver, parameter, line)?;
-                bound.push(BoundArgument::Value(Self::call_default_value(parameter, value, automation)));
+                bound.push(BoundArgument::Value(self.source_value_argument(Self::call_default_value(parameter, value, automation), parameter, frame, line.unwrap_or(0), automation_property)?));
                 continue;
             };
+            if self.variant_parameter(parameter) {
+                if let Some(argument) = evaluated.and_then(|values| values.get(argument_index)) {
+                    Self::evaluated_variant_array(argument, self.typed_array_expression(expression, frame));
+                }
+            }
             if let Some((prepared, conversion)) = evaluated.and_then(|values| {
                 values[argument_index]
                     .conversion
@@ -11004,20 +11252,20 @@ impl<'a> Runtime<'a> {
                     ArgumentConversion::Object => {
                         let slot = VariableSlot::object_temporary(value.clone());
                         slot.set_declared("Variant");
-                        converted_copybacks.push((destination, slot.clone()));
+                        converted_copybacks.push((parameter_index, destination, slot.clone()));
                         slot
                     }
                     ArgumentConversion::FixedString(width) => {
                         let slot = VariableSlot::new(value.clone());
                         slot.set_declared("String");
-                        fixed_string_copybacks.push((destination, width, slot.clone()));
+                        fixed_string_copybacks.push((parameter_index, destination, width, slot.clone()));
                         slot
                     }
                 };
                 if parameter.mode == ParamMode::ByRef {
                     bound.push(BoundArgument::Reference(temporary));
                 } else {
-                    bound.push(BoundArgument::Value(value));
+                    bound.push(BoundArgument::Value(self.source_value_argument(value, parameter, frame, expression.span().line, automation_property)?));
                 }
                 continue;
             }
@@ -11028,7 +11276,8 @@ impl<'a> Runtime<'a> {
                         None => BoundArgument::Value(evaluated[argument_index].take_value()),
                     }
                 } else {
-                    self.reference_argument(expression, frame, expression.span().line)?
+                    if self.variant_parameter(parameter) { self.variant_argument(expression, false, false, frame)? }
+                    else { self.reference_argument(expression, frame, expression.span().line)? }
                 } {
                     BoundArgument::Reference(slot) => {
                         // A specific class passed as Object or Variant gets a converted reference.
@@ -11044,7 +11293,7 @@ impl<'a> Runtime<'a> {
                             let temporary = VariableSlot::object_temporary(value);
                             temporary.set_declared("Variant");
                             bound.push(BoundArgument::Reference(temporary.clone()));
-                            converted_copybacks.push((slot.copyback_place(), temporary));
+                            converted_copybacks.push((parameter_index, slot.copyback_place(), temporary));
                             continue;
                         }
                         if let Some(width) = self.reference_fixed_width(expression, &slot, frame) {
@@ -11054,40 +11303,51 @@ impl<'a> Runtime<'a> {
                             let temporary = VariableSlot::new(value);
                             temporary.set_declared("String");
                             bound.push(BoundArgument::Reference(temporary.clone()));
-                            fixed_string_copybacks.push((slot, width, temporary));
+                            fixed_string_copybacks.push((parameter_index, slot, width, temporary));
                         } else {
                             bound.push(BoundArgument::Reference(slot));
                         }
                         continue;
                     }
                     BoundArgument::Value(value) => {
-                        bound.push(BoundArgument::Value(value));
+                        bound.push(BoundArgument::Value(self.source_value_argument(value, parameter, frame, expression.span().line, automation_property)?));
                         continue;
                     }
                 }
             }
-            bound.push(BoundArgument::Value(if let Some(evaluated) = evaluated {
+            let value = if let Some(evaluated) = evaluated {
                 evaluated[argument_index].take_by_value()
             } else {
-                self.eval_expr(expression, frame)?
-            }));
+                if self.variant_parameter(parameter) {
+                    match self.variant_argument(expression, true, parameter.mode == ParamMode::ByVal, frame)? {
+                        BoundArgument::Reference(slot) => slot.snapshot(),
+                        BoundArgument::Value(value) => value,
+                    }
+                }
+                else { self.eval_expr(expression, frame)? }
+            };
+            bound.push(BoundArgument::Value(self.source_value_argument(value, parameter, frame, expression.span().line, automation_property)?));
         }
+
+        if source_binding { bound.reverse(); }
+        converted_copybacks.sort_by_key(|entry| entry.0);
+        fixed_string_copybacks.sort_by_key(|entry| entry.0);
 
         // A receiver getter can change Err after argument preparation. Late
         // parameter coercion must see that state before the first body statement.
         self.err_in = Some(self.err_out.take().unwrap_or_else(|| frame.error_state.clone()));
         let result = if let Some(receiver) = receiver {
             self.as_instance(receiver, |this| {
-                this.invoke_procedure(procedure, bound, line)
+                this.invoke_procedure(procedure, bound, line, true)
             })
         } else {
-            self.invoke_in_module(module, procedure, bound, line)
+            self.invoke_in_module(module, procedure, bound, line, true)
         };
         if let Some(carried) = self.err_out.take() {
             frame.error_state = carried;
         }
         if result.is_ok() {
-            for (target, value) in converted_copybacks {
+            for (_, target, value) in converted_copybacks {
                 let kind = target
                     .declared
                     .borrow()
@@ -11103,7 +11363,7 @@ impl<'a> Runtime<'a> {
             }
         }
         if result.is_ok() {
-            for (target, width, value) in fixed_string_copybacks {
+            for (_, target, width, value) in fixed_string_copybacks {
                 target.write_copyback(coerce_string_width(value.snapshot(), width, line)?, line)?;
             }
         }
@@ -11228,6 +11488,19 @@ impl<'a> Runtime<'a> {
         // Only VBA's own functions read a Range for its value. `Intersect`,
         // `Union` and every other name the host answers take the object, and
         // reading one first would cost a million cells for `Range("A:A")`.
+        if name.eq_ignore_ascii_case("switch") && !args.is_empty() && args.len().is_multiple_of(2) {
+            for pair in args.chunks_exact(2) {
+                let condition = self.let_value(pair[0].clone(), frame, line.unwrap_or(0))?;
+                if matches!(condition, Value::Error(_)) {
+                    return Err(language_error(13, "Switch condition cannot be an Error value", line.unwrap_or(0)));
+                }
+                if !matches!(condition, Value::Null) && truthy(&condition)
+                    .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, line))? {
+                    return Ok(pair[1].clone());
+                }
+            }
+            return Ok(Value::Null);
+        }
         let read_args = if is_builtin_function(name)
             && builtin_reads_values(name)
             && args.iter().any(|value| matches!(value, Value::Object(_)))
@@ -11730,7 +12003,7 @@ impl<'a> Runtime<'a> {
                         return Err(language_error(13, "Automation ByRef argument type mismatch", line));
                     }
                 }
-                self.call_resolved_source_body(module, &procedure, Some(receiver), &arguments, forced, Some(&evaluated), frame, Some(line))
+                self.call_resolved_source_body_with_defaults(module, &procedure, Some(receiver), &arguments, forced, Some(&evaluated), frame, Some(line), false, false)
             } else {
                 let mut values = args.to_vec();
                 let first = args.len().saturating_sub(1);
@@ -14362,6 +14635,7 @@ fn builtin_reads_values(name: &str) -> bool {
             | "iif"
             | "array"
             | "choose"
+            | "switch"
             | "lbound"
             | "ubound"
             | "join"
