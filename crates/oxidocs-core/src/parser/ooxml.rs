@@ -181,6 +181,45 @@ fn eq_text(chars: &[char], at: &mut usize) -> String {
     out
 }
 
+/// OXI_UNKNOWN_FIELD (2026-11-18, default ON, opt-out _DISABLE): a field with no
+/// result whose instruction starts with a word that is no Word field name is a
+/// bare bookmark reference, and an undefined bookmark draws Word's error text.
+/// `_pb_unknown_field_gen.py`: «sanitizesanitize» without a result -> «エラー!
+/// ブックマークが定義されていません。» (with a cached result -> the cache; AUTHOR ->
+/// nothing; a defined bookmark name -> its text, not modelled). The docx corpus
+/// replaces instructions with «sanitize…»: ja/reference__0b6f3b32 (7 fields),
+/// 13e1b7fc (2), 530de8d7 (11) -- one error text per field in each Word PDF, set
+/// in the field's own run (0b6f3b32: 9pt ＭＳ 明朝), and the taller table rows
+/// move 0b6f3b32's last row of p8 onto p9.
+fn unknown_field_text(instruction: &str) -> Option<&'static str> {
+    const KNOWN: &[&str] = &[
+        "=", "ADDIN", "ADDRESSBLOCK", "ADVANCE", "ASK", "AUTHOR", "AUTONUM", "AUTONUMLGL",
+        "AUTONUMOUT", "AUTOTEXT", "AUTOTEXTLIST", "BARCODE", "BIBLIOGRAPHY", "BIDIOUTLINE",
+        "CITATION", "COMMENTS", "COMPARE", "CONTROL", "CREATEDATE", "DATABASE", "DATE", "DDE",
+        "DDEAUTO", "DISPLAYBARCODE", "DOCPROPERTY", "DOCVARIABLE", "EDITTIME", "EMBED", "EQ",
+        "FILENAME", "FILESIZE", "FILLIN", "FORMCHECKBOX", "FORMDROPDOWN", "FORMTEXT", "FTNREF",
+        "GLOSSARY", "GOTOBUTTON", "GREETINGLINE", "HTMLCONTROL", "HYPERLINK", "IF", "IMPORT",
+        "INCLUDE", "INCLUDEPICTURE", "INCLUDETEXT", "INDEX", "INFO", "KEYWORDS", "LASTSAVEDBY",
+        "LINK", "LISTNUM", "MACROBUTTON", "MERGEBARCODE", "MERGEFIELD", "MERGEREC", "MERGESEQ",
+        "NEXT", "NEXTIF", "NOTEREF", "NUMCHARS", "NUMPAGES", "NUMWORDS", "OCX", "PAGE", "PAGEREF",
+        "PRINT", "PRINTDATE", "PRIVATE", "QUOTE", "RD", "REF", "REVNUM", "SAVEDATE", "SECTION",
+        "SECTIONPAGES", "SEQ", "SET", "SHAPE", "SKIPIF", "STYLEREF", "SUBJECT", "SYMBOL", "TA",
+        "TC", "TEMPLATE", "TIME", "TITLE", "TOA", "TOC", "USERADDRESS", "USERINITIALS",
+        "USERNAME", "XE",
+    ];
+    if crate::env_flag!("OXI_UNKNOWN_FIELD_DISABLE") {
+        return None;
+    }
+    let word = instruction.split_whitespace().next()?;
+    if word.starts_with('=') || word.starts_with('\\') || !word.chars().next()?.is_alphabetic() {
+        return None;
+    }
+    if KNOWN.iter().any(|k| k.eq_ignore_ascii_case(word)) {
+        return None;
+    }
+    Some("エラー! ブックマークが定義されていません。")
+}
+
 /// Past the argument of a `\*` switch: blanks, then a quoted string or a word.
 fn eq_skip_format_arg(chars: &[char], at: &mut usize) {
     while chars.get(*at) == Some(&' ') {
@@ -504,6 +543,8 @@ impl ParseContext {
                             if !crate::env_flag!("OXI_EQ_DISABLE") {
                                 text.push_str(&shown);
                             }
+                        } else if let Some(err) = unknown_field_text(&field.instruction) {
+                            text.push_str(err);
                         }
                     }
                 }
@@ -20127,6 +20168,10 @@ mod eq_field_tests {
         assert_eq!((r.hps_halfpt, r.hps_raise_halfpt, r.font_size), (Some(10), Some(18), Some(5.0)));
         assert_eq!(r.align, Some(crate::ir::RubyAlign::DistributeSpace));
         assert_eq!(r.annotation_fonts, vec!["メイリオ".to_string()]);
+        assert_eq!(super::unknown_field_text("sanitizesanitize"), Some("エラー! ブックマークが定義されていません。"));
+        assert_eq!(super::unknown_field_text(" PAGE "), None);
+        assert_eq!(super::unknown_field_text("ADDIN EN.CITE"), None);
+        assert_eq!(super::unknown_field_text("= 1+2"), None);
         assert!(super::eq_ruby("eq \\o\\ad(事業所所在地,　　　　)", &[]).is_none());
         assert!(super::eq_ruby("eq \\o\\ac(○,印)", &[]).is_none());
         // no \* hps: the reading's own run size (0054fa53)
