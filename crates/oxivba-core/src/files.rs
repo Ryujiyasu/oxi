@@ -270,6 +270,14 @@ impl Files {
         Ok(self.absolute_path(path))
     }
 
+    /// Files whose buffered sequential output is published when this environment closes.
+    pub fn buffered_output_files(&self) -> Vec<String> {
+        self.pending_writes.iter().filter(|(_, pending)| !pending.buffered.is_empty())
+            .filter_map(|(key, _)| self.open.get(key))
+            .filter_map(|handle| self.contents.get(&handle.path).map(|(path, _)| path.clone()))
+            .collect::<std::collections::BTreeSet<_>>().into_iter().collect()
+    }
+
     pub fn closed_snapshot(&self) -> FileSystemSnapshot {
         FileSystemSnapshot {
             folders:self.folders.iter().map(|path| if path.len()==2 && path.ends_with(':') {format!("{path}\\")} else {path.clone()}).collect(),

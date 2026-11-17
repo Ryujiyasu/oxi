@@ -233,6 +233,85 @@ finally{runner.closeVbaProject();globalThis.Worker=originalWorker;}
 assert(directoryEntryControls.passed);
 
 
+async function validateBufferedProjectClose(w, bytes, runner) {
+ const ensure=(condition,message)=>{if(!condition)throw Error(message)};
+ const pathname='C:\\work\\close-data.bin';
+ const source=`Public Function BeginWrite(ByVal pathname As String, ByVal appendMode As Boolean, ByVal amount As Long) As Long
+ If appendMode Then
+  Open pathname For Append As #1
+ Else
+  Open pathname For Output As #1
+ End If
+ Print #1, String$(amount,"A");
+ BeginWrite=FileLen(pathname)
+End Function
+Public Function Size(ByVal pathname As String) As Long
+ Size=FileLen(pathname)
+End Function
+Public Sub Finish()
+ Close #1
+End Sub
+Public Sub BinaryWrite(ByVal pathname As String)
+ Dim octet As Byte
+ octet=90
+ Open pathname For Binary As #2
+ Put #2,,octet
+End Sub`;
+ function closeAtKnownDate() {
+  const BaseDate=globalThis.Date, epoch=new BaseDate(2027,0,2,3,4,5).getTime();
+  globalThis.Date=class extends BaseDate {constructor(...args){super(...(args.length?args:[epoch]));}};
+  try{return runner.closeVbaProject();}finally{globalThis.Date=BaseDate;}
+ }
+ let cases=0,workerCalls=0;
+ for(const append of [false,true])for(const amount of [3,513]) {
+  runner.closeVbaProject();
+  let workbook=w.parse_spreadsheet(bytes);
+  async function run(procedure,args,initial=false) {
+   const options={applicationState:{displayAlerts:false,enableEvents:false},
+    ...(initial?{fileSystemState:{folders:[],files:[],mountedFolders:[],mountedFiles:[]}}:{}),
+    fileContext:{packageBytes:bytes,fullName:'C:\\work\\buffered.xlsm',readOnly:true,
+     ...(initial?{folders:['C:\\work'],files:[{path:pathname,bytes:[79,76,68]}]}:{})}};
+   const out=await runner.runVbaInWorker(workbook,source,procedure,args,0,'buffered.xlsm',options,bytes);
+   workbook=out.workbook;workerCalls++;return out;
+  }
+  try {
+   const sizeBefore=append?3:0;
+   let out=await run('BeginWrite',[pathname,append,amount],true);
+   ensure(out.result.value===sizeBefore,'pending FileLen before close');
+   const callerFile=out.file_system_state.files.find(f=>f.path.toLowerCase()===pathname.toLowerCase());
+   callerFile.bytes.fill(90);
+   out=await run('Size',[pathname]);
+   ensure(out.result.value===sizeBefore,'retaining close state must not flush the live worker');
+   ensure(closeAtKnownDate(),'pending-output worker closes');
+   out=await run('Size',[pathname]);
+   const expected=[...(append?[79,76,68]:[]),...Array(amount).fill(65)];
+   const file=out.file_system_state.files.find(f=>f.path.toLowerCase()===pathname.toLowerCase());
+   ensure(out.result.value===expected.length,'size survives worker close');
+   ensure(JSON.stringify(Array.from(file.bytes))===JSON.stringify(expected),'all pending bytes survive close and caller mutation');
+   const written=out.file_system_state.modifiedTimes.find(entry=>entry.path.toLowerCase()===pathname.toLowerCase());
+   ensure(written.value===46389+(3*3600+4*60+5)/86400,'buffered bytes receive the actual close time');
+   await run('BeginWrite',[pathname,false,3]);
+   await run('Finish',[]);
+   await run('BeginWrite',[pathname,false,0]);
+   ensure(runner.closeVbaProject(),'empty-output worker closes');
+   out=await run('Size',[pathname]);
+   ensure(out.result.value===0,'an old close snapshot must not resurrect truncated bytes');
+   out=await run('BinaryWrite',[pathname]);
+   const binaryDate=out.file_system_state.modifiedTimes.find(entry=>entry.path.toLowerCase()===pathname.toLowerCase()).value;
+   ensure(closeAtKnownDate(),'binary-output worker closes');
+   out=await run('Size',[pathname]);
+   ensure(out.result.value===1,'immediate binary bytes survive close');
+   ensure(out.file_system_state.modifiedTimes.find(entry=>entry.path.toLowerCase()===pathname.toLowerCase()).value===binaryDate,'closing must not redatestamp already written bytes');
+   cases++;
+  } finally { runner.closeVbaProject(); }
+ }
+ return {cases,worker_calls:workerCalls,passed:true};
+}
+let bufferedCloseControls;
+try{globalThis.Worker=BrowserWorker;bufferedCloseControls=await validateBufferedProjectClose(wasm,bytes,runner);}
+finally{runner.closeVbaProject();globalThis.Worker=originalWorker;}
+assert(bufferedCloseControls.passed);
+
 const liveClockDate=globalThis.Date;
 try {
  let epoch=new liveClockDate(2026,10,17,12,0,0).getTime();
@@ -266,4 +345,4 @@ try {
  }
 }finally{globalThis.Date=savedClockDate;}
 
-console.log(JSON.stringify({native_clock_cases:nativeClockCases,directory_entry_validation_cases:directoryEntryControls.validations,directory_entry_worker_calls:directoryEntryControls.worker_calls,file_date_validation_cases:modificationDateControls.validation.length,file_date_worker_calls:modificationDateControls.observations.length,native_steps:fixture.cases.length,expected_end_terminations:1,invalid_snapshots:invalidStates.length,direct_session_worker:true,caller_snapshot_isolation:true,passed:true}));
+console.log(JSON.stringify({buffered_close_worker_cases:bufferedCloseControls.cases,buffered_close_worker_calls:bufferedCloseControls.worker_calls,native_clock_cases:nativeClockCases,directory_entry_validation_cases:directoryEntryControls.validations,directory_entry_worker_calls:directoryEntryControls.worker_calls,file_date_validation_cases:modificationDateControls.validation.length,file_date_worker_calls:modificationDateControls.observations.length,native_steps:fixture.cases.length,expected_end_terminations:1,invalid_snapshots:invalidStates.length,direct_session_worker:true,caller_snapshot_isolation:true,passed:true}));

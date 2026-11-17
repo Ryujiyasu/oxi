@@ -29,6 +29,9 @@ mod shapes_members;
 mod regexp;
 #[path = "spreadsheet_vba_file_io.rs"]
 mod file_io;
+#[cfg(test)]
+#[path = "spreadsheet_vba_file_lifecycle_tests.rs"]
+mod file_lifecycle_tests;
 #[path = "spreadsheet_vba_windows.rs"]
 mod windows;
 
@@ -49060,6 +49063,17 @@ impl SpreadsheetVbaSession {
     pub fn from_reference(reference: &str) -> Result<SpreadsheetVbaSession, JsError> {
         take_returned_project(reference).map(|state| Self { state: Some(state) })
             .map_err(|error| JsError::new(&error))
+    }
+
+    /// Optional closing namespace and paths whose modification dates must be
+    /// supplied at actual host close. Taking this view leaves the live project
+    /// and its buffered output unchanged.
+    pub fn closed_file_system_state(&self) -> Result<JsValue, JsError> {
+        match self.state.as_ref().and_then(|state| state.host.file_io.snapshot_after_close()) {
+            Some(state) => serde_wasm_bindgen::to_value(&state)
+                .map_err(|error| JsError::new(&error.to_string())),
+            None => Ok(JsValue::UNDEFINED),
+        }
     }
 
     pub fn compile(&self,source:&str,options:JsValue) -> Result<JsValue,JsError> {
