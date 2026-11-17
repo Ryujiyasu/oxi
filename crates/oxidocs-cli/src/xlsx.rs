@@ -162,6 +162,43 @@ mod tests {
             .iter()
             .any(|u| u.kind == "merge-across-print-boundary"));
     }
+    /// Styles with a fill, a dotted bottom border and distributed alignment.
+    const FORM_STYLES: &str = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFCCCC"/></patternFill></fill></fills><borders count="2"><border/><border><bottom style="dotted"><color auto="1"/></bottom></border></borders><cellXfs count="2"><xf fontId="0" fillId="0" borderId="0"/><xf fontId="0" fillId="2" borderId="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="distributed"/></xf></cellXfs></styleSheet>"#;
+    fn form_sheet(page_setup: &str) -> String {
+        format!(r#"<worksheet><cols><col min="1" max="1" width="30" customWidth="1"/></cols><sheetData><row r="1"><c r="A1" s="1" t="inlineStr"><is><t>金額</t></is></c></row></sheetData>{page_setup}</worksheet>"#)
+    }
+    fn fills(doc: &PdfDocument) -> usize {
+        doc.pages[0].contents.iter().filter(|e| matches!(e, ContentElement::Path(p) if p.fill.is_some())).count()
+    }
+
+    #[test]
+    fn xlsx_pdf_black_and_white_leaves_fills_out() {
+        let colour = package_with_styles(&[("S", "visible", &form_sheet(""))], "", FORM_STYLES);
+        let mono = package_with_styles(&[("S", "visible", &form_sheet(r#"<pageSetup blackAndWhite="1"/>"#))], "", FORM_STYLES);
+        let (colour, _) = pages(&colour).unwrap();
+        let (mono, unsupported) = pages(&mono).unwrap();
+        assert_eq!(fills(&colour), 1);
+        assert_eq!(fills(&mono), 0);
+        assert!(unsupported.is_empty(), "{unsupported:?}");
+    }
+
+    #[test]
+    fn xlsx_pdf_distributes_text_and_dots_borders() {
+        let bytes = package_with_styles(&[("S", "visible", &form_sheet(""))], "", FORM_STYLES);
+        let (doc, unsupported) = pages(&bytes).unwrap();
+        assert!(unsupported.is_empty(), "{unsupported:?}");
+        // 均等割り付け: each character is drawn on its own, far apart across the cell
+        let xs: Vec<f64> = doc.pages[0].contents.iter().filter_map(|e| e.text_span()).map(|s| s.x).collect();
+        assert_eq!(xs.len(), 2, "{xs:?}");
+        assert!(xs[1] - xs[0] > 60., "{xs:?}");
+        // a dotted rule is many short segments, not one line
+        let dotted = doc.pages[0].contents.iter().filter_map(|e| match e {
+            ContentElement::Path(p) if p.stroke.is_some() => Some(p.operations.len()),
+            _ => None,
+        }).max().unwrap();
+        assert!(dotted > 20, "{dotted}");
+    }
+
     #[test]
     fn xlsx_pdf_general_alignment_puts_numbers_right() {
         // horizontal="general" (LibreOffice writes it for the default) must
