@@ -1065,6 +1065,25 @@ impl Files {
         } else {Ok(())}
     }
 
+    /// Move the raw cursor of a native TextStream after decoding characters.
+    pub(crate) fn advance_stream(&mut self, number: i64, count: usize) -> Result<(), FileError> {
+        let handle = self.open.get_mut(&channel_key(self.project_scope, number)).ok_or(FileError::BadNumber)?;
+        handle.position = handle.position.checked_add(count).ok_or(FileError::BadRecordNumber)?;
+        Ok(())
+    }
+
+    /// Append already encoded TextStream data without a UTF-8 conversion.
+    pub(crate) fn write_stream(&mut self, number: i64, bytes: &[u8]) -> Result<(), FileError> {
+        let handle = self.open.get_mut(&channel_key(self.project_scope, number)).ok_or(FileError::BadNumber)?;
+        if handle.mode == OpenMode::Input { return Err(FileError::BadMode); }
+        if !handle.can_write { return Err(FileError::PathFileAccess); }
+        let file = self.contents.get_mut(&handle.path).ok_or(FileError::BadNumber)?;
+        file.1.extend_from_slice(bytes);
+        let path = handle.path.clone();
+        self.mark_handle_written(number, &path, bytes.len());
+        Ok(())
+    }
+
     /// Write text to a file open for output, keeping track of its column.
     pub fn write(&mut self, number: i64, text: &str) -> Result<(), FileError> {
         let handle = self.open.get_mut(&channel_key(self.project_scope, number)).ok_or(FileError::BadNumber)?;

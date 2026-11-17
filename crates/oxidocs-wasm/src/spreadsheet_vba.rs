@@ -31912,6 +31912,9 @@ impl<'a> ApplicationHost<'a> {
 }
 
 impl Host for ApplicationHost<'_> {
+    fn ansi_codec(&self) -> Option<oxivba_core::AnsiCodec> {
+        self.read(None, "", false, |host, _| host.ansi_codec())
+    }
     fn encode_ansi(&self, units: &[u16], locale: Option<i64>) -> Option<Vec<u8>> {
         self.read(None, "", false, |host, _| host.encode_ansi(units, locale))
     }
@@ -32554,6 +32557,9 @@ impl Host for ApplicationHost<'_> {
 }
 
 impl Host for WorkbookHost<'_> {
+    fn ansi_codec(&self) -> Option<oxivba_core::AnsiCodec> {
+        self.automation_code_page.unwrap_or(AnsiCodePage::Western).character_codec(None)
+    }
     fn encode_ansi(&self, units: &[u16], locale: Option<i64>) -> Option<Vec<u8>> {
         let page=self.automation_code_page.unwrap_or(AnsiCodePage::Western).character_codec(locale)?;
         Some(page.encode(units))
