@@ -50504,6 +50504,17 @@ mod tests {
     use super::*;
     use oxicells_core::ir::Sheet;
 
+    // The Native COM corpus represents both null and empty BSTRs as JSON text.
+    // Typed result tests separately assert that the transport keeps them apart.
+    fn native_com_scalar(value: &serde_json::Value) -> serde_json::Value {
+        if value["type"] == "null_string" {
+            serde_json::Value::String(String::new())
+        } else {
+            value["value"].clone()
+        }
+    }
+
+
     #[test]
     fn conditional_stop_defaults_match_native_followup() {
         use std::io::Read;
@@ -144968,7 +144979,7 @@ End Function"#;
                 args,0,context,&mut None).unwrap();
             assert!(result.error.is_none(),"{} {case}: {}",group["id"],serde_json::to_value(&result.error).unwrap());
             let value=serde_json::to_value(result.result).unwrap();
-            let actual:Vec<serde_json::Value>=value["value"]["values"].as_array().unwrap().iter().map(|v|v["value"].clone()).collect();
+            let actual:Vec<serde_json::Value>=value["value"]["values"].as_array().unwrap().iter().map(native_com_scalar).collect();
             assert_eq!(serde_json::to_value(actual).unwrap(),case["expected"],"{} {case}",group["id"]);
         }
     }
@@ -145019,7 +145030,7 @@ End Function"#;
                 vec![Value::Integer(mode),Value::String(r"C:\work\input.xlsx".into())],0,context,&mut None).unwrap();
             assert!(result.error.is_none(),"mode {mode}: {}",serde_json::to_value(&result.error).unwrap());
             let value=serde_json::to_value(result.result).unwrap();
-            let actual:Vec<serde_json::Value>=value["value"]["values"].as_array().unwrap().iter().map(|v|v["value"].clone()).collect();
+            let actual:Vec<serde_json::Value>=value["value"]["values"].as_array().unwrap().iter().map(native_com_scalar).collect();
             assert_eq!(serde_json::to_value(actual).unwrap(),case["expected"],"mode {mode}");
         }
     }
@@ -145071,7 +145082,7 @@ End Function"#;
             assert!(result.error.is_none(),"{label} mode {mode}: {}",serde_json::to_value(&result.error).unwrap());
             let value=serde_json::to_value(result.result).unwrap();
             let states:Vec<Vec<serde_json::Value>>=value["value"]["values"].as_array().unwrap().iter().map(|state|
-                state["value"]["values"].as_array().unwrap().iter().map(|cell|cell["value"].clone()).collect()
+                state["value"]["values"].as_array().unwrap().iter().map(native_com_scalar).collect()
             ).collect();
             assert_eq!(serde_json::to_value(states).unwrap(),case["expected"],"{label} mode {mode}");
             assert!(result.files.iter().any(|file|file.path==r"C:\work\copy.xlsx"),"{label} mode {mode}: no exported copy");
@@ -145136,7 +145147,7 @@ End Function"####;
         assert!(!base.contains_key("xl/styles.xml"));
         let state_values=|value:serde_json::Value|->serde_json::Value {
             value["value"]["values"].as_array().unwrap().iter().map(|state|
-                state["value"]["values"].as_array().unwrap().iter().map(|v|v["value"].clone()).collect::<Vec<_>>()
+                state["value"]["values"].as_array().unwrap().iter().map(native_com_scalar).collect::<Vec<_>>()
             ).collect::<Vec<_>>().into()
         };
         let run=|bytes:&[u8],source:&str,mode:usize| {

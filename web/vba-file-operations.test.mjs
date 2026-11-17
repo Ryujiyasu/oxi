@@ -817,7 +817,7 @@ async function verifyTemplateOpen(mode,control){
      const report=session?session.run(out.workbook,source,'NativeProbe.ReportProbePeers',[],0,name,{errorLanguage:'ja-JP'})
       :await runner.runVbaInWorker(out.workbook,source,'NativeProbe.ReportProbePeers',[],0,name,{errorLanguage:'ja-JP'},driver);
      assert.equal(report.error,undefined,label+' report peers');
-     assert.deepEqual(report.result,{type:'string',value:item.peer_report},label+' peer states');
+     assert.deepEqual(report.result,item.peer_report===''?{type:'null_string'}:{type:'string',value:item.peer_report},label+' peer states');
      const cleaned=session?session.run(report.workbook,source,'NativeProbe.CleanupProbePeers',[],0,name,{errorLanguage:'ja-JP'})
       :await runner.runVbaInWorker(report.workbook,source,'NativeProbe.CleanupProbePeers',[],0,name,{errorLanguage:'ja-JP'},driver);
      assert.equal(cleaned.error,undefined,label+' clean peers');assert.equal((cleaned.other_workbooks||[]).length,0);
