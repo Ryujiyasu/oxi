@@ -129,6 +129,7 @@ enum WithSubject {
 struct PreparedAssignmentArguments {
     values: Vec<Option<EvaluatedArgument>>,
     parameters: Option<Vec<crate::ast::Param>>,
+    source_preparation: Option<SourceArgumentPreparation>,
 }
 
 #[derive(Clone, Copy)]
@@ -410,6 +411,9 @@ pub trait Host {
     /// Return the next value to resolve, or None after committing the write.
     fn resume_array_set(&mut self, _state: &mut dyn std::any::Any, _resolved: Option<Result<Value, String>>)
         -> Result<Option<Value>, String> { Ok(None) }
+
+    /// Resolve a declared host object interface without executing a getter.
+    fn reference_object_type(&self, _name: &str) -> Option<String> { None }
 
     fn assignment_global_type(&self, _name: &str) -> Option<String> { None }
 
@@ -784,6 +788,14 @@ impl From<crate::files::FileError> for FileReadFailure {
     }
 }
 
+#[derive(Default)]
+struct SourceArgumentPreparation {
+    frame: usize,
+    values: BTreeMap<usize, Value>,
+    references: BTreeMap<usize, ValueSlot>,
+    grouped_values: BTreeSet<usize>,
+}
+
 pub struct Runtime<'a> {
     /// The Err object is the program's, not a procedure's: what a caller
     /// has in it is what the procedure it calls starts with, and what that
@@ -796,6 +808,7 @@ pub struct Runtime<'a> {
     module: &'a Module,
     /// Successful procedure checks, keyed by immutable module identity and span.
     compiled_procedures: BTreeSet<(usize, usize, ProcKind)>,
+    source_argument_preparations: Vec<SourceArgumentPreparation>,
     host: Option<&'a mut dyn Host>,
     steps: usize,
     max_steps: usize,
@@ -1434,6 +1447,7 @@ impl<'a> Runtime<'a> {
             err_out: None,
             module: module.standard_modules.first().map(|(_, scope)| scope).unwrap_or(module),
             compiled_procedures: BTreeSet::new(),
+            source_argument_preparations: Vec::new(),
             host: None,
             steps: 0,
             // Room for a real macro's loops -- a pass over a few thousand
@@ -2270,6 +2284,9 @@ impl<'a> Runtime<'a> {
                 return name;
             }
         }
+        if let Some(name) = self.host.as_deref().and_then(|host| host.reference_object_type(name)) {
+            return name;
+        }
         let name = key(object_type_name(name));
         if name == "scripting.dictionary" { "dictionary".to_string() } else { name }
     }
@@ -2831,8 +2848,15 @@ impl<'a> Runtime<'a> {
         let setter = self.source_setter_parameters(target, frame, object_value);
         if let Some(parameters) = setter {
             if args.len() < 2 { return Ok(None); }
-            let values = self.evaluate_selected_arguments(args, *force_by_value, Some(&parameters), frame, None)?;
-            return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters) }));
+            let source_preparation = self.with_prepared_source_arguments(args, *force_by_value,
+                &parameters, frame, target.span().line, |runtime, _frame| {
+                    Ok(std::mem::take(runtime.source_argument_preparations.last_mut()
+                        .expect("source setter argument scope")))
+                })?;
+            return Ok(Some(PreparedAssignmentArguments {
+                values: vec![None; args.len()], parameters: Some(parameters),
+                source_preparation: Some(source_preparation),
+            }));
         }
         let factory = self.source_factory_procedure(target, frame);
         if let Some((_, procedure)) = factory.as_ref().filter(|(_, procedure)| !procedure.params.is_empty()) {
@@ -2847,7 +2871,7 @@ impl<'a> Runtime<'a> {
             order.pop();
             let values = self.evaluate_selected_arguments(args, *force_by_value, Some(&parameters), frame,
                 Some(ArgumentSelection { indices: &order, defer_byval_references: true }))?;
-            return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters) }));
+            return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters), source_preparation: None }));
         }
         let late_factory = factory.is_some();
         let late_member = late_factory || matches!(target.as_ref(), Expr::Member { .. } | Expr::WithMember(..) | Expr::WithBangMember(..))
@@ -2864,7 +2888,7 @@ impl<'a> Runtime<'a> {
                 order.pop();
                 let values = self.evaluate_selected_arguments(args, *force_by_value, Some(&parameters), frame,
                     Some(ArgumentSelection { indices: &order, defer_byval_references: true }))?;
-                return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters) }));
+                return Ok(Some(PreparedAssignmentArguments { values, parameters: Some(parameters), source_preparation: None }));
             }
             if self.lookup_slot(frame, name).is_some_and(|slot| !matches!(&*slot.borrow(), Value::Object(_) | Value::Nothing)) {
                 return Ok(None);
@@ -2901,12 +2925,17 @@ impl<'a> Runtime<'a> {
                 if let Some(captured) = value.take() { *value = Some(EvaluatedArgument::new(captured.value(), None)); }
             }
         }
-        Ok(Some(PreparedAssignmentArguments { values, parameters }))
+        Ok(Some(PreparedAssignmentArguments { values, parameters, source_preparation: None }))
     }
 
     fn finish_assignment_arguments(&mut self, target: &Expr, prepared: Option<PreparedAssignmentArguments>, frame: &mut Frame) -> Result<Option<Vec<EvaluatedArgument>>, RuntimeError> {
         let Some(mut prepared) = prepared else { return Ok(None); };
         let Expr::Index { args, force_by_value, .. } = target else { unreachable!("prepared indexed assignment"); };
+        if let Some(source_preparation) = prepared.source_preparation.take() {
+            self.source_argument_preparations.push(source_preparation);
+            let result = self.evaluate_dispatch_arguments(args, *force_by_value, prepared.parameters.as_deref(), frame);
+            return self.release_source_argument_preparation(result, target.span().line).map(Some);
+        }
         let missing: Vec<_> = prepared.values.iter().enumerate().filter_map(|(index, value)| value.is_none().then_some(index)).collect();
         if !missing.is_empty() {
             let remaining = self.evaluate_selected_arguments(args, *force_by_value, prepared.parameters.as_deref(), frame,
@@ -3121,6 +3150,19 @@ impl<'a> Runtime<'a> {
         force_by_value: bool,
         parameters: Option<&[crate::ast::Param]>,
         frame: &mut Frame,
+    ) -> Result<Vec<EvaluatedArgument>, RuntimeError> {
+        if let Some(parameters) = parameters.filter(|_| !args.is_empty()) {
+            self.with_prepared_source_arguments(args, force_by_value, parameters, frame,
+                args.first().and_then(|a| a.value.as_ref()).map_or(0, |e| e.span().line),
+                |runtime, frame| runtime.evaluate_dispatch_arguments(args, force_by_value, Some(parameters), frame))
+        } else {
+            self.evaluate_dispatch_arguments(args, force_by_value, parameters, frame)
+        }
+    }
+
+    fn evaluate_dispatch_arguments(
+        &mut self, args: &[Argument], force_by_value: bool,
+        parameters: Option<&[crate::ast::Param]>, frame: &mut Frame,
     ) -> Result<Vec<EvaluatedArgument>, RuntimeError> {
         self.evaluate_selected_arguments(args, force_by_value, parameters, frame, None)
             .map(|values| values.into_iter().map(Option::unwrap).collect())
@@ -7358,10 +7400,7 @@ impl<'a> Runtime<'a> {
             resolved.name = scalar;
             return default_value(&resolved);
         }
-        if self.source_class_key(&type_name.name).is_some()
-            || self.document_references.as_ref().is_some_and(|references| {
-                references.library.resolve_type(&type_name.name).is_some()
-            })
+        if self.is_specific_object_type(&type_name.name)
         {
             Value::Nothing
         } else {
@@ -8208,6 +8247,12 @@ impl<'a> Runtime<'a> {
     }
 
     fn reference_argument(&mut self, expr: &Expr, frame: &mut Frame, line: u32) -> Result<BoundArgument, RuntimeError> {
+        if let Some(slot) = self.prepared_source_argument_reference(expr, frame) {
+            return Ok(BoundArgument::Reference(slot));
+        }
+        if let Some(value) = self.prepared_source_argument_value(expr, frame) {
+            return Ok(BoundArgument::Value(value));
+        }
         self.ensure_expression_module(expr, frame)?;
         if let Some(name) = expr_name(expr) {
             if self.is_constant(frame, name) { return self.eval_expr(expr, frame).map(BoundArgument::Value); }
@@ -9578,6 +9623,18 @@ impl<'a> Runtime<'a> {
     }
 
     fn eval_expr(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, RuntimeError> {
+        if let Some(value) = self.prepared_source_argument_value(expr, frame) {
+            return Ok(value);
+        }
+        if let Expr::Group { expression, .. } = expr {
+            let id = expr as *const Expr as usize;
+            let frame_id = frame as *const Frame as usize;
+            if self.source_argument_preparations.iter().rev().any(|prepared|
+                prepared.frame == frame_id && prepared.grouped_values.contains(&id))
+            {
+                return self.eval_expr(expression, frame);
+            }
+        }
         let value = self.eval_uncoerced_expr(expr, frame)?;
         if self.host.is_none() { return Ok(value); }
         let target = match expr {
@@ -9646,24 +9703,24 @@ impl<'a> Runtime<'a> {
         // bare, except that VBA.Array always counts from 0: measured, under
         // Option Base 1 it runs 0 To 1 where Array(7, 8) runs 1 To 2.
         if let Some(bare) = self.vba_qualified(expr, frame) {
-            if let Expr::Index { target, args, .. } = &bare {
-                if matches!(&**target, Expr::Ident(name, _) if name.eq_ignore_ascii_case("array")) {
-                    let mut values = Vec::with_capacity(args.len());
-                    for argument in args {
-                        values.push(match &argument.value {
-                            Some(value) => self.eval_expr(value, frame)?,
-                            None => Value::Missing,
-                        });
+            // Qualified intrinsic calls reuse their original argument results;
+            // rebuilding a bare AST must not execute cached getters again.
+            let mut aliases = Vec::new();
+            self.alias_prepared_source_tree(expr, &bare, frame, &mut aliases);
+            let result = (|| {
+                if let Expr::Index { target, args, .. } = &bare {
+                    if matches!(&**target, Expr::Ident(name, _) if name.eq_ignore_ascii_case("array")) {
+                        return self.eval_array_constructor(args, frame, 0);
                     }
-                    return Ok(Value::Array(ArrayValue {
-                        dimensions: vec![ArrayDimension { lower_bound: 0, length: values.len() }],
-                        values,
-                        element_default: Box::new(Value::Empty),
-                        resizable: true,
-                    }));
                 }
+                self.eval_expr(&bare, frame)
+            })();
+            for (scope, id, value, reference, grouped) in aliases.into_iter().rev() {
+                if value { self.source_argument_preparations[scope].values.remove(&id); }
+                if reference { self.source_argument_preparations[scope].references.remove(&id); }
+                if grouped { self.source_argument_preparations[scope].grouped_values.remove(&id); }
             }
-            return self.eval_expr(&bare, frame);
+            return result;
         }
         if is_place_expression(expr) && self.record_rooted(frame, expr) {
             if let Some(field) =
@@ -10062,6 +10119,9 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 if let Expr::Ident(name, _) | Expr::TypedIdent { name, .. } = target.as_ref() {
+                    if name.eq_ignore_ascii_case("array") && self.lookup_slot(frame, name).is_none() {
+                        return self.eval_array_constructor(args, frame, self.option_base());
+                    }
                     if let Some(answer) = self.storage_size_asked_of(name, args, frame) {
                         return answer;
                     }
@@ -10154,7 +10214,11 @@ impl<'a> Runtime<'a> {
                     _=>None,
                 }.or_else(|| early_macro.then(Self::macro_parameters));
                 let evaluated=if early_macro || matches!(target.as_ref(),Expr::Member{..}|Expr::WithMember(..)|Expr::WithBangMember(..)) {
-                    Some(self.evaluate_source_arguments(args,*force_by_value,parameters.as_deref(),frame)?)
+                    Some(if early_macro {
+                        self.evaluate_dispatch_arguments(args,*force_by_value,parameters.as_deref(),frame)?
+                    } else {
+                        self.evaluate_source_arguments(args,*force_by_value,parameters.as_deref(),frame)?
+                    })
                 } else {None};
                 let receiver = match target.as_ref() {
                     Expr::Member { object, .. } => Some(self.eval_object(object, frame, span.line)?),
@@ -10439,7 +10503,263 @@ impl<'a> Runtime<'a> {
         self.call_resolved_source_body_with_defaults(module, procedure, receiver, args, force_by_value, evaluated, frame, line, false)
     }
 
+    fn eval_array_constructor(
+        &mut self, args: &[Argument], frame: &mut Frame, lower_bound: i64,
+    ) -> Result<Value, RuntimeError> {
+        let mut captured = Vec::with_capacity(args.len());
+        for argument in args {
+            captured.push(match &argument.value {
+                Some(expression) if !argument.force_by_value =>
+                    self.reference_argument(expression, frame, expression.span().line)?,
+                Some(expression) => BoundArgument::Value(self.eval_expr(expression, frame)?),
+                None => BoundArgument::Value(Value::Missing),
+            });
+        }
+        let values: Vec<_> = captured.iter().map(|argument| match argument {
+            BoundArgument::Reference(slot) => slot.snapshot(),
+            BoundArgument::Value(value) => value.clone(),
+        }).collect();
+        Ok(Value::Array(ArrayValue {
+            dimensions: vec![ArrayDimension { lower_bound, length: values.len() }],
+            values, element_default: Box::new(Value::Empty), resizable: true,
+        }))
+    }
+
+    fn prepared_source_argument_value(&self, expression: &Expr, frame: &Frame) -> Option<Value> {
+        let id = expression as *const Expr as usize;
+        let frame_id = frame as *const Frame as usize;
+        self.source_argument_preparations.iter().rev()
+            .filter(|prepared| prepared.frame == frame_id)
+            .find_map(|prepared| prepared.values.get(&id).cloned()
+                .or_else(|| prepared.references.get(&id).map(|slot| slot.snapshot())))
+    }
+
+    fn prepared_source_argument_reference(&mut self, expression: &Expr, frame: &Frame) -> Option<ValueSlot> {
+        let id = expression as *const Expr as usize;
+        let frame_id = frame as *const Frame as usize;
+        self.source_argument_preparations.iter_mut().rev()
+            .filter(|prepared| prepared.frame == frame_id)
+            .find_map(|prepared| prepared.references.remove(&id))
+    }
+
+    /// Conversion and operator instructions are completed when the call binds
+    /// its arguments. Function and property invocations produce their temporary
+    /// results first; those invocations must not be repeated during binding.
+    fn alias_prepared_source_tree(
+        &mut self, original: &Expr, rewritten: &Expr, frame: &Frame,
+        aliases: &mut Vec<(usize, usize, bool, bool, bool)>,
+    ) {
+        let old_id = original as *const Expr as usize;
+        let new_id = rewritten as *const Expr as usize;
+        let frame_id = frame as *const Frame as usize;
+        if old_id != new_id {
+            for (index, prepared) in self.source_argument_preparations.iter_mut().enumerate() {
+                if prepared.frame != frame_id { continue; }
+                let value = prepared.values.get(&old_id).cloned();
+                let reference = prepared.references.get(&old_id).cloned();
+                let grouped = prepared.grouped_values.contains(&old_id);
+                if value.is_some() || reference.is_some() || grouped {
+                    if let Some(value) = value.as_ref() { prepared.values.insert(new_id, value.clone()); }
+                    if let Some(slot) = reference.as_ref() { prepared.references.insert(new_id, slot.clone()); }
+                    if grouped { prepared.grouped_values.insert(new_id); }
+                    aliases.push((index, new_id, value.is_some(), reference.is_some(), grouped));
+                }
+            }
+        }
+        match (original, rewritten) {
+            (Expr::Group { expression: a, .. }, Expr::Group { expression: b, .. })
+            | (Expr::Unary { operand: a, .. }, Expr::Unary { operand: b, .. })
+            | (Expr::TypeOf { operand: a, .. }, Expr::TypeOf { operand: b, .. })
+            | (Expr::Member { object: a, .. }, Expr::Member { object: b, .. })
+            | (Expr::Bang { object: a, .. }, Expr::Bang { object: b, .. }) =>
+                self.alias_prepared_source_tree(a, b, frame, aliases),
+            (Expr::Binary { lhs: a, rhs: b, .. }, Expr::Binary { lhs: c, rhs: d, .. }) => {
+                self.alias_prepared_source_tree(a, c, frame, aliases);
+                self.alias_prepared_source_tree(b, d, frame, aliases);
+            }
+            (Expr::Index { target: a, args: aa, .. }, Expr::Index { target: b, args: bb, .. }) => {
+                self.alias_prepared_source_tree(a, b, frame, aliases);
+                for (a, b) in aa.iter().zip(bb) {
+                    if let (Some(a), Some(b)) = (&a.value, &b.value) {
+                        self.alias_prepared_source_tree(a, b, frame, aliases);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn source_argument_intrinsic(&self, target: &Expr, frame: &Frame) -> bool {
+        let qualified = self.vba_qualified(target, frame);
+        let target = qualified.as_ref().unwrap_or(target);
+        let Some(name) = expr_name(target) else { return false; };
+        if self.lookup_slot(frame, name).is_some()
+            || (qualified.is_none() && self.has_visible_procedure(name)) {
+            return false;
+        }
+        matches!(key(name).as_str(),
+            "abs" | "sgn" | "int" | "fix" | "cbyte" | "cint" | "clng" |
+            "clnglng" | "clngptr" | "cdbl" | "csng" | "ccur" | "cstr" |
+            "cvar" | "cbool" | "cdate" | "len" | "lenb" | "instr" | "strcomp")
+    }
+
+    fn source_argument_array_place(&self, expression: &Expr, frame: &Frame) -> bool {
+        self.source_expression_type(expression, frame).is_some_and(|kind| kind.is_array)
+            || self.expression_slot(expression, frame)
+                .is_some_and(|slot| matches!(&*slot.borrow(), Value::Array(_)))
+            || matches!(expression, Expr::Index { target, .. }
+                if self.source_argument_array_place(target, frame))
+    }
+
+    fn prepare_source_argument_expression(
+        &mut self, expression: &Expr, frame: &mut Frame, scope: usize,
+    ) -> Result<(), RuntimeError> {
+        let mut invoke = false;
+        match expression {
+            Expr::Literal(..) | Expr::AddressOf { .. } => {}
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
+                invoke = self.lookup_slot(frame, name).is_none()
+                    && (self.has_visible_procedure(name) || self.document_globals.contains_key(&key(name)));
+            }
+            Expr::Group { expression: inner, span } => {
+                self.prepare_source_argument_expression(inner, frame, scope)?;
+                let object = self.source_expression_type(inner, frame).is_some_and(|kind| {
+                    !kind.is_array && (kind.name.eq_ignore_ascii_case("Object")
+                        || self.is_specific_object_type(&kind.name))
+                });
+                if object {
+                    let value = self.eval_expr(inner, frame)?;
+                    let value = self.let_value(value, frame, span.line)?;
+                    self.source_argument_preparations[scope].values
+                        .insert(expression as *const Expr as usize, value);
+                } else {
+                    self.source_argument_preparations[scope].grouped_values
+                        .insert(expression as *const Expr as usize);
+                }
+            }
+            Expr::Unary { operand, .. } | Expr::TypeOf { operand, .. } => {
+                self.prepare_source_argument_expression(operand, frame, scope)?;
+            }
+            Expr::Binary { lhs, rhs, .. } => {
+                self.prepare_source_argument_expression(lhs, frame, scope)?;
+                self.prepare_source_argument_expression(rhs, frame, scope)?;
+            }
+            Expr::Index { target, args, .. } => {
+                if self.source_argument_array_place(target, frame) && !args.is_empty() {
+                    invoke = true;
+                } else if self.source_argument_array_place(target, frame) || self.source_argument_intrinsic(target, frame) {
+                    self.prepare_source_argument_expression(target, frame, scope)?;
+                    for argument in args {
+                        if let Some(expression) = &argument.value {
+                            self.prepare_source_argument_expression(expression, frame, scope)?;
+                        }
+                    }
+                } else {
+                    invoke = true;
+                }
+            }
+            Expr::Member { object, .. } => {
+                let module_place = self.qualified_standard_member(expression, frame).is_some_and(|(module, name)| {
+                    module.items.iter().any(|item| matches!(item, ModuleItem::Variables(declaration)
+                        if declaration.items.iter().any(|variable| variable.name.eq_ignore_ascii_case(name))))
+                });
+                if module_place || self.record_rooted(frame, expression) {
+                    self.prepare_source_argument_expression(object, frame, scope)?;
+                } else if self.vba_qualified(expression, frame).is_none() {
+                    invoke = true;
+                }
+            }
+            Expr::WithMember(..) | Expr::WithBangMember(..) => {
+                invoke = !self.record_rooted(frame, expression);
+            }
+            Expr::Bang { .. } | Expr::New { .. } | Expr::EvaluateShortcut { .. } => invoke = true,
+        }
+        if invoke {
+            let value = self.eval_expr(expression, frame)?;
+            self.source_argument_preparations[scope].values
+                .insert(expression as *const Expr as usize, value);
+        }
+        Ok(())
+    }
+
     fn call_resolved_source_body_with_defaults(
+        &mut self, module: &'a Module, procedure: &Procedure, receiver: Option<&ObjectRef>,
+        args: &[Argument], force_by_value: bool, evaluated: Option<&[EvaluatedArgument]>,
+        frame: &mut Frame, line: Option<u32>, automation: bool,
+    ) -> Result<Value, RuntimeError> {
+        if evaluated.is_some() || args.is_empty() {
+            return self.call_resolved_source_body_after_preparation(
+                module, procedure, receiver, args, force_by_value, evaluated, frame, line, automation,
+            );
+        }
+        self.with_prepared_source_arguments(args, force_by_value, &procedure.params,
+            frame, line.unwrap_or(0), |runtime, frame| {
+                runtime.call_resolved_source_body_after_preparation(
+                    module, procedure, receiver, args, force_by_value, evaluated, frame, line, automation,
+                )
+            })
+    }
+
+    fn with_prepared_source_arguments<T>(
+        &mut self, args: &[Argument], force_by_value: bool, parameters: &[crate::ast::Param],
+        frame: &mut Frame, line: u32,
+        operation: impl FnOnce(&mut Self, &mut Frame) -> Result<T, RuntimeError>,
+    ) -> Result<T, RuntimeError> {
+        let scope = self.source_argument_preparations.len();
+        self.source_argument_preparations.push(SourceArgumentPreparation {
+            frame: frame as *const Frame as usize,
+            values: BTreeMap::new(),
+            references: BTreeMap::new(),
+            grouped_values: BTreeSet::new(),
+        });
+        let result = (|| {
+            let mut order: Vec<_> = (0..args.len()).collect();
+            order.sort_by_key(|index| args[*index].name.as_ref()
+                .and_then(|name| parameters.iter().position(|p| p.name.eq_ignore_ascii_case(name)))
+                .unwrap_or(*index));
+            for index in order {
+                if let Some(expression) = &args[index].value {
+                    let parameter = args[index].name.as_ref()
+                        .and_then(|name| parameters.iter().find(|p| p.name.eq_ignore_ascii_case(name)))
+                        .or_else(|| parameters.get(index))
+                        .or_else(|| parameters.last().filter(|p| p.mode == ParamMode::ParamArray));
+                    let reference = !force_by_value && !args[index].force_by_value
+                        && parameter.is_some_and(|p| p.mode != ParamMode::ByVal)
+                        && matches!(expression, Expr::Index { target, args, .. }
+                            if !args.is_empty() && self.source_argument_array_place(target, frame));
+                    if reference {
+                        let id = expression as *const Expr as usize;
+                        match self.reference_argument(expression, frame, expression.span().line)? {
+                            BoundArgument::Reference(slot) => {
+                                self.source_argument_preparations[scope].references.insert(id, slot);
+                            }
+                            BoundArgument::Value(value) => {
+                                self.source_argument_preparations[scope].values.insert(id, value);
+                            }
+                        }
+                    } else {
+                        self.prepare_source_argument_expression(expression, frame, scope)?;
+                    }
+                }
+            }
+            operation(self, frame)
+        })();
+        self.release_source_argument_preparation(result, line)
+    }
+
+    fn release_source_argument_preparation<T>(&mut self, result: Result<T, RuntimeError>, line: u32) -> Result<T, RuntimeError> {
+        let prepared = self.source_argument_preparations.pop().expect("source argument scope");
+        let managed = !prepared.references.is_empty() || prepared.values.values().any(|value|
+            matches!(value, Value::Object(_) | Value::Array(_) | Value::Record(_)));
+        drop(prepared);
+        if managed {
+            let collected = self.collect_instances(line);
+            if result.is_ok() { collected?; }
+        }
+        result
+    }
+
+    fn call_resolved_source_body_after_preparation(
         &mut self, module: &'a Module, procedure: &Procedure, receiver: Option<&ObjectRef>,
         args: &[Argument], force_by_value: bool, evaluated: Option<&[EvaluatedArgument]>,
         frame: &mut Frame, line: Option<u32>, automation: bool,
@@ -10802,6 +11122,7 @@ impl<'a> Runtime<'a> {
             || self.document_references.as_ref().is_some_and(|references| {
                 references.library.resolve_type(name).is_some()
             })
+            || self.host.as_deref().is_some_and(|host| host.reference_object_type(name).is_some())
             || matches!(
                 key(object_type_name(name)).as_str(),
                 "application"
@@ -14928,11 +15249,16 @@ pub(crate) fn call_builtin(
                 Value::Null => Ok(Value::Null),
                 _ => {
                     let value = number(value).map_err(mismatch)?;
+                    if name != "atn" && value.abs() >= 9.223372e18 {
+                        return Err(invalid_procedure_call(
+                            format!("argument outside the domain of {name}"), line));
+                    }
                     Ok(Value::Double(match name.as_str() {
                         "atn" => value.atan(),
                         "cos" => value.cos(),
                         "sin" => value.sin(),
-                        "tan" => value.tan(),
+                        // Tan divides the separately rounded Double results.
+                        "tan" => value.sin() / value.cos(),
                         _ => unreachable!(),
                     }))
                 }
@@ -27353,6 +27679,60 @@ Attribute VB_Name = "TextStream"
         assert_eq!(failure.kind, RuntimeErrorKind::ArgumentCount);
     }
 
+
+    #[test]
+    fn trigonometric_domain_errors_preserve_targets_and_leave_atn_available() {
+        let source = r#"Public Function Probe(ByVal x As Double) As String
+  Dim value As Double, answer As String
+  On Error Resume Next
+  value = 7: Err.Clear
+  value = Sin(x)
+  answer = Err.Number & "|" & value
+  value = 7: Err.Clear
+  value = Cos(x)
+  answer = answer & "|" & Err.Number & "|" & value
+  value = 7: Err.Clear
+  value = Tan(x)
+  answer = answer & "|" & Err.Number & "|" & value
+  Err.Clear
+  value = Atn(x)
+  Probe = answer & "|" & Err.Number & "|" & TypeName(value)
+End Function
+"#;
+        for bits in [0x43df_ffff_fdda_d230, 0x43df_ffff_fdda_d231,
+                     0x43e0_0000_0000_0000, 0x7fef_ffff_ffff_ffff] {
+            for sign in [1.0, -1.0] {
+                let value = f64::from_bits(bits) * sign;
+                assert_eq!(run(source, "Probe", vec![Value::Double(value)]).unwrap(),
+                    Value::String("5|7|5|7|5|7|0|Double".to_string()), "input {value}");
+            }
+        }
+        for bits in [0x43df_ffff_fdda_d22e, 0x43df_ffff_fdda_d22f] {
+            for sign in [1.0, -1.0] {
+                let value = f64::from_bits(bits) * sign;
+                let result = run(source, "Probe", vec![Value::Double(value)]).unwrap();
+                let Value::String(text) = result else { panic!("expected a descriptor") };
+                let fields: Vec<_> = text.split('|').collect();
+                assert_eq!(fields.len(), 8);
+                for index in [0, 2, 4, 6] { assert_eq!(fields[index], "0", "input {value}"); }
+            }
+        }
+    }
+
+    #[test]
+    fn trigonometric_tangent_retains_native_quotient_bits() {
+        let source = "Public Function Probe(ByVal x As Double) As Double\n  Probe = Tan(x)\nEnd Function\n";
+        for (input, expected) in [(0.1, 0x3fb9_af88_7743_0b7f_u64),
+                                  (0.2, 0x3fc9_f267_068a_55eb),
+                                  (-0.2, 0xbfc9_f267_068a_55eb),
+                                  (1.5, 0x402c_33ed_50b8_8778),
+                                  (-0.0, 0x8000_0000_0000_0000)] {
+            let result = run(source, "Probe", vec![Value::Double(input)]).unwrap();
+            let Value::Double(value) = result else { panic!("Tan must return a Double") };
+            assert_eq!(value.to_bits(), expected, "input {input}");
+        }
+    }
+
     #[test]
     fn executes_transcendental_math_and_rgb_functions() {
         let value = run(
@@ -28407,6 +28787,437 @@ Attribute VB_Name = "TextStream"
         )
         .unwrap();
         assert_eq!(rounded, Value::String("c".to_string()));
+    }
+
+    #[test]
+    fn source_call_arguments_setter_indices_bind_after_the_assigned_value() {
+        for (arguments, early, late, trace) in [
+            ("g,Mutate()", "33", "33", "MVS"),
+            ("g+1,Mutate()", "34", "12", "MVS"),
+            ("CStr(g),Mutate()", "33", "11", "MVS"),
+            ("ReadLong()+g,Mutate()", "44", "22", "RMVS"),
+            ("data(pos),Mutate()", "10", "44", "MVS"),
+            ("marker:=Mutate(),a:=g", "33", "33", "MVS"),
+        ] {
+            for declared in ["PhaseWorker", "Object"] {
+                let source = format!(r#"
+Attribute VB_Name = "Driver"
+Public g As Variant,data As Variant,pos As Long,trace As String,captured As String
+Private Function ReadLong() As Long
+ trace=trace & "R":ReadLong=g
+End Function
+Private Function Mutate() As Long
+ g=22:pos=1:data(0)=22:trace=trace & "M":Mutate=7
+End Function
+Private Function RightSide() As Long
+ g=33:data(0)=44:trace=trace & "V":RightSide=99
+End Function
+Public Function Probe() As String
+ Dim worker As {declared}
+ Set worker=New PhaseWorker:g=11:pos=0:data=Array(10,11)
+ worker.Slot({arguments})=RightSide()
+ Probe=captured & "|" & trace
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "PhaseWorker"
+Public Property Let Slot(ByVal a As Variant,ByVal marker As Long,ByVal value As Variant)
+ Driver.trace=Driver.trace & "S":Driver.captured=CStr(a)
+End Property
+"#);
+                let (module, classes) = crate::parse_project(&source).unwrap();
+                let actual = Runtime::new(&module).with_classes(&classes).call("Driver.Probe", vec![]).unwrap();
+                assert_eq!(actual, Value::String(format!("{}|{trace}", if declared == "Object" { late } else { early })),
+                    "{declared}: {arguments}");
+            }
+        }
+    }
+
+    #[test]
+    fn source_call_arguments_single_setter_index_keeps_native_rhs_order() {
+        for (expression, early, early_trace, late, late_trace) in [
+            ("ReadLong()", "33", "VRS", "11", "RVS"),
+            ("g+1", "34", "VS", "12", "VS"),
+            ("data(0)", "44", "VS", "44", "VS"),
+        ] {
+            for declared in ["PhaseWorker", "Object"] {
+                let source = format!(r#"
+Attribute VB_Name = "Driver"
+Public g As Variant,data As Variant,trace As String,captured As String
+Private Function ReadLong() As Long
+ trace=trace & "R":ReadLong=g
+End Function
+Private Function RightSide() As Long
+ g=33:data(0)=44:trace=trace & "V":RightSide=99
+End Function
+Public Function Probe() As String
+ Dim worker As {declared}
+ Set worker=New PhaseWorker:g=11:data=Array(10,11)
+ worker.One({expression})=RightSide()
+ Probe=captured & "|" & trace
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "PhaseWorker"
+Public Property Let One(ByVal a As Variant,ByVal value As Variant)
+ Driver.trace=Driver.trace & "S":Driver.captured=CStr(a)
+End Property
+"#);
+                let (module, classes) = crate::parse_project(&source).unwrap();
+                let actual = Runtime::new(&module).with_classes(&classes).call("Driver.Probe", vec![]).unwrap();
+                let (expected, trace) = if declared == "Object" { (late, late_trace) } else { (early, early_trace) };
+                assert_eq!(actual, Value::String(format!("{expected}|{trace}")), "{declared}: {expression}");
+            }
+        }
+    }
+
+    #[test]
+    fn source_call_arguments_array_constructor_reads_places_after_value_expressions() {
+        for constructor in ["Array", "VBA.Array"] {
+            let source = format!(r#"
+Private g As Long,data As Variant
+Private Function Mutate() As Long
+ g=22:data(0)=33:Mutate=7
+End Function
+Public Function Probe() As String
+ Dim a As Variant,b As Variant,c As Variant
+ g=11:data=Array(10,11):a={constructor}(g,Mutate())
+ g=11:data=Array(10,11):b={constructor}(g+1,Mutate())
+ g=11:data=Array(10,11):c={constructor}(data(0),Mutate())
+ Probe=a(0) & "|" & b(0) & "|" & c(0)
+End Function
+"#);
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(), Value::String("22|12|33".into()), "{constructor}");
+        }
+    }
+
+    #[test]
+    fn source_call_arguments_distinguish_declared_and_dispatch_class_calls() {
+        for (declared, expression, early, late) in [
+            ("PhaseWorker", "g", "22", "22"),
+            ("PhaseWorker", "g+1", "23", "12"),
+            ("PhaseWorker", "CStr(g)", "22", "11"),
+            ("PhaseWorker", "ReadLong()+g", "33", "22"),
+            ("Object", "g", "22", "22"),
+            ("Object", "g+1", "23", "12"),
+            ("Object", "CStr(g)", "22", "11"),
+            ("Object", "ReadLong()+g", "33", "22"),
+        ] {
+            for property in [false, true] {
+                let member = if property { "Echo" } else { "Take" };
+                let source = format!(r#"
+Attribute VB_Name = "Driver"
+Private g As Variant
+Private Function ReadLong() As Long
+ ReadLong=g
+End Function
+Private Function Mutate() As Long
+ g=22:Mutate=7
+End Function
+Public Function Probe() As String
+ Dim worker As {declared}
+ Set worker=New PhaseWorker:g=11
+ Probe=worker.{member}({expression},Mutate())
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "PhaseWorker"
+Public Function Take(ByVal a As Variant,ByVal marker As Long) As String
+ Take=CStr(a)
+End Function
+Public Property Get Echo(ByVal a As Variant,ByVal marker As Long) As String
+ Echo=CStr(a)
+End Property
+"#);
+                let (module, classes) = crate::parse_project(&source).unwrap();
+                let actual = Runtime::new(&module).with_classes(&classes).call("Driver.Probe", vec![]).unwrap();
+                assert_eq!(actual, Value::String(if declared == "Object" { late } else { early }.into()),
+                    "{declared}.{member}({expression})");
+            }
+        }
+    }
+
+    #[test]
+    fn source_call_arguments_capture_array_values_and_reference_places_once() {
+        for (parameter, expression, mutation, expected) in [
+            ("ByVal", "data(pos)", "data(0)=33", "10|0|1|33"),
+            ("ByVal", "data(pos)+g", "data(0)=33", "32|0|1|33"),
+            ("ByVal", "(data(pos))", "data(0)=33", "10|0|1|33"),
+            ("ByVal", "data(pos)", "data=Array(33,44)", "10|0|1|33"),
+            ("ByRef", "data(pos)", "data=Array(33,44)", "|10|0|10"),
+        ] {
+            let source = format!(r#"
+Private data As Variant,pos As Long,g As Long
+Private Function Mutate() As Long
+ {mutation}:pos=1:g=22:Mutate=7
+End Function
+Private Function Take({parameter} a As Variant,ByVal marker As Long) As String
+ Take=CStr(a)
+End Function
+Public Function Probe() As String
+ Dim answer As String,held As Long
+ data=Array(10,11):pos=0:g=11
+ On Error Resume Next
+ answer=Take({expression},Mutate())
+ held=Err.Number
+ Probe=answer & "|" & held & "|" & pos & "|" & data(0)
+End Function
+"#);
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(), Value::String(expected.into()), "{parameter}: {expression}; {mutation}");
+        }
+    }
+
+    #[test]
+    fn source_call_arguments_keep_intrinsic_and_runtime_function_phases() {
+        for (expression, initial, changed, late) in [
+            ("Abs(g)", "-1", "2", true), ("CStr(g)", "11", "22", true),
+            ("Len(g)", "\"a\"", "\"bb\"", true),
+            ("InStr(g,\"a\")", "\"aa\"", "\"bb\"", true),
+            ("StrComp(g,\"a\")", "\"a\"", "\"b\"", true),
+            ("CDec(g)", "11", "22", false),
+            ("Left(g,1)", "\"a\"", "\"b\"", false),
+            ("TypeName(g)", "11", "\"22\"", false),
+            ("VarType(g)", "11", "\"22\"", false),
+            ("Array(g)", "11", "22", false),
+        ] {
+            let source = format!(r#"
+Private g As Variant
+Private Function Mutate() As Long
+ g={changed}: Mutate=7
+End Function
+Private Function Describe(ByVal value As Variant) As String
+ If IsArray(value) Then
+  Describe=TypeName(value) & ":" & CStr(value(0))
+ Else
+  Describe=TypeName(value) & ":" & CStr(value)
+ End If
+End Function
+Private Function Take(ByVal a As Variant,ByVal marker As Long) As String
+ Take=Describe(a)
+End Function
+Public Function Probe() As Variant
+ Dim before As String,after As String,answer As String
+ g={initial}: before=Describe({expression})
+ g={changed}: after=Describe({expression})
+ g={initial}: answer=Take({expression},Mutate())
+ Probe=Array(before,after,answer)
+End Function
+"#);
+            let Value::Array(values) = run(&source, "Probe", vec![]).unwrap() else {
+                panic!("phase probe must return three strings");
+            };
+            assert_ne!(values.values[0], values.values[1], "{expression} distinguishes phases");
+            assert_eq!(values.values[2], values.values[usize::from(late)], "{expression}");
+        }
+    }
+
+    #[test]
+    fn source_call_arguments_release_preparation_after_a_failed_binding() {
+        let source = r#"
+Private g As Variant,trace As String
+Private Function Mutate() As Long
+ g=22:trace=trace & "M":Mutate=7
+End Function
+Private Function Take(ByVal a As Variant,ByVal marker As Long) As String
+ Take=CStr(a)
+End Function
+Public Function Probe() As String
+ Dim i As Long,answer As String,held As Long
+ On Error Resume Next
+ For i=1 To 2
+  g=11:answer=Take(1/0,Mutate())
+  held=Err.Number:Err.Clear
+ Next i
+ Probe=trace & "|" & held
+End Function
+"#;
+        assert_eq!(run(source, "Probe", vec![]).unwrap(), Value::String("MM|11".into()));
+    }
+
+    #[test]
+    fn source_call_arguments_preserve_calls_while_delaying_operations() {
+        for (expression, expected, trace) in [
+            ("g+1", "23", "M"), ("g*2", "44", "M"),
+            ("CStr(g)", "22", "M"), ("CLng(g)", "22", "M"),
+            ("Read()+g", "33", "RM"), ("g+Read()", "33", "RM"),
+            ("Read()+1", "12", "RM"),
+            ("VBA.CStr(Read()+g)", "33", "RM"),
+            ("VBA.CStr(VBA.CLng(Read()+g))", "33", "RM"),
+            ("obj.Count+g", "23", "M"),
+        ] {
+            let source = format!(r#"
+Private g As Variant, trace As String, obj As Object
+Private Function Read() As Long
+ trace=trace & "R"
+ Read=g
+End Function
+Private Function Mutate() As Long
+ obj.Add 33: g=22: trace=trace & "M": Mutate=7
+End Function
+Private Function Take(ByVal a As Variant,ByVal marker As Long) As String
+ Take=CStr(a) & "|" & trace
+End Function
+Public Function Probe() As String
+ g=11: Set obj=New Collection: obj.Add 11
+ Probe=Take({expression},Mutate())
+End Function
+"#);
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(),
+                Value::String(format!("{expected}|{trace}")), "{expression}");
+        }
+    }
+
+    #[test]
+    fn source_call_arguments_group_objects_by_declared_storage() {
+        for (declaration, initial, mutation, expected) in [
+            ("Object", "Set value=New Collection", "value=22", "450||Collection"),
+            ("Variant", "Set value=New Collection", "value=22", "0|Integer|Integer"),
+            ("Variant", "value=11", "Set value=New Collection", "0|Collection|Collection"),
+        ] {
+            let source = format!(r#"
+Private value As {declaration}
+Private Function Mutate() As Long
+ {mutation}
+ Mutate=7
+End Function
+Private Function Take(ByVal a As Variant,ByVal marker As Long) As String
+ Take=TypeName(a)
+End Function
+Public Function Probe() As String
+ Dim answer As String,held As Long
+ {initial}
+ On Error Resume Next
+ answer=Take((value),Mutate())
+ held=Err.Number
+ Probe=held & "|" & answer & "|" & TypeName(value)
+End Function
+"#);
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(), Value::String(expected.into()), "{declaration}: {mutation}");
+        }
+    }
+
+    #[test]
+    fn source_call_arguments_keep_grouped_variant_values_and_isolate_writes() {
+        let source = r#"
+Private trace As String
+Private Function Mutate(ByRef value As Variant) As Long
+ value=22: trace=trace & "M": Mutate=7
+End Function
+Private Function Take(ByRef a As Variant,ByVal marker As Long) As String
+ Dim before As Variant
+ before=a: a=33
+ Take=before & "|" & a & "|" & trace
+End Function
+Public Function Probe() As String
+ Dim value As Variant
+ value=11
+ Probe=Take((value),Mutate(value))
+ Probe=Probe & "|" & value
+End Function
+"#;
+        assert_eq!(run(source, "Probe", vec![]).unwrap(), Value::String("22|33|M|22".into()));
+    }
+
+    #[test]
+    fn source_call_arguments_read_variables_after_later_argument_expressions() {
+        for (declared, parameter, initial, changed, expected) in [
+            ("Variant", "Variant", "11", "22", "22|7|M"),
+            ("Long", "Variant", "11", "22", "22|7|M"),
+            ("Variant", "Long", "11", "22", "22|7|M"),
+            ("Long", "Long", "11", "22", "22|7|M"),
+            ("String", "String", "\"A\"", "\"B\"", "B|7|M"),
+            ("String", "Variant", "\"A\"", "\"B\"", "B|7|M"),
+        ] {
+            for grouped in [false, true] {
+                let argument = if grouped { "(value)" } else { "value" };
+                let source = format!(r#"
+Private trace As String
+Private Function Change(ByRef value As {declared}) As Long
+ value={changed}
+ trace=trace & "M"
+ Change=7
+End Function
+Private Function Take(ByVal a As {parameter},ByVal marker As Long) As String
+ Take=CStr(a) & "|" & marker & "|" & trace
+End Function
+Public Function Probe() As String
+ Dim value As {declared}
+ value={initial}
+ Probe=Take({argument},Change(value))
+End Function
+"#);
+                assert_eq!(run(&source, "Probe", vec![]).unwrap(), Value::String(expected.into()),
+                    "{declared} -> {parameter}, grouped={grouped}");
+            }
+        }
+    }
+
+    #[test]
+    fn source_call_arguments_convert_after_argument_side_effects() {
+        for (initial, changed, error_number, returned) in [
+            ("\"bad\"", "22", 0, "22"),
+            ("11", "\"bad\"", 13, ""),
+        ] {
+            let source = format!(r#"
+Private trace As String
+Private Function Change(ByRef value As Variant) As Long
+ value={changed}
+ trace=trace & "M"
+ Change=7
+End Function
+Private Function Take(ByVal a As Long,ByVal marker As Long) As String
+ Take=CStr(a)
+End Function
+Public Function Probe() As String
+ Dim value As Variant, answer As String, held As Long
+ value={initial}
+ On Error Resume Next
+ answer=Take(value,Change(value))
+ held=Err.Number
+ Probe=answer & "|" & held & "|" & trace
+End Function
+"#);
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(),
+                Value::String(format!("{returned}|{error_number}|M")));
+        }
+    }
+
+    #[test]
+    fn source_call_arguments_copy_arrays_after_later_initialization() {
+        for (kind, expected_type, expected_first) in [
+            ("Object", "Nothing", "object"),
+            ("Integer", "Integer", "21"),
+            ("Variant", "Integer", "31"),
+        ] {
+            let declaration = if kind == "Variant" { "Dim data As Variant: data=Array(11,12)".into() }
+                else { format!("Dim data() As {kind}") };
+            let parameter = if kind == "Variant" { "ByRef value As Variant".into() }
+                else { format!("ByRef value() As {kind}") };
+            let set_first = match kind {
+                "Integer" => "value(2)=21",
+                "Variant" => "value(2)=31",
+                _ => "",
+            };
+            let source = format!(r#"
+Private Function Initialize({parameter}) As Long
+ ReDim value(2 To 4)
+ {set_first}
+ Initialize=7
+End Function
+Private Function Take(ByVal a As Variant,ByVal marker As Long) As String
+ Dim first As String
+ If IsObject(a(LBound(a))) Then
+  first="object"
+ Else
+  first=CStr(a(LBound(a)))
+ End If
+ Take=TypeName(a) & "|" & LBound(a) & "|" & UBound(a) & "|" & TypeName(a(LBound(a))) & "|" & first & "|" & marker
+End Function
+Public Function Probe() As String
+ {declaration}
+ Probe=Take(data,Initialize(data))
+End Function
+"#);
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(),
+                Value::String(format!("{kind}()|2|4|{expected_type}|{expected_first}|7")));
+        }
     }
 
     #[test]

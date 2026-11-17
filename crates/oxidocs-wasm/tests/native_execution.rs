@@ -1175,7 +1175,13 @@ fn replay_native_window_group(group: &serde_json::Value) {
                         continue;
                     }
                 }
-                let mut value = actual["value"].clone();
+                // A null BSTR is an empty COM string; VBA Null stays null.
+                // The typed API deliberately retains the null_string subtype.
+                let mut value = if actual["type"] == "null_string" {
+                    serde_json::Value::String(String::new())
+                } else {
+                    actual["value"].clone()
+                };
                 if group["id"] == "property_types"
                     && at < 39
                     && at % 3 == 0

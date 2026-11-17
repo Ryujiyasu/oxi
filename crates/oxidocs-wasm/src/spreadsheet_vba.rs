@@ -32309,6 +32309,9 @@ impl Host for ApplicationHost<'_> {
             host.bind_indexed_assignment(receiver.expect("native receiver"), _name, args, names)
         })
     }
+    fn reference_object_type(&self, name: &str) -> Option<String> {
+        self.read(None, "", true, |host, _receiver| host.reference_object_type(name))
+    }
     fn assignment_global_type(&self, _name: &str) -> Option<String> {
         self.read(None, _name, true, |host, _receiver| {
             host.assignment_global_type(_name)
@@ -32621,6 +32624,10 @@ impl Host for WorkbookHost<'_> {
                 Ok(None)
             }
         }
+    }
+
+    fn reference_object_type(&self, name: &str) -> Option<String> {
+        builtin_compilation_references().library.object_type_name(name)
     }
 
     fn assignment_global_type(&self, name: &str) -> Option<String> {
@@ -138082,6 +138089,29 @@ End Function
         let mut host = WorkbookHost::new(&mut book, 0).unwrap();
         assert_eq!(execute_with_host(&module, "EnumerateShapes", vec![], &mut host).unwrap(),
             Value::String("Bundle;Revenue;Comment 1;|Rectangle 1;Rectangle 2;|2|1".into()));
+    }
+
+    #[test]
+    fn worksheet_shape_enumeration_clears_host_declared_controls() {
+        for declared in ["ChartObject", "Excel.ChartObject"] {
+            for empty in [false, true] {
+                let mut book = workbook();
+                let delete = if empty { "ActiveSheet.ChartObjects.Delete" } else { "" };
+                let module = parse_module(&format!(r#"Public Function Probe() As String
+ Dim item As {declared},count As Long
+ Set item=ActiveSheet.ChartObjects.Add(1,1,100,100)
+ {delete}
+ For Each item In ActiveSheet.ChartObjects
+  count=count+1
+ Next item
+ Probe=count & "|" & TypeName(item) & "|" & CStr(item Is Nothing)
+End Function
+"#)).unwrap();
+                let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+                assert_eq!(execute_with_host(&module, "Probe", vec![], &mut host).unwrap(),
+                    Value::String(format!("{}|Nothing|True", usize::from(!empty))), "{declared}, empty={empty}");
+            }
+        }
     }
 
     #[test]
