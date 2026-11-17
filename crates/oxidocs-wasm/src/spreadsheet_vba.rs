@@ -50506,7 +50506,7 @@ mod tests {
 
     // The Native COM corpus represents both null and empty BSTRs as JSON text.
     // Typed result tests separately assert that the transport keeps them apart.
-    fn native_com_scalar(value: &serde_json::Value) -> serde_json::Value {
+    pub(super) fn native_com_scalar(value: &serde_json::Value) -> serde_json::Value {
         if value["type"] == "null_string" {
             serde_json::Value::String(String::new())
         } else {
@@ -92844,7 +92844,7 @@ End Sub
                         "{label} retains every unreturned Native peer");
                     let report = close_fixture_run(outcome.workbook, &source, "NativeProbe.ReportProbePeers", vec![], &name, &mut session);
                     assert!(report.error.is_none());
-                    assert_eq!(serde_json::to_value(&report.result).unwrap()["value"], case["peer_report"], "{label} Native peer states");
+                    assert_eq!(native_com_scalar(&serde_json::to_value(&report.result).unwrap()), case["peer_report"], "{label} Native peer states");
                     let cleaned = close_fixture_run(report.workbook, &source, "NativeProbe.CleanupProbePeers", vec![], &name, &mut session);
                     assert!(cleaned.error.is_none() && cleaned.other_workbooks.is_empty());
                     workbook = cleaned.workbook;

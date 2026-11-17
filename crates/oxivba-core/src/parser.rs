@@ -231,6 +231,7 @@ fn parse_module_knowing(source: &str, enums: &[String]) -> Result<Module, LexErr
         pos: 0,
         terminated: true,
         pending_next_counters: Vec::new(),
+        pending_next_span: None,
         enum_names: enums.to_vec(),
         default_types: [None; 26],
         syntax_errors: Vec::new(),
@@ -345,6 +346,7 @@ struct Parser<'a> {
     /// Remaining counters from a combined `Next inner, outer` terminator.
     /// The inner loop consumes the first and leaves the rest for its parents.
     pending_next_counters: Vec<Expr>,
+    pending_next_span: Option<Span>,
     /// The module's Enums so far, which come before any procedure that
     /// names one.
     enum_names: Vec<String>,
@@ -2364,12 +2366,15 @@ impl<'a> Parser<'a> {
                 .unwrap_or(Expr::Literal(Literal::Empty, span));
             self.end_statement();
             let body = self.parse_block(&["next"]);
+            let next_span = self.pending_next_span.filter(|_| !self.pending_next_counters.is_empty())
+                .unwrap_or_else(|| self.span());
             let next_counter = self.parse_next_counter();
             return Statement::ForEach(ForEachStmt {
                 item,
                 collection,
                 body,
                 next_counter,
+                next_span,
                 span,
             });
         }
@@ -2411,6 +2416,7 @@ impl<'a> Parser<'a> {
             return Some(self.pending_next_counters.remove(0));
         }
 
+        self.pending_next_span = Some(self.span());
         self.eat_kw("next");
         let mut counters = Vec::new();
         while !self.at_eol() && !self.at_punct(Punct::Colon) {

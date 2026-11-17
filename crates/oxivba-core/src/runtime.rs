@@ -1407,6 +1407,12 @@ impl EvaluatedArgument {
     }
 }
 
+enum StatementStep<T> {
+    Completed(T),
+    Skipped,
+    Flow(Flow),
+}
+
 enum Flow {
     Continue,
     Exit(ExitKind),
@@ -6959,12 +6965,50 @@ impl<'a> Runtime<'a> {
         }
     }
 
-    fn exec_for_each(
+    /// A control statement has separately resumable operations: resuming a
+    /// failed For Each header enters its body, whereas resuming its Next
+    /// advances past the loop. Retrying preserves the operation's location.
+    fn exec_resumable_step<T>(
+        &mut self,
+        frame: &mut Frame,
+        line: u32,
+        numbered_line: Option<u32>,
+        mut operation: impl FnMut(&mut Self, &mut Frame) -> Result<T, RuntimeError>,
+    ) -> Result<StatementStep<T>, RuntimeError> {
+        loop {
+            self.tick(Some(line))?;
+            frame.last_line_number = numbered_line;
+            let failure = match operation(self, frame) {
+                Ok(value) => return Ok(StatementStep::Completed(value)),
+                Err(failure) => failure,
+            };
+            let mut flow = self.handle_runtime_error(failure, frame)?;
+            if let Flow::Handle(label) = flow {
+                flow = self.run_handler(&label, frame)?;
+                if matches!(flow, Flow::Resume(_)) {
+                    frame.error_handler_active = false;
+                    frame.error_state = ErrorState::default();
+                }
+            }
+            return match flow {
+                Flow::Resume(ResumeTarget::Same) => continue,
+                Flow::Continue | Flow::Resume(ResumeTarget::Next) => Ok(StatementStep::Skipped),
+                Flow::Resume(ResumeTarget::Label(label)) => Ok(StatementStep::Flow(Flow::Jump(label))),
+                other => Ok(StatementStep::Flow(other)),
+            };
+        }
+    }
+
+    fn for_each_values(
         &mut self,
         loop_: &ForEachStmt,
         frame: &mut Frame,
-    ) -> Result<Flow, RuntimeError> {
+        array_iteration: &mut bool,
+        object_control: bool,
+    ) -> Result<(Option<ObjectRef>, std::vec::IntoIter<Value>), RuntimeError> {
+        *array_iteration = false;
         let collection = self.eval_expr(&loop_.collection, frame)?;
+        *array_iteration = matches!(collection, Value::Array(_));
         let enumeration_owner = match &collection {
             Value::Object(object) => Some(ObjectRef {
                 handle: object.handle,
@@ -6976,6 +7020,9 @@ impl<'a> Runtime<'a> {
         };
         let values = match collection {
             Value::Array(array) => {
+                if object_control {
+                    return Err(language_error(424, "Object required", loop_.span.line));
+                }
                 if array.dimensions.is_empty() {
                     return Err(language_error(92, "For loop not initialized", loop_.span.line));
                 }
@@ -6992,47 +7039,115 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 values
-            },
-            Value::Object(object) => {
-                self.host_enumerate(&object, loop_.span.line)?
-                    .ok_or_else(|| {
-                        error(
-                            RuntimeErrorKind::TypeMismatch,
-                            format!("VBA object is not enumerable: {}", object.kind),
-                            Some(loop_.span.line),
-                        )
-                    })?
             }
-            _ => {
-                return Err(error(
+            Value::Object(object) => self.host_enumerate(&object, loop_.span.line)?
+                .ok_or_else(|| error(
                     RuntimeErrorKind::TypeMismatch,
-                    "For Each requires a VBA array or enumerable object",
+                    format!("VBA object is not enumerable: {}", object.kind),
                     Some(loop_.span.line),
-                ))
-            }
+                ))?,
+            Value::Nothing => return Err(language_error(424, "Object required", loop_.span.line)),
+            _ => return Err(error(
+                RuntimeErrorKind::TypeMismatch,
+                "For Each requires a VBA array or enumerable object",
+                Some(loop_.span.line),
+            )),
         };
-        let mut last_was_object = None;
-        for value in values {
-            self.tick(Some(loop_.span.line))?;
-            if enumeration_owner.as_ref().is_some_and(|receiver| {
-                self.host.as_deref().is_some_and(|host| !host.enumeration_item_is_live(receiver, &value))
-            }) { continue; }
-            last_was_object = Some(matches!(value, Value::Object(_)));
-            self.assign(&loop_.item, value, frame, loop_.span.line)?;
-            match self.exec_body(&loop_.body, frame)? {
-                Flow::Continue => {}
-                Flow::Exit(ExitKind::For) => return Ok(Flow::Continue),
+        Ok((enumeration_owner, values.into_iter()))
+    }
+
+    fn next_enumeration_value(
+        &self,
+        owner: Option<&ObjectRef>,
+        values: &mut std::vec::IntoIter<Value>,
+    ) -> Option<Value> {
+        values.find(|value| !owner.is_some_and(|receiver| {
+            self.host.as_deref().is_some_and(|host| !host.enumeration_item_is_live(receiver, value))
+        }))
+    }
+
+    fn exec_for_each(
+        &mut self,
+        loop_: &ForEachStmt,
+        frame: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        let declared = expr_name(&loop_.item).and_then(|name| self.lookup_slot(frame, name))
+            .and_then(|slot| slot.declared.borrow().clone());
+        let object_control = declared.as_deref().is_some_and(|kind| {
+            kind.eq_ignore_ascii_case("Object") || self.is_specific_object_type(kind)
+        });
+        let cleared = if object_control { Value::Nothing } else { Value::Empty };
+        let mut array_iteration = false;
+        let header_line = frame.last_line_number;
+        let mut cursor = None;
+        match self.exec_resumable_step(
+            frame, loop_.span.line, header_line, |runtime, frame| {
+                cursor = None;
+                let (owner, mut values) = runtime.for_each_values(
+                    loop_, frame, &mut array_iteration, object_control,
+                )?;
+                let first = runtime.next_enumeration_value(owner.as_ref(), &mut values);
+                // The enumerator survives a failed first-item conversion:
+                // Resume Next enters the body, then Next can still advance it.
+                cursor = Some((owner, values));
+                runtime.assign(&loop_.item, cleared.clone(), frame, loop_.span.line)?;
+                if let Some(value) = first {
+                    let value = if object_control {
+                        runtime.coerce_runtime(value, "Object", loop_.span.line, runtime.this_year())?
+                    } else { value };
+                    runtime.assign(&loop_.item, value, frame, loop_.span.line)?;
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            },
+        )? {
+            StatementStep::Completed(false) => return Ok(Flow::Continue),
+            StatementStep::Completed(true) | StatementStep::Skipped => {}
+            StatementStep::Flow(flow) => return Ok(flow),
+        };
+        loop {
+            let exiting = match self.exec_body(&loop_.body, frame)? {
+                Flow::Continue => false,
+                Flow::Exit(ExitKind::For) => true,
                 flow => return Ok(flow),
+            };
+            let next_number = match loop_.body.last() {
+                Some(Statement::LineNumber { value, .. }) => Some(*value),
+                _ => frame.last_line_number,
+            };
+            match self.exec_resumable_step(
+                frame, loop_.next_span.line, next_number, |runtime, frame| {
+                    if cursor.is_none() {
+                        if !array_iteration {
+                            runtime.assign(&loop_.item, cleared.clone(), frame, loop_.next_span.line)?;
+                        }
+                        return Err(language_error(92, "For loop not initialized", loop_.next_span.line));
+                    }
+                    if exiting {
+                        return Ok(false);
+                    }
+                    runtime.assign(&loop_.item, cleared.clone(), frame, loop_.next_span.line)?;
+                    // Retrying Next repeats the advance as well as conversion.
+                    let next = cursor.as_mut().and_then(|(owner, values)| {
+                        runtime.next_enumeration_value(owner.as_ref(), values)
+                    });
+                    if let Some(value) = next {
+                        let value = if object_control {
+                            runtime.coerce_runtime(value, "Object", loop_.next_span.line, runtime.this_year())?
+                        } else { value };
+                        runtime.assign(&loop_.item, value, frame, loop_.next_span.line)?;
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                },
+            )? {
+                StatementStep::Completed(true) => {}
+                StatementStep::Completed(false) | StatementStep::Skipped => return Ok(Flow::Continue),
+                StatementStep::Flow(flow) => return Ok(flow),
             }
         }
-        // A loop that ran to the end leaves its variable holding nothing:
-        // measured, `ws Is Nothing` after `For Each ws In Worksheets` and
-        // `IsEmpty(x)` after one over an array or a Collection.
-        if let Some(object) = last_was_object {
-            let cleared = if object { Value::Nothing } else { Value::Empty };
-            self.assign(&loop_.item, cleared, frame, loop_.span.line)?;
-        }
-        Ok(Flow::Continue)
     }
 
     fn exec_do(&mut self, loop_: &DoStmt, frame: &mut Frame) -> Result<Flow, RuntimeError> {
@@ -28292,6 +28407,295 @@ Attribute VB_Name = "TextStream"
         )
         .unwrap();
         assert_eq!(rounded, Value::String("c".to_string()));
+    }
+
+    #[test]
+    fn for_each_first_conversion_retains_the_cursor_and_resume_repeats_next_advance() {
+        for (first_bad, handler, retry, expected) in [
+            (true, false, false, "BNothing:424@10;BCollection:424@10;ANothing:424@10|2|0"),
+            (true, true, false, "H424@10;BNothing:0@0;BCollection:0@0;ANothing:0@0|2|1"),
+            (false, true, true, "BCollection:0@0;H424@40;BCollection:0@0;ANothing:0@0|2|1"),
+            (false, true, false, "BCollection:0@0;H424@40;ANothing:0@0|1|1"),
+        ] {
+            let source = format!(r#"
+Public Function Probe() As String
+ Dim data As Collection, obj As Collection, item As Object, trace As String, count As Long, handled As Long
+ Set data=New Collection
+ Set obj=New Collection
+ Set item=obj
+ {}
+ On Error {}
+10 For Each item In data
+20 count=count+1
+30 trace=trace & "B" & TypeName(item) & ":" & Err.Number & "@" & Erl & ";"
+ If count>5 Then Exit For
+40 Next item
+50 Probe=trace & "A" & TypeName(item) & ":" & Err.Number & "@" & Erl & "|" & count & "|" & handled
+ Exit Function
+H:
+ handled=handled+1
+ trace=trace & "H" & Err.Number & "@" & Erl & ";"
+ If handled>4 Then Exit Function
+ {}
+End Function
+"#, if first_bad { "data.Add 1\n data.Add obj" } else { "data.Add obj\n data.Add 1\n data.Add obj" },
+                    if handler { "GoTo H" } else { "Resume Next" },
+                    if retry { "Resume" } else { "Resume Next" });
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(), Value::String(expected.into()));
+        }
+    }
+
+    #[test]
+    fn for_each_rejects_an_object_control_before_array_initialization() {
+        for setup in [
+            "Dim data As Variant: data=Array(1,2)",
+            "Dim original() As Integer, data As Variant: data=original",
+            "Dim original() As Object, data As Variant: data=original",
+            "Dim original(0 To 0) As Object, data As Variant: Set original(0)=New Collection: data=original",
+        ] {
+            let source = format!(r#"
+Public Function Probe() As String
+ {setup}
+ Dim item As Object, trace As String, count As Long
+ Set item=New Collection
+ On Error Resume Next
+10 For Each item In data
+20 count=count+1:trace=TypeName(item) & ":" & Err.Number & "@" & Erl & ";"
+ If count>3 Then Exit For
+30 Next item
+40 Probe=trace & TypeName(item) & ":" & Err.Number & "@" & Erl & "|" & count
+End Function
+"#);
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(),
+                Value::String("Collection:424@10;Collection:92@30|1".into()));
+        }
+    }
+
+    #[test]
+    fn for_each_exhaustion_clears_the_declared_control_storage() {
+        for kind in ["Variant", "Object", "Collection"] {
+            for full in [false, true] {
+                let source = format!(r#"
+Public Function Probe() As String
+ Dim data As Collection, obj As Collection, item As {kind}, count As Long
+ Set data=New Collection
+ Set obj=New Collection
+ {}
+ {}
+ For Each item In data
+  count=count+1
+ Next item
+ Probe=TypeName(item) & "|" & count
+End Function
+"#, if full { "data.Add obj" } else { "" },
+                    if kind == "Variant" { "item=17" } else { "Set item=obj" });
+                assert_eq!(run(&source, "Probe", vec![]).unwrap(),
+                    Value::String(format!("{}|{}", if kind == "Variant" { "Empty" } else { "Nothing" }, u8::from(full))));
+            }
+        }
+    }
+
+    #[test]
+    fn for_each_failed_initialization_preserves_the_array_control_value() {
+        for (setup, expression, header_error, after) in [
+            ("Dim data() As Integer", "data", 92, "Integer:17"),
+            ("Dim original() As Integer, data As Variant: data=original", "data", 92, "Integer:17"),
+            ("Dim data As Variant: data=7", "data", 13, "Empty:"),
+            ("Dim data As Variant", "BadCollection()", 5, "Empty:"),
+            ("Dim data As Object: Set data=Nothing", "data", 424, "Empty:"),
+        ] {
+            let source = format!(r#"
+Private Function BadCollection() As Variant
+ Err.Raise 5
+End Function
+Public Function Probe() As String
+ {setup}
+ Dim item As Variant, trace As String
+ item=17
+ On Error Resume Next
+10 For Each item In {expression}
+20 trace=TypeName(item) & ":" & item & ":" & Err.Number & "@" & Erl & ";"
+30 Next item
+40 Probe=trace & TypeName(item) & ":" & item & ":" & Err.Number & "@" & Erl
+End Function
+"#);
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(),
+                Value::String(format!("Integer:17:{header_error}@10;{after}:92@30")));
+        }
+        let empty = r#"
+Public Function Probe() As String
+ Dim item As Variant, data As Variant
+ item=17: data=Array()
+ For Each item In data
+  Probe="body"
+ Next item
+ Probe=Probe & TypeName(item)
+End Function
+"#;
+        assert_eq!(run(empty, "Probe", vec![]).unwrap(), Value::String("Empty".into()));
+    }
+
+    #[test]
+    fn for_each_next_conversion_failure_leaves_an_empty_object_reference() {
+        for handler in [false, true] {
+            let source = format!(r#"
+Public Function Probe() As String
+ Dim data As Collection, obj As Collection, item As Object, trace As String, count As Long
+ Set data=New Collection
+ Set obj=New Collection
+ data.Add obj
+ data.Add 1
+ data.Add obj
+ On Error {}
+10 For Each item In data
+20 count=count+1
+30 trace=trace & "B" & TypeName(item) & ":" & Err.Number & "@" & Erl & ";"
+ If count>4 Then Exit For
+40 Next item
+50 Probe=trace & "A" & TypeName(item) & ":" & Err.Number & "@" & Erl & "|" & count
+ Exit Function
+H:
+ trace=trace & "H" & Err.Number & "@" & Erl & ";"
+ Resume Next
+End Function
+"#, if handler { "GoTo H" } else { "Resume Next" });
+            let expected = if handler {
+                "BCollection:0@0;H424@40;ANothing:0@0|1"
+            } else {
+                "BCollection:0@0;ANothing:424@40|1"
+            };
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(), Value::String(expected.into()));
+        }
+    }
+
+    #[test]
+    fn for_each_header_and_next_have_separate_error_continuations() {
+        for (setup, expected_error) in [
+            ("Dim data() As Integer", 92),
+            ("Dim data As Variant: data=7", 13),
+            ("Dim data As Variant: data=Null", 13),
+            ("Dim data As Object: Set data=Nothing", 424),
+            ("Dim data As Variant: data=BadCollection()", 5),
+        ] {
+            for handler in [false, true] {
+                let collection = if expected_error == 5 { "BadCollection()" } else { "data" };
+                let setup = if expected_error == 5 { "Dim data As Variant" } else { setup };
+                let source = format!(r#"
+Private Function BadCollection() As Variant
+ Err.Raise 5
+End Function
+Public Function Probe() As String
+ {setup}
+ Dim item As Variant, trace As String, count As Long, handled As Long
+5 trace="S;"
+10 On Error {}
+20 Err.Clear
+30 For Each item In {collection}
+40 count=count+1
+50 trace=trace & "B" & Err.Number & "@" & Erl & ":" & TypeName(item) & ";"
+ If count>2 Then Exit For
+70 Next item
+80 Probe=trace & "A" & Err.Number & "@" & Erl & ":" & TypeName(item) & "|" & count & "|" & handled
+ Exit Function
+H:
+ handled=handled+1
+ trace=trace & "H" & Err.Number & "@" & Erl & ";"
+ If handled>4 Then Exit Function
+ Resume Next
+End Function
+"#, if handler { "GoTo H" } else { "Resume Next" });
+                let expected = if handler {
+                    format!("S;H{expected_error}@30;B0@0:Empty;H92@70;A0@0:Empty|1|2")
+                } else {
+                    format!("S;B{expected_error}@30:Empty;A92@70:Empty|1|0")
+                };
+                assert_eq!(run(&source, "Probe", vec![]).unwrap(), Value::String(expected), "{setup} / handler={handler}");
+            }
+        }
+    }
+
+    #[test]
+    fn for_each_resume_retries_its_header_or_its_next() {
+        for retry_header in [true, false] {
+            let handler = if retry_header {
+                "ReDim data(0 To 1)\n data(0)=41\n data(1)=42\n Resume"
+            } else {
+                "If handled=1 Then Resume Next\n If handled<4 Then Resume\n Resume Next"
+            };
+            let source = format!(r#"
+Public Function Probe() As String
+ Dim data() As Integer, item As Variant, trace As String, handled As Long, count As Long
+5 trace="S;"
+10 On Error GoTo H
+30 For Each item In data
+40 count=count+1
+50 trace=trace & "B" & TypeName(item) & "=" & CStr(item) & ";"
+ If count>4 Then Exit For
+70 Next item
+80 Probe=trace & "A" & Err.Number & "@" & Erl & "|" & handled
+ Exit Function
+H:
+ handled=handled+1
+ trace=trace & "H" & Err.Number & "@" & Erl & ";"
+ If handled>6 Then Exit Function
+ {handler}
+End Function
+"#);
+            let expected = if retry_header {
+                "S;H92@30;BInteger=41;BInteger=42;A0@0|1"
+            } else {
+                "S;H92@30;BEmpty=;H92@70;H92@70;H92@70;A0@0|4"
+            };
+            assert_eq!(run(&source, "Probe", vec![]).unwrap(), Value::String(expected.into()));
+        }
+    }
+
+    #[test]
+    fn for_each_failed_header_keeps_nested_loops_and_exit_for_locations() {
+        let source = r#"
+Public Function Nested() As String
+ Dim data() As Long, item As Variant, outer As Variant, trace As String, handled As Long
+ On Error GoTo H
+10 For Each outer In Array(1,2)
+20 For Each item In data
+30 trace=trace & "B" & outer & ":" & Err.Number & "@" & Erl & ";"
+40 Next item
+50 trace=trace & "O" & outer & ";"
+60 Next outer
+ Nested=trace
+ Exit Function
+H:
+ handled=handled+1
+ If handled>6 Then Exit Function
+ trace=trace & "H" & Err.Number & "@" & Erl & ";"
+ Resume Next
+End Function
+Public Function ExitFailed() As String
+ Dim data() As Integer, item As Variant, trace As String
+ On Error Resume Next
+10 For Each item In data
+20 trace=Err.Number & "@" & Erl & ";"
+ Exit For
+30 Next item
+40 ExitFailed=trace & Err.Number & "@" & Erl
+End Function
+Public Function Redirect() As String
+ Dim data() As Integer, item As Variant
+ On Error GoTo H
+ For Each item In data
+  Redirect="body"
+ Next item
+Finished:
+ Redirect=Redirect & "finished"
+ Exit Function
+H:
+ Resume Finished
+End Function
+"#;
+        assert_eq!(run(source, "Nested", vec![]).unwrap(),
+            Value::String("H92@20;B1:0@0;H92@40;O1;H92@20;B2:0@0;H92@40;O2;".into()));
+        assert_eq!(run(source, "ExitFailed", vec![]).unwrap(), Value::String("92@10;92@30".into()));
+        assert_eq!(run(source, "Redirect", vec![]).unwrap(), Value::String("finished".into()));
     }
 
     #[test]

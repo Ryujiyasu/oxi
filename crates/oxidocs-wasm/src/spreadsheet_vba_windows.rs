@@ -966,7 +966,7 @@ mod tests {
                         continue;
                     }
                 }
-                let mut value = actual["value"].clone();
+                let mut value = super::super::tests::native_com_scalar(actual);
                 if group["id"] == "property_types" && at < 39 && at % 3 == 0
                     && case["expected"][at + 1] == 10 && actual["type"] == "error" {
                     // COM exposes VT_ERROR as a signed SCODE. The public engine
