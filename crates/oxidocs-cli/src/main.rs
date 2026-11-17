@@ -94,8 +94,12 @@ fn main() {
             };
             finish(input, output, convert(input, output, strict));
         }
-        Some("pptx-to-png") => {
-            let usage = "Usage: oxi pptx-to-png [--strict] [--page N] [--width PX] [--height PX] <input.pptx> <output.png>";
+        Some("pptx-to-png") | Some("xlsx-to-png") => {
+            let usage = if args[1] == "xlsx-to-png" {
+                "Usage: oxi xlsx-to-png [--strict] [--page N] [--width PX] [--height PX] <input.xlsx> <output.png>"
+            } else {
+                "Usage: oxi pptx-to-png [--strict] [--page N] [--width PX] [--height PX] <input.pptx> <output.png>"
+            };
             let mut strict = false;
             let mut page = 1usize;
             let mut size = raster::Size { width: None, height: None };
@@ -233,6 +237,7 @@ fn main() {
             eprintln!("  oxi pptx-to-pdf [--strict] [--quiet] <input.pptx> <output.pdf>");
             eprintln!("  oxi xlsx-to-pdf [--strict] [--quiet] <input.xlsx> <output.pdf>");
             eprintln!("  oxi pptx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.pptx> <output.png>");
+            eprintln!("  oxi xlsx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.xlsx> <output.png>");
             eprintln!("      page N (default 1), fitted inside the given width and/or height (default 96 dpi)");
             eprintln!("  oxi serve [--threads N]");
             eprintln!("      one JSON request per stdin line, {{\"input\", \"output\", \"strict\", \"id\"}};");
@@ -5571,6 +5576,23 @@ mod serve_tests {
 
         let past_end = json!({ "input": input, "output": output, "page": 99 });
         assert_eq!(serve_one(&past_end.to_string())["exit"].as_i64(), Some(EXIT_FAILED as i64));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A workbook draws to PNG from the same print pages xlsx-to-pdf writes,
+    /// fitted inside the box like any other page.
+    #[test]
+    fn a_workbook_page_draws_to_png() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/basic_test.xlsx");
+        let dir = std::env::temp_dir().join(format!("oxi-xlsx-png-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let output = dir.join("sheet.png");
+        let size = raster::Size { width: Some(300), height: None };
+        let Ok(done) = convert_png(input, output.to_str().unwrap(), false, 1, size) else { panic!("xlsx-to-png failed") };
+        assert!(done.pages >= 1);
+        let png = image::open(&output).unwrap();
+        assert_eq!(png.width(), 300);
+        assert!(convert_png(input, output.to_str().unwrap(), false, done.pages + 1, size).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 
