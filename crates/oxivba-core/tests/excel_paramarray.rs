@@ -276,3 +276,222 @@ End Function
 "#;
     assert_eq!(array_report(source),vec![Value::Integer(8201),Value::Integer(9)]);
 }
+
+
+fn grouped_variant_report(operation: &str) -> Vec<Value> {
+    let source = format!(r#"
+Attribute VB_Name = "GroupedProbe"
+Option Explicit
+Public Trace As String
+Public Function Describe(ByVal value As Variant) As Variant
+ Describe=Array(VarType(value),TypeName(value),IsObject(value))
+End Function
+Private Function TakeValue(ByVal value As Variant,Optional ByVal other As Variant) As Variant
+ TakeValue=Describe(value)
+End Function
+Private Function TakeRef(ByRef value As Variant,Optional ByVal other As Variant) As Variant
+ TakeRef=Describe(value)
+End Function
+Private Function TakePack(ParamArray values() As Variant) As Variant
+ TakePack=Describe(values(0))
+End Function
+Public Function Later() As Long
+ Trace=Trace & "L;":Later=0
+End Function
+Public Function Change(ByRef value As Variant) As Long
+ Trace=Trace & "L;":Set value=Nothing:Change=0
+End Function
+Public Function Probe() As Variant
+ Dim typed As GroupedPayload,obj As Object,boxed As Variant,receiver As GroupedReceiver,late As Object
+ Dim answer As Variant,held As Variant,number As Long,errors As Variant,zero As Double
+ Set typed=New GroupedPayload:Set obj=typed:Set boxed=obj
+ Set receiver=New GroupedReceiver:Set late=receiver:Trace=""
+ On Error Resume Next
+ Err.Clear
+ {operation}
+ number=Err.Number
+ errors=Array(Err.Number,Err.Description,Err.Source,Err.HelpFile,Err.HelpContext)
+ Probe=Array(Array(number,answer,Trace),errors)
+End Function
+VERSION 1.0 CLASS
+Attribute VB_Name = "GroupedPayload"
+Public Property Get Value() As Long
+Attribute Value.VB_UserMemId = 0
+ GroupedProbe.Trace=GroupedProbe.Trace & "G;"
+ Value=7
+End Property
+VERSION 1.0 CLASS
+Attribute VB_Name = "GroupedReceiver"
+Public Function TakeValue(ByVal value As Variant,Optional ByVal other As Variant) As Variant
+ TakeValue=GroupedProbe.Describe(value)
+End Function
+"#);
+    let report = array_report(&source);
+    match &report[0] {
+        Value::Array(array) => array.values.clone(),
+        other => panic!("expected grouped argument report, received {other:?}"),
+    }
+}
+
+fn check_grouped_variant_report(operation: &str, number: i64, kind: i64, name: &str, object: bool, trace: &str) {
+    let actual = grouped_variant_report(operation);
+    assert_eq!(actual[0], Value::Integer(number), "{operation}: {actual:?}");
+    if number == 0 {
+        let Value::Array(description) = &actual[1] else { panic!("{operation}: {actual:?}"); };
+        assert_eq!(description.values, vec![Value::Integer(kind), Value::String(name.into()), Value::Boolean(object)], "{operation}");
+    } else {
+        assert_eq!(actual[1], Value::Empty, "{operation}");
+    }
+    assert_eq!(actual[2], Value::String(trace.into()), "{operation}");
+}
+
+#[test]
+fn grouped_variant_arguments_preserve_the_formal_parameter_context() {
+    check_grouped_variant_report(r#"answer=TakeValue(boxed)"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue((boxed))"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=TakeRef((boxed))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=TakePack((boxed))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=late.TakeValue((boxed))"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=receiver.TakeValue((boxed))"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,(boxed))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=CallByName(receiver,"TakeValue",1,(boxed))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=TakePack((obj))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,(obj))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue((obj))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"held=Array((boxed)):answer=Describe(held(0))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"held=IIf(True,(boxed),0):answer=Describe(held)"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"held=Choose(1,(boxed)):answer=Describe(held)"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"held=Switch(True,(boxed)):answer=Describe(held)"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"held=(boxed):answer=Describe(held)"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,boxed)"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=TakePack(boxed)"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue((typed))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(((boxed)))"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=TakePack(((boxed)))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,((boxed)))"#, 0, 3, "Long", false, "G;");
+}
+
+#[test]
+fn grouped_variant_intrinsic_operands_preserve_object_values() {
+    check_grouped_variant_report(r#"answer=TakeValue(IIf(True,(boxed),0))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(Choose(1,(boxed)))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(True,(boxed)))"#, 0, 3, "Long", false, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(IIf(True,boxed,0))"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(Choose(1,boxed))"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(True,boxed))"#, 0, 3, "GroupedPayload", true, "G;");
+}
+
+#[test]
+fn grouped_variant_arguments_preserve_callback_order() {
+    check_grouped_variant_report(r#"answer=TakeRef((boxed),Later())"#, 0, 3, "Long", false, "L;G;");
+    check_grouped_variant_report(r#"answer=TakeValue((boxed),Later())"#, 0, 3, "GroupedPayload", true, "L;G;");
+    check_grouped_variant_report(r#"answer=TakePack((boxed),Later())"#, 0, 3, "Long", false, "G;L;");
+    check_grouped_variant_report(r#"answer=TakeValue(IIf(True,(boxed),Later()))"#, 0, 3, "Long", false, "L;G;");
+    check_grouped_variant_report(r#"answer=TakeValue(Choose(1,(boxed),Later()))"#, 0, 3, "Long", false, "G;L;");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(True,(boxed),False,Later()))"#, 0, 3, "Long", false, "G;L;");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,(boxed),Later())"#, 0, 3, "Long", false, "L;G;");
+    check_grouped_variant_report(r#"answer=TakeRef((boxed),Change(boxed))"#, 91, 0, "", false, "L;");
+    check_grouped_variant_report(r#"answer=TakeValue((boxed),Change(boxed))"#, 0, 9, "Nothing", true, "L;");
+    check_grouped_variant_report(r#"answer=TakePack((boxed),Change(boxed))"#, 0, 3, "Long", false, "G;L;");
+    check_grouped_variant_report(r#"answer=TakeValue(IIf(True,(boxed),Change(boxed)))"#, 91, 0, "", false, "L;");
+    check_grouped_variant_report(r#"answer=TakeValue(Choose(1,(boxed),Change(boxed)))"#, 0, 3, "Long", false, "G;L;");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(True,(boxed),False,Change(boxed)))"#, 0, 3, "Long", false, "G;L;");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,(boxed),Change(boxed))"#, 91, 0, "", false, "L;");
+}
+
+#[test]
+fn grouped_variant_arguments_preserve_errors_and_switch_selection() {
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(boxed,11,True,22))"#, 0, 2, "Integer", false, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(True,boxed,boxed,0))"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(False,0,boxed,11))"#, 0, 2, "Integer", false, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(True,boxed,Nothing,0))"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(False,0,Nothing,1))"#, 91, 0, "", false, "");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(Null,0,True,boxed))"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(CVErr(5),0,True,boxed))"#, 13, 0, "", false, "");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(True,boxed,CVErr(5),0))"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=TakeValue(Switch(0,0,7,boxed))"#, 0, 3, "GroupedPayload", true, "G;");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,1/zero,Later())"#, 11, 0, "", false, "L;");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,(boxed),1/zero)"#, 11, 0, "", false, "G;");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,1/zero,(boxed))"#, 11, 0, "", false, "");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,(obj),Later())"#, 0, 3, "Long", false, "G;L;");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,boxed,Change(boxed))"#, 0, 9, "Nothing", true, "L;");
+    check_grouped_variant_report(r#"answer=CallByName(late,"TakeValue",1,((boxed)),Later())"#, 0, 3, "Long", false, "L;G;");
+    check_grouped_variant_report(r#"answer=TakeValue(IIf(True,(boxed),1/zero))"#, 11, 0, "", false, "");
+}
+
+fn typed_array_writeback_report(element: &str, operation: &str, invocation: &str) -> Vec<Value> {
+    let pack_operation = operation.replace("value", "values(0)");
+    array_report(&format!(r#"
+Private Function FailValue() As Variant
+ Err.Raise 5
+End Function
+Private Function MutateRef(ByRef value As Variant) As Long
+ On Error Resume Next
+ Err.Clear
+ {operation}
+ Dim number As Long:number=Err.Number
+ Err.Clear
+ MutateRef=number
+End Function
+Private Function MutateValue(ByVal value As Variant) As Long
+ On Error Resume Next
+ Err.Clear
+ {operation}
+ Dim number As Long:number=Err.Number
+ Err.Clear
+ MutateValue=number
+End Function
+Private Function MutatePack(ParamArray values() As Variant) As Long
+ On Error Resume Next
+ Err.Clear
+ {pack_operation}
+ Dim number As Long:number=Err.Number
+ Err.Clear
+ MutatePack=number
+End Function
+Public Function Probe() As Variant
+ Dim data() As {element},inside As Long,outside As Long,lo As Long,hi As Long,le As Long,he As Long
+ ReDim data(1 To 1)
+ On Error Resume Next
+ Err.Clear
+ inside={invocation}
+ outside=Err.Number
+ Err.Clear
+ lo=LBound(data):le=Err.Number
+ Err.Clear
+ hi=UBound(data):he=Err.Number
+ Probe=Array(inside,outside,lo,le,hi,he,VarType(data))
+End Function
+"#))
+}
+
+#[test]
+fn typed_array_variant_references_reject_whole_value_replacement() {
+    for (element, kind) in [("Object", 8201), ("Long", 8195), ("Variant", 8204), ("Byte", 8209), ("String", 8200)] {
+        for invocation in ["MutateRef(data)", "MutatePack(data)"] {
+            for (operation, number) in [("value=Empty",458),("value=Null",458),("value=CVErr(2000)",458),("Set value=Nothing",13),("value=FailValue()",5)] {
+                assert_eq!(typed_array_writeback_report(element,operation,invocation),
+                    [number,0,1,0,1,0,kind].into_iter().map(Value::Integer).collect::<Vec<_>>(),
+                    "{element}: {invocation}: {operation}");
+            }
+        }
+    }
+    for operation in ["value=Array(7,8)", "value=42"] {
+        assert_eq!(typed_array_writeback_report("Object",operation,"MutateRef(data)"),
+            [458,0,1,0,1,0,8201].into_iter().map(Value::Integer).collect::<Vec<_>>());
+    }
+}
+
+#[test]
+fn typed_array_variant_copies_remain_independently_replaceable() {
+    for invocation in ["MutateRef((data))", "MutateValue(data)", "MutateValue((data))", "MutatePack((data))"] {
+        for operation in ["value=Array(7,8)","value=42"] {
+            assert_eq!(typed_array_writeback_report("Object",operation,invocation),
+                [0,0,1,0,1,0,8201].into_iter().map(Value::Integer).collect::<Vec<_>>(), "{invocation}: {operation}");
+        }
+    }
+    assert_eq!(typed_array_writeback_report("Object","ReDim value(2 To 3)","MutateRef(data)"),
+        [0,0,2,0,3,0,8201].into_iter().map(Value::Integer).collect::<Vec<_>>());
+    assert_eq!(typed_array_writeback_report("Object","Erase value","MutateRef(data)"),
+        [0,0,0,9,0,9,8201].into_iter().map(Value::Integer).collect::<Vec<_>>());
+}
