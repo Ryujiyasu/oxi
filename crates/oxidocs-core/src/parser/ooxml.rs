@@ -17628,6 +17628,10 @@ fn s1397_minor_ea(theme_val: &str, theme: &super::theme::ThemeColors, doc_defaul
     // docDefaults' literal is inherited (the docDefaults itself resolves the
     // reference to the Jpan face at the end of the chain, styles.rs).
     let _ = doc_default_literal;
+    // OXI_EMPTYEA_SCRIPT_FACE: the script face, as at the chain end (styles.rs).
+    if std::env::var_os("OXI_EMPTYEA_SCRIPT_FACE_DISABLE").is_none() {
+        return super::styles::s1397_minor_ea_styles(theme, theme_val);
+    }
     None
 }
 

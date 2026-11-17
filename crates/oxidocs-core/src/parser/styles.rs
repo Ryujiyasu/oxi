@@ -39,7 +39,17 @@ pub fn s1397_minor_ea_styles(theme: &ThemeColors, theme_val: &str) -> Option<Str
     // PMingLiU; legal__05cb4a0abb24c0fd: same theme shape, no literal anywhere
     // -> 游明朝, the Jpan face). The empty slot is "no font": the next literal
     // in the chain wins, and only the chain's end takes the script face.
-    if S1397_IN_RPR_DEFAULT.with(|c| c.get()) {
+    // OXI_EMPTYEA_SCRIPT_FACE (2026-11-17): every level answers like the chain
+    // end, not only the rPrDefault. `_pb_emptyea_literal_gen.py`, 11 arms, Word
+    // PDF span face: a run or paragraph-style reference paints the script face
+    // (Jpan ＭＳ 明朝 / 游明朝, zh-TW -> PMingLiU) over a Normal literal ＭＳ Ｐ明朝 /
+    // ＭＳ ゴシック and over a docDefaults literal ＭＳ ゴシック alike; no Jpan ->
+    // MS Mincho. S1397's legal__0676305d reading (Normal 新細明體 wins) is the
+    // same face as its zh-TW Hant entry, so it cannot separate the two.
+    // ja/legal__02f84965: Normal ＭＳ Ｐ明朝, theme Jpan ＭＳ 明朝 -> Word MS-Mincho.
+    if S1397_IN_RPR_DEFAULT.with(|c| c.get())
+        || std::env::var_os("OXI_EMPTYEA_SCRIPT_FACE_DISABLE").is_none()
+    {
         // S1496 (2026-09-20, default ON, opt-out OXI_S1496_DISABLE): the script
         // face is the one settings `themeFontLang eastAsia` names -- zh-CN ->
         // Hans (等线), zh-TW -> Hant (PMingLiU), ja-JP / absent -> Jpan
