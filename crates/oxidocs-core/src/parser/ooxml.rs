@@ -8528,6 +8528,29 @@ pub(super) fn parse_color_modifiers_alpha(reader: &mut Reader<&[u8]>, base_hex: 
     ), alpha)
 }
 
+/// OXI_VML_BRACKET (2026-11-17): VML shapetypes 85 / 86 are the single left /
+/// right bracket (o:spt 85 path «m21600,qx0@0l0@1qy21600,21600e», unfilled); a
+/// left bracket mirrored by style flip:x is the right one. blind-A ja/technical__
+/// 7cc63ebc p2 frames a paragraph with a t85 pair (the right one flip:x); Oxi drew
+/// both as boxes.
+fn vml_bracket_preset(type_attr: Option<&str>, style: Option<&str>) -> Option<&'static str> {
+    if crate::env_flag!("OXI_VML_BRACKET_DISABLE") {
+        return None;
+    }
+    let t = type_attr?;
+    let flip_x = style.is_some_and(|s| s.split(';').any(|kv| {
+        let mut it = kv.splitn(2, ':');
+        it.next().map(str::trim) == Some("flip") && it.next().is_some_and(|v| v.contains('x'))
+    }));
+    if t.ends_with("_x0000_t85") {
+        Some(if flip_x { "rightBracket" } else { "leftBracket" })
+    } else if t.ends_with("_x0000_t86") {
+        Some(if flip_x { "leftBracket" } else { "rightBracket" })
+    } else {
+        None
+    }
+}
+
 /// Parse a w:drawing element to extract image, shape, or text box info
 /// A VML shape's relativeHeight: its positive z-index (OXI_VML_ZINDEX).
 fn vml_relative_height(z_index: u32) -> u32 {
@@ -12062,8 +12085,13 @@ fn parse_vml_pict(
                             match local.as_str() {
                                 "shape" => {
                                     // Map VML shapetype IDs to OOXML preset names
+                                    let vml_style_attr = e.attributes().flatten()
+                                        .find(|a| local_name(a.key.as_ref()) == "style")
+                                        .map(|a| String::from_utf8_lossy(&a.value).to_string());
                                     match vml_type_attr.as_deref() {
                                         Some(t) if t.contains("t185") => "bracketPair", // double bracket 〔〕
+                                        t if vml_bracket_preset(t, vml_style_attr.as_deref()).is_some() =>
+                                            vml_bracket_preset(t, vml_style_attr.as_deref()).unwrap(),
                                         // OXI_VML_CONNECTOR_LINE (2026-11-08, default ON, opt-out
                                         // _DISABLE): shapetype 32 is the straight connector -- a
                                         // line corner to corner (flip picks the diagonal). blind-J
@@ -12327,10 +12355,17 @@ fn parse_vml_pict(
                             .map(|a| String::from_utf8_lossy(&a.value).to_string());
                         shape_type = Some(
                             match local.as_str() {
-                                "shape" => match vml_type_attr.as_deref() {
-                                    Some(t) if t.contains("t185") => "bracketPair",
-                                    _ => "rect",
-                                },
+                                "shape" => {
+                                    let vml_style_attr = e.attributes().flatten()
+                                        .find(|a| local_name(a.key.as_ref()) == "style")
+                                        .map(|a| String::from_utf8_lossy(&a.value).to_string());
+                                    match vml_type_attr.as_deref() {
+                                        Some(t) if t.contains("t185") => "bracketPair",
+                                        t if vml_bracket_preset(t, vml_style_attr.as_deref()).is_some() =>
+                                            vml_bracket_preset(t, vml_style_attr.as_deref()).unwrap(),
+                                        _ => "rect",
+                                    }
+                                }
                                 "roundrect" => "roundRect",
                                 other => other,
                             }
