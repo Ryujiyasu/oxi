@@ -1287,6 +1287,14 @@ fn s480_dash_style(style: Option<&str>)
 #[cfg(windows)]
 fn s711b_dash_units(style: Option<&str>, width_pt: f32) -> Option<Vec<f32>> {
     if std::env::var("OXI_S480_DISABLE").is_ok() { return None; }
+    // OXI_DASH_SMALLGAP (2026-11-18, default ON, opt-out _DISABLE): Word draws
+    // dashSmallGap 3.6 w on / 1.2 w off from the border's start (Word PDF rasters,
+    // 05a78ecd sz 8 = 3.60 / 1.20, 039036e4 sz 4 = 1.8 / 0.6); the CLI PDF draws the
+    // same cadence (oxidocs-cli dash_pattern_widths).
+    if style == Some("dashSmallGap") && std::env::var_os("OXI_DASH_SMALLGAP_DISABLE").is_none() {
+        let _ = width_pt;
+        return Some(vec![3.6, 1.2]);
+    }
     // OPT-IN (default solid) until the sub-pixel border-POSITION wall is fixed:
     // a correct-cadence dotted border still SSIM-regresses (3a4f -0.0033) because
     // Oxi's border position differs from Word's by sub-pixel, so the dots

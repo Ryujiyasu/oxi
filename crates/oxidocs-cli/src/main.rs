@@ -2672,7 +2672,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     }
                 }
 
-                oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width, .. } => {
+                oxidocs_core::layout::LayoutContent::TableBorder { x1, y1, x2, y2, color, width, style } => {
                     let bc = color.as_deref()
                         .and_then(parse_hex_color)
                         .unwrap_or(Color::Gray(0.0));
@@ -2684,11 +2684,13 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     // 417.19 for y 28.40 / 67.35 / 417.15). Vertical rules stay centred.
                     let dy = if (*y1 - *y2).abs() < 0.01
                         && std::env::var_os("OXI_PDF_HRULE_BELOW_DISABLE").is_none() { bw * 0.5 } else { 0.0 };
+                    let (ax, ay, bx, by) = (*x1 as f64, *y1 as f64 + dy, *x2 as f64, *y2 as f64 + dy);
+                    let operations = match dash_pattern_widths(style.as_deref()) {
+                        Some(pattern) => dashed_segments(ax, ay, bx, by, &pattern, bw),
+                        None => vec![PathOp::MoveTo(ax, ay), PathOp::LineTo(bx, by)],
+                    };
                     contents.push(ContentElement::Path(PathData {
-                        operations: vec![
-                            PathOp::MoveTo(*x1 as f64, *y1 as f64 + dy),
-                            PathOp::LineTo(*x2 as f64, *y2 as f64 + dy),
-                        ],
+                        operations,
                         stroke: Some(StrokeStyle {
                             color: bc, width: bw,
                             line_cap: LineCap::Butt, line_join: LineJoin::Miter,
@@ -5638,4 +5640,40 @@ mod coverage_tests {
     fn unescape_xml_leaves_unknown_entities() {
         assert_eq!(unescape_xml("a&lt;b&#65;&nbsp;&"), "a<bA&nbsp;&");
     }
+}
+
+/// OXI_DASH_SMALLGAP (2026-11-18, default ON, opt-out _DISABLE): a border's dash
+/// cadence in multiples of its width (on, off, ...), or None for a solid stroke.
+/// Word PDF rasters at 600-1200 dpi: `dashSmallGap` is 3.6 w on / 1.2 w off from
+/// the border's start -- ja/educational__05a78ecd (sz 8): 3.60 / 1.20 from x1 48.6;
+/// ja/forms__039036e4 (sz 4): 1.68 / 0.72 (1.8 / 0.6 within a pixel); blind-H
+/// forms__023570df: adjacent cells' rules overlap into one period of 2.4.
+fn dash_pattern_widths(style: Option<&str>) -> Option<Vec<f64>> {
+    match style? {
+        "dashSmallGap" if std::env::var_os("OXI_DASH_SMALLGAP_DISABLE").is_none() => Some(vec![3.6, 1.2]),
+        _ => None,
+    }
+}
+
+/// The on-segments of a dashed stroke from (ax, ay) to (bx, by), starting on.
+fn dashed_segments(ax: f64, ay: f64, bx: f64, by: f64, pattern: &[f64], width: f64) -> Vec<PathOp> {
+    let len = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+    let unit = width.max(0.25);
+    if len <= 0.0 || pattern.iter().sum::<f64>() * unit <= 0.0 {
+        return vec![PathOp::MoveTo(ax, ay), PathOp::LineTo(bx, by)];
+    }
+    let (ux, uy) = ((bx - ax) / len, (by - ay) / len);
+    let mut ops = Vec::new();
+    let (mut at, mut i) = (0.0f64, 0usize);
+    while at < len {
+        let step = pattern[i % pattern.len()] * unit;
+        if i % 2 == 0 {
+            let end = (at + step).min(len);
+            ops.push(PathOp::MoveTo(ax + ux * at, ay + uy * at));
+            ops.push(PathOp::LineTo(ax + ux * end, ay + uy * end));
+        }
+        at += step;
+        i += 1;
+    }
+    ops
 }
