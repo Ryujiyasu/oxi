@@ -2226,6 +2226,17 @@ fn classify_paragraph(para: &Paragraph, block_index: usize, _total_blocks: usize
 fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::BTreeSet<String>) {
     // Use LayoutEngine for layout (single source of truth with WASM path)
     let engine = oxidocs_core::layout::LayoutEngine::for_document(doc);
+    // S483 in the CLI (2026-11-18, opt-out OXI_S483_DISABLE): draw tracked changes in
+    // Word's final view (deletions hidden, insertions as plain text), as the GDI and
+    // DWrite renderers already do and as the Word truth is captured (revisions
+    // accepted, R35). The CLI kept ShowRevisions::All: change bars in the margin, deleted
+    // text struck through, and inserted-then-merged paragraphs left standing --
+    // en/correspondence__00217539 p3 (ins 11 / del 3) drew bars and a blank line.
+    let engine = if std::env::var_os("OXI_S483_DISABLE").is_some() {
+        engine
+    } else {
+        engine.with_show_revisions(oxidocs_core::ir::ShowRevisions::Final)
+    };
     let layout_result = engine.layout(doc);
 
     // Font metrics for accurate baseline calculation
