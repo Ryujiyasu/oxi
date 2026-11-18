@@ -4261,6 +4261,26 @@ fn s1037_marker_style(para: &Paragraph) -> Option<&RunStyle> {
     para.style.list_marker_style.as_deref()
 }
 
+impl LayoutEngine {
+    /// OXI_MARKER_OWN_SIZE (2026-11-18, default ON, opt-out _DISABLE): a marker the
+    /// level gives no `w:sz` is sized by its own resolved style (S1037: level rPr >
+    /// paragraph mark > paragraph style), not by the paragraph's FIRST run -- which
+    /// may be an empty run that only carries an anchored shape. `_pb_anchor_run_gen.py`
+    /// (Symbol bullet, 11pt text after a 14pt bold anchor-only run): Word's line sits
+    /// at 97.46 with or without the anchor; Oxi grew the marker line by the 14pt
+    /// Symbol ascent and opened it 3.02 low. en/policies__0026b7f7 p2 «Preschool…»
+    /// (two sz 28 text-box anchors): Word 300.29, Oxi 303.36.
+    pub(crate) fn marker_own_size(&self, para: &Paragraph, para_font_size: f32) -> f32 {
+        if crate::env_flag!("OXI_MARKER_OWN_SIZE_DISABLE") {
+            return para_font_size;
+        }
+        match s1037_marker_style(para) {
+            Some(ms) => self.resolve_font_size(ms, &para.style),
+            None => para_font_size,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct GridColumnCapacity {
     page: usize,

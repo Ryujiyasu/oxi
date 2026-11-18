@@ -2723,7 +2723,7 @@ impl<'a> ParagraphLayouter<'a> {
             // The overflow is the whole point of the rule, so feeding it the
             // wrong size does not merely scale it -- it invents one.
             let s1263_marker_fs = if !crate::env_flag!("OXI_S1263_DISABLE") {
-                para.style.list_marker_size.unwrap_or(para_font_size)
+                para.style.list_marker_size.unwrap_or_else(|| self.marker_own_size(para, para_font_size))
             } else {
                 para_font_size
             };
@@ -2879,7 +2879,7 @@ impl<'a> ParagraphLayouter<'a> {
             // marker's ascent 10.05 < Calibri@11's 10.47 → NO line growth,
             // Word pitch 13.44; sizing it at para_font_size wrongly grew the
             // line to 14.01).
-            let marker_fs = para.style.list_marker_size.unwrap_or(para_font_size);
+            let marker_fs = para.style.list_marker_size.unwrap_or_else(|| self.marker_own_size(para, para_font_size));
             // S820b (2026-07-13): the Symbol marker contributes its ASCENT
             // only — the line's descent stays the TEXT fonts' max, and the
             // external leading drops when the marker drives the height.
