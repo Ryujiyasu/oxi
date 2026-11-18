@@ -1890,7 +1890,19 @@ impl<'a> LineBreaker<'a> {
                         || previous_style.bold != style.bold
                         || previous_style.italic != style.italic
                         || previous_style.run_border != style.run_border
-                        || (sup_word_unit && previous_style.vertical_align != style.vertical_align));
+                        || (sup_word_unit && previous_style.vertical_align != style.vertical_align)
+                        // OXI_PAINT_STYLE_SEGMENTS (2026-11-18, default ON, opt-out _DISABLE):
+                        // a paint-only change inside a word is a segment too, or the word
+                        // is drawn in its FIRST run's paint. en/technical__00545fa1 p3
+                        // «MOO5146» + highlighted «20210614» (same font and size): Word
+                        // draws the yellow box behind 20210614; Oxi drew one plain
+                        // «MOO514620210614».
+                        || (!crate::env_flag!("OXI_PAINT_STYLE_SEGMENTS_DISABLE")
+                            && (previous_style.highlight != style.highlight
+                                || previous_style.shading != style.shading
+                                || previous_style.color != style.color
+                                || previous_style.underline != style.underline
+                                || previous_style.strikethrough != style.strikethrough)));
                 if metric_style_boundary || script_size_boundary || ((has_private_glyph(previous_text) || has_private_glyph(text))
                     && (previous_style.font_family != style.font_family
                         || previous_style.font_family_east_asia != style.font_family_east_asia
