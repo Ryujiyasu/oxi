@@ -89,6 +89,19 @@ impl FloatingNumber {
         }
         // An inherited quiet NaN propagates its payload; invalid operations on
         // infinities raise VBA overflow instead of manufacturing a new NaN.
+        // When both quiet NaNs are present, Native VBA selects the larger
+        // significand payload; equal payloads select the positive sign.
+        if let (Special(a), Special(b)) = (self, rhs) {
+            if a.is_nan() && b.is_nan() {
+                let left = a.to_bits() & 0x7fff_ffff_ffff_ffff;
+                let right = b.to_bits() & 0x7fff_ffff_ffff_ffff;
+                return Ok(if left > right || left == right && !a.is_sign_negative() {
+                    self
+                } else {
+                    rhs
+                });
+            }
+        }
         if let Special(value) = self {
             if value.is_nan() {
                 return Ok(self);
@@ -160,7 +173,17 @@ impl Runtime<'_> {
         let name = expr_name(target)?;
         if !matches!(
             key(name).as_str(),
-            "abs" | "sgn" | "int" | "fix" | "cint" | "cdbl" | "csng" | "cbool" | "clng" | "cbyte"
+            "abs"
+                | "sgn"
+                | "int"
+                | "fix"
+                | "cint"
+                | "cdbl"
+                | "csng"
+                | "cbool"
+                | "clng"
+                | "cbyte"
+                | "cdate"
         ) {
             return None;
         }
@@ -174,6 +197,16 @@ impl Runtime<'_> {
         };
         Some((|| {
             let value = self.eval_expr(operand, frame)?;
+            // Library-qualified conversions consume stored Variant arguments.
+            // Their measured special-value rules differ from compiler intrinsics.
+            match (key(name).as_str(), &value) {
+                ("csng", Value::Double(n)) if !n.is_finite() => {
+                    return Err(Self::floating_fault(Fault::Overflow, span.line));
+                }
+                ("sgn", Value::Single(n)) if n.is_nan() => return Ok(Value::Int16(0)),
+                ("sgn", Value::Double(n)) if n.is_nan() => return Ok(Value::Int16(0)),
+                _ => {}
+            }
             self.call_named(name, vec![value], &[None], Some(span.line), frame)
         })())
     }
@@ -322,6 +355,32 @@ impl Runtime<'_> {
         }
     }
 
+    fn stored_floating_number(value: &Value, line: u32) -> Result<FloatingNumber, RuntimeError> {
+        // Inspect the stored width before promoting Single to Double: promotion
+        // can quiet a signaling NaN and lose the load-time VBA overflow.
+        let signaling = match value {
+            Value::Single(value) => {
+                let bits = value.to_bits();
+                bits & 0x7fc0_0000 == 0x7f80_0000 && bits & 0x003f_ffff != 0
+            }
+            Value::Double(value) => {
+                let bits = value.to_bits();
+                bits & 0x7ff8_0000_0000_0000 == 0x7ff0_0000_0000_0000
+                    && bits & 0x0007_ffff_ffff_ffff != 0
+            }
+            _ => false,
+        };
+        if signaling {
+            return Err(Self::floating_fault(Fault::Overflow, line));
+        }
+        let wide = match value {
+            Value::LongLong(n) | Value::Integer(n) => Some(FloatingNumber::from_i64(*n)),
+            Value::Boolean(value) => Some(FloatingNumber::from_i64(if *value { -1 } else { 0 })),
+            other => any_number(other).and_then(FloatingNumber::from_f64),
+        };
+        wide.ok_or_else(|| error(RuntimeErrorKind::TypeMismatch, "type mismatch", Some(line)))
+    }
+
     fn floating_intermediate(
         &mut self,
         expr: &Expr,
@@ -333,13 +392,9 @@ impl Runtime<'_> {
                 let mut aliases = Vec::new();
                 self.alias_prepared_source_tree(expr, &bare, frame, &mut aliases);
                 let result = match self.qualified_stored_numeric_call(&bare, frame) {
-                    Some(result) => result.and_then(|value| {
-                        any_number(&value)
-                            .and_then(FloatingNumber::from_f64)
-                            .ok_or_else(|| {
-                                error(RuntimeErrorKind::TypeMismatch, "type mismatch", Some(line))
-                            })
-                    }),
+                    Some(result) => {
+                        result.and_then(|value| Self::stored_floating_number(&value, line))
+                    }
                     None => self.floating_intermediate(&bare, frame),
                 };
                 for (scope, id, value, reference, grouped) in aliases.into_iter().rev() {
@@ -418,12 +473,7 @@ impl Runtime<'_> {
             }
         }
         let value = self.eval_scalar_expr(expr, frame)?;
-        let wide = match value {
-            Value::LongLong(n) | Value::Integer(n) => Some(FloatingNumber::from_i64(n)),
-            Value::Boolean(value) => Some(FloatingNumber::from_i64(if value { -1 } else { 0 })),
-            other => any_number(&other).and_then(FloatingNumber::from_f64),
-        };
-        wide.ok_or_else(|| error(RuntimeErrorKind::TypeMismatch, "type mismatch", Some(line)))
+        Self::stored_floating_number(&value, line)
     }
 
     pub(super) fn floating_conversion(
@@ -456,6 +506,7 @@ impl Runtime<'_> {
                 | "sgn"
                 | "int"
                 | "fix"
+                | "cdate"
         ) {
             return None;
         }
@@ -463,6 +514,19 @@ impl Runtime<'_> {
             let wide = self.floating_intermediate(expr, frame)?;
             let line = expr.span().line;
             match target.as_str() {
+                "cdate" => {
+                    let value = wide.to_f64();
+                    if !value.is_finite() {
+                        return Err(Self::floating_fault(Fault::Overflow, line));
+                    }
+                    self.call_named(
+                        "CDate",
+                        vec![Value::Double(value)],
+                        &[None],
+                        Some(line),
+                        frame,
+                    )
+                }
                 "cbool" | "boolean" if wide.to_f64().is_nan() => {
                     Err(Self::floating_fault(Fault::Overflow, line))
                 }

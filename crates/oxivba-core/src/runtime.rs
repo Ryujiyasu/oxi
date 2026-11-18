@@ -15727,6 +15727,11 @@ pub(crate) fn call_builtin(
                     Ok(Value::LongLong(value as i64))
                 }
             }
+            "csng" if matches!(value, Value::Single(n) if !n.is_finite()) => Ok(value.clone()),
+            "csng" if matches!(value, Value::Double(n) if !n.is_finite()) => {
+                let Value::Double(n) = value else { unreachable!() };
+                Ok(Value::Single(*n as f32))
+            }
             "csng" => {
                 let value = number(value).map_err(mismatch)?;
                 if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
@@ -15840,6 +15845,9 @@ pub(crate) fn call_builtin(
             "sgn" => match value {
                 _ => {
                     let value = number(value).map_err(mismatch)?;
+                    if value.is_nan() {
+                        return Err(error(RuntimeErrorKind::Overflow, "overflow in Sgn", line));
+                    }
                     Ok(Value::Int16(if value > 0.0 {
                         1
                     } else if value < 0.0 {
@@ -18596,6 +18604,17 @@ fn call_date_builtin(
         "cdate" | "cvdate" | "datevalue" | "timevalue" | "isdate" => {
             if args.len() != 1 {
                 return Err(wrong_count("1 argument"));
+            }
+            // The Variant conversion retains quiet NaN dates. Typed numeric
+            // CDate is handled by the compiler conversion path before this call.
+            if name == "cdate" {
+                match &args[0] {
+                    Value::Single(n) if n.is_nan() => return Ok(Value::Date(f64::from(*n))),
+                    Value::Double(n) if n.is_nan() => return Ok(Value::Date(*n)),
+                    Value::Single(n) if n.is_infinite() => return Err(mismatch("type mismatch converting infinity to Date".to_string())),
+                    Value::Double(n) if n.is_infinite() => return Err(mismatch("type mismatch converting infinity to Date".to_string())),
+                    _ => {}
+                }
             }
             // `CDate(Null)` is error 94, not the type mismatch a
             // string that will not parse gets. Measured against Excel;
