@@ -18596,9 +18596,9 @@ fn call_date_builtin(
                 // "11" has to be a date to count, and it is not.
                 let serial = parse_written_date_text(&written, this_year).map_err(mismatch)?;
                 return Ok(Value::Date(if name == "datevalue" {
-                    serial.floor()
+                    serial.trunc()
                 } else {
-                    serial.rem_euclid(1.0)
+                    serial.fract().abs()
                 }));
             }
             let parsed = value_date_serial(&args[0], this_year);
@@ -18656,8 +18656,8 @@ fn call_date_builtin(
                 return Ok(Value::Date(result));
             }
             Ok(Value::Date(match name {
-                "datevalue" => serial.floor(),
-                "timevalue" => serial.rem_euclid(1.0),
+                "datevalue" => serial.trunc(),
+                "timevalue" => serial.fract().abs(),
                 _ => serial,
             }))
         }
@@ -28522,6 +28522,45 @@ End Function
             value,
             Value::String("12:00:00 AM|2/29/2024|2024-2-29 16:35:17|2024|16|29|12|False".to_string())
         );
+    }
+
+    #[test]
+    fn datevalue_and_timevalue_negative_date_text_match_excel() {
+        // Strings and typed Dates were compared in two independent Excel instances.
+        let cases: [(&str, [f64; 5]); 10] = [
+            ("12/22/1899 6:00:00 PM", [-8.75, -8.0, 0.75, -8.0, 0.75]),
+            ("12/23/1899 12:00:00 PM", [-7.5, -7.0, 0.5, -7.0, 0.5]),
+            ("12/28/1899 6:00:00 PM", [-2.75, -2.0, 0.75, -2.0, 0.75]),
+            ("12/29/1899 6:00:00 AM", [-1.25, -1.0, 0.25, -1.0, 0.25]),
+            ("12/29/1899 12:00:00 PM", [-1.5, -1.0, 0.5, -1.0, 0.5]),
+            ("12/29/1899 6:00:00 PM", [-1.75, -1.0, 0.75, -1.0, 0.75]),
+            ("12/30/1899 12:00:00 PM", [0.5, 0.0, 0.5, 0.0, 0.5]),
+            ("12/31/1899 6:00:00 AM", [1.25, 1.0, 0.25, 1.0, 0.25]),
+            ("1/1/1900 6:00:00 PM", [2.75, 2.0, 0.75, 2.0, 0.75]),
+            ("2/29/2024 6:00:00 AM", [45351.25, 45351.0, 0.25, 45351.0, 0.25]),
+        ];
+        let source = r#"Public Function ExtractDatePiece(ByVal stamp As String, ByVal operation As Long) As Variant
+ Dim value As Variant
+ Select Case operation
+ Case 0: value=CDate(stamp)
+ Case 1: value=DateValue(stamp)
+ Case 2: value=TimeValue(stamp)
+ Case 3: value=DateValue(CDate(stamp))
+ Case 4: value=TimeValue(CDate(stamp))
+ End Select
+ ExtractDatePiece=Array(TypeName(value),VarType(value),CDbl(value))
+End Function"#;
+        for (stamp, expected) in cases {
+            for (operation, serial) in expected.into_iter().enumerate() {
+                let value = run(source, "ExtractDatePiece", vec![
+                    Value::String(stamp.to_string()), Value::Integer(operation as i64),
+                ]).unwrap();
+                let Value::Array(array) = value else { panic!("expected a result array") };
+                assert_eq!(array.values, vec![
+                    Value::String("Date".to_string()), Value::Integer(7), Value::Double(serial),
+                ], "stamp={stamp}, operation={operation}");
+            }
+        }
     }
 
     #[test]
