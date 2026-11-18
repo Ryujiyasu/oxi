@@ -44,6 +44,7 @@ pub mod clock;
 pub mod references;
 pub mod decimal;
 pub mod errors;
+mod extended;
 pub mod files;
 pub mod fingerprint;
 pub mod lexer;
