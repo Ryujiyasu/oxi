@@ -10,23 +10,41 @@ the method are in the [repository README](https://github.com/Ryujiyasu/oxi).
 
 ## A word about size
 
-The `.wasm` is about 95 MB (56 MB gzip-compressed, as browsers and CDNs usually
-send it), and most of that is data rather than code: font metrics, typography
-tables and the measured constants the layout is derived from. The largest single
-part is the per-face font metric catalog, about 33 MB. A docs-only build (the
-crate's default features, without spreadsheets, presentations and VBA) is about
-74 MB. Load it once and cache it.
+The `.wasm` is about 62 MB (24 MB gzip-compressed, as browsers and CDNs usually
+send it). It carries the metrics of the common faces — Yu Gothic, Yu Mincho,
+Meiryo, the MS faces, Calibri, Cambria and the like — so ordinary documents lay
+out with nothing else. The metrics of about 740 other faces that Windows ships
+(HG fonts, UD Digi Kyokasho, many Latin, CJK and other-script faces) are in
+[@oxidocs/wasm-fonts](https://www.npmjs.com/package/@oxidocs/wasm-fonts) and
+come in through a font plugin, a face at a time, when a document uses one.
+Load the module once and cache it.
 
 ## Use
 
 ```js
-import init, { layout_document, parse_spreadsheet } from '@oxidocs/wasm';
+import init, * as oxi from '@oxidocs/wasm';
+import { useFonts, withFonts } from '@oxidocs/wasm/fonts.js';
+import fonts from '@oxidocs/wasm-fonts';
 
 await init();
+useFonts(oxi, fonts);   // the uncommon faces, fetched per face from jsDelivr
 
 const docx = new Uint8Array(await file.arrayBuffer());
-const pages = layout_document(docx);   // laid-out pages, ready to draw
+const pdf = await withFonts(oxi, () => oxi.docx_to_pdf(docx));
+const pages = await withFonts(oxi, () => oxi.layout_document(docx));
 ```
+
+`withFonts` runs the call, lets the plugins supply the faces it was missing,
+and runs it again. Calling the module directly works too; a face neither built
+in nor supplied by a plugin is then laid out with fallback metrics.
+
+Font plugins in `@oxidocs/wasm-fonts`:
+
+- the default export: online, range requests to this version's catalog on jsDelivr;
+- `fontsFrom(url)`: a copy you host — an intranet server works, so does one without range support;
+- `fontsFromFile(read)`: from disk, for Node.
+
+Use the same version of both packages: the module holds the catalog's index.
 
 Every export is typed; `oxidocs_wasm.d.ts` travels with the package.
 
