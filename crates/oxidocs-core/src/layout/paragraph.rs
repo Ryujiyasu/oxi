@@ -1672,7 +1672,17 @@ impl<'a> ParagraphLayouter<'a> {
             // 369-doc SSIM A/B changed 0 bytes with it on.
             && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_WRAP_ROWPLAN_CJK_DISABLE"))
             && body_para_index.is_some()
-            && fragments.iter().all(|f| !f.0.chars().any(|c| matches!(c, '\t' | '\u{FFFC}')))
+            // OXI_WRAP_ROWPLAN_TAB (2026-11-18, default ON, opt-out _DISABLE): a tab
+            // does not keep a paragraph out of the row planner. en/educational__00201982
+            // p3: a first-line tab, then a wrapSquare picture anchored 152pt into the
+            // same paragraph -- Word moves the lines beside it to 273, Oxi ran them at
+            // 72 under the picture; without the tab Oxi already wrapped them.
+            // Only for a paragraph that starts clear of every band: the planner does
+            // not model a tab stop that falls inside a band's lane (en/blindD50
+            // forms__003fcb91's «To,<tab>» beside a floating table went a line down).
+            && fragments.iter().all(|f| !f.0.chars().any(|c| c == '\u{FFFC}'
+                || (c == '\t' && (s758_band.is_some()
+                    || crate::env_flag!("OXI_WRAP_ROWPLAN_TAB_DISABLE")))))
         {
             if let Some((bottom, reduction, shift)) = s758_band.or(future_wrap_band) {
                 // Requery current page/column bands even when this paragraph

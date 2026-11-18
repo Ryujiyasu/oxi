@@ -7568,6 +7568,7 @@ fn parse_run(
     let mut text = String::new();
     let mut symbol_spans = Vec::new();
     let mut style = RunStyle::default();
+    let mut rpr_direct = (false, false);
     let mut drawing_result: Option<DrawingResult> = None;
     let mut drawing_page_offset = 0;
     let mut drawing_boundary_offset = 0;
@@ -7631,6 +7632,7 @@ fn parse_run(
                         let (s, c) = parse_run_properties(reader, ctx, styles, false)?;
                         style = s;
                         rpr_change = c;
+                        rpr_direct = RPR_DIRECT.with(|c| c.get());
                     }
                     "t" | "delText" if depth == 0 => {
                         in_text = true;
@@ -8054,10 +8056,12 @@ fn parse_run(
         }
     }
 
+    let had_color = style.color.is_some();
     resolve_character_style(&mut style, styles,
         toc_result_for_run.unwrap_or_else(||
             ctx.in_toc_result() && (url.is_some() || ctx.in_hyperlink_result())),
         &ctx.paragraph_base.borrow());
+    apply_run_overrides(&mut style, rpr_direct, had_color);
 
     // If this run contains a field instruction, convert to placeholder text
     let mut field_type: Option<FieldType> = None;
@@ -8769,7 +8773,35 @@ fn scene3d_blacken(blocks: &mut [Block]) {
     }
 }
 
+thread_local! {
+    static DOCPR_HIDDEN_ANCHOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    // set by every parse_drawing: the Choice was a hidden anchor, so its mc:Fallback
+    // twin (a v:group whose visibility:hidden the VML reader does not apply at group
+    // level) must not stand in for it
+    static LAST_DRAWING_HIDDEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// OXI_DOCPR_HIDDEN (2026-11-18, default ON, opt-out _DISABLE): a floating object
+/// whose wp:docPr says hidden="1" is not drawn and keeps no text off. ja/creative
+/// __14af1ca6's header carries Word's manuscript-grid group («Genko:A4:20:20»,
+/// hidden, its VML twin visibility:hidden); Word's PDF has no trace of it, Oxi drew
+/// its green frame round the page.
 fn parse_drawing(
+    reader: &mut Reader<&[u8]>,
+    ctx: &ParseContext,
+    styles: &StyleSheet,
+) -> Result<DrawingResult, ParseError> {
+    let outer = DOCPR_HIDDEN_ANCHOR.with(|c| c.replace(false));
+    let result = parse_drawing_inner(reader, ctx, styles);
+    let hidden = DOCPR_HIDDEN_ANCHOR.with(|c| c.replace(outer));
+    LAST_DRAWING_HIDDEN.with(|c| c.set(hidden));
+    match result {
+        Ok(_) if hidden => Ok(DrawingResult { image: None, shape: None, text_box: None, symbol_text: None }),
+        other => other,
+    }
+}
+
+fn parse_drawing_inner(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
     styles: &StyleSheet,
@@ -9152,6 +9184,13 @@ fn parse_drawing(
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             if key == "descr" {
                                 alt_text = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                            if key == "hidden"
+                                && is_anchor
+                                && matches!(attr.value.as_ref(), b"1" | b"true" | b"on")
+                                && !crate::env_flag!("OXI_DOCPR_HIDDEN_DISABLE")
+                            {
+                                DOCPR_HIDDEN_ANCHOR.with(|c| c.set(true));
                             }
                         }
                     }
@@ -10399,6 +10438,13 @@ fn parse_drawing(
                             if key == "descr" {
                                 alt_text = Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
+                            if key == "hidden"
+                                && is_anchor
+                                && matches!(attr.value.as_ref(), b"1" | b"true" | b"on")
+                                && !crate::env_flag!("OXI_DOCPR_HIDDEN_DISABLE")
+                            {
+                                DOCPR_HIDDEN_ANCHOR.with(|c| c.set(true));
+                            }
                         }
                     }
                     // Shape preset geometry (e.g. rect, ellipse, roundRect, triangle, etc.)
@@ -11563,7 +11609,13 @@ fn parse_drawing(
         scene3d_blacken(&mut shape_text_blocks);
     }
     let text_box = if (!is_outline_shape
-        && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty() || group_drawn))
+        && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty() || group_drawn
+            // OXI_GROUP_MEMBERS_VISIBLE (2026-11-18, default ON, opt-out _DISABLE): a group with
+            // drawable members is visible whatever the last-win noFill / ln noFill
+            // flags say. en/creative__010300e3's frame group (a filled rect with
+            // `ln noFill`, unfilled freeforms, lines): has_visual came out false and
+            // the whole group -- bar, rules, title frame -- was dropped.
+            || (group_members_box && !crate::env_flag!("OXI_GROUP_MEMBERS_VISIBLE_DISABLE"))))
         || (txbx_chain.is_some_and(|c| c.1 > 0) && !crate::env_flag!("OXI_TXBX_LINK_DISABLE"))
     {
         Some(TextBox {
@@ -11798,6 +11850,18 @@ fn parse_drawing(
         image
     };
 
+    // OXI_GROUP_NO_SELF_SHAPE (2026-11-18, default ON, opt-out _DISABLE): once a group's
+    // members ride on its box, the group is not also a shape of its own -- that shape
+    // took the LAST member's preset over the group's extent (010300e3: a «line»
+    // drawn corner to corner across the page).
+    let shape = if group_members_box
+        && text_box.as_ref().is_some_and(|tb| !tb.vector_shapes.is_empty())
+        && !crate::env_flag!("OXI_GROUP_NO_SELF_SHAPE_DISABLE")
+    {
+        None
+    } else {
+        shape
+    };
     Ok(DrawingResult {
         symbol_text: None,
         image,
@@ -13755,6 +13819,9 @@ fn parse_alternate_content(
                         // Only keep if it produced something useful (image, shape, or text box)
                         if result.is_none() && dr.has_content() {
                             result = Some(dr);
+                        } else if result.is_none() && LAST_DRAWING_HIDDEN.with(|c| c.get()) {
+                            // OXI_DOCPR_HIDDEN: an empty result keeps the Fallback out
+                            result = Some(dr);
                         }
                     }
                     // S1643: <w16se:symEx w16se:font=".." w16se:char="2600"/> -- the symbol
@@ -13954,6 +14021,29 @@ fn parse_math_run_properties(xml:&str,ctx:&ParseContext,styles:&StyleSheet)
     Ok(Some(style))
 }
 
+thread_local! {
+    /// (u none, color auto) given directly on the last rPr parse_run_properties read
+    static RPR_DIRECT: std::cell::Cell<(bool, bool)> = const { std::cell::Cell::new((false, false)) };
+}
+
+/// OXI_RUN_OVERRIDES_CHARSTYLE (2026-11-18, default ON, opt-out _DISABLE): a run's own
+/// <w:u w:val="none"/> and <w:color w:val="auto"/> beat its character style.
+/// en/reference__0042471c's phone number names rStyle Hyperlink with both on the run;
+/// Word's PDF sets it black, not underlined -- Oxi drew it blue and underlined (the
+/// style merge ORs underline and fills a missing colour).
+fn apply_run_overrides(style: &mut RunStyle, direct: (bool, bool), had_color: bool) {
+    if crate::env_flag!("OXI_RUN_OVERRIDES_CHARSTYLE_DISABLE") {
+        return;
+    }
+    if direct.0 {
+        style.underline = false;
+        style.underline_style = None;
+    }
+    if direct.1 && !had_color {
+        style.color = None;
+    }
+}
+
 fn parse_run_properties(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
@@ -13975,6 +14065,8 @@ fn parse_run_properties(
     let mut text_fill_pos = 0.0f32;
     let mut rstyle_id: Option<String> = None;
     let mut rpr_change: Option<PropertyChange> = None;
+    let mut direct_u_none = false;
+    let mut direct_color_auto = false;
 
     loop {
         match reader.read_event()? {
@@ -14282,7 +14374,7 @@ fn parse_run_properties(
                         }
                         let s1355 = std::env::var("OXI_S1355_DISABLE").is_err();
                         match val.as_deref() {
-                            Some("none") => style.underline = false,
+                            Some("none") => { style.underline = false; direct_u_none = true; }
                             Some(v) => {
                                 style.underline = true;
                                 style.underline_style = Some(v.to_string());
@@ -14452,6 +14544,8 @@ fn parse_run_properties(
                         } else if let Some(ref cv) = color_val {
                             if cv != "auto" {
                                 style.color = Some(cv.clone());
+                            } else {
+                                direct_color_auto = true;
                             }
                         }
                     }
@@ -14725,8 +14819,11 @@ fn parse_run_properties(
 
     style.char_style_id = rstyle_id;
     if resolve_style {
+        let had_color = style.color.is_some();
         resolve_character_style(&mut style, styles, false, &ctx.paragraph_base.borrow());
+        apply_run_overrides(&mut style, (direct_u_none, direct_color_auto), had_color);
     }
+    RPR_DIRECT.with(|c| c.set((direct_u_none, direct_color_auto)));
 
     Ok((style, rpr_change))
 }

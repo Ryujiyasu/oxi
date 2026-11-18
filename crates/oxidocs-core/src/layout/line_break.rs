@@ -2593,9 +2593,20 @@ impl<'a> LineBreaker<'a> {
                 && style.east_asia_lang.as_deref().map_or(false, |lang|
                     lang.eq_ignore_ascii_case("en") || lang.to_ascii_lowercase().starts_with("en-"));
             // Proportional punctuation does not provide a full-width compression budget.
+            // OXI_PROP_PUNCT_REGISTRY (2026-11-18, default ON, opt-out _DISABLE): a face
+            // whose metrics carry no advances of their own (the synthesized HGPGothicM)
+            // reads its marks from the registry the breaker uses. char_width_em gave
+            // 、 a full em there, so HGP kept the full-width squeeze budget: Word sets
+            // ja/correspondence__032cce9c's 、 at 7.97 and never squeezes it at break
+            // (`_pb_propcomma_gen.py`: HGP refuses a 1.8pt overflow, as MS P* do).
+            let prop_punct_registry = !crate::env_flag!("OXI_PROP_PUNCT_REGISTRY_DISABLE");
             let narrow_punctuation_natural = !lines_and_chars && cjk_metrics.map_or(false, |m| {
                 ['\u{3001}', '\u{3002}'].iter().all(|&ch| {
-                    let width = m.char_width_em(ch);
+                    let width = if prop_punct_registry && m.char_widths.is_empty() {
+                        self.registry.char_width_pt_with_gdi_map(ch, 12.0, m, None) / 12.0
+                    } else {
+                        m.char_width_em(ch)
+                    };
                     width > 0.0 && width < 0.99
                 })
             });
