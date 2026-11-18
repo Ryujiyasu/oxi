@@ -3575,6 +3575,11 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashSet::new());
     static FULLY_SERVED: std::cell::RefCell<std::collections::HashSet<String>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
+    /// S-BOLDONLYKEEP: typefaces the deck files with a bold slot and no
+    /// regular one. A fresh PowerPoint draws their PLAIN runs in the embedded
+    /// Bold (blind 12/18/07 Montserrat, d60 Poppins).
+    static BOLD_ONLY: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
     /// What the parts we did NOT load claim to be. A part is skipped when the
     /// machine already has that family, on the premise that the installed copy
     /// stands in for it -- so its identity still has to be visible, or a rule
@@ -3714,6 +3719,12 @@ fn skipwhole_on() -> bool {
     std::env::var("OXI_SKIPWHOLE_DISABLE").is_err()
 }
 
+/// S-BOLDONLYKEEP: a typeface the deck files without a regular slot is never
+/// skipped in favour of the machine's copy; setting this restores the skip.
+fn boldonlykeep_on() -> bool {
+    std::env::var("OXI_BOLDONLYKEEP_DISABLE").is_err()
+}
+
 /// S-SKIPBOLD: a request whose honest part was SKIPPED goes to the installed
 /// family, unless this is set, which restores answering it from whatever part
 /// claims the name.
@@ -3732,6 +3743,13 @@ fn styled_face(family: &str, bold: bool, italic: bool) -> (String, i32, bool) {
     // perfectly good bold slot waiting -- d26 asked for bold on "Darker
     // Grotesque Medium", whose bold slot holds a real Darker Grotesque Bold,
     // and got the Medium thickened instead.
+    if !italic && !bold && BOLD_ONLY.with(|s| s.borrow().contains(family)) {
+        if let Some(slot) = slot_face_name(family, true) {
+            if EMBEDDED_FACES.with(|f| f.borrow().contains(&slot)) {
+                return (slot, 400, false);
+            }
+        }
+    }
     if !italic {
         if let Some(slot) = slot_face_name(family, bold) {
             if EMBEDDED_FACES.with(|f| f.borrow().contains(&slot)) {
@@ -3907,6 +3925,17 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             BOLD_SLOT.with(|b| b.borrow_mut().insert(font.typeface.clone()));
         }
     }
+    if boldonlykeep_on() {
+        for font in &pres.embedded_fonts {
+            let has_regular = pres
+                .embedded_fonts
+                .iter()
+                .any(|f| f.typeface == font.typeface && !f.bold && !f.italic);
+            if font.bold && !font.italic && !has_regular {
+                BOLD_ONLY.with(|s| s.borrow_mut().insert(font.typeface.clone()));
+            }
+        }
+    }
     let mut loaded = 0;
     // Which families the MACHINE already has, asked before anything private is
     // added (see `family_installed`).
@@ -3950,9 +3979,13 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
                 .iter()
                 .map(|f| (f.typeface.as_str(), f.bold, f.italic))
                 .filter(|(f, _b, _i)| {
-                    filed[f]
-                        .iter()
-                        .all(|(sb, si)| per_slot.contains(&(*f, *sb, *si)))
+                    // S-BOLDONLYKEEP: a typeface filed with no regular slot keeps
+                    // its parts -- a fresh PowerPoint draws its plain runs in the
+                    // embedded Bold (blind 12/18/07 Montserrat, d60 Poppins).
+                    (!boldonlykeep_on() || filed[f].contains(&(false, false)))
+                        && filed[f]
+                            .iter()
+                            .all(|(sb, si)| per_slot.contains(&(*f, *sb, *si)))
                 })
                 .collect();
             FULLY_SERVED.with(|fs| {
@@ -4139,7 +4172,10 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             // Retrying under the part's own unique slot name sidesteps the
             // collision, so the deck's font becomes reachable and we can
             // measure which copy PowerPoint actually drew.
-            let retried = embedcollide_on()
+            let bold_only_part = font.bold
+                && !font.italic
+                && BOLD_ONLY.with(|s| s.borrow().contains(&font.typeface));
+            let retried = (embedcollide_on() || bold_only_part)
                 && slot_face_name(&font.typeface, font.bold)
                     .map(|slot| {
                         let ok = load_font_as(&font.data, &slot);
@@ -17827,6 +17863,7 @@ struct GdiFaceMetrics;
 #[cfg(windows)]
 impl oxislides_core::layout::FaceMetrics for GdiFaceMetrics {
     fn advance_em(&self, family: &str, bold: bool, italic: bool, ch: char) -> Option<f32> {
+        let bold = bold || (!italic && BOLD_ONLY.with(|s| s.borrow().contains(family)));
         // ★The cloud table answers only for a family the deck did not file,
         // or one the machine serves at EVERY filed slot (S-SKIPWHOLE's
         // measurement half). A half-served family belongs to the deck's own
