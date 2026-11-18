@@ -6912,6 +6912,14 @@ impl<'a> ParagraphLayouter<'a> {
             } else {
                 line_text_width
             };
+            // OXI_DISTRIBUTE_EVERY_CHAR (2026-11-18, default ON, opt-out _DISABLE): jc=distribute
+            // spreads its slack over EVERY character gap, inside Latin words and around
+            // spaces alike. `_pb_distribute_latin_gen.py` (7 arms: «SN-1005» in MS P明朝 /
+            // MS 明朝 / Century, «ABC def», «Hello world», «Distributed» in Times): Word's
+            // glyphs step by advance + one constant; Oxi centred a one-word line and spread
+            // only at spaces. ja/technical__742dd29b's «S N - 1 0 0 5» title.
+            let distribute_every_char = para.alignment == Alignment::Distribute
+                && !crate::env_flag!("OXI_DISTRIBUTE_EVERY_CHAR_DISABLE");
             let align_offset = match para.alignment {
                 Alignment::Left => 0.0,
                 Alignment::Center => {
@@ -6927,7 +6935,11 @@ impl<'a> ParagraphLayouter<'a> {
                 // because slack is distributed across fragments. When justification can't
                 // apply (single-fragment line), center the content.
                 Alignment::Distribute => {
-                    if line.fragments.len() > 1 {
+                    // OXI_DISTRIBUTE_EVERY_CHAR: a one-word line is spread too, not centred
+                    if line.fragments.len() > 1
+                        || (distribute_every_char
+                            && line.fragments.iter().map(|f| f.text.chars().count()).sum::<usize>() > 1)
+                    {
                         0.0
                     } else {
                         let slack = render_width - extra_indent - line_text_width;
@@ -7015,7 +7027,11 @@ impl<'a> ParagraphLayouter<'a> {
                 // 「場所：…１－１７）　　　　」 stays natural in Word).
                 && line.fragments.last().and_then(|f| f.text.chars().last()).is_some_and(|c| !c.is_whitespace())
                 && !crate::env_flag!("OXI_YAKU_LASTLINE_FIT_DISABLE");
-            if (should_justify || last_fit) && line.fragments.len() > 1 {
+            if (should_justify || last_fit)
+                && (line.fragments.len() > 1
+                    || (distribute_every_char
+                        && line.fragments.first().is_some_and(|f| f.text.chars().count() > 1)))
+            {
                 // S472 (break-agnostic render): when on, the yakumono compression for
                 // RENDER is computed here purely from natural widths vs available
                 // (Word's demand model), independent of whatever the break decided —
@@ -7438,7 +7454,7 @@ impl<'a> ParagraphLayouter<'a> {
                         })
                         .count();
 
-                    if space_count > 0 {
+                    if space_count > 0 && !distribute_every_char {
                         let per_space = slack / space_count as f32;
                         for (fi, frag) in line.fragments.iter().enumerate() {
                             if fi < line.fragments.len() - 1
@@ -7458,7 +7474,7 @@ impl<'a> ParagraphLayouter<'a> {
                             .fragments
                             .iter()
                             .any(|f| f.text.chars().any(|c| kinsoku::is_cjk(c)));
-                        if has_cjk && total_chars > 1 {
+                        if (has_cjk || distribute_every_char) && total_chars > 1 {
                             let char_gap_count = total_chars - 1;
                             let per_char_gap = slack / char_gap_count as f32;
                             // S627 (2026-06-19) ATTEMPTED + FALSIFIED + REVERTED: DISCRETE
