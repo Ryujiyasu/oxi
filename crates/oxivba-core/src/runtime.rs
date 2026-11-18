@@ -11662,11 +11662,34 @@ impl<'a> Runtime<'a> {
                 // about as the object it is: measured, VarType of one is 9.
                 let instance = matches!(value, Value::Object(object)
                     if matches!(self.internal_objects.get(&object.handle), Some(InternalObject::Instance(_))));
+                let reads_getter = matches!(value, Value::Object(object)
+                    if self.source_scalar_getter(object).is_some_and(|getter|
+                        !getter.params.iter().any(|parameter|
+                            !parameter.optional && parameter.mode != ParamMode::ParamArray)));
                 match self.read_argument(value, frame, line.unwrap_or(0)) {
-                    Err(failure) if asks_about && instance && failure.vba_number == Some(438) => {
+                    Err(failure) if asks_about && instance && !matches!(failure.kind,
+                        RuntimeErrorKind::StepLimit | RuntimeErrorKind::CallDepth |
+                        RuntimeErrorKind::ExecutionTerminated | RuntimeErrorKind::UnhandledEvent |
+                        RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile) => {
+                        // Type predicates keep the object when its default getter
+                        // cannot supply a value. A getter that actually ran still
+                        // leaves its Err fields, without entering the caller's handler.
+                        if reads_getter {
+                            self.err_out.take();
+                            frame.error_state = self.raised_error_state(&failure,
+                                &frame.source_name, excel_erl(frame.body, frame.last_line_number));
+                        }
                         read.push(value.clone())
                     }
-                    answer => read.push(answer?),
+                    answer => {
+                        let value = answer?;
+                        // A scalar conversion follows defaults returned as objects;
+                        // predicates inspect just the first value, and Let itself
+                        // continues to preserve an object returned by one getter.
+                        read.push(if asks_about { value } else {
+                            self.scalar_operand(value, frame, line.unwrap_or(0))?
+                        });
+                    }
                 }
             }
             Some(read)
@@ -12399,11 +12422,44 @@ impl<'a> Runtime<'a> {
     /// An object used where VBA wants a value stands for its default member, so
     /// `Range("A1") + 1` reads the cell rather than failing. Object contexts —
     /// `Is`, `TypeName`, `IsObject`, passing an argument — keep the object.
-    fn scalar_operand(&mut self, value: Value, frame: &Frame, line: u32) -> Result<Value, RuntimeError> {
-        match value {
-            Value::Object(_) | Value::Nothing => self.let_value(value, frame, line),
-            value => Ok(value),
+    fn scalar_operand(&mut self, mut value: Value, frame: &Frame, line: u32) -> Result<Value, RuntimeError> {
+        loop {
+            match value {
+                Value::Object(_) | Value::Nothing => {
+                    self.tick(Some(line))?;
+                    value = self.let_value(value, frame, line)?;
+                }
+                value => return Ok(value),
+            }
         }
+    }
+
+    fn source_scalar_getter(&self, receiver: &ObjectRef) -> Option<Procedure> {
+        let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&receiver.handle)
+            else { return None; };
+        self.source_class_procedure_view(&instance.class, "_default",
+            &[ProcKind::PropertyGet, ProcKind::Function], receiver.dispatch_view.as_deref())
+            .map(|(_, getter)| getter)
+    }
+
+    fn source_scalar_value(&mut self, receiver: &ObjectRef, line: u32)
+        -> Option<Result<Value, RuntimeError>>
+    {
+        if !matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
+            return None;
+        }
+        Some(match self.source_scalar_getter(receiver) {
+            None => Err(language_error(438, "the object has no scalar default member", line)),
+            Some(getter) if getter.params.iter().any(|parameter|
+                !parameter.optional && parameter.mode != ParamMode::ParamArray) =>
+                Err(language_error(449, "the default member requires arguments", line)),
+            Some(getter) => {
+                // Interface dispatch resolves its public default member to the
+                // implementation name itself; do not resolve that name twice.
+                let name = if receiver.dispatch_view.is_some() { "_default" } else { &getter.name };
+                self.instance_member(receiver, name, &[], line)
+            }
+        })
     }
 
     /// Reads a builtin's argument as a value. An object with a default member
@@ -12419,6 +12475,7 @@ impl<'a> Runtime<'a> {
         if self.disconnected_source_object(object) {
             return Err(self.disconnected_source_error(line, false));
         }
+        if let Some(answer) = self.source_scalar_value(object, line) { return answer; }
         // An object whose host says it has no scalar default member keeps
         // its place here too, Value property or not.
         if self.host.as_deref().and_then(|host| host.default_member_error(object)).is_some() {
@@ -12497,6 +12554,9 @@ impl<'a> Runtime<'a> {
             if let Some(InternalObject::FileItem(path) | InternalObject::FolderItem(path)) = self.internal_objects.get(&receiver.handle) {
                 return Ok(Value::String(path.clone()));
             }
+        }
+        if let Value::Object(receiver) = &value {
+            if let Some(answer) = self.source_scalar_value(receiver, line) { return answer; }
         }
         match value {
             // An object with no default member cannot become a value, and
