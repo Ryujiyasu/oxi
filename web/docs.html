@@ -234,9 +234,11 @@ input[type="file"]{display:none}
       <div class="rr">
         <select class="font-sel" id="fontFamily" style="font-family:Calibri">
           <option value="Calibri" style="font-family:Calibri">Calibri</option>
-          <option value="Yu Gothic UI" style="font-family:'Yu Gothic UI','游ゴシック'">游ゴシック</option>
-          <option value="Yu Mincho" style="font-family:'Yu Mincho','游明朝'">游明朝</option>
-          <option value="Meiryo" style="font-family:Meiryo,'メイリオ'">メイリオ</option>
+          <option value="游ゴシック" style="font-family:'Yu Gothic','游ゴシック'">游ゴシック</option>
+          <option value="游明朝" style="font-family:'Yu Mincho','游明朝'">游明朝</option>
+          <option value="メイリオ" style="font-family:Meiryo,'メイリオ'">メイリオ</option>
+          <option value="ＭＳ 明朝" style="font-family:'MS Mincho','ＭＳ 明朝'">ＭＳ 明朝</option>
+          <option value="ＭＳ ゴシック" style="font-family:'MS Gothic','ＭＳ ゴシック'">ＭＳ ゴシック</option>
           <option value="Arial" style="font-family:Arial">Arial</option>
           <option value="Times New Roman" style="font-family:'Times New Roman'">Times New Roman</option>
           <option value="Georgia" style="font-family:Georgia">Georgia</option>
@@ -344,9 +346,11 @@ input[type="file"]{display:none}
   <div class="mbar-row">
     <select class="font-sel" id="mFontFamily" style="width:90px;height:32px;font-size:11px;font-family:Calibri">
       <option value="Calibri" style="font-family:Calibri">Calibri</option>
-      <option value="Yu Gothic UI" style="font-family:'Yu Gothic UI','游ゴシック'">游ゴシック</option>
-      <option value="Yu Mincho" style="font-family:'Yu Mincho','游明朝'">游明朝</option>
-      <option value="Meiryo" style="font-family:Meiryo,'メイリオ'">メイリオ</option>
+      <option value="游ゴシック" style="font-family:'Yu Gothic','游ゴシック'">游ゴシック</option>
+      <option value="游明朝" style="font-family:'Yu Mincho','游明朝'">游明朝</option>
+      <option value="メイリオ" style="font-family:Meiryo,'メイリオ'">メイリオ</option>
+          <option value="ＭＳ 明朝" style="font-family:'MS Mincho','ＭＳ 明朝'">ＭＳ 明朝</option>
+          <option value="ＭＳ ゴシック" style="font-family:'MS Gothic','ＭＳ ゴシック'">ＭＳ ゴシック</option>
       <option value="Arial" style="font-family:Arial">Arial</option>
       <option value="Times New Roman" style="font-family:'Times New Roman'">Times New Roman</option>
     </select>
@@ -2452,9 +2456,34 @@ function syncRibbonFromCursor() {
     const v = String(el.font_size);
     if ([...$('fontSize').options].some(o => o.value === v)) $('fontSize').value = v;
   }
-  if (el.font_family) {
-    const base = el.font_family.split(',')[0].replace(/['"]/g, '').trim();
-    if ([...$('fontFamily').options].some(o => o.value === base)) $('fontFamily').value = base;
+  if (el.font_family) showDocumentFont(el.font_family.split(',')[0].replace(/['"]/g, '').trim());
+}
+
+// The pickers offer the faces Word users pick from, under the names Word
+// writes into the file. A document may name any other face (Yu Gothic UI, a
+// corporate font, a stand-in): it is drawn as named and kept as named on save,
+// and the picker shows its name in a passing entry that is not on the list.
+const FONT_ALIASES = { 'Yu Gothic': '游ゴシック', 'Yu Mincho': '游明朝', 'Meiryo': 'メイリオ',
+  'MS Mincho': 'ＭＳ 明朝', 'MS Gothic': 'ＭＳ ゴシック' };
+function showDocumentFont(name) {
+  const shown = FONT_ALIASES[name] || name;
+  for (const sel of [$('fontFamily'), $('mFontFamily')]) {
+    if (!sel) continue;
+    let passing = sel.querySelector('option[data-document-font]');
+    if ([...sel.options].some(o => o.value === shown && !o.dataset.documentFont)) {
+      if (passing) passing.remove();
+      sel.value = shown;
+      continue;
+    }
+    if (!passing) {
+      passing = document.createElement('option');
+      passing.dataset.documentFont = '1';
+      passing.style.color = '#666';
+      sel.insertBefore(passing, sel.firstChild);
+    }
+    passing.value = name;
+    passing.textContent = name;
+    sel.value = name;
   }
 }
 
