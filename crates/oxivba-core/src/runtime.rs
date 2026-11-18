@@ -18596,9 +18596,9 @@ fn call_date_builtin(
                 // "11" has to be a date to count, and it is not.
                 let serial = parse_written_date_text(&written, this_year).map_err(mismatch)?;
                 return Ok(Value::Date(if name == "datevalue" {
-                    serial.floor()
+                    serial.trunc()
                 } else {
-                    serial.rem_euclid(1.0)
+                    serial.fract().abs()
                 }));
             }
             let parsed = value_date_serial(&args[0], this_year);
@@ -18656,8 +18656,8 @@ fn call_date_builtin(
                 return Ok(Value::Date(result));
             }
             Ok(Value::Date(match name {
-                "datevalue" => serial.floor(),
-                "timevalue" => serial.rem_euclid(1.0),
+                "datevalue" => serial.trunc(),
+                "timevalue" => serial.fract().abs(),
                 _ => serial,
             }))
         }
@@ -19230,7 +19230,9 @@ fn is_date_interval(interval: &str) -> bool {
 
 fn date_part(interval: &str, serial: f64, first_day: i64, first_week: i64) -> Result<i64, String> {
     let parts = serial_date_parts(serial)?;
-    let day_number = serial.floor() as i64;
+    // The whole part names the OLE date; a negative fraction is its time of day.
+    // Keep week and weekday extraction consistent with Weekday and the date parts.
+    let day_number = serial.trunc() as i64;
     Ok(match interval {
         "yyyy" => parts.year,
         "q" => i64::from((parts.month - 1) / 3 + 1),
@@ -28520,6 +28522,101 @@ End Function
             value,
             Value::String("12:00:00 AM|2/29/2024|2024-2-29 16:35:17|2024|16|29|12|False".to_string())
         );
+    }
+
+    #[test]
+    fn datevalue_and_timevalue_negative_date_text_match_excel() {
+        // Strings and typed Dates were compared in two independent Excel instances.
+        let cases: [(&str, [f64; 5]); 10] = [
+            ("12/22/1899 6:00:00 PM", [-8.75, -8.0, 0.75, -8.0, 0.75]),
+            ("12/23/1899 12:00:00 PM", [-7.5, -7.0, 0.5, -7.0, 0.5]),
+            ("12/28/1899 6:00:00 PM", [-2.75, -2.0, 0.75, -2.0, 0.75]),
+            ("12/29/1899 6:00:00 AM", [-1.25, -1.0, 0.25, -1.0, 0.25]),
+            ("12/29/1899 12:00:00 PM", [-1.5, -1.0, 0.5, -1.0, 0.5]),
+            ("12/29/1899 6:00:00 PM", [-1.75, -1.0, 0.75, -1.0, 0.75]),
+            ("12/30/1899 12:00:00 PM", [0.5, 0.0, 0.5, 0.0, 0.5]),
+            ("12/31/1899 6:00:00 AM", [1.25, 1.0, 0.25, 1.0, 0.25]),
+            ("1/1/1900 6:00:00 PM", [2.75, 2.0, 0.75, 2.0, 0.75]),
+            ("2/29/2024 6:00:00 AM", [45351.25, 45351.0, 0.25, 45351.0, 0.25]),
+        ];
+        let source = r#"Public Function ExtractDatePiece(ByVal stamp As String, ByVal operation As Long) As Variant
+ Dim value As Variant
+ Select Case operation
+ Case 0: value=CDate(stamp)
+ Case 1: value=DateValue(stamp)
+ Case 2: value=TimeValue(stamp)
+ Case 3: value=DateValue(CDate(stamp))
+ Case 4: value=TimeValue(CDate(stamp))
+ End Select
+ ExtractDatePiece=Array(TypeName(value),VarType(value),CDbl(value))
+End Function"#;
+        for (stamp, expected) in cases {
+            for (operation, serial) in expected.into_iter().enumerate() {
+                let value = run(source, "ExtractDatePiece", vec![
+                    Value::String(stamp.to_string()), Value::Integer(operation as i64),
+                ]).unwrap();
+                let Value::Array(array) = value else { panic!("expected a result array") };
+                assert_eq!(array.values, vec![
+                    Value::String("Date".to_string()), Value::Integer(7), Value::Double(serial),
+                ], "stamp={stamp}, operation={operation}");
+            }
+        }
+    }
+
+    #[test]
+    fn datepart_negative_serial_weekdays_and_weeks_match_excel() {
+        // Excel 16: 20 serials, 8 first-day selectors and 4 first-week selectors.
+        // Each result was observed in two independent Excel instances.
+        let cases: [(f64, [i16; 8], [i16; 32]); 20] = [
+            (-8.75, [6, 6, 5, 4, 3, 2, 1, 7], [51, 51, 52, 52, 52, 52, 52, 51, 51, 51, 52, 52, 52, 52, 52, 51, 51, 51, 51, 51, 51, 52, 52, 51, 51, 51, 51, 51, 51, 51, 51, 50]),
+            (-8.0, [6, 6, 5, 4, 3, 2, 1, 7], [51, 51, 52, 52, 52, 52, 52, 51, 51, 51, 52, 52, 52, 52, 52, 51, 51, 51, 51, 51, 51, 52, 52, 51, 51, 51, 51, 51, 51, 51, 51, 50]),
+            (-7.5, [7, 7, 6, 5, 4, 3, 2, 1], [51, 51, 52, 52, 52, 52, 52, 52, 51, 51, 52, 52, 52, 52, 52, 52, 51, 51, 51, 51, 51, 52, 52, 52, 51, 51, 51, 51, 51, 51, 51, 51]),
+            (-7.0, [7, 7, 6, 5, 4, 3, 2, 1], [51, 51, 52, 52, 52, 52, 52, 52, 51, 51, 52, 52, 52, 52, 52, 52, 51, 51, 51, 51, 51, 52, 52, 52, 51, 51, 51, 51, 51, 51, 51, 51]),
+            (-2.75, [5, 5, 4, 3, 2, 1, 7, 6], [52, 52, 53, 53, 53, 53, 52, 52, 52, 52, 53, 53, 53, 53, 52, 52, 52, 52, 52, 52, 52, 53, 52, 52, 52, 52, 52, 52, 52, 52, 51, 51]),
+            (-2.0, [5, 5, 4, 3, 2, 1, 7, 6], [52, 52, 53, 53, 53, 53, 52, 52, 52, 52, 53, 53, 53, 53, 52, 52, 52, 52, 52, 52, 52, 53, 52, 52, 52, 52, 52, 52, 52, 52, 51, 51]),
+            (-1.75, [6, 6, 5, 4, 3, 2, 1, 7], [52, 52, 53, 53, 53, 53, 53, 52, 52, 52, 53, 53, 53, 53, 53, 52, 52, 52, 52, 52, 52, 53, 1, 52, 52, 52, 52, 52, 52, 52, 52, 51]),
+            (-1.5, [6, 6, 5, 4, 3, 2, 1, 7], [52, 52, 53, 53, 53, 53, 53, 52, 52, 52, 53, 53, 53, 53, 53, 52, 52, 52, 52, 52, 52, 53, 1, 52, 52, 52, 52, 52, 52, 52, 52, 51]),
+            (-1.25, [6, 6, 5, 4, 3, 2, 1, 7], [52, 52, 53, 53, 53, 53, 53, 52, 52, 52, 53, 53, 53, 53, 53, 52, 52, 52, 52, 52, 52, 53, 1, 52, 52, 52, 52, 52, 52, 52, 52, 51]),
+            (-1.0, [6, 6, 5, 4, 3, 2, 1, 7], [52, 52, 53, 53, 53, 53, 53, 52, 52, 52, 53, 53, 53, 53, 53, 52, 52, 52, 52, 52, 52, 53, 1, 52, 52, 52, 52, 52, 52, 52, 52, 51]),
+            (-0.75, [7, 7, 6, 5, 4, 3, 2, 1], [52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 52, 52, 52, 53, 1, 1, 52, 52, 52, 52, 52, 52, 52, 52]),
+            (-0.5, [7, 7, 6, 5, 4, 3, 2, 1], [52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 52, 52, 52, 53, 1, 1, 52, 52, 52, 52, 52, 52, 52, 52]),
+            (-0.25, [7, 7, 6, 5, 4, 3, 2, 1], [52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 52, 52, 52, 53, 1, 1, 52, 52, 52, 52, 52, 52, 52, 52]),
+            (0.0, [7, 7, 6, 5, 4, 3, 2, 1], [52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 52, 52, 52, 53, 1, 1, 52, 52, 52, 52, 52, 52, 52, 52]),
+            (0.25, [7, 7, 6, 5, 4, 3, 2, 1], [52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 52, 52, 52, 53, 1, 1, 52, 52, 52, 52, 52, 52, 52, 52]),
+            (0.5, [7, 7, 6, 5, 4, 3, 2, 1], [52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 52, 52, 52, 53, 1, 1, 52, 52, 52, 52, 52, 52, 52, 52]),
+            (0.75, [7, 7, 6, 5, 4, 3, 2, 1], [52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 53, 53, 53, 53, 53, 53, 52, 52, 52, 52, 52, 53, 1, 1, 52, 52, 52, 52, 52, 52, 52, 52]),
+            (1.0, [1, 1, 7, 6, 5, 4, 3, 2], [53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 1, 1, 52, 52, 52, 53, 1, 1, 53, 53, 52, 52, 52, 52, 52, 52]),
+            (1.25, [1, 1, 7, 6, 5, 4, 3, 2], [53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 1, 1, 52, 52, 52, 53, 1, 1, 53, 53, 52, 52, 52, 52, 52, 52]),
+            (2.75, [2, 2, 1, 7, 6, 5, 4, 3], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 52, 52, 53, 1, 1, 53, 53, 1, 52, 52, 52, 52, 52]),
+        ];
+        for (serial, weekdays, weeks) in cases {
+            for first in 0..8usize {
+                for week in 0..4usize {
+                    let first_day = if first == 0 { 1 } else { first as i64 };
+                    let first_week = if week == 0 { 1 } else { week as i64 };
+                    assert_eq!(
+                        date_part("w", serial, first_day, first_week).unwrap(),
+                        i64::from(weekdays[first]),
+                        "weekday: serial={serial}, first={first}, week={week}",
+                    );
+                    assert_eq!(
+                        date_part("ww", serial, first_day, first_week).unwrap(),
+                        i64::from(weeks[week * 8 + first]),
+                        "week: serial={serial}, first={first}, week={week}",
+                    );
+                }
+            }
+        }
+        let value = run(
+            r#"Public Function NegativeWeekday() As String
+ Dim d As Date
+ d=CDate(-0.5)
+ NegativeWeekday=DatePart("w",d) & "|" & DatePart("ww",d) & "|" & Weekday(d) & "|" & VarType(DatePart("w",d))
+End Function"#,
+            "NegativeWeekday",
+            vec![],
+        ).unwrap();
+        assert_eq!(value, Value::String("7|52|7|2".to_string()));
     }
 
     #[test]
