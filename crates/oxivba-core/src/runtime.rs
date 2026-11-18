@@ -21,6 +21,7 @@ mod utf16;
 mod bstr;
 mod text_stream;
 mod floating;
+mod trig;
 
 use crate::ast::{FileInputStmt, FileMode, FileOpenStmt, FileSeekStmt, FileTransferKind, FileTransferStmt, FileOutputKind, FileOutputSeparator, FileOutputStmt, FileSystemStmt, FileSystemUnaryKind, 
     AlignedAssignStmt, AlignmentKind, Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind,
@@ -15561,10 +15562,10 @@ pub(crate) fn call_builtin(
                     }
                     Ok(Value::Double(match name.as_str() {
                         "atn" => value.atan(),
-                        "cos" => value.cos(),
-                        "sin" => value.sin(),
+                        "cos" => trig::cos(value),
+                        "sin" => trig::sin(value),
                         // Tan divides the separately rounded Double results.
-                        "tan" => value.sin() / value.cos(),
+                        "tan" => trig::tan(value),
                         _ => unreachable!(),
                     }))
                 }
