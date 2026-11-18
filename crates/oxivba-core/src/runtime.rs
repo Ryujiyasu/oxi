@@ -14,6 +14,7 @@ use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
+    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
 };
 
 use crate::errors::{vba_error_description, ErrorEnvironment};
@@ -721,6 +722,10 @@ pub enum RuntimeErrorKind {
     /// `Error 40040` ends execution without entering any VBA error handler.
     /// `Err.Raise 40040` instead produces a catchable automation error (440).
     ExecutionTerminated,
+    /// A failure escaping a source event callback cannot be caught by the
+    /// procedure raising it. Hosts handle it as an unhandled runtime error,
+    /// including project reset, rather than Error 40040's retained state.
+    UnhandledEvent,
     /// The `End` statement unwinds every caller and requests a project reset.
     EndStatement,
     StepLimit,
@@ -1067,6 +1072,8 @@ struct DictionaryEntry {
 
 type ValueSlot = Rc<VariableSlot>;
 
+static NEXT_EVENT_CONNECTION: AtomicU64 = AtomicU64::new(1);
+
 /// A variable or a frozen field/element of one. Projected slots share the
 /// original storage: ByRef writes are visible immediately through every alias,
 /// including when the callee exits by an error.
@@ -1094,6 +1101,25 @@ struct SlotStorage {
     strings: RefCell<BTreeMap<Vec<RecordStep>, bstr::Allocation>>,
     locked_arrays: RefCell<BTreeMap<Vec<RecordStep>, usize>>,
     aliases: RefCell<BTreeMap<Vec<RecordStep>, ValueSlot>>,
+    // None is ordinary storage; zero is a disconnected WithEvents binding.
+    event_connection: Cell<Option<u64>>,
+    event_heads: RefCell<Vec<(u64, u64)>>,
+}
+
+// A connection point retains its original head during an active dispatch.
+// Disconnecting that head leaves a tombstone for nested enumerations until
+// the outer dispatch returns; its already-running enumeration continues.
+struct EventDispatchHead(Rc<SlotStorage>);
+
+impl EventDispatchHead {
+    fn new(slot: &ValueSlot, source: u64, connection: u64) -> Self {
+        slot.storage.event_heads.borrow_mut().push((source, connection));
+        Self(slot.storage.clone())
+    }
+}
+
+impl Drop for EventDispatchHead {
+    fn drop(&mut self) { self.0.event_heads.borrow_mut().pop(); }
 }
 
 impl VariableSlot {
@@ -1122,6 +1148,8 @@ impl VariableSlot {
                 strings: RefCell::new(BTreeMap::new()),
                 locked_arrays: RefCell::new(BTreeMap::new()),
                 aliases: RefCell::new(aliases),
+                event_connection: Cell::new(None),
+                event_heads: RefCell::new(Vec::new()),
             }),
             descriptor_address: None,
             _descriptor_owner: None,
@@ -1142,6 +1170,22 @@ impl VariableSlot {
     fn set_array_declared(&self, name: &str) {
         if self.array_declared.borrow().is_none() {
             *self.array_declared.borrow_mut() = Some(name.to_string());
+        }
+    }
+
+    fn set_with_events(&self) {
+        if self.storage.event_connection.get().is_none() {
+            self.storage.event_connection.set(Some(0));
+            self.record_event_write(matches!(&*self.borrow(), Value::Object(_)));
+        }
+    }
+
+    fn record_event_write(&self, is_object: bool) {
+        if self.path.is_empty() && self.storage.event_connection.get().is_some() {
+            let connection = if is_object {
+                NEXT_EVENT_CONNECTION.fetch_add(1, AtomicOrdering::Relaxed)
+            } else { 0 };
+            self.storage.event_connection.set(Some(connection));
         }
     }
 
@@ -1232,12 +1276,14 @@ impl VariableSlot {
     }
 
     fn write(&self, value: Value) {
+        let is_object = matches!(&value, Value::Object(_));
         self.storage.strings.borrow_mut().retain(|path,_|!path.starts_with(&self.path));
         self.storage.array_addresses.borrow_mut().retain(|path,_|!path.starts_with(&self.path));
         if self.path.is_empty() {
             self.storage.aliases.borrow_mut().clear();
         }
         *self.borrow_mut() = value;
+        self.record_event_write(is_object);
     }
 
     /// A converted argument writes back to this logical place after the call,
@@ -1256,6 +1302,7 @@ impl VariableSlot {
     }
 
     fn write_copyback(&self, value: Value, line: Option<u32>) -> Result<(), RuntimeError> {
+        let is_object = matches!(&value, Value::Object(_));
         let mut held = self.storage.value.borrow_mut();
         let target = slot_value_mut(&mut held, &self.path).ok_or_else(|| {
             error(
@@ -1265,6 +1312,8 @@ impl VariableSlot {
             )
         })?;
         *target = value;
+        drop(held);
+        self.record_event_write(is_object);
         Ok(())
     }
 
@@ -3399,8 +3448,8 @@ impl<'a> Runtime<'a> {
 
     /// `RaiseEvent Name(args)` from the instance running now: every
     /// instance holding it in a `WithEvents` variable hears it, through its
-    /// `variable_Name` procedure, in the order the instances were made.
-    fn event_listeners(&self, source: &ObjectRef, name: &str) -> Vec<(u64, ObjectRef, String)> {
+    /// `variable_Name` procedure, in the order their connections were made.
+    fn event_connections(&self, source: &ObjectRef, name: &str, entering: bool) -> Vec<(u64, u64, ObjectRef, String, ValueSlot)> {
         let mut listeners = Vec::new();
         for (handle, object) in &self.internal_objects {
             let InternalObject::Instance(instance) = object else { continue; };
@@ -3414,19 +3463,26 @@ impl<'a> Runtime<'a> {
                 let ModuleItem::Variables(declaration) = item else { continue; };
                 for variable in declaration.items.iter().filter(|variable| variable.with_events) {
                     let procedure = format!("{}_{}", variable.name, name);
-                    if !context.has_procedure_of(module, &procedure, &[ProcKind::Sub]) { continue; }
                     let slot = if context.owner == Some(*handle) {
                         context.module_values.get(&key(&variable.name))
                     } else {
                         instance.state.as_ref().and_then(|state| state.values.get(&key(&variable.name)))
                     };
-                    if slot.is_some_and(|slot| matches!(&*slot.borrow(),
-                        Value::Object(object) if object.handle == source.handle)) {
-                        listeners.push((project, ObjectRef::new(*handle, instance.class.clone()), procedure));
+                    if let Some(slot) = slot {
+                        if entering && slot.storage.event_heads.borrow().iter().any(|(handle, connection)|
+                            *handle == source.handle
+                                && slot.storage.event_connection.get() != Some(*connection))
+                        { return Vec::new(); }
+                        if matches!(&*slot.borrow(), Value::Object(object) if object.handle == source.handle) {
+                            if let Some(connection) = slot.storage.event_connection.get().filter(|id| *id != 0) {
+                                listeners.push((connection, project, ObjectRef::new(*handle, instance.class.clone()), procedure, slot.clone()));
+                            }
+                        }
                     }
                 }
             }
         }
+        listeners.sort_by_key(|listener| listener.0);
         listeners
     }
 
@@ -3442,11 +3498,38 @@ impl<'a> Runtime<'a> {
         })
     }
 
+    fn unhandled_event_error(&self, mut failure: RuntimeError) -> RuntimeError {
+        if matches!(failure.kind, RuntimeErrorKind::StepLimit | RuntimeErrorKind::CallDepth
+            | RuntimeErrorKind::ExecutionTerminated | RuntimeErrorKind::EndStatement
+            | RuntimeErrorKind::Compile | RuntimeErrorKind::UnhandledEvent)
+        { return failure; }
+        // Resolve metadata in the handler's project before crossing back to
+        // the raising procedure. Keep the original number and visible words.
+        let state = self.raised_error_state(&failure, &self.project_name, None);
+        failure.kind = RuntimeErrorKind::UnhandledEvent;
+        failure.vba_number = Some(state.number);
+        failure.message = state.description;
+        failure.vba_source = Some(state.source);
+        failure.vba_help_file = Some(state.help_file);
+        failure.vba_help_context = Some(state.help_context);
+        failure.vba_default_description = false;
+        failure
+    }
+
     fn raise_event(&mut self, name: &str, args: Vec<Value>, references: Vec<Option<ValueSlot>>, line: u32) -> Result<(), RuntimeError> {
         let Some(source) = self.me.clone() else { return Ok(()); };
-        for (project, listener, procedure) in self.event_listeners(&source, name) {
-            self.in_application_project(project, |runtime|
-                runtime.call_event_handler(&listener, &procedure, &args, &references, line))?;
+        let mut listeners = self.event_connections(&source, name, true);
+        let _head = listeners.first().map(|entry| EventDispatchHead::new(&entry.4, source.handle, entry.0));
+        let mut previous_connection = 0;
+        while let Some((connection, project, listener, procedure, _)) = listeners.into_iter()
+            .find(|listener| listener.0 > previous_connection)
+        {
+            previous_connection = connection;
+            self.in_application_project(project, |runtime| {
+                runtime.call_event_handler(&listener, &procedure, &args, &references, line)
+                    .map_err(|failure| runtime.unhandled_event_error(failure))
+            })?;
+            listeners = self.event_connections(&source, name, false);
         }
         Ok(())
     }
@@ -3476,11 +3559,19 @@ impl<'a> Runtime<'a> {
             let references: Vec<_> = delivery.arguments.iter().map(|index| references[*index].clone()).collect();
             // Native connection-point sinks precede the document's own handler.
             // The shared Cancel slot retains each sink's writes for the next.
-            for (project, listener, procedure) in self.event_listeners(&delivery.receiver, &delivery.name) {
-                self.in_application_project(project, |runtime|
+            let mut listeners = self.event_connections(&delivery.receiver, &delivery.name, true);
+            let _head = listeners.first().map(|entry| EventDispatchHead::new(&entry.4, delivery.receiver.handle, entry.0));
+            let mut previous_connection = 0;
+            while let Some((connection, project, listener, procedure, _)) = listeners.into_iter()
+                .find(|listener| listener.0 > previous_connection)
+            {
+                previous_connection = connection;
+                let handled = self.in_application_project(project, |runtime|
                     runtime.call_event_handler(&listener, &procedure, &values(), &references, 0))?;
-                handlers += 1;
+                handlers += usize::from(handled);
+                listeners = self.event_connections(&delivery.receiver, &delivery.name, false);
             }
+            drop(_head);
             if let Some(procedure) = &delivery.document_handler {
                 let handled = self.in_application_project(delivery.project, |runtime| {
                     if !runtime.document_instances.contains(&delivery.receiver.handle) { return Ok(false); }
@@ -4524,6 +4615,7 @@ impl<'a> Runtime<'a> {
                         }
                         let slot = VariableSlot::new(value);
                         if variable.array_bounds.is_none() { slot.set_declared(&variable.type_name.name); }else{slot.set_array_declared(&variable.type_name.name);}
+                        if variable.with_events { slot.set_with_events(); }
                         self.module_values.insert(name.clone(), slot);
                         if declaration.is_const {
                             self.module_constants.insert(name);
@@ -5301,7 +5393,7 @@ impl<'a> Runtime<'a> {
     ) -> Result<Flow, RuntimeError> {
         if matches!(
             failure.kind,
-            RuntimeErrorKind::StepLimit | RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated | RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile
+            RuntimeErrorKind::StepLimit | RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated | RuntimeErrorKind::UnhandledEvent | RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile
         ) || frame.error_handler_active
         {
             return Err(failure);
@@ -5564,7 +5656,7 @@ impl<'a> Runtime<'a> {
                             {
                                 let value = self.let_value(value, frame, span.line).map_err(|failure| {
                                     if matches!(failure.kind, RuntimeErrorKind::StepLimit | RuntimeErrorKind::CallDepth
-                                        | RuntimeErrorKind::ExecutionTerminated | RuntimeErrorKind::EndStatement
+                                        | RuntimeErrorKind::ExecutionTerminated | RuntimeErrorKind::UnhandledEvent | RuntimeErrorKind::EndStatement
                                         | RuntimeErrorKind::Compile)
                                     { failure } else { language_error(number, "default assignment value could not be read", span.line) }
                                 })?;
@@ -7364,6 +7456,7 @@ impl<'a> Runtime<'a> {
                 )?)
             };
             if variable.array_bounds.is_none() { slot.set_declared(&variable.type_name.name); }else{slot.set_array_declared(&variable.type_name.name);}
+                        if variable.with_events { slot.set_with_events(); }
             if variable.array_bounds.is_none() && variable.type_name.fixed_length.is_some() {
                 frame
                     .fixed_strings
@@ -12372,7 +12465,7 @@ impl<'a> Runtime<'a> {
                 };
                 value = answer.map_err(|failure| {
                     if automation && !matches!(failure.kind, RuntimeErrorKind::StepLimit |
-                        RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated |
+                        RuntimeErrorKind::CallDepth | RuntimeErrorKind::ExecutionTerminated | RuntimeErrorKind::UnhandledEvent |
                         RuntimeErrorKind::EndStatement | RuntimeErrorKind::Compile) {
                         language_error(13, "the default member could not supply a scalar argument", line)
                     } else { failure }
@@ -14113,6 +14206,7 @@ fn runtime_error_number(failure: &RuntimeError) -> i64 {
         RuntimeErrorKind::InvalidProcedureCall => 5,
         RuntimeErrorKind::Unsupported => 445,
         RuntimeErrorKind::Compile | RuntimeErrorKind::EndStatement => 0,
+        RuntimeErrorKind::UnhandledEvent => 95,
         RuntimeErrorKind::ExecutionTerminated => 40_040,
         RuntimeErrorKind::StepLimit => 6,
         RuntimeErrorKind::CallDepth => 28,

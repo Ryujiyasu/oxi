@@ -1275,6 +1275,8 @@ impl<'a> Parser<'a> {
         // A label: `foo:` at the head of a line, distinguished from `foo := x`
         // and from `foo: bar` only by the colon coming straight after the name.
         if matches!(self.kind(), TokenKind::Ident(_))
+            && (self.pos == 0
+                || matches!(self.tokens[self.pos - 1].kind, TokenKind::Eol | TokenKind::LineNumber(_)))
             && matches!(self.kind_at(1), TokenKind::Punct(Punct::Colon))
         {
             let name = self.parse_ident().unwrap_or_default();
