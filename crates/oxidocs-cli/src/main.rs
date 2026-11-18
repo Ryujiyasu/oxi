@@ -2799,7 +2799,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                             if let Some(els) = played {
                                 contents.extend(els);
                             }
-                        } else if let Ok(img) = image::load_from_memory(data) {
+                        } else if let Some(img) = pdf_cmyk_jpeg(data).or_else(|| image::load_from_memory(data).ok()) {
                             let turned_box = if std::env::var_os("OXI_PDF_IMAGE_CROP_DISABLE").is_none() {
                                 pdf_turned_box(img.width(), img.height(), *crop, *rotation, elem.x, elem.y, elem.width, elem.height)
                             } else {
@@ -5709,4 +5709,88 @@ fn dashed_segments(ax: f64, ay: f64, bx: f64, by: f64, pattern: &[f64], width: f
         i += 1;
     }
     ops
+}
+
+/// OXI_PDF_CMYK_ICC (2026-11-18, default ON, opt-out _DISABLE): a CMYK JPEG with an
+/// embedded ICC profile is converted to sRGB through that profile (perceptual), as
+/// Word does when it writes the PDF; the decoder's own CMYK -> RGB is a naive formula
+/// that oversaturates. Word PDF image pixels, mean |diff| per channel:
+/// en/creative__00feb732 (1275x788, 557 KB profile) naive 18.42 / ICC perceptual 7.15
+/// / relative colorimetric 8.15; blind-C en/technical__008ae1fa naive 12.43 /
+/// perceptual 6.45 / relative 10.09. Adobe CMYK JPEGs store inverted ink values.
+fn pdf_cmyk_jpeg(data: &[u8]) -> Option<image::DynamicImage> {
+    use zune_core::colorspace::ColorSpace;
+    use zune_core::options::DecoderOptions;
+    if std::env::var_os("OXI_PDF_CMYK_ICC_DISABLE").is_some() || !data.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::CMYK);
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(std::io::Cursor::new(data), options);
+    let dbg = std::env::var_os("OXI_DBG_CMYK").is_some();
+    if let Err(e) = decoder.decode_headers() {
+        if dbg { eprintln!("[CMYK] headers {:?}", e); }
+        return None;
+    }
+    if dbg {
+        eprintln!("[CMYK] in={:?} icc={:?} dims={:?}", decoder.input_colorspace(),
+            decoder.icc_profile().map(|v| v.len()), decoder.dimensions());
+    }
+    let input = decoder.input_colorspace()?;
+    if !matches!(input, ColorSpace::CMYK | ColorSpace::YCCK) {
+        return None;
+    }
+    let icc = decoder.icc_profile()?;
+    let (w, h) = decoder.dimensions()?;
+    // zune-jpeg cannot map YCCK to CMYK itself: take the raw YCCK samples and undo
+    // the colour transform as libjpeg does (YCbCr -> RGB, CMY = 255 - RGB, K as is),
+    // which gives the stored (Adobe-inverted) CMYK.
+    let ycck = input == ColorSpace::YCCK;
+    if ycck {
+        let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::YCCK);
+        decoder = zune_jpeg::JpegDecoder::new_with_options(std::io::Cursor::new(data), options);
+        decoder.decode_headers().ok()?;
+    }
+    let mut cmyk = match decoder.decode() {
+        Ok(v) => v,
+        Err(e) => { if dbg { eprintln!("[CMYK] decode {:?}", e); } return None; }
+    };
+    if dbg { eprintln!("[CMYK] len={} want={}", cmyk.len(), w * h * 4); }
+    if cmyk.len() != w * h * 4 {
+        return None;
+    }
+    if ycck {
+        for px in cmyk.chunks_exact_mut(4) {
+            let (y, cb, cr) = (px[0] as f32, px[1] as f32 - 128.0, px[2] as f32 - 128.0);
+            let r = (y + 1.402 * cr).round().clamp(0.0, 255.0);
+            let g = (y - 0.344_136 * cb - 0.714_136 * cr).round().clamp(0.0, 255.0);
+            let b = (y + 1.772 * cb).round().clamp(0.0, 255.0);
+            px[0] = 255 - r as u8;
+            px[1] = 255 - g as u8;
+            px[2] = 255 - b as u8;
+        }
+    }
+    let adobe = data.windows(5).take(4096).any(|win| win == b"Adobe");
+    if adobe {
+        for v in cmyk.iter_mut() {
+            *v = 255 - *v;
+        }
+    }
+    let src = match moxcms::ColorProfile::new_from_slice(&icc) {
+        Ok(p) => p,
+        Err(e) => { if dbg { eprintln!("[CMYK] icc parse {:?}", e); } return None; }
+    };
+    let dst = moxcms::ColorProfile::new_srgb();
+    let options = moxcms::TransformOptions {
+        rendering_intent: moxcms::RenderingIntent::Perceptual,
+        ..Default::default()
+    };
+    let transform = src
+        .create_transform_8bit(moxcms::Layout::Rgba, &dst, moxcms::Layout::Rgb, options);
+    let transform = match transform {
+        Ok(t) => t,
+        Err(e) => { if dbg { eprintln!("[CMYK] transform {:?}", e); } return None; }
+    };
+    let mut rgb = vec![0u8; w * h * 3];
+    transform.transform(&cmyk, &mut rgb).ok()?;
+    image::RgbImage::from_raw(w as u32, h as u32, rgb).map(image::DynamicImage::ImageRgb8)
 }

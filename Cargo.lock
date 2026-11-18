@@ -524,6 +524,7 @@ dependencies = [
  "image",
  "libc",
  "mimalloc",
+ "moxcms",
  "ovba",
  "oxicells-core",
  "oxidocs-common",
@@ -542,6 +543,8 @@ dependencies = [
  "tiny-skia",
  "windows-sys",
  "zip",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

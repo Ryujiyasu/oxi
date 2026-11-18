@@ -33,6 +33,10 @@ encoding_rs = "0.8"
 subsetter = "0.2.6"
 rustybuzz = "0.20"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
+# CMYK JPEGs are colour-managed through their embedded ICC profile (pdf_cmyk_jpeg).
+zune-jpeg = "0.5"
+zune-core = "0.5"
+moxcms = "0.8"
 ovba = "0.7.1"
 oxihanko = { version = "0.9.0", path = "../oxihanko", features = ["ring"] }
 ring = "0.17.14"
