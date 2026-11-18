@@ -16408,8 +16408,16 @@ cells={} pitch={:.2} text={:?}",
             if self.compat_mode >= 15 && self.compat_mode_explicit
                 && !crate::env_flag!("OXI_CM15_HEADER_TOP_EDGE_DISABLE")
             {
+                // OXI_HDR_TOPNONE_PAD (2026-11-19, default ON, opt-out _DISABLE): with the
+                // table's top border none / nil the row keeps the rule it already pads
+                // (insideH): `_pb_hdr_topnone_gen.py` (top none / nil with insideH sz4 and
+                // sz12): Word starts the first body row on page 2 at the insideH rule's
+                // bottom (97.46 / 98.42); taking the absent top as 0 put Oxi 0.48 high.
+                // en/reports__0018b88f's GO tables (TableGrid, tblBorders top none): every
+                // continuation page ran 0.6pt high.
                 let top = match table.style.top_border.as_ref() {
                     Some(d) if d.style != "none" && d.style != "nil" => self.s1187_eff_bw(&d.style, d.width),
+                    Some(_) if !crate::env_flag!("OXI_HDR_TOPNONE_PAD_DISABLE") => padded,
                     Some(_) => 0.0,
                     None => table.style.border_width.unwrap_or(0.5),
                 };
