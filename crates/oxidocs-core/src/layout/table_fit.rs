@@ -11664,7 +11664,29 @@ impl<'a> TableFitLayouter<'a> {
                         cursor.visual_y + pad_t, content_h, pad_b, factor));
                 }
                 let is_vmerge_restart = cell.v_merge.as_deref() == Some("restart");
+                // OXI_CELL_AUTO_WHITE (2026-11-18, default ON, opt-out _DISABLE): the
+                // automatic text colour turns white on a cell fill whose Rec.601 luma is
+                // below 59/255 -- the text-box rule (S1326) holds for cell shading too.
+                // `_pb_cell_autocolor_gen.py`: 000000 / 3A3A3A (58.0) / C00000 (57.4) /
+                // 1F3864 / 002060 white; 3C3C3C (60.0) / C80000 (59.8) / 404040 / 4472C4 /
+                // 969696 black. en/legal__000e6513's header «GOVERNMENT NOTICES» (fill
+                // 000000, no colour) was drawn black on black.
+                let cell_auto_white = !crate::env_flag!("OXI_CELL_AUTO_WHITE_DISABLE")
+                    && cell.shading.as_deref().is_some_and(|f| {
+                        let hex = f.trim_start_matches('#');
+                        hex.len() >= 6 && {
+                            let c = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(255) as f32;
+                            0.299 * c(0) + 0.587 * c(2) + 0.114 * c(4) < 59.0
+                        }
+                    });
                 for mut elem in cell_elements {
+                    if cell_auto_white && elem.cell_ancestor_path.is_empty() {
+                        if let LayoutContent::Text { ref mut color, .. } = elem.content {
+                            if color.as_deref().map_or(true, |c| c.eq_ignore_ascii_case("auto")) {
+                                *color = Some("FFFFFF".to_string());
+                            }
+                        }
+                    }
                     if cell_float_flow && elem.cell_ancestor_path.is_empty()
                         && matches!(elem.content, LayoutContent::Text { .. }) {
                         if let Some(replay) = float_replay {
