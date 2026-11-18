@@ -20,6 +20,8 @@ use crate::errors::{vba_error_description, ErrorEnvironment};
 mod utf16;
 mod bstr;
 mod text_stream;
+mod floating;
+mod trig;
 
 use crate::ast::{FileInputStmt, FileMode, FileOpenStmt, FileSeekStmt, FileTransferKind, FileTransferStmt, FileOutputKind, FileOutputSeparator, FileOutputStmt, FileSystemStmt, FileSystemUnaryKind, 
     AlignedAssignStmt, AlignmentKind, Argument, ArrayBound, BinaryOp, CaseLabel, DoStmt, ExitKind,
@@ -3281,7 +3283,15 @@ impl<'a> Runtime<'a> {
             });
             let variant = (source_binding || parameters.is_none())
                 && parameter.is_none_or(|parameter| self.variant_parameter(parameter));
-            let bound = match &argument.value {
+            let floating = if !variant {
+                match (&argument.value, parameter) {
+                    (Some(expression), Some(parameter)) if parameter.mode == ParamMode::ByVal
+                        || !is_place_expression(expression) =>
+                        self.floating_conversion(expression, &parameter.type_name.name, frame),
+                    _ => None,
+                }
+            } else { None };
+            let bound = if let Some(result) = floating { BoundArgument::Value(result?) } else { match &argument.value {
                 Some(expression) if variant => self.variant_argument(expression,
                     force_by_value || argument.force_by_value,
                     preserve_byval_variant && parameter.is_none_or(|p| source_binding && p.mode == ParamMode::ByVal), frame)?,
@@ -3290,7 +3300,7 @@ impl<'a> Runtime<'a> {
                 }
                 Some(expression) => BoundArgument::Value(self.eval_expr(expression, frame)?),
                 None => BoundArgument::Value(Value::Missing),
-            };
+            }};
             let line = argument
                 .value
                 .as_ref()
@@ -5336,7 +5346,7 @@ impl<'a> Runtime<'a> {
     ) -> Result<Flow, RuntimeError> {
         match statement {
             Statement::If(branch) => {
-                if truthy(&self.eval_scalar_expr(&branch.condition, frame)?).map_err(|message| {
+                if truthy(&self.floating_condition_value(&branch.condition, frame)?).map_err(|message| {
                     error(
                         RuntimeErrorKind::TypeMismatch,
                         message,
@@ -5346,7 +5356,7 @@ impl<'a> Runtime<'a> {
                     self.exec_body(&branch.then_body, frame)
                 } else {
                     for (condition, body) in &branch.else_ifs {
-                        if truthy(&self.eval_scalar_expr(condition, frame)?).map_err(|message| {
+                        if truthy(&self.floating_condition_value(condition, frame)?).map_err(|message| {
                             error(
                                 RuntimeErrorKind::TypeMismatch,
                                 message,
@@ -7325,7 +7335,7 @@ impl<'a> Runtime<'a> {
         frame: &mut Frame,
         line: u32,
     ) -> Result<bool, RuntimeError> {
-        truthy(&self.eval_scalar_expr(condition, frame)?)
+        truthy(&self.floating_condition_value(condition, frame)?)
             .map_err(|message| error(RuntimeErrorKind::TypeMismatch, message, Some(line)))
     }
 
@@ -9707,6 +9717,9 @@ impl<'a> Runtime<'a> {
         if let Some(value) = self.prepared_source_argument_value(expr, frame) {
             return Ok(value);
         }
+        if let Some(rank) = self.floating_chain(expr, frame) {
+            return self.boxed_floating_chain(expr, frame, rank);
+        }
         if let Expr::Group { expression, .. } = expr {
             let id = expr as *const Expr as usize;
             let frame_id = frame as *const Frame as usize;
@@ -9796,6 +9809,7 @@ impl<'a> Runtime<'a> {
                         return self.eval_array_constructor(args, frame, 0);
                     }
                 }
+                if let Some(result) = self.qualified_stored_numeric_call(&bare, frame) { return result; }
                 self.eval_expr(&bare, frame)
             })();
             for (scope, id, value, reference, grouped) in aliases.into_iter().rev() {
@@ -9860,7 +9874,7 @@ impl<'a> Runtime<'a> {
             Expr::New { type_name, span } => self.new_object(object_type_name(type_name), span.line),
             Expr::Unary { op, operand, span } => {
                 let typed = self.statically_typed(operand, frame);
-                let value = self.eval_expr(operand, frame)?;
+                let value = if *op == UnaryOp::Not { self.floating_integer_operand(operand, frame)? } else { self.eval_expr(operand, frame)? };
                 let value = self.scalar_operand(value, frame, span.line)?;
                 // A Variant that overflows moves up a type instead: measured,
                 // -v of a Variant Integer -32768 is the Long 32768 and of a
@@ -9890,13 +9904,14 @@ impl<'a> Runtime<'a> {
             }
             Expr::Binary { op, lhs, rhs, span } => {
                 let typed = (self.statically_typed(lhs, frame), self.statically_typed(rhs, frame));
-                let lhs = self.eval_expr(lhs, frame)?;
+                let integer_op = matches!(op, BinaryOp::IntDiv | BinaryOp::Mod | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Eqv | BinaryOp::Imp);
+                let lhs = if integer_op { self.floating_integer_operand(lhs, frame)? } else { self.eval_expr(lhs, frame)? };
                 // Native VBA requires the left object before it evaluates the
                 // right expression. An invalid Variant raises 424 immediately.
                 if *op == BinaryOp::Is && !matches!(lhs, Value::Object(_) | Value::Nothing) {
                     return Err(language_error(424, "Object required", span.line));
                 }
-                let rhs = self.eval_expr(rhs, frame)?;
+                let rhs = if integer_op { self.floating_integer_operand(rhs, frame)? } else { self.eval_expr(rhs, frame)? };
                 if *op == BinaryOp::Is && !matches!(rhs, Value::Object(_) | Value::Nothing) {
                     return Err(language_error(424, "Object required", span.line));
                 }
@@ -9909,6 +9924,14 @@ impl<'a> Runtime<'a> {
                         self.scalar_operand(rhs, frame, span.line)?,
                     )
                 };
+                // Typed floating comparisons signal invalid arithmetic for NaN.
+                // Variant comparison has its own measured unordered semantics.
+                if typed.0 && typed.1
+                    && matches!(op, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge)
+                    && [&lhs, &rhs].iter().any(|value| matches!(value, Value::Single(n) if n.is_nan()) || matches!(value, Value::Double(n) if n.is_nan()))
+                {
+                    return Err(error(RuntimeErrorKind::Overflow, "overflow", Some(span.line)));
+                }
                 if let Some(answer) = variant_comparison(*op, &lhs, &rhs, typed, self.option_compare_text()) {
                     return answer.map_err(|(kind, message)| error(kind, message, Some(span.line)));
                 }
@@ -10207,6 +10230,9 @@ impl<'a> Runtime<'a> {
                     }
                     if self.lookup_slot(frame, name).is_none() && !self.has_visible_procedure(name) {
                         let intrinsic = key(name);
+                        if let [Argument { value: Some(operand), name: None, .. }] = args.as_slice() {
+                            if let Some(result) = self.floating_conversion(operand, &intrinsic, frame) { return result; }
+                        }
                         if intrinsic == "iif" && args.len() == 3 {
                             let parameters: Vec<_> = ["expr", "truepart", "falsepart"].into_iter().map(|name| crate::ast::Param {
                                 mode: ParamMode::ByVal, optional: false, name: name.into(), is_array: false,
@@ -10693,6 +10719,11 @@ impl<'a> Runtime<'a> {
         -> Result<Value, RuntimeError>
     {
         let declared = self.source_expression_type(target, frame);
+        if matches!(target, Expr::Ident(..) | Expr::TypedIdent { .. }) {
+            if let Some(kind) = declared.as_ref().filter(|kind| !kind.is_array) {
+                if let Some(result) = self.floating_conversion(expression, &kind.name, frame) { return result; }
+            }
+        }
         let setter = match target {
             Expr::Index { target, .. } => self.source_setter_signature(target, frame, false),
             _ => self.source_setter_signature(target, frame, false),
@@ -11317,6 +11348,8 @@ impl<'a> Runtime<'a> {
             }
             let value = if let Some(evaluated) = evaluated {
                 evaluated[argument_index].take_by_value()
+            } else if let Some(result) = self.floating_conversion(expression, &parameter.type_name.name, frame) {
+                result?
             } else {
                 if self.variant_parameter(parameter) {
                     match self.variant_argument(expression, true, parameter.mode == ParamMode::ByVal, frame)? {
@@ -15529,10 +15562,10 @@ pub(crate) fn call_builtin(
                     }
                     Ok(Value::Double(match name.as_str() {
                         "atn" => value.atan(),
-                        "cos" => value.cos(),
-                        "sin" => value.sin(),
+                        "cos" => trig::cos(value),
+                        "sin" => trig::sin(value),
                         // Tan divides the separately rounded Double results.
-                        "tan" => value.sin() / value.cos(),
+                        "tan" => trig::tan(value),
                         _ => unreachable!(),
                     }))
                 }
@@ -15628,7 +15661,7 @@ pub(crate) fn call_builtin(
             // Text past a Double's range is an overflow: measured, CDbl("1E400")
             // is 6.
             "cdbl" => match number(value).map_err(|message| coercion_error(value, message, line))? {
-                held if held.is_finite() => Ok(Value::Double(held)),
+                held if held.is_finite() || matches!(value, Value::Single(_) | Value::Double(_)) => Ok(Value::Double(held)),
                 _ => Err(error(RuntimeErrorKind::Overflow, "overflow converting to Double", line)),
             },
             // Hex text of four digits or fewer is an Integer's bits:
@@ -15694,6 +15727,11 @@ pub(crate) fn call_builtin(
                 } else {
                     Ok(Value::LongLong(value as i64))
                 }
+            }
+            "csng" if matches!(value, Value::Single(n) if !n.is_finite()) => Ok(value.clone()),
+            "csng" if matches!(value, Value::Double(n) if !n.is_finite()) => {
+                let Value::Double(n) = value else { unreachable!() };
+                Ok(Value::Single(*n as f32))
             }
             "csng" => {
                 let value = number(value).map_err(mismatch)?;
@@ -15808,6 +15846,9 @@ pub(crate) fn call_builtin(
             "sgn" => match value {
                 _ => {
                     let value = number(value).map_err(mismatch)?;
+                    if value.is_nan() {
+                        return Err(error(RuntimeErrorKind::Overflow, "overflow in Sgn", line));
+                    }
                     Ok(Value::Int16(if value > 0.0 {
                         1
                     } else if value < 0.0 {
@@ -18564,6 +18605,17 @@ fn call_date_builtin(
         "cdate" | "cvdate" | "datevalue" | "timevalue" | "isdate" => {
             if args.len() != 1 {
                 return Err(wrong_count("1 argument"));
+            }
+            // The Variant conversion retains quiet NaN dates. Typed numeric
+            // CDate is handled by the compiler conversion path before this call.
+            if name == "cdate" {
+                match &args[0] {
+                    Value::Single(n) if n.is_nan() => return Ok(Value::Date(f64::from(*n))),
+                    Value::Double(n) if n.is_nan() => return Ok(Value::Date(*n)),
+                    Value::Single(n) if n.is_infinite() => return Err(mismatch("type mismatch converting infinity to Date".to_string())),
+                    Value::Double(n) if n.is_infinite() => return Err(mismatch("type mismatch converting infinity to Date".to_string())),
+                    _ => {}
+                }
             }
             // `CDate(Null)` is error 94, not the type mismatch a
             // string that will not parse gets. Measured against Excel;
@@ -36925,6 +36977,9 @@ fn widened_operand(value: &Value, rank: u8) -> Option<Value> {
     }
     if own >= rank {
         return Some(value.clone());
+    }
+    if let Value::Single(value) = value {
+        return Some(Value::Double(f64::from(*value)));
     }
     let whole = match value {
         Value::Byte(n) => i64::from(*n),
