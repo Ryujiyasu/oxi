@@ -15891,6 +15891,10 @@ impl<'a> WorkbookHost<'a> {
     /// several cells holds an array, which is a type mismatch rather than
     /// something to print, and an object with nothing scalar behind it likewise.
     fn printed_value(&self, value: &Value) -> Result<Value, String> {
+        if let Value::AutomationVariant(code) = value {
+            return if *code == 16 { Ok(Value::Integer(0)) }
+                else { Err(host_error(458, "Unsupported Automation subtype cannot be printed")) };
+        }
         let Value::Object(object) = value else {
             return Ok(value.clone());
         };
@@ -20973,6 +20977,9 @@ impl<'a> WorkbookHost<'a> {
             .first()
             .filter(|value| !matches!(value, Value::Missing))
             .ok_or_else(|| "Range.Find What argument is required".to_string())?;
+        if matches!(what, Value::AutomationVariant(code) if *code != 16) {
+            return Err(host_error(458, "Unsupported Automation subtype cannot be searched"));
+        }
         let (kept_in, kept_at, kept_order) = self.find_settings;
         let look_in = find_integer_argument(args.get(2), kept_in, "LookIn")?;
         if !matches!(look_in, -4163 | -4123 | -4144 | -4184) {
@@ -40072,6 +40079,7 @@ impl Host for WorkbookHost<'_> {
 
 fn format_debug_value(value: &Value) -> String {
     match value {
+        Value::AutomationVariant(code) => format!("<Automation subtype {code}>"),
         Value::Empty => String::new(),
         Value::Missing => "Missing".to_string(),
         Value::Nothing => "Nothing".to_string(),
@@ -42687,6 +42695,8 @@ fn match_type_argument(value: Option<&Value>) -> Result<i64, String> {
 
 fn find_value_text(value: &Value) -> String {
     match value {
+        Value::AutomationVariant(16) => "0".into(),
+        Value::AutomationVariant(code) => format!("<Automation subtype {code}>"),
         Value::Empty => String::new(),
         Value::Boolean(value) => if *value { "TRUE" } else { "FALSE" }.to_string(),
         Value::Int16(value) => value.to_string(),
@@ -45690,6 +45700,8 @@ fn to_cell_value(value: Value) -> Result<CellValue, String> {
             }
         },
         Value::Empty | Value::Null => Ok(CellValue::Empty),
+        Value::AutomationVariant(16) => Ok(CellValue::Number(0.0)),
+        Value::AutomationVariant(_) => Err(host_error(1004, "Unsupported Automation subtype cannot be assigned to a cell")),
         Value::Missing => Err("an omitted VBA argument cannot be assigned to a cell".to_string()),
         Value::Nothing => Err("Nothing cannot be assigned to a spreadsheet cell".to_string()),
         Value::Boolean(value) => Ok(CellValue::Boolean(value)),
@@ -46820,6 +46832,9 @@ fn decode_typed_scalar(input: &serde_json::Value) -> Result<oxivba_core::Value, 
         return Err("unknown typed scalar field".into());
     }
     let tag = object.get("type").and_then(|v| v.as_str()).ok_or("typed scalar has no type")?;
+    if tag == "automation_variant" {
+        return Err("Automation subtype descriptors do not contain a reusable value".into());
+    }
     let unit = match tag {
         "empty" => Some(Value::Empty),
         "missing" => Some(Value::Missing),
@@ -47258,6 +47273,9 @@ enum OutputValue {
     Currency(String),
     Decimal(String),
     Error(i64),
+    /// An opaque subtype descriptor, with no native payload. It is inspectable
+    /// in execution output but cannot be reconstructed as a typed input value.
+    AutomationVariant { type_code: u16 },
     String(String),
     Utf16(Vec<u16>),
     Bstr(Vec<u8>),
@@ -47429,6 +47447,7 @@ impl From<Value> for OutputValue {
             Value::Date(value) => Self::Date(OutputFloat::double(value)),
             Value::Double(value) => Self::Double(OutputFloat::double(value)),
             Value::Error(value) => Self::Error(value),
+            Value::AutomationVariant(type_code) => Self::AutomationVariant { type_code },
             Value::String(value) => Self::String(value),
             Value::NullString=>Self::NullString,
             Value::Utf16(units)=>Self::Utf16(units),
