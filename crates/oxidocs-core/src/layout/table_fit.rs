@@ -122,9 +122,24 @@ impl<'a> TableFitLayouter<'a> {
         // floating table among them), and tokyoshugyo -- scored against its own
         // Word PDF -- 0.8575 -> 0.8606 with p18 +0.1639, p19 +0.0559, p17 +0.0415
         // and nothing regressed. Its p18-19 +21pt departure is gone.
+        // OXI_FLOAT_TBLIND_C14 (2026-11-18, default ON, opt-out _DISABLE): in compat <= 14
+        // a floating table's tblInd moves it like an inline one -- the cell text lands at
+        // anchor + tblpX + tblInd and the leading cell absorbs its margin per cell (S496).
+        // `_pb_float_tbl_x_gen.py` (margin 70.85, cellMar 108): compat 14 float tblInd
+        // 0 / 108 / 300 -> text 70.82 / 76.22 / 85.82, tblpX 500 + 300 -> 110.78; compat
+        // 15 float ignores tblInd (76.22 for 108 and 300). Oxi took S1158's whole-table
+        // shift AND S496's per-cell one, dropping tblInd: 65.45 for every positive tblInd.
+        // en/reports__00156ad9 (compat 14, three floating tables, tblInd 108): 10.8 left.
+        let float_tblind_c14 = if !crate::env_flag!("OXI_FLOAT_TBLIND_C14_DISABLE")
+            && self.compat_mode <= 14
+            && table.style.position.as_ref().is_some_and(|p| p.h_align.is_none())
+        {
+            table.style.indent.filter(|v| *v > 0.1).unwrap_or(0.0)
+        } else { 0.0 };
         let s1158_float_absorb = !crate::env_flag!("OXI_S1158_DISABLE")
             && self.compat_mode <= 14
-            && table.style.position.is_some();
+            && table.style.position.is_some()
+            && float_tblind_c14 <= 0.0;
         // The shift is the cell margin ALONE -- no border/2. Word's tblpX=567 arm
         // lands at 113.42 - 5.40 = 108.02 and the non-floating tblInd=567 arm at
         // the same 108.02, so both paths absorb exactly cellMar; adding half the
@@ -163,8 +178,8 @@ impl<'a> TableFitLayouter<'a> {
                 }
             } else {
                 match pos.h_anchor.as_deref() {
-                    Some("page") => pos.x,
-                    _ => start_x + pos.x,
+                    Some("page") => pos.x + float_tblind_c14,
+                    _ => start_x + pos.x + float_tblind_c14,
                 }
             }
         } else {
