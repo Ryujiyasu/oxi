@@ -9758,8 +9758,26 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         (true, Some(st)) if st.after_autospacing => Some(14.0),
                         _ => None,
                     };
+                    // OXI_IMG_CONTEXTUAL (2026-11-19, default ON, opt-out _DISABLE): the gap
+                    // above an image-only paragraph collapses under contextualSpacing like a
+                    // text paragraph's: a side that carries it drops its own spacing when
+                    // both paragraphs share a style. `_pb_ctx_image_gen.py` (docDefaults
+                    // after 160; text + picture paragraph, direct / style contextualSpacing,
+                    // jc centre or not): Word sets the picture 8pt higher than the arm
+                    // without it, Oxi kept the 8pt in every arm. en/technical__00545fa1 p1 /
+                    // p3 pictures (Word 356.9 / 166.8, Oxi +8.0).
+                    let img_ctx = !crate::env_flag!("OXI_IMG_CONTEXTUAL_DISABLE")
+                        && img.position.is_none()
+                        && s1183_host.is_some_and(|h| h.style_id.as_deref() == prev_para_style_id.as_deref());
+                    let img_prev_after = if img_ctx && prev_contextual_spacing { 0.0 } else { prev_space_after };
+                    let img_own_before = s1183_sb.unwrap_or(img.paragraph_space_before);
+                    let img_own_before = if img_ctx && s1183_host.is_some_and(|h| h.contextual_spacing) {
+                        0.0
+                    } else {
+                        img_own_before
+                    };
                     let mut img_before = if s965 {
-                        prev_space_after.max(s1183_sb.unwrap_or(img.paragraph_space_before))
+                        img_prev_after.max(img_own_before)
                     } else {
                         0.0
                     };
