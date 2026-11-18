@@ -12351,10 +12351,19 @@ cells={} pitch={:.2} text={:?}",
                 && (tb.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
                     || (matches!(tb.wrap_type, Some(crate::ir::WrapType::Square | crate::ir::WrapType::Tight))
                         && tb.width >= column_w - 30.0)))
-            .filter_map(|(_, tb)| tb.position.as_ref().and_then(|p| match p.v_relative.as_deref() {
-                Some("page") => Some(p.y + tb.height),
-                Some("paragraph") | Some("text") => Some(header_y + p.y + tb.height),
-                _ => None,
+            // OXI_HDR_BAND_EFFECT_DIST (2026-11-19, default ON, opt-out _DISABLE): the band
+            // ends below the box's effectExtent b and distB. `_pb_hfe_gen.py` (full-width
+            // wrapSquare 26.25pt header box; eff b 0 / 0.75 / 2pt x distB 0 / 4pt): Word's body
+            // line moves +0.75 / +2.0 / +4.0 / +4.72 / +5.92; Oxi ignored both.
+            // en/forms__001ae487's banner (eff b 0.75): every body line 0.75 high.
+            .filter_map(|(_, tb)| tb.position.as_ref().and_then(|p| {
+                let below = if crate::env_flag!("OXI_HDR_BAND_EFFECT_DIST_DISABLE") { 0.0 }
+                    else { p.eff_b.max(0.0) + p.dist_b.unwrap_or(0.0).max(0.0) };
+                match p.v_relative.as_deref() {
+                    Some("page") => Some(p.y + tb.height + below),
+                    Some("paragraph") | Some("text") => Some(header_y + p.y + tb.height + below),
+                    _ => None,
+                }
             }))
             .fold(0.0f32, f32::max)
     }
