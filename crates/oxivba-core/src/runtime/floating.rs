@@ -5,6 +5,144 @@
 use super::*;
 use crate::extended::{Extended, Fault};
 
+/// Finite temporaries retain the extended exponent range. Stored IEEE special
+/// values travel separately so loading infinity never becomes a new overflow.
+#[derive(Clone, Copy)]
+enum FloatingNumber {
+    Finite(Extended),
+    Special(f64),
+}
+
+impl FloatingNumber {
+    fn from_f64(value: f64) -> Option<Self> {
+        Some(match Extended::from_f64(value) {
+            Some(value) => Self::Finite(value),
+            None => Self::Special(value),
+        })
+    }
+
+    fn from_i64(value: i64) -> Self {
+        Self::Finite(Extended::from_i64(value))
+    }
+    fn is_zero(self) -> bool {
+        matches!(self, Self::Finite(value) if value.is_zero())
+    }
+    fn is_negative(self) -> bool {
+        match self {
+            Self::Finite(value) => value.is_negative(),
+            Self::Special(value) => value.is_sign_negative(),
+        }
+    }
+    fn to_f64(self) -> f64 {
+        match self {
+            Self::Finite(value) => value.to_f64(),
+            Self::Special(value) => value,
+        }
+    }
+    fn to_f32(self) -> f32 {
+        match self {
+            Self::Finite(value) => value.to_f32(),
+            Self::Special(value) => value as f32,
+        }
+    }
+    fn negated(self) -> Self {
+        match self {
+            Self::Finite(value) => Self::Finite(value.negated()),
+            Self::Special(value) => Self::Special(-value),
+        }
+    }
+    fn abs(self) -> Self {
+        match self {
+            Self::Finite(value) => Self::Finite(value.abs()),
+            Self::Special(value) => Self::Special(value.abs()),
+        }
+    }
+    fn floor(self) -> Self {
+        match self {
+            Self::Finite(value) => Self::Finite(value.floor()),
+            _ => self,
+        }
+    }
+    fn truncated(self) -> Self {
+        match self {
+            Self::Finite(value) => Self::Finite(value.truncated()),
+            _ => self,
+        }
+    }
+    fn round_i64(self) -> Option<i64> {
+        match self {
+            Self::Finite(value) => value.round_i64(),
+            _ => None,
+        }
+    }
+    fn binary(self, rhs: Self, op: BinaryOp) -> Result<Self, Fault> {
+        use FloatingNumber::{Finite, Special};
+        if let (Finite(a), Finite(b)) = (self, rhs) {
+            return match op {
+                BinaryOp::Add => a.add(b),
+                BinaryOp::Sub => a.sub(b),
+                BinaryOp::Mul => a.mul(b),
+                BinaryOp::Div => a.div(b),
+                _ => unreachable!(),
+            }
+            .map(Finite);
+        }
+        // An inherited quiet NaN propagates its payload; invalid operations on
+        // infinities raise VBA overflow instead of manufacturing a new NaN.
+        if let Special(value) = self {
+            if value.is_nan() {
+                return Ok(self);
+            }
+        }
+        if let Special(value) = rhs {
+            if value.is_nan() {
+                return Ok(rhs);
+            }
+        }
+        let negative = self.is_negative() != rhs.is_negative();
+        let infinity = if negative {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
+        match (self, rhs, op) {
+            (Special(a), Special(b), BinaryOp::Add)
+                if a.is_sign_negative() != b.is_sign_negative() =>
+            {
+                Err(Fault::Overflow)
+            }
+            (Special(a), Special(b), BinaryOp::Sub)
+                if a.is_sign_negative() == b.is_sign_negative() =>
+            {
+                Err(Fault::Overflow)
+            }
+            (Special(_), Special(_), BinaryOp::Div) => Err(Fault::Overflow),
+            (Special(a), _, BinaryOp::Add | BinaryOp::Sub) => Ok(Special(a)),
+            (_, Special(b), BinaryOp::Add) => Ok(Special(b)),
+            (_, Special(b), BinaryOp::Sub) => Ok(Special(-b)),
+            (_, _, BinaryOp::Mul) if self.is_zero() || rhs.is_zero() => Err(Fault::Overflow),
+            (_, _, BinaryOp::Mul) => Ok(Special(infinity)),
+            (Finite(_), Special(_), BinaryOp::Div) => Ok(Finite(
+                Extended::from_f64(if negative { -0.0 } else { 0.0 }).unwrap(),
+            )),
+            (Special(_), Finite(_), BinaryOp::Div) => Ok(Special(infinity)),
+            _ => unreachable!(),
+        }
+    }
+    fn add(self, rhs: Self) -> Result<Self, Fault> {
+        self.binary(rhs, BinaryOp::Add)
+    }
+    fn sub(self, rhs: Self) -> Result<Self, Fault> {
+        self.binary(rhs, BinaryOp::Sub)
+    }
+    fn mul(self, rhs: Self) -> Result<Self, Fault> {
+        self.binary(rhs, BinaryOp::Mul)
+    }
+    fn div(self, rhs: Self) -> Result<Self, Fault> {
+        self.binary(rhs, BinaryOp::Div)
+    }
+}
+
 impl Runtime<'_> {
     /// Library-qualified calls receive stored numeric arguments, including
     /// VBA.CInt. The unqualified compiler conversion consumes the intermediate.
@@ -63,6 +201,13 @@ impl Runtime<'_> {
     /// Determine eligibility without executing a getter or a function twice.
     fn intermediate_rank(&self, expr: &Expr, frame: &Frame) -> Option<NumRank> {
         if let Some(bare) = self.vba_qualified(expr, frame) {
+            if let Expr::Index { target, .. } = &bare {
+                if expr_name(target).is_some_and(|name| {
+                    matches!(key(name).as_str(), "abs" | "sgn" | "int" | "fix" | "round")
+                }) {
+                    return None;
+                }
+            }
             return self.intermediate_rank(&bare, frame);
         }
         let rank = match expr {
@@ -117,7 +262,13 @@ impl Runtime<'_> {
                             "cint" => Some("Integer".into()),
                             "clng" => Some("Long".into()),
                             "cbyte" => Some("Byte".into()),
-                            "sqr" | "val" => Some("Double".into()),
+                            "sqr" | "val" | "sin" | "cos" | "tan" | "atn" | "exp" | "log" => {
+                                Some("Double".into())
+                            }
+                            "sgn" => {
+                                self.intermediate_rank(args.first()?.value.as_ref()?, frame)?;
+                                Some("Integer".into())
+                            }
                             "abs" | "int" | "fix" => {
                                 let operand = args.first()?.value.as_ref()?;
                                 match self.intermediate_rank(operand, frame)? {
@@ -175,7 +326,7 @@ impl Runtime<'_> {
         &mut self,
         expr: &Expr,
         frame: &mut Frame,
-    ) -> Result<Extended, RuntimeError> {
+    ) -> Result<FloatingNumber, RuntimeError> {
         let line = expr.span().line;
         if self.prepared_source_argument_value(expr, frame).is_none() {
             if let Some(bare) = self.vba_qualified(expr, frame) {
@@ -184,7 +335,7 @@ impl Runtime<'_> {
                 let result = match self.qualified_stored_numeric_call(&bare, frame) {
                     Some(result) => result.and_then(|value| {
                         any_number(&value)
-                            .and_then(Extended::from_f64)
+                            .and_then(FloatingNumber::from_f64)
                             .ok_or_else(|| {
                                 error(RuntimeErrorKind::TypeMismatch, "type mismatch", Some(line))
                             })
@@ -213,11 +364,11 @@ impl Runtime<'_> {
             }
             if let Expr::Index { target, args, .. } = expr {
                 if let Some(name) = expr_name(target).filter(|name| {
-                    name.eq_ignore_ascii_case("abs")
+                    matches!(key(name).as_str(), "abs" | "int" | "fix")
                         && self.lookup_slot(frame, name).is_none()
                         && !self.has_visible_procedure(name)
                 }) {
-                    let _ = name;
+                    let operation = key(name);
                     if let [Argument {
                         value: Some(operand),
                         name: None,
@@ -228,9 +379,13 @@ impl Runtime<'_> {
                             .intermediate_rank(operand, frame)
                             .is_some_and(|r| matches!(r, NumRank::Single | NumRank::Double))
                         {
-                            return self
-                                .floating_intermediate(operand, frame)
-                                .map(Extended::abs);
+                            return self.floating_intermediate(operand, frame).map(|value| {
+                                match operation.as_str() {
+                                    "int" => value.floor(),
+                                    "fix" => value.truncated(),
+                                    _ => value.abs(),
+                                }
+                            });
                         }
                     }
                 }
@@ -264,9 +419,9 @@ impl Runtime<'_> {
         }
         let value = self.eval_scalar_expr(expr, frame)?;
         let wide = match value {
-            Value::LongLong(n) | Value::Integer(n) => Some(Extended::from_i64(n)),
-            Value::Boolean(value) => Some(Extended::from_i64(if value { -1 } else { 0 })),
-            other => any_number(&other).and_then(Extended::from_f64),
+            Value::LongLong(n) | Value::Integer(n) => Some(FloatingNumber::from_i64(n)),
+            Value::Boolean(value) => Some(FloatingNumber::from_i64(if value { -1 } else { 0 })),
+            other => any_number(&other).and_then(FloatingNumber::from_f64),
         };
         wide.ok_or_else(|| error(RuntimeErrorKind::TypeMismatch, "type mismatch", Some(line)))
     }
@@ -300,6 +455,7 @@ impl Runtime<'_> {
                 | "byte"
                 | "sgn"
                 | "int"
+                | "fix"
         ) {
             return None;
         }
@@ -307,7 +463,11 @@ impl Runtime<'_> {
             let wide = self.floating_intermediate(expr, frame)?;
             let line = expr.span().line;
             match target.as_str() {
+                "cbool" | "boolean" if wide.to_f64().is_nan() => {
+                    Err(Self::floating_fault(Fault::Overflow, line))
+                }
                 "cbool" | "boolean" => Ok(Value::Boolean(!wide.is_zero())),
+                "sgn" if wide.to_f64().is_nan() => Err(Self::floating_fault(Fault::Overflow, line)),
                 "sgn" => Ok(Value::Int16(if wide.is_zero() {
                     0
                 } else if wide.is_negative() {
@@ -315,18 +475,24 @@ impl Runtime<'_> {
                 } else {
                     1
                 })),
-                "cdbl" | "double" | "csng" | "single" | "int" => {
-                    let wide = if target == "int" { wide.floor() } else { wide };
+                "cdbl" | "double" | "csng" | "single" | "int" | "fix" => {
+                    let wide = match target.as_str() {
+                        "int" => wide.floor(),
+                        "fix" => wide.truncated(),
+                        _ => wide,
+                    };
                     let single = target == "csng"
                         || target == "single"
-                        || target == "int"
+                        || matches!(target.as_str(), "int" | "fix")
                             && self.intermediate_rank(expr, frame) == Some(NumRank::Single);
                     let value = if single {
                         Value::Single(wide.to_f32())
                     } else {
                         Value::Double(wide.to_f64())
                     };
-                    if any_number(&value).is_some_and(f64::is_finite) {
+                    if matches!(wide, FloatingNumber::Special(_))
+                        || any_number(&value).is_some_and(f64::is_finite)
+                    {
                         Ok(value)
                     } else {
                         Err(Self::floating_fault(Fault::Overflow, line))
@@ -359,7 +525,9 @@ impl Runtime<'_> {
         } else {
             Value::Double(wide.to_f64())
         };
-        if any_number(&answer).is_some_and(f64::is_finite) {
+        if matches!(wide, FloatingNumber::Special(_))
+            || any_number(&answer).is_some_and(f64::is_finite)
+        {
             Ok(answer)
         } else {
             Err(Self::floating_fault(Fault::Overflow, expr.span().line))

@@ -322,6 +322,14 @@ impl Extended {
             0,
         )
     }
+    pub(crate) fn truncated(self) -> Self {
+        let whole = self.abs().floor();
+        if self.negative {
+            whole.negated()
+        } else {
+            whole
+        }
+    }
 }
 
 #[cfg(test)]

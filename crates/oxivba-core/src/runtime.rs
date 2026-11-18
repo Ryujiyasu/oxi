@@ -9923,6 +9923,14 @@ impl<'a> Runtime<'a> {
                         self.scalar_operand(rhs, frame, span.line)?,
                     )
                 };
+                // Typed floating comparisons signal invalid arithmetic for NaN.
+                // Variant comparison has its own measured unordered semantics.
+                if typed.0 && typed.1
+                    && matches!(op, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge)
+                    && [&lhs, &rhs].iter().any(|value| matches!(value, Value::Single(n) if n.is_nan()) || matches!(value, Value::Double(n) if n.is_nan()))
+                {
+                    return Err(error(RuntimeErrorKind::Overflow, "overflow", Some(span.line)));
+                }
                 if let Some(answer) = variant_comparison(*op, &lhs, &rhs, typed, self.option_compare_text()) {
                     return answer.map_err(|(kind, message)| error(kind, message, Some(span.line)));
                 }
@@ -15652,7 +15660,7 @@ pub(crate) fn call_builtin(
             // Text past a Double's range is an overflow: measured, CDbl("1E400")
             // is 6.
             "cdbl" => match number(value).map_err(|message| coercion_error(value, message, line))? {
-                held if held.is_finite() => Ok(Value::Double(held)),
+                held if held.is_finite() || matches!(value, Value::Single(_) | Value::Double(_)) => Ok(Value::Double(held)),
                 _ => Err(error(RuntimeErrorKind::Overflow, "overflow converting to Double", line)),
             },
             // Hex text of four digits or fewer is an Integer's bits:
