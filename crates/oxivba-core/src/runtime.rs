@@ -70,6 +70,10 @@ pub enum Value {
     Date(f64),
     /// A Variant of subtype Error, normally created by `CVErr`.
     Error(i64),
+    /// An Automation subtype without a VBA type name. The code is observable
+    /// through VarType; it is not an Error Variant or an object reference.
+    /// No native pointer or unknown payload is retained or synthesized here.
+    AutomationVariant(u16),
     String(String),
     /// BSTR contents containing unpaired UTF-16 units. Never decoded lossily.
     Utf16(Vec<u16>),
@@ -2391,6 +2395,11 @@ impl<'a> Runtime<'a> {
     ) -> Result<Value, RuntimeError> {
         if self.application_projects_enabled && self.source_class_key(declared).is_some() && matches!(&value,Value::Object(object) if self.foreign_project(object).is_some()) {return Err(language_error(13,"class identity belongs to a different project",line));}
 
+        if !declared.eq_ignore_ascii_case("Variant")
+            && matches!(value, Value::AutomationVariant(code) if code != 16)
+        {
+            return Err(language_error(458, "Unsupported Automation subtype", line));
+        }
         let generic_object = declared.eq_ignore_ascii_case("Object");
         let specific_object = !generic_object && self.is_specific_object_type(declared);
         if generic_object || specific_object {
@@ -3187,6 +3196,9 @@ impl<'a> Runtime<'a> {
         frame: &Frame,
         line: u32,
     ) -> Result<Value, RuntimeError> {
+        if matches!(value, Value::AutomationVariant(code) if code != 16) {
+            return Err(language_error(458, "Unsupported Automation subtype cannot be copied", line));
+        }
         if parameter.is_array || parameter.type_name.is_new || matches!(value, Value::Missing) {
             return Ok(value);
         }
@@ -10462,7 +10474,8 @@ impl<'a> Runtime<'a> {
                     argument_names.push(argument.name.clone());
                     values.push(if let Some(evaluated)=&evaluated {evaluated[index].value()}else{match argument.value.as_ref() {
                         Some(value) if expr_name(target).is_some_and(|name| matches!(key(name).as_str(),
-                            "typename" | "vartype" | "isarray" | "isobject" | "isempty" | "isnull" | "cvar")) =>
+                            "typename" | "vartype" | "isarray" | "isobject" | "isempty" | "isnull"
+                            | "isnumeric" | "isdate" | "iserror" | "cvar")) =>
                             self.variant_expression(value, frame)?,
                         Some(value) => self.eval_expr(value, frame)?,
                         None => Value::Missing,
@@ -10789,6 +10802,19 @@ impl<'a> Runtime<'a> {
             };
             argument = BoundArgument::Value(self.let_value(value, frame, expression.span().line)?);
         }
+        // Parentheses copy a held Variant. A function-result temporary can
+        // instead be transferred, including when passed to a ByRef Variant.
+        if matches!(expression, Expr::Group { .. })
+            && self.expression_slot(expression.without_groups(), frame).is_some()
+        {
+            let value = match &argument {
+                BoundArgument::Reference(slot) => slot.snapshot(),
+                BoundArgument::Value(value) => value.clone(),
+            };
+            if matches!(value, Value::AutomationVariant(code) if code != 16) {
+                return Err(language_error(458, "Unsupported Automation subtype cannot be copied", expression.span().line));
+            }
+        }
         if self.typed_array_expression(expression, frame) {
             match &mut argument {
                 BoundArgument::Reference(slot) => Self::materialize_variant_array_reference(slot),
@@ -10835,9 +10861,22 @@ impl<'a> Runtime<'a> {
                     Some(WithSubject::Object { assignment_type: None, .. })),
                 _ => false,
             });
-        if variant && (self.array_expression(expression, frame) || self.source_argument_array_place(expression, frame)) {
-            self.variant_expression(expression, frame)
-        } else { self.eval_expr(expression, frame) }
+        // Language storage copies a held Variant. A host setter instead
+        // receives it and decides whether its Automation type is accepted.
+        let language_storage = declared.is_some() || match target.without_groups() {
+            Expr::Ident(..) | Expr::TypedIdent { .. } => true,
+            Expr::Index { target, .. } => self.expression_slot(target, frame).is_some(),
+            _ => false,
+        };
+        let copying_place = language_storage
+            && self.expression_slot(expression.without_groups(), frame).is_some();
+        let value = if variant && (self.array_expression(expression, frame) || self.source_argument_array_place(expression, frame)) {
+            self.variant_expression(expression, frame)?
+        } else { self.eval_expr(expression, frame)? };
+        if copying_place && matches!(value, Value::AutomationVariant(code) if code != 16) {
+            return Err(language_error(458, "Unsupported Automation subtype cannot be copied", expression.span().line));
+        }
+        Ok(value)
     }
 
     fn evaluated_variant_array(argument: &EvaluatedArgument, typed_array: bool) {
@@ -11627,6 +11666,19 @@ impl<'a> Runtime<'a> {
             }
             return Ok(Value::Null);
         }
+        if let Some(Value::AutomationVariant(code)) = args.iter().find(|value|
+            matches!(value, Value::AutomationVariant(_)))
+        {
+            let name_key = name.to_ascii_lowercase();
+            let predicate = matches!(name_key.as_str(), "vartype" | "isnumeric" | "isempty"
+                | "isnull" | "isdate" | "iserror" | "isarray" | "isobject");
+            if name_key == "isdate" { return Ok(Value::Boolean(false)); }
+            if !predicate && (*code != 16 || name_key == "typename") {
+                let mut failure = language_error(458, "Unsupported Automation subtype", line.unwrap_or(0));
+                if name_key == "str" { failure.vba_source = Some("Empty".into()); }
+                return Err(failure);
+            }
+        }
         let read_args = if is_builtin_function(name)
             && builtin_reads_values(name)
             && args.iter().any(|value| matches!(value, Value::Object(_)))
@@ -11686,9 +11738,43 @@ impl<'a> Runtime<'a> {
                         // A scalar conversion follows defaults returned as objects;
                         // predicates inspect just the first value, and Let itself
                         // continues to preserve an object returned by one getter.
-                        read.push(if asks_about { value } else {
-                            self.scalar_operand(value, frame, line.unwrap_or(0))?
-                        });
+                        if !asks_about && matches!(name.to_ascii_lowercase().as_str(), "len" | "lenb")
+                            && matches!(&value, Value::Object(object)
+                                if self.source_scalar_getter(object).is_some())
+                        {
+                            // Native Excel's nested source default produces a Variant
+                            // whose subtype is the final Long result, rather than a
+                            // string length. These scalar subtypes were measured with
+                            // both Len and LenB; unsupported subtypes need their own
+                            // value representation and consumption rules below.
+                            let scalar = self.scalar_operand(value, frame, line.unwrap_or(0))?;
+                            if let Value::Integer(tag) = scalar {
+                                let result = match tag {
+                                    0 => Some(Value::Empty),
+                                    1 => Some(Value::Null),
+                                    2 => Some(Value::Int16(0)),
+                                    3 => Some(Value::Integer(0)),
+                                    4 => Some(Value::Single(0.0)),
+                                    5 => Some(Value::Double(0.0)),
+                                    6 => Some(Value::Currency(0)),
+                                    7 => Some(Value::Date(0.0)),
+                                    10 => Some(Value::Error(0)),
+                                    11 => Some(Value::Boolean(false)),
+                                    17 => Some(Value::Byte(0)),
+                                    20 => Some(Value::LongLong(0)),
+                                    16 | 82 | 83 | 84 | 95 | 99 => Some(Value::AutomationVariant(tag as u16)),
+                                    _ => None,
+                                };
+                                if let Some(result) = result { return Ok(result); }
+                                read.push(Value::Integer(tag));
+                            } else {
+                                read.push(scalar);
+                            }
+                        } else {
+                            read.push(if asks_about { value } else {
+                                self.scalar_operand(value, frame, line.unwrap_or(0))?
+                            });
+                        }
                     }
                 }
             }
@@ -12429,6 +12515,8 @@ impl<'a> Runtime<'a> {
                     self.tick(Some(line))?;
                     value = self.let_value(value, frame, line)?;
                 }
+                Value::AutomationVariant(code) if code != 16 =>
+                    return Err(language_error(458, "Unsupported Automation subtype", line)),
                 value => return Ok(value),
             }
         }
@@ -20865,6 +20953,7 @@ fn value_type_name(value: &Value) -> String {
         Value::Decimal(_) => "Decimal".to_string(),
         Value::Date(_) => "Date".to_string(),
         Value::Error(_) => "Error".to_string(),
+        Value::AutomationVariant(_) => "UnsupportedAutomation".to_string(),
         Value::String(_) | Value::Utf16(_) | Value::ByteString(_) | Value::NullString => "String".to_string(),
         // An array is named for what it holds: measured, `Split` gives
         // String(), and a Long array handed round in a Variant is Long().
@@ -20894,6 +20983,7 @@ fn value_var_type(value: &Value) -> i64 {
         Value::Date(_) => 7,
         Value::Byte(_) => 17,
         Value::Error(_) => 10,
+        Value::AutomationVariant(code) => i64::from(*code),
         Value::String(_) | Value::Utf16(_) | Value::ByteString(_) | Value::NullString => 8,
         Value::Object(_) | Value::Nothing => 9,
         Value::Boolean(_) => 11,
@@ -20938,6 +21028,8 @@ fn number(value: &Value) -> Result<f64, String> {
         Value::Decimal(value) => Ok(value.to_f64()),
         Value::Date(value) => Ok(*value),
         Value::Error(value) => Ok(*value as f64),
+        Value::AutomationVariant(16) => Ok(0.0),
+        Value::AutomationVariant(_) => Err(host_error(458, "Unsupported Automation subtype")),
         Value::Null => Err("invalid use of Null".to_string()),
         Value::Missing => Err("invalid use of Missing".to_string()),
         Value::Nothing => Err("object variable or With block variable not set".to_string()),
@@ -21055,6 +21147,8 @@ fn numeric_text(text: &str) -> Option<f64> {
 
 fn truthy(value: &Value) -> Result<bool, String> {
     match value {
+        Value::AutomationVariant(16) => Ok(false),
+        Value::AutomationVariant(_) => Err(host_error(458, "Unsupported Automation subtype")),
         Value::Utf16(_) | Value::NullString => Err("type mismatch converting String to Boolean".into()),
         Value::ByteString(_) => bstr_truthy(value),
         Value::Empty | Value::Null | Value::Boolean(false) => Ok(false),
@@ -22345,6 +22439,8 @@ fn text(value: &Value) -> Result<String, String> {
         // only answer available in a browser, where there is no Office to
         // ask. A known limit rather than an oversight.
         Value::Error(value) => format!("Error {value}"),
+        Value::AutomationVariant(16) => "0".into(),
+        Value::AutomationVariant(_) => return Err(host_error(458, "Unsupported Automation subtype")),
         Value::String(value) => value.clone(),
         Value::Array(_) => return Err("type mismatch converting array to String".to_string()),
         Value::Record(_) => {
