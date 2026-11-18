@@ -18928,7 +18928,22 @@ cells={} pitch={:.2} text={:?}",
                             let font_size = frag.style.font_size.unwrap_or(para_font_size);
                             let metrics =
                                 &*self.metrics_for_text(&frag.text, &frag.style, para_style);
-                            let f = metrics.word_line_height_no_grid(font_size);
+                            // OXI_SG0_TEXT_HHEA (2026-11-18, default ON, opt-out _DISABLE): a
+                            // Latin face prices a text line at its hhea natural, as the blank
+                            // branch above (OXI_SG0_BLANK_HHEA) and every no-grid Latin line do.
+                            // `_pb_tnr_lh_gen.py` (Times New Roman 12, snapToGrid 0, line 240
+                            // auto, docGrid lines 312): Word steps 13.81 in all five arms
+                            // (eastAsia SimSun / none / ＭＳ 明朝, compat none / 15); the win
+                            // sum floored to 0.5pt gave 13.0 (13.8 with no grid).
+                            // en/reports__001d0cb2: the title and the notes under its table
+                            // ran 0.8pt per line short.
+                            let f = if !metrics.is_cjk_83_64_font()
+                                && !crate::env_flag!("OXI_SG0_TEXT_HHEA_DISABLE")
+                            {
+                                metrics.natural_line_height_hhea(font_size)
+                            } else {
+                                metrics.word_line_height_no_grid(font_size)
+                            };
                             if f > raw_max {
                                 raw_max = f;
                             }
