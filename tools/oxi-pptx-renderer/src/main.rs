@@ -3719,6 +3719,12 @@ fn skipwhole_on() -> bool {
     std::env::var("OXI_SKIPWHOLE_DISABLE").is_err()
 }
 
+/// S-ANCHORCTR: `a:bodyPr/@anchorCtr` centres the text block; setting this
+/// draws the box as if it were absent.
+fn anchorctr_on() -> bool {
+    std::env::var("OXI_ANCHORCTR_DISABLE").is_err()
+}
+
 /// S-BOLDONLYKEEP: a typeface the deck files without a regular slot is never
 /// skipped in favour of the machine's copy; setting this restores the skip.
 fn boldonlykeep_on() -> bool {
@@ -6738,7 +6744,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         }
                         let turned_text = begin_turned_text(mem_dc, sh, paragraphs, scale);
                         let (geom_l, geom_r, geom_t, _geom_b) = geom_text_inset(sh);
-                        let left_x =
+                        let mut left_x =
                             x + ((sh.l_ins + geom_l) as f64 * scale).round() as i32;
                         let right_x = x
                             + ((sh.width - sh.r_ins - geom_r) as f64 * scale).round() as i32;
@@ -6758,6 +6764,51 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         // layout_paragraph_baselines).
                         let mut counters =
                             std::collections::HashMap::<(u32, String), (Option<u32>, u32)>::new();
+                        // S-ANCHORCTR: `a:bodyPr/@anchorCtr` centres the text
+                        // BLOCK -- as wide as its widest left-aligned line's right
+                        // end -- in the inset area (probe `anchorctr`, 9 arms).
+                        // The breaks are the full width's, so a measuring pass
+                        // finds the block and the drawing pass is then laid out
+                        // in it.
+                        let ctr_shift = if sh.anchor_ctr && anchorctr_on() {
+                            let mut c2 = std::collections::HashMap::<(u32, String), (Option<u32>, u32)>::new();
+                            let mut pf: Option<f32> = None;
+                            let mut cur = cursor_pt;
+                            let mut right = 0.0f32;
+                            for (pi, p) in paragraphs.iter().enumerate() {
+                                let m = if master_ctx.is_empty() {
+                                    None
+                                } else {
+                                    Some(&master_ctx[(p.lvl as usize).min(master_ctx.len() - 1)])
+                                };
+                                let family = effective_family(
+                                    mem_dc,
+                                    &paragraph_family(
+                                        pres,
+                                        sh,
+                                        p,
+                                        &sh.ph_levels[..],
+                                        m.map(std::slice::from_ref).unwrap_or(&[]),
+                                    ),
+                                );
+                                let mut q = p.clone();
+                                q.alignment = Some(SlideAlignment::Left);
+                                let (lines, ..) = layout_paragraph_baselines(
+                                    mem_dc, &q, &mut cur, sh.width, scale, pi == 0, &family,
+                                    sh.l_ins + geom_l, sh.r_ins + geom_r, &master_ctx[..],
+                                    &sh.ph_levels[..], anchor_off, &mut c2, &mut pf,
+                                    sh.wrap_text, sh.spc_first_last_para,
+                                );
+                                for l in &lines {
+                                    right = right.max(l.2 + l.3);
+                                }
+                            }
+                            let inner = sh.width - sh.l_ins - geom_l - sh.r_ins - geom_r;
+                            ((inner - right) / 2.0).max(0.0)
+                        } else {
+                            0.0
+                        };
+                        left_x += (ctr_shift as f64 * scale).round() as i32;
                         let mut prev_fs: Option<f32> = None;
                         for (pi, p) in paragraphs.iter().enumerate() {
                             // A run that states no face inherits the LEVEL's, not the
@@ -6871,8 +6922,8 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 scale,
                                 pi == 0,
                                 &family,
-                                sh.l_ins + geom_l,
-                                sh.r_ins + geom_r,
+                                sh.l_ins + geom_l + ctr_shift,
+                                sh.r_ins + geom_r + ctr_shift,
                                 &master_ctx[..],
                                 &sh.ph_levels[..],
                                 anchor_off,

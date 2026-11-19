@@ -1494,6 +1494,7 @@ fn parse_slide(
     let mut shape_anchor: Option<String> = None;
     let mut shape_wrap = true;
     let mut shape_spc_first_last = false;
+    let mut shape_anchor_ctr = false;
     let mut shape_text_vert: Option<String> = None;
     // `a:bodyPr/a:normAutofit` (fontScale, lnSpcReduction) of the open shape.
     let mut shape_autofit: Option<(f32, f32)> = None;
@@ -1786,6 +1787,7 @@ fn parse_slide(
                         shape_ins_set = [false; 4];
                         shape_anchor = None;
                         shape_wrap = true;
+                        shape_anchor_ctr = false;
                     }
                     "graphicFrame" if in_sp_tree => {
                         // A graphicFrame (table/chart/SmartArt). Reuse the shape
@@ -1838,6 +1840,7 @@ fn parse_slide(
                         shape_ins_set = [false; 4];
                         shape_anchor = None;
                         shape_wrap = true;
+                        shape_anchor_ctr = false;
                     }
                     "tbl" if in_graphic_frame => {
                         in_table = true;
@@ -2388,6 +2391,9 @@ fn parse_slide(
                         // settled what it does.
                         if let Some(v) = get_attr(&e, "spcFirstLastPara") {
                             shape_spc_first_last = v == "1" || v == "true";
+                        }
+                        if let Some(v) = get_attr(&e, "anchorCtr") {
+                            shape_anchor_ctr = v == "1" || v == "true";
                         }
                         if let Some(v) = get_attr(&e, "vert") {
                             shape_text_vert = (v != "horz").then_some(v);
@@ -3245,6 +3251,9 @@ fn parse_slide(
                         if let Some(v) = get_attr(&e, "spcFirstLastPara") {
                             shape_spc_first_last = v == "1" || v == "true";
                         }
+                        if let Some(v) = get_attr(&e, "anchorCtr") {
+                            shape_anchor_ctr = v == "1" || v == "true";
+                        }
                         if let Some(v) = get_attr(&e, "vert") {
                             shape_text_vert = (v != "horz").then_some(v);
                         }
@@ -3817,6 +3826,7 @@ fn parse_slide(
                                 &mut shape_spc_first_last,
                                 false,
                             ),
+                            anchor_ctr: std::mem::replace(&mut shape_anchor_ctr, false),
                             text_vert: shape_text_vert.take(),
                             text_warp: shape_text_warp.take(),
                             src_rect: shape_src_rect.take(),
@@ -3981,6 +3991,7 @@ fn parse_slide(
                             top_level: true,
                             wrap_text: true,
                             spc_first_last_para: false,
+                            anchor_ctr: false,
                             text_vert: None,
                             text_warp: None,
                             x: shape_x,
@@ -5023,6 +5034,7 @@ fn parse_inherited_shapes(
                                         // wrap="none".
                                         wrap_text: true,
                             spc_first_last_para: false,
+                            anchor_ctr: false,
                             text_vert: None,
                                         text_warp: None,
                                         x,

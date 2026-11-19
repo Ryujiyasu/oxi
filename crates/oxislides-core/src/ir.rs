@@ -462,6 +462,14 @@ pub struct Shape {
     /// lower, d16 declares 6pt and draws 6.065pt lower.
     #[serde(default)]
     pub spc_first_last_para: bool,
+    /// `a:bodyPr/@anchorCtr` -- the text block is centred horizontally in the
+    /// box. Probe `anchorctr` (2026-11-18, 9 arms): the block is as wide as
+    /// its widest line's right end (marL/indent included, measured
+    /// left-aligned), it sits in the middle of the inset area, and each
+    /// paragraph's algn then aligns inside that block. Line breaks are those
+    /// of the full width. newdev 54542 s2's body box is the corpus's case.
+    #[serde(default)]
+    pub anchor_ctr: bool,
     /// `a:bodyPr/@vert` when it is not `horz` (e.g. `eaVert`).
     #[serde(default)]
     pub text_vert: Option<String>,
