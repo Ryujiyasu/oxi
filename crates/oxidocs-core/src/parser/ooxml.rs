@@ -3849,6 +3849,11 @@ fn preceding_page_boundaries(runs: &[Run]) -> usize {
 const PTAB_LEFT_MARK: char = '\u{F8F0}';
 const PTAB_RIGHT_SENTINEL: f32 = 1.0e6;
 const PTAB_CENTER_SENTINEL: f32 = 2.0e6;
+/// OXI_PTAB_ONLY: marks a paragraph whose tabs are all positional (removed on resolve).
+const PTAB_ONLY_SENTINEL: f32 = 3.0e6;
+thread_local! {
+    static PARA_PLAIN_TAB: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 thread_local! {
     static PTAB_STOPS: std::cell::RefCell<Vec<TabStopAlignment>> = std::cell::RefCell::new(Vec::new());
 }
@@ -3859,10 +3864,14 @@ fn resolve_ptab_sentinels(document: &mut Document) {
         for block in blocks.iter_mut() {
             match block {
                 Block::Paragraph(p) => {
+                    if p.style.tab_stops.iter().any(|t| t.position >= PTAB_ONLY_SENTINEL) {
+                        p.style.tab_stops.retain(|t| t.position >= PTAB_RIGHT_SENTINEL && t.position < PTAB_ONLY_SENTINEL);
+                    }
                     if p.style.tab_stops.iter().any(|t| t.position >= PTAB_RIGHT_SENTINEL) {
                         let width = (column - p.style.indent_left.unwrap_or(0.0)
                             - p.style.indent_right.unwrap_or(0.0)).max(0.0);
                         for t in p.style.tab_stops.iter_mut() {
+                            if t.position >= PTAB_ONLY_SENTINEL { continue; }
                             if t.position >= PTAB_CENTER_SENTINEL { t.position = width * 0.5; }
                             else if t.position >= PTAB_RIGHT_SENTINEL { t.position = width; }
                         }
@@ -5903,7 +5912,18 @@ fn parse_paragraph_with_inline_images_impl(
 
     // OXI_PTAB: the positional stops of this paragraph (positions resolved per
     // section in resolve_ptab_sentinels), and its left ptabs.
-    for alignment in PTAB_STOPS.with(|v| std::mem::take(&mut *v.borrow_mut())) {
+    let ptab_plain = PARA_PLAIN_TAB.with(|c| c.replace(false));
+    let ptab_list = PTAB_STOPS.with(|v| std::mem::take(&mut *v.borrow_mut()));
+    // OXI_PTAB_ONLY (2026-11-19, default ON, opt-out _DISABLE): a positional tab goes
+    // straight to its own place; the paragraph's ordinary stops do not catch it.
+    // en/administrative__001eef60's footers «<w:ptab alignment=right/>Page N» (Footer
+    // style: centre 4680, right 9360): Word sets «Page N» right-aligned at the
+    // margin (518.5); the '\t' took the centre stop first (277). Scope: every tab of
+    // the paragraph is positional.
+    if !ptab_list.is_empty() && !ptab_plain && std::env::var_os("OXI_PTAB_ONLY_DISABLE").is_none() {
+        style.tab_stops.push(TabStop { position: PTAB_ONLY_SENTINEL, alignment: TabStopAlignment::Left, leader: None, clear: false });
+    }
+    for alignment in ptab_list {
         style.tab_stops.push(TabStop {
             position: if alignment == TabStopAlignment::Center { PTAB_CENTER_SENTINEL } else { PTAB_RIGHT_SENTINEL },
             alignment,
@@ -7975,7 +7995,7 @@ fn parse_run(
                         }
                         if in_text { t_br_floor = text.len(); }
                     }
-                    "tab" => text.push('\t'),
+                    "tab" => { text.push('\t'); PARA_PLAIN_TAB.with(|c| c.set(true)); }
                     // S747: <w:noBreakHyphen/> renders as a hyphen that FORBIDS
                     // a line break — map to U+2011 NON-BREAKING HYPHEN (the
                     // breaker's is_break_after covers '-' only, so U+2011 adds
