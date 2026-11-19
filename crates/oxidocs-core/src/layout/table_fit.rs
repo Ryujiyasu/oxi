@@ -11092,8 +11092,28 @@ impl<'a> TableFitLayouter<'a> {
                                 let effect_top = if img.position.is_none() {
                                     img.effect_extent_t.max(0.0)
                                 } else { 0.0 };
+                                // OXI_CELL_IMG_HOST_X (2026-11-19, default ON, opt-out _DISABLE): an
+                                // image-only cell paragraph places its picture by the host's indents
+                                // and jc inside the cell's content box, as Word does. `_pb_cellimg_x_gen.py`
+                                // (60pt picture in a 200pt cell; left / center / right / ind -51 / 360 /
+                                // centre + 360): Word 72.5 / 142.0 / 211.5 / 69.95 / 90.5 / 151.0; Oxi drew
+                                // every arm at the cell's left. en/legal__000e6513's header logo (ind -51).
+                                let img_host_dx = match img.host_paragraph.as_deref() {
+                                    Some(h) if !crate::env_flag!("OXI_CELL_IMG_HOST_X_DISABLE") => {
+                                        let left = h.style.indent_left.unwrap_or(0.0)
+                                            + h.style.indent_first_line.unwrap_or(0.0);
+                                        let right = h.style.indent_right.unwrap_or(0.0);
+                                        let room = cell_w - pad_l - pad_r - left - right - img.width;
+                                        left + match h.alignment {
+                                            crate::ir::Alignment::Center => (room * 0.5).max(0.0),
+                                            crate::ir::Alignment::Right => room.max(0.0),
+                                            _ => 0.0,
+                                        }
+                                    }
+                                    _ => 0.0,
+                                };
                                 cell_elements.push(LayoutElement::new(
-                                    cell_x + pad_l,
+                                    cell_x + pad_l + img_host_dx,
                                     content_h + effect_top,
                                     img.width,
                                     img.height,
