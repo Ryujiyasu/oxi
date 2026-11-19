@@ -4817,7 +4817,11 @@ impl<'a> Runtime<'a> {
                     .get(&class.to_ascii_lowercase())
                     .is_some_and(|module| self.has_procedure_of(module, "Class_Terminate", &[ProcKind::Sub]));
                 if has_terminate && !self.project_ended {
-                    let this = ObjectRef::new(handle, class);
+                    // Me may escape its termination handler, including back
+                    // into the class's default slot. Give those references a
+                    // lifetime so the instance survives until they let go.
+                    let life = Rc::new(LifeToken { handle, native_stream: false, due: Rc::clone(&self.due) });
+                    let this = ObjectRef { handle, kind: class, life: Some(life), dispatch_view: None };
                     // Its own Err is its own: measured, the 5 a procedure
                     // raised still stands in the caller after one of its
                     // locals was terminated on the way out.
@@ -4830,6 +4834,11 @@ impl<'a> Runtime<'a> {
                         // The rest stay due for the next look.
                         self.due.borrow_mut().extend_from_slice(&batch[index + 1..]);
                         return Err(raised);
+                    }
+                    if !self.project_ended && this.life.as_ref().is_some_and(|life| Rc::strong_count(life) > 1) {
+                        // The event already ran. The surviving references
+                        // release its fields later without a second event.
+                        continue;
                     }
                 }
                 // Gone, and with it whatever it alone was holding.
