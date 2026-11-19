@@ -845,6 +845,8 @@ pub struct Runtime<'a> {
     module_initialized: bool,
     /// The class modules, by name in lower case.
     classes: BTreeMap<String, &'a Module>,
+    /// User-class default instances are project globals, shared by every module.
+    predeclared_globals: BTreeMap<String, ValueSlot>,
     /// The standard module, which `module` points back to whenever no
     /// class instance is running.
     main_module: &'a Module,
@@ -944,6 +946,7 @@ pub struct ProjectState {
     files: crate::files::Files,
     temp_names: u64,
     internal_objects: BTreeMap<u64, InternalObject>,
+    predeclared_globals: BTreeMap<String, ValueSlot>,
     next_internal_handle: u64,
     object_pointers: BTreeMap<(u64, String, Option<String>), i64>,
     bstr_literals: BTreeMap<Vec<u16>,bstr::Allocation>,
@@ -1523,6 +1526,7 @@ impl<'a> Runtime<'a> {
             temp_names: 0,
             module_initialized: false,
             classes: BTreeMap::new(),
+            predeclared_globals: BTreeMap::new(),
             main_module: module,
             owner: None,
             main_state: None,
@@ -1579,9 +1583,34 @@ impl<'a> Runtime<'a> {
     /// The project's class modules, each by its name.
     pub fn with_classes(mut self, classes: &'a [(String, Module)]) -> Self {
         for (name, module) in classes {
-            self.classes.insert(name.to_ascii_lowercase(), module);
+            let name = key(name);
+            self.classes.insert(name.clone(), module);
+            if Self::class_is_predeclared(module) {
+                self.predeclared_globals.entry(name.clone()).or_insert_with(|| {
+                    let slot = VariableSlot::new(Value::Nothing);
+                    slot.set_declared(&name);
+                    slot
+                });
+            }
         }
+        self.retain_predeclared_globals();
         self
+    }
+
+    fn class_is_predeclared(module: &Module) -> bool {
+        // Native-base components use host receivers even when optional
+        // document metadata was not supplied for this invocation.
+        !module.items.iter().any(|item| matches!(item,
+            ModuleItem::Attribute { name, .. } if name.eq_ignore_ascii_case("VB_Base")))
+            && module.items.iter().any(|item| matches!(item,
+            ModuleItem::Attribute { name, value, .. }
+                if name.eq_ignore_ascii_case("VB_PredeclaredId") && value.trim().eq_ignore_ascii_case("True")))
+    }
+
+    fn retain_predeclared_globals(&mut self) {
+        let classes = &self.classes;
+        self.predeclared_globals.retain(|name, _|
+            classes.get(name).is_some_and(|module| Self::class_is_predeclared(module)));
     }
 
     /// Bind document components to host-owned objects. Call after restoring
@@ -1593,7 +1622,13 @@ impl<'a> Runtime<'a> {
         bindings: Vec<(String,ObjectRef)>,
         references: std::sync::Arc<crate::CompileReferences>,
     ) -> Result<Self,RuntimeError> {
+        // Host document globals retain their native receiver, including the
+        // declared-but-unavailable document case handled by read_variable.
+        for (name, _) in &references.document_modules {
+            self.predeclared_globals.remove(&key(name));
+        }
         for (name,object) in bindings {
+            self.predeclared_globals.remove(&key(&name));
             let name=key(&name);
             if name.is_empty() || object.handle >= 1_u64<<63 || self.document_globals.contains_key(&name) {
                 return Err(error(RuntimeErrorKind::Unsupported,"invalid document object binding",None));
@@ -1640,6 +1675,8 @@ impl<'a> Runtime<'a> {
         self.files.set_clock(self.clock.clone());
         self.temp_names = state.temp_names;
         self.internal_objects = state.internal_objects;
+        self.predeclared_globals.extend(state.predeclared_globals);
+        if !self.classes.is_empty() { self.retain_predeclared_globals(); }
         self.next_internal_handle = state.next_internal_handle;
         self.object_pointers = state.object_pointers;
         self.bstr_literals = state.bstr_literals;
@@ -1664,6 +1701,7 @@ impl<'a> Runtime<'a> {
             files: self.files,
             temp_names: self.temp_names,
             internal_objects: self.internal_objects,
+            predeclared_globals: self.predeclared_globals,
             next_internal_handle: self.next_internal_handle,
             object_pointers: self.object_pointers,
             bstr_literals: self.bstr_literals,
@@ -4103,6 +4141,7 @@ impl<'a> Runtime<'a> {
         self.module_values.clear();
         self.module_constants.clear();
         self.module_auto_new.clear();
+        for slot in self.predeclared_globals.values() { *slot.borrow_mut() = Value::Nothing; }
         self.module_fixed_strings.clear();
         self.module_declared.clear();
         self.module_variants.clear();
@@ -4758,6 +4797,13 @@ impl<'a> Runtime<'a> {
                     Some(InternalObject::Instance(instance)) if !instance.terminated => {
                         instance.terminated = true;
                         instance.class.clone()
+                    }
+                    Some(InternalObject::Instance(_)) => {
+                        // A failed initializer skips its own termination event,
+                        // but its fields still go with its last reference.
+                        self.internal_objects.remove(&handle);
+                        self.object_projects.remove(&handle);
+                        continue;
                     }
                     Some(InternalObject::DisconnectedInstance) => {
                         self.internal_objects.remove(&handle);
@@ -8548,6 +8594,7 @@ impl<'a> Runtime<'a> {
             .or_else(|| self.module_values.get(&name))
             // A class sees the standard module's Public variables.
             .or_else(|| self.foreign_variable_state(&name).and_then(|state| state.values.get(&name)))
+            .or_else(|| self.predeclared_globals.get(&name))
             .cloned()
     }
 
@@ -8594,7 +8641,19 @@ impl<'a> Runtime<'a> {
                 self.module_auto_new.get(&name_key).or_else(|| self.foreign_variable_state(&name_key).and_then(|state| state.auto_new.get(&name_key)))
             }
             .cloned();
-            if let Some(type_name) = type_name {
+            let predeclared = self.predeclared_globals.get(&name_key)
+                .is_some_and(|global| Rc::ptr_eq(&global.storage, &slot.storage));
+            if predeclared {
+                // A default constructor runs in the caller's current Err context.
+                let incoming = self.err_out.take().unwrap_or_else(|| frame.error_state.clone());
+                let previous = self.err_in.replace(incoming);
+                let initialized = self.new_source_class_object(&name_key, line, Some(&slot));
+                self.err_in = previous;
+                initialized?;
+                // Initialization can clear or replace the root. Release an
+                // unrooted completed instance before the caller consumes it.
+                self.collect_instances(line)?;
+            } else if let Some(type_name) = type_name {
                 let value = self.new_object(object_type_name(&type_name), line)?;
                 *slot.borrow_mut() = value;
             }
@@ -8603,23 +8662,9 @@ impl<'a> Runtime<'a> {
         Ok(Some(value))
     }
 
-    fn new_object(&mut self, type_name: &str, line: u32) -> Result<Value, RuntimeError> {
-        let (kind, object) = if type_name.eq_ignore_ascii_case("collection") {
-            ("Collection", InternalObject::Collection(Vec::new()))
-        } else if type_name.eq_ignore_ascii_case("dictionary")
-            || type_name.eq_ignore_ascii_case("scripting.dictionary")
-        {
-            (
-                "Dictionary",
-                InternalObject::Dictionary(DictionaryObject {
-                    entries: Vec::new(),
-                    compare_mode: 0,
-                    compare_text: false,
-                }),
-            )
-        } else if type_name.eq_ignore_ascii_case("scripting.filesystemobject") {
-            ("FileSystemObject", InternalObject::FileSystem)
-        } else if let Some(class_module) = self.source_class_module(type_name) {
+    fn new_source_class_object(&mut self, type_name: &str, line: u32, default_slot: Option<&ValueSlot>) -> Result<Value, RuntimeError> {
+        let class_module = self.source_class_module(type_name).ok_or_else(||
+            error(RuntimeErrorKind::Unsupported, format!("New is not available for VBA type: {type_name}"), Some(line)))?;
             let name = class_module
                 .items
                 .iter()
@@ -8641,14 +8686,53 @@ impl<'a> Runtime<'a> {
             let made = ObjectRef { handle, kind: name, life: Some(life),dispatch_view:None };
             // Its variables are set up, then Class_Initialize runs, as the
             // instance comes into being.
-            self.as_instance(&made, |this| {
+            if let Some(slot) = default_slot { *slot.borrow_mut() = Value::Object(made.clone()); }
+            let initialized = self.as_instance(&made, |this| {
                 this.initialize_module()?;
                 if this.has_procedure_of(this.module, "Class_Initialize", &[ProcKind::Sub]) {
                     this.call_kind("Class_Initialize", &[ProcKind::Sub], Vec::new(), Some(line))?;
                 }
                 Ok(())
-            })?;
-            return Ok(Value::Object(made));
+            });
+            if let Err(failure) = initialized {
+                if let Some(slot) = default_slot {
+                    // A failed lazy initialization clears the default root even
+                    // when the initializer replaced it with a completed instance.
+                    *slot.borrow_mut() = Value::Nothing;
+                }
+                // Failed explicit New and lazy construction both suppress the
+                // incomplete object's termination event, not its field release.
+                if let Some(InternalObject::Instance(instance)) = self.internal_objects.get_mut(&made.handle) {
+                    instance.terminated = true;
+                }
+                // Release a completed replacement before the failed original's
+                // fields. Keep the original failure during both cleanup stages.
+                let _ = self.collect_instances(line);
+                drop(made);
+                let _ = self.collect_instances(line);
+                return Err(failure);
+            }
+        Ok(Value::Object(made))
+    }
+
+    fn new_object(&mut self, type_name: &str, line: u32) -> Result<Value, RuntimeError> {
+        let (kind, object) = if type_name.eq_ignore_ascii_case("collection") {
+            ("Collection", InternalObject::Collection(Vec::new()))
+        } else if type_name.eq_ignore_ascii_case("dictionary")
+            || type_name.eq_ignore_ascii_case("scripting.dictionary")
+        {
+            (
+                "Dictionary",
+                InternalObject::Dictionary(DictionaryObject {
+                    entries: Vec::new(),
+                    compare_mode: 0,
+                    compare_text: false,
+                }),
+            )
+        } else if type_name.eq_ignore_ascii_case("scripting.filesystemobject") {
+            ("FileSystemObject", InternalObject::FileSystem)
+        } else if self.source_class_module(type_name).is_some() {
+            return self.new_source_class_object(type_name, line, None);
         } else {
             return Err(error(
                 RuntimeErrorKind::Unsupported,
@@ -9563,6 +9647,8 @@ impl<'a> Runtime<'a> {
                         }
                         None => value,
                     };
+                    existing.write(value);
+                } else if let Some(existing) = self.predeclared_globals.get(&name) {
                     existing.write(value);
                 } else {
                     if implicit_variant {
