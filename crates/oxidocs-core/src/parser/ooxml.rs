@@ -5335,7 +5335,9 @@ fn parse_paragraph_with_inline_images_impl(
             if !para_rs.east_asia_hint && doc_rs.east_asia_hint {
                 para_rs.east_asia_hint = true;
             }
-            if para_rs.color.is_none() {
+            if para_rs.color.is_none()
+                && !(para_rs.color_auto && !crate::env_flag!("OXI_STYLE_COLOR_AUTO_DISABLE"))
+            {
                 para_rs.color = doc_rs.color.clone();
             }
             // S547 (2026-06-12): w:kern gates the yakumono pair halving — must
@@ -15213,6 +15215,55 @@ fn parse_table(
             for (row_idx, row) in rows.iter_mut().enumerate() {
                 let num_cols = row.cells.len();
                 for (col_idx, cell) in row.cells.iter_mut().enumerate() {
+                    // OXI_TBLSTYLE_LAYERED (2026-11-20, default ON, opt-out _DISABLE): Word
+                    // stacks the table style's conditional parts -- bands, then first/last
+                    // column, then first/last row, then the corner cells -- and each part
+                    // overrides only what it declares. en/technical__0043bfe0 p11 (Grid Table 4
+                    // Accent 4, firstRow fill 6B2976 + white, firstCol bold only, band1Horz
+                    // E8CAED): Word keeps the purple header and the lilac band in the first
+                    // column; Oxi picked firstCol alone and left both cells white. A run's own
+                    // <w:b w:val="0"/> also beats the style's bold (the part only sets it
+                    // where the run says nothing).
+                    if !crate::env_flag!("OXI_TBLSTYLE_LAYERED_DISABLE") {
+                        let mut fmt = crate::ir::TableConditionalFormat::default();
+                        let mut any = false;
+                        for key in resolve_conditional_layers(row_idx, col_idx, num_rows, num_cols, &look) {
+                            if let Some(part) = cond_fmts.get(key) {
+                                any = true;
+                                if part.shading.is_some() { fmt.shading = part.shading.clone(); }
+                                if part.borders.is_some() { fmt.borders = part.borders.clone(); }
+                                if part.bold.is_some() { fmt.bold = part.bold; }
+                                if part.color.is_some() { fmt.color = part.color.clone(); }
+                            }
+                        }
+                        if any {
+                            if cell.shading.is_none() {
+                                cell.shading = fmt.shading.clone();
+                            }
+                            if cell.borders.is_none() {
+                                cell.borders = fmt.borders.clone();
+                            }
+                            if fmt.bold.is_some() || fmt.color.is_some() {
+                                for block in &mut cell.blocks {
+                                    if let Block::Paragraph(para) = block {
+                                        for run in &mut para.runs {
+                                            if let Some(b) = fmt.bold {
+                                                if !run.style.bold && !run.style.has_explicit_bold {
+                                                    run.style.bold = b;
+                                                }
+                                            }
+                                            if let Some(ref c) = fmt.color {
+                                                if run.style.color.is_none() {
+                                                    run.style.color = Some(c.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     // Determine which conditional format applies (priority: corner > row/col > band)
                     let cond_key =
                         resolve_conditional_type(row_idx, col_idx, num_rows, num_cols, &look);
@@ -15257,6 +15308,43 @@ fn parse_table(
         style,
         grid_columns,
     })
+}
+
+/// Every tblStylePr part that applies to a cell, lowest priority first
+/// (bands, first/last column, first/last row, corner) -- OXI_TBLSTYLE_LAYERED.
+/// `_pb_tblstyle_layer_gen.py`: with firstRow and firstCol both filled, Word's top-left cell
+/// takes the firstRow fill; an nwCell fill beats both; the band reaches the first column.
+fn resolve_conditional_layers(
+    row_idx: usize,
+    col_idx: usize,
+    num_rows: usize,
+    num_cols: usize,
+    look: &crate::ir::TableLook,
+) -> Vec<&'static str> {
+    let is_first_row = row_idx == 0 && look.first_row;
+    let is_last_row = row_idx + 1 == num_rows && look.last_row;
+    let is_first_col = col_idx == 0 && look.first_column;
+    let is_last_col = col_idx + 1 == num_cols && look.last_column;
+    let mut out = Vec::new();
+    if look.banded_columns && !is_first_col && !is_last_col {
+        let band_size = look.col_band_size.max(1) as usize;
+        let c = if look.first_column { col_idx.saturating_sub(1) } else { col_idx };
+        out.push(if (c / band_size) % 2 == 0 { "band1Vert" } else { "band2Vert" });
+    }
+    if look.banded_rows && !is_first_row && !is_last_row {
+        let band_size = look.row_band_size.max(1) as usize;
+        let r = if look.first_row { row_idx.saturating_sub(1) } else { row_idx };
+        out.push(if (r / band_size) % 2 == 0 { "band1Horz" } else { "band2Horz" });
+    }
+    if is_first_col { out.push("firstCol"); }
+    if is_last_col { out.push("lastCol"); }
+    if is_first_row { out.push("firstRow"); }
+    if is_last_row { out.push("lastRow"); }
+    if is_first_row && is_first_col { out.push("nwCell"); }
+    if is_first_row && is_last_col { out.push("neCell"); }
+    if is_last_row && is_first_col { out.push("swCell"); }
+    if is_last_row && is_last_col { out.push("seCell"); }
+    out
 }
 
 /// Determine which tblStylePr condition type applies to a cell.

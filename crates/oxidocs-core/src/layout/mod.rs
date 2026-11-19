@@ -6893,6 +6893,11 @@ impl LayoutEngine {
         if let Some(ref c) = run_style.color {
             return Some(c.as_str());
         }
+        // OXI_STYLE_COLOR_AUTO: a character style's own colour "auto" beats the
+        // paragraph style's colour (`_pb_color_auto_gen.py` Cstyle: Word black).
+        if run_style.color_auto && !crate::env_flag!("OXI_STYLE_COLOR_AUTO_DISABLE") {
+            return None;
+        }
         if let Some(ref drs) = para_style.default_run_style {
             if let Some(ref c) = drs.color {
                 return Some(c.as_str());
@@ -19832,6 +19837,24 @@ cells={} pitch={:.2} text={:?}",
         // ﾎﾟｯﾌﾟ体 line=0 atLeast): Word's baseline 32.66 below the content top =
         // (41.5 - 32)/2 + 27.5 (+0.4 bearing); the arm below put it at 36.05.
         let natbox_atleast_on = !crate::env_flag!("OXI_NATBOX_ATLEAST_DISABLE");
+        // OXI_ATLEAST_UNDER_LATIN_S1652 (2026-11-20, default ON, opt-out _DISABLE): a body
+        // pure-Latin atLeast line keeps the S1652 arm even when the value is under the
+        // font -- that arm (1.0 + line - cell) already IS the auto placement there, and
+        // the auto arm's grid branch (S695) prices the line differently.
+        // `_pb_atl_base_gen.py` (TNR 12 atLeast 220/240/270/276/300, auto, TNR 11 atLeast
+        // 220, TNR 10 atLeast 200; compat 14 and 15): Word baseline 11.16 for every
+        // under-font arm = auto; Oxi 11.7 / 10.77 / 9.84 (+0.5) on the 220/240 arms and
+        // within 0.07 everywhere with this. en/legal__000e6513 (TNR 12 atLeast 220) +0.55.
+        let atl_under_latin = !in_shape_context
+            && !crate::env_flag!("OXI_ATLEAST_UNDER_LATIN_S1652_DISABLE")
+            && !crate::env_flag!("OXI_S504_DISABLE")
+            && !crate::env_flag!("OXI_S1652_DISABLE")
+            && !line.fragments.is_empty()
+            && line.fragments.iter().all(|frag| {
+                !self
+                    .metrics_for_text(&frag.text, &frag.style, para_style)
+                    .is_cjk_83_64_font()
+            });
         match (
             para_style.line_spacing_rule.as_deref(),
             para_style.line_spacing,
@@ -19846,6 +19869,7 @@ cells={} pitch={:.2} text={:?}",
             (Some(rule @ ("exact" | "atLeast")), Some(v))
                 if (rule == "exact" || v > 0.01 || !natbox_atleast_on)
                     && !(rule == "atLeast" && v + 0.5 < line_height
+                        && !atl_under_latin
                         && !crate::env_flag!("OXI_ATLEAST_UNDER_FONT_AUTO_DISABLE")) =>
             {
                 // S1261 (2026-08-30, OPT-IN `OXI_S1261=1` pending gates): under

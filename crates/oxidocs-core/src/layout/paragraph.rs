@@ -2439,10 +2439,27 @@ impl<'a> ParagraphLayouter<'a> {
                         } else {
                             0.0
                         };
+                        // OXI_INLINE_EFFECT_TEXT_LINE (2026-11-20, default ON, opt-out _DISABLE):
+                        // on a line that also holds text, a picture stands on the baseline as
+                        // its extent grown by wp:effectExtent t + b, and its bitmap bottom
+                        // sits b above the baseline. `_pb_icon_eff_gen.py` (Cambria 10 line,
+                        // picture 11.25 / 20pt, effect (t,b) = (0,0) (0,.75) (1.5,0)
+                        // (1.5,1.95)): Word's entry pitch grows by t + b (+0.60/+1.32/+3.36,
+                        // +0.72/+1.32/+3.36), bitmap bottom = baseline - b; Oxi ignored both.
+                        // en/reference__0042471c «Corresponding Author:» icon (b 0.75).
+                        let effect_text_line = descent > 0.0 && !is_header_footer
+                            && !self.doc_body_has_real_cjk
+                            && !crate::env_flag!("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE")
+                            && !crate::env_flag!("OXI_INLINE_EFFECT_TEXT_LINE_DISABLE");
                         let object_ascent = if picture_only {
                             line.fragments.iter().filter(|f| f.style.inline_object_image.is_some() || f.style.inline_group_object)
-                                .filter_map(|f| f.style.inline_object_extent.map(|(_, h)|
-                                    (h + f.style.position.unwrap_or(0.0)).max(0.0)))
+                                .filter_map(|f| f.style.inline_object_extent.map(|(_, h)| {
+                                    let eff = if effect_text_line {
+                                        f.style.inline_object_image.as_ref().map_or(0.0, |im|
+                                            im.effect_extent_t.max(0.0) + im.effect_extent_b.max(0.0))
+                                    } else { 0.0 };
+                                    (h + eff + f.style.position.unwrap_or(0.0)).max(0.0)
+                                }))
                                 .fold(0.0_f32, f32::max)
                         } else { obj_h - lower };
                         object_ascent.max(text_asc) + lower.max(descent) + extra
@@ -8056,9 +8073,19 @@ impl<'a> ParagraphLayouter<'a> {
                         (m.win_ascent + leading) * f.style.font_size.unwrap_or(para_font_size)
                     })
                     .fold(0.0_f32, f32::max);
+                // OXI_INLINE_EFFECT_TEXT_LINE: on a line with text the picture's box
+                // includes its effectExtent t + b.
+                let eff_on = text_ascent > 0.0 && !is_header_footer
+                    && !crate::env_flag!("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE")
+                    && !crate::env_flag!("OXI_INLINE_EFFECT_TEXT_LINE_DISABLE");
                 let image_ascent = line.fragments.iter().filter(|f| f.style.inline_object_image.is_some())
-                    .filter_map(|f| f.style.inline_object_extent.map(|(_, h)|
-                        (h + f.style.position.unwrap_or(0.0)).max(0.0)))
+                    .filter_map(|f| f.style.inline_object_extent.map(|(_, h)| {
+                        let eff = if eff_on {
+                            f.style.inline_object_image.as_ref().map_or(0.0, |im|
+                                im.effect_extent_t.max(0.0) + im.effect_extent_b.max(0.0))
+                        } else { 0.0 };
+                        (h + eff + f.style.position.unwrap_or(0.0)).max(0.0)
+                    }))
                     .fold(0.0_f32, f32::max);
                 Some((text_ascent, image_ascent.max(text_ascent + line_ascent_growth)))
             } else { None };
@@ -8969,6 +8996,18 @@ impl<'a> ParagraphLayouter<'a> {
                         // top is exactly the S851 height model, and is inert when
                         // the object is shorter than the text ascent (the EN
                         // reference__0042471c 11.25pt icon is unchanged).
+                        // OXI_INLINE_EFFECT_TEXT_LINE: the bitmap bottom sits effectExtent b
+                        // above the baseline on a line that also holds text.
+                        let baseline = if story_inline_baseline.is_none()
+                            && !is_header_footer && !self.doc_body_has_real_cjk
+                            && !crate::env_flag!("OXI_BODY_IMAGE_EFFECT_EXTENT_DISABLE")
+                            && !crate::env_flag!("OXI_INLINE_EFFECT_TEXT_LINE_DISABLE")
+                            && line.fragments.iter().any(|f| f.text != "\u{FFFC}" && !f.text.trim().is_empty())
+                        {
+                            baseline - img.effect_extent_b.max(0.0)
+                        } else {
+                            baseline
+                        };
                         let oy = if !crate::env_flag!("OXI_S1040_DISABLE") {
                             (baseline - oh).max(emit_y)
                         } else {
