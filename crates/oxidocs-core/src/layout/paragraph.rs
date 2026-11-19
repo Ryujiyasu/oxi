@@ -7892,6 +7892,8 @@ impl<'a> ParagraphLayouter<'a> {
                 // Typed-grid lines only: on a free line Word does let a larger «　» set
                 // the baseline (kojin_000505813's footnote: a 10.5pt «　» after the
                 // reference keeps the 8pt text 2.4pt lower than without it).
+                let tab_base = !crate::env_flag!("OXI_TAB_BASELINE_DISABLE")
+                    && LayoutEngine::s1298_has_visible(&line.fragments);
                 let ws_base = !crate::env_flag!("OXI_WS_BASELINE_DISABLE")
                     && !page.doc_grid_no_type
                     && para.style.snap_to_grid
@@ -7902,6 +7904,12 @@ impl<'a> ParagraphLayouter<'a> {
                     .enumerate()
                     .filter(|(fi, f)| !LayoutEngine::s1045_skip(s1045_ma, *fi, f, para_font_size))
                     .filter(|(_, f)| !(ws_base && LayoutEngine::s1298_glyphless(f)))
+                    // OXI_TAB_BASELINE (2026-11-19, default ON, opt-out _DISABLE): a tab-only run
+                    // sets no baseline on any line that draws something. `_pb_tabrun_lh_gen.py`
+                    // (TNR 10 text + a 14pt tab run mid / at the end, no grid): Word's baseline and
+                    // pitch stay the 10pt line's; Oxi dropped the baseline 3.7. en/technical__00501ca3's
+                    // TOC: the first entry's 11pt tab run lowered the page's lines 1.1pt.
+                    .filter(|(_, f)| !(tab_base && !f.text.is_empty() && f.text.chars().all(|c| c == '\t')))
                     .map(|(_, f)| {
                         let fs = f.style.font_size.unwrap_or(para_font_size);
                         let a = self
@@ -7935,6 +7943,8 @@ impl<'a> ParagraphLayouter<'a> {
                 0.0
             } else {
                 let s1045_ma = self.s1045_height_drivers(&line.fragments, para_font_size);
+                let tab_base = !crate::env_flag!("OXI_TAB_BASELINE_DISABLE")
+                    && LayoutEngine::s1298_has_visible(&line.fragments);
                 let ws_base = !crate::env_flag!("OXI_WS_BASELINE_DISABLE")
                     && !page.doc_grid_no_type
                     && para.style.snap_to_grid
@@ -7945,6 +7955,12 @@ impl<'a> ParagraphLayouter<'a> {
                     .enumerate()
                     .filter(|(fi, f)| !LayoutEngine::s1045_skip(s1045_ma, *fi, f, para_font_size))
                     .filter(|(_, f)| !(ws_base && LayoutEngine::s1298_glyphless(f)))
+                    // OXI_TAB_BASELINE (2026-11-19, default ON, opt-out _DISABLE): a tab-only run
+                    // sets no baseline on any line that draws something. `_pb_tabrun_lh_gen.py`
+                    // (TNR 10 text + a 14pt tab run mid / at the end, no grid): Word's baseline and
+                    // pitch stay the 10pt line's; Oxi dropped the baseline 3.7. en/technical__00501ca3's
+                    // TOC: the first entry's 11pt tab run lowered the page's lines 1.1pt.
+                    .filter(|(_, f)| !(tab_base && !f.text.is_empty() && f.text.chars().all(|c| c == '\t')))
                     .map(|(_, f)| {
                         let base = f.style.font_size.unwrap_or(para_font_size);
                         // The size the fragment is actually SET at: a super- or
