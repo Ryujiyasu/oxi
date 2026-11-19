@@ -1599,9 +1599,12 @@ impl<'a> Runtime<'a> {
 
     fn class_is_predeclared(module: &Module) -> bool {
         // Native-base components use host receivers even when optional
-        // document metadata was not supplied for this invocation.
+        // document metadata was not supplied for this invocation. The generic
+        // user-class base stored by VBA does not bind a host receiver.
         !module.items.iter().any(|item| matches!(item,
-            ModuleItem::Attribute { name, .. } if name.eq_ignore_ascii_case("VB_Base")))
+            ModuleItem::Attribute { name, value, .. }
+                if name.eq_ignore_ascii_case("VB_Base")
+                    && !value.trim().eq_ignore_ascii_case("0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}")))
             && module.items.iter().any(|item| matches!(item,
             ModuleItem::Attribute { name, value, .. }
                 if name.eq_ignore_ascii_case("VB_PredeclaredId") && value.trim().eq_ignore_ascii_case("True")))
