@@ -1122,7 +1122,14 @@ impl<'a> ParagraphLayouter<'a> {
             }
 
             // Bullet markers are scaled up (2x) so adjust Y to align with text center
-            let marker_y_offset = if marker.contains('\u{2022}') || marker.contains('\u{25CF}') {
+            // OXI_BULLET_BASELINE (2026-11-19, default ON, opt-out _DISABLE): Word sets a
+            // •/● marker on the body baseline like any other marker (Word PDF: 53 bullet
+            // lines over administrative/correspondence/forms/policies docs all dy=0.0;
+            // probe Calibri/Arial marker × atLeast/auto/exact all 0.0). The old lift
+            // dates from when bullets were drawn 2x; it left them 2.5–4.4pt high.
+            let marker_y_offset = if (marker.contains('\u{2022}') || marker.contains('\u{25CF}'))
+                && crate::env_flag!("OXI_BULLET_BASELINE_DISABLE")
+            {
                 -marker_font_size * 0.15 // shift up slightly
             } else {
                 0.0
