@@ -8690,7 +8690,17 @@ impl<'a> ParagraphLayouter<'a> {
                         let regular = if synthetic > 0.0 {
                             (frag_metrics.char_width_em(ch) - frag_metrics.synthetic_bold_advance) * resolved_font_size
                         } else { adv };
-                        let step = (regular * 600.0 / 72.0).round() * 72.0 / 600.0 + synthetic;
+                        // OXI_LEADER_GRID_PPEM (2026-11-19, default ON, opt-out _DISABLE): the
+                        // advance is taken at the 600dpi INTEGER ppem, then rounded: en/technical
+                        // __0043bfe0's TOC (Arial Bold 11, '.' 0.2778em): ppem 92 -> 25.56 -> 26 units
+                        // = 3.12, Word's step on every line; fs*600/72 = 91.67 gave 25 (3.0). The
+                        // _pb_leader_grid_gen.py arms (Calibri / MS 9 / 10.5 / 11 / 12) come out the same.
+                        let step = if !crate::env_flag!("OXI_LEADER_GRID_PPEM_DISABLE") && resolved_font_size > 0.0 {
+                            let ppem = (resolved_font_size * 600.0 / 72.0).round();
+                            (regular / resolved_font_size * ppem).round() * 72.0 / 600.0 + synthetic
+                        } else {
+                            (regular * 600.0 / 72.0).round() * 72.0 / 600.0 + synthetic
+                        };
                         if step <= 0.1 {
                             return None;
                         }
