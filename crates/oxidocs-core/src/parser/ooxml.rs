@@ -6185,8 +6185,14 @@ fn parse_paragraph_with_inline_images_impl(
         // drawing at its run position lets the common line model account for
         // text descent and explicit breaks. Empty/tab-only hosts retain their
         // image-only line model, which has no visible text descent.
+        // OXI_HDR_TAB_IMAGE (2026-11-19, default ON, opt-out _DISABLE): a tab before the
+        // picture positions it too. en/administrative__001eef60's default header
+        // «<tab/>[logo]» (Header style centre 4680 / right 9360): Word draws the logo at
+        // 256..320 on every page after the first; the tab-only host fell between the
+        // image-only and the visible-text routes and the logo was dropped.
         || (preserve_header_image_host
-            && runs.iter().any(|run| run.text.chars().any(|c| !c.is_whitespace()))
+            && runs.iter().any(|run| run.text.chars().any(|c| !c.is_whitespace())
+                || (run.text.contains('\t') && std::env::var_os("OXI_HDR_TAB_IMAGE_DISABLE").is_none()))
             && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty()))
     {
         if std::env::var("OXI_DBG_S854").is_ok() {

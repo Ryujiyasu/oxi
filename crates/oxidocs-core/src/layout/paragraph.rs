@@ -2080,6 +2080,10 @@ impl<'a> ParagraphLayouter<'a> {
             && !crate::env_flag!("OXI_S779_DISABLE");
         let header_inline_geometry = is_header_footer
             && (crate::env_flag!("OXI_HEADER_INLINE_OBJECTS")
+                // OXI_HDR_TAB_IMAGE: a tab-placed header picture (see the parser)
+                || (!crate::env_flag!("OXI_HDR_TAB_IMAGE_DISABLE")
+                    && para.runs.iter().any(|r| r.text.contains('\t'))
+                    && para.runs.iter().any(|r| r.style.inline_object_image.is_some()))
                 || (para.style.line_spacing_rule.as_deref() == Some("exact")
                     && para.runs.iter().any(|r| r.style.inline_object_image.is_some())));
         let header_exact_inline = header_inline_geometry

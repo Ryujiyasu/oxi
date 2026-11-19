@@ -13157,7 +13157,8 @@ cells={} pitch={:.2} text={:?}",
                     // run sizes reserve the same height as the painted paragraph.
                     let has_inline_image = para.runs.iter().any(|r| r.style.inline_object_image.is_some());
                     let mixed_inline_header = has_inline_image
-                        && para.runs.iter().any(|r| r.text.chars().any(|c| !c.is_whitespace()));
+                        && para.runs.iter().any(|r| r.text.chars().any(|c| !c.is_whitespace())
+                            || (r.text.contains('\t') && !crate::env_flag!("OXI_HDR_TAB_IMAGE_DISABLE")));
                     let inline_header = has_inline_image
                         && (mixed_inline_header || crate::env_flag!("OXI_HEADER_INLINE_OBJECTS"));
                     let text_height = if (!self.doc_body_has_real_cjk || inline_header)
