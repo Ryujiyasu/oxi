@@ -2959,23 +2959,28 @@ const MIME_TYPES = {
     pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 
-async function downloadEdited() {
-    if (!currentFileBytes || !currentFileType || xlsxSaveBusy) return;
+/**
+ * The edited file, built the way each format keeps what was not touched: the
+ * changed text written into the original package for .docx and .pptx, the
+ * changed cells (or the edited workbook) for .xlsx. Resolves to null when
+ * nothing has changed, else { bytes, extension, mimeType, count, message }.
+ * Shared by the download button and by hosts that save in place (the VS Code
+ * extension).
+ */
+async function buildEditedFile() {
+    if (!currentFileBytes || !currentFileType || xlsxSaveBusy) return null;
     if (currentFileType === 'xlsx') syncPendingXlsxEditsToIr();
     let edits;
     if (currentFileType === 'docx') edits = collectDocxEdits();
     else if (currentFileType === 'xlsx') edits = collectXlsxEdits();
     else if (currentFileType === 'pptx') edits = collectPptxEdits();
-    else return;
+    else return null;
     // A new workbook can be Saved=true before it has its first file name.
     const needsInitialSave = currentFileType === 'xlsx' && !/\.(xlsx|xlsm|xltx|xltm)$/i.test(currentFileName || '');
     let wholeWorkbook = currentFileType === 'xlsx' && (needsInitialSave || xlsxWorkbookChanged || xlsxVbaSourceDirty
         || (currentDocIR.calculation?.mode ?? 'auto') !== currentXlsxSavedCalculation.mode
         || (currentDocIR.calculation?.on_save ?? true) !== currentXlsxSavedCalculation.on_save);
-    if (edits.length === 0 && !wholeWorkbook && !(currentFileType === 'xlsx' && xlsxEditRevision)) {
-        showStatus(t('noChanges'), 'info');
-        return;
-    }
+    if (edits.length === 0 && !wholeWorkbook && !(currentFileType === 'xlsx' && xlsxEditRevision)) return null;
     let endVbaOperation;
     const grid = document.getElementById('pages-container');
     const gridWasInert = grid?.inert;
@@ -2998,12 +3003,11 @@ async function downloadEdited() {
             endVbaOperation = vbaEditorSettings.beginOperation();
             nativeExecution = await saveVbaWorkbookInWorker(currentDocIR, saveSource, currentXlsxSheetIndex,
                 currentFileName, options, data, `edited.${savedExtension}`);
-            if (currentFileBytes !== saveFileBytes) return;
+            if (currentFileBytes !== saveFileBytes) throw new Error('The document changed while it was being saved.');
             applyVbaExecution(nativeExecution, before);
             if (!nativeExecution.save?.completed) {
                 if (nativeExecution.error) throw new Error(nativeExecution.error.message);
-                showStatus('Save cancelled.', 'info');
-                return;
+                throw new Error('Save cancelled.');
             }
             if (!nativeExecution.save.package_bytes) throw new Error('The saved file is not available.');
             editedBytes = new Uint8Array(nativeExecution.save.package_bytes);
@@ -3012,26 +3016,53 @@ async function downloadEdited() {
         else if (wholeWorkbook) editedBytes = edit_xlsx_from_workbook(data, currentDocIR);
         else if (currentFileType === 'xlsx') editedBytes = edit_xlsx(data, edits);
         else editedBytes = edit_pptx(data, edits);
-        const mimeType = currentFileType === 'xlsx' ? vbaWorkbookMimeType(savedExtension) : MIME_TYPES[currentFileType];
-        const blob = new Blob([editedBytes], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `edited.${savedExtension}`;
-        a.click();
-        URL.revokeObjectURL(url);
-        // This control downloads an edited copy. The current workbook retains
-        // its dirty state and source baseline, just as SaveCopyAs does.
-        showStatus(nativeExecution?.error ? nativeExecution.error.message
-            : I18N[currentLang].downloaded(wholeWorkbook ? edits.length || 1 : edits.length),
-            nativeExecution?.error ? 'error' : 'info');
-    } catch (error) {
-        showStatus('Save error: ' + (error?.message || error), 'error');
-        console.error(error);
+        return {
+            bytes: editedBytes,
+            extension: savedExtension,
+            mimeType: currentFileType === 'xlsx' ? vbaWorkbookMimeType(savedExtension) : MIME_TYPES[currentFileType],
+            count: wholeWorkbook ? edits.length || 1 : edits.length,
+            message: nativeExecution?.error?.message,
+        };
     } finally {
         endVbaOperation?.();
         if (grid) grid.inert = gridWasInert;
         xlsxSaveBusy = false;
+    }
+}
+
+/** Whether there is anything to save: a cheap look, no file is built. */
+function hasUnsavedEdits() {
+    if (!currentFileBytes || !currentFileType) return false;
+    if (currentFileType === 'xlsx') return !!(xlsxEditRevision || xlsxWorkbookChanged || xlsxVbaSourceDirty);
+    const selector = currentFileType === 'docx' ? '.edit-run' : '.edit-slide-run';
+    for (const el of document.querySelectorAll(selector)) {
+        if (el.dataset.original !== undefined && el.textContent !== el.dataset.original) return true;
+    }
+    return false;
+}
+
+async function downloadEdited() {
+    if (!currentFileBytes || !currentFileType || xlsxSaveBusy) return;
+    try {
+        const edited = await buildEditedFile();
+        if (!edited) {
+            showStatus(t('noChanges'), 'info');
+            return;
+        }
+        const blob = new Blob([edited.bytes], { type: edited.mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `edited.${edited.extension}`;
+        a.click();
+        URL.revokeObjectURL(url);
+        // This control downloads an edited copy. The current workbook retains
+        // its dirty state and source baseline, just as SaveCopyAs does.
+        showStatus(edited.message || I18N[currentLang].downloaded(edited.count), edited.message ? 'error' : 'info');
+    } catch (error) {
+        if (error?.message === 'Save cancelled.') { showStatus('Save cancelled.', 'info'); return; }
+        showStatus('Save error: ' + (error?.message || error), 'error');
+        console.error(error);
     }
 }
 

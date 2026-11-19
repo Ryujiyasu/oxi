@@ -1,6 +1,6 @@
-# Oxi — Word / Excel / PowerPoint viewer for VS Code
+# Oxi — Word / Excel / PowerPoint editor for VS Code
 
-Open `.docx`, `.xlsx` and `.pptx` files directly in VS Code. The rendering is
+Open, edit and save `.docx`, `.xlsx` and `.pptx` files directly in VS Code. The rendering is
 done by [Oxi](https://gitlab.com/Ryujiyasu/oxi), a Rust + WebAssembly Office
 engine whose page layout is measured, document by document, against Microsoft
 Office's own output.
@@ -26,7 +26,16 @@ document grid, ruby, vertical writing, warichu, emphasis marks.
 ## What it does today
 
 - Renders `.docx`, `.xlsx` and `.pptx` in a VS Code tab
-- **Read-only.** Edits made in the embedded UI are not written back to the file
+- Edit the text of Word documents and slides, and the cells of workbooks, in
+  place; **Ctrl+S** saves back to the file, **Save As** writes a copy, and
+  **Revert File** goes back to what is on disk. A tab with unsaved edits is
+  marked like any other, and the edits survive a restart (hot exit)
+- **Only what you change is written.** A save puts the changed text into the
+  original package and leaves the rest of the file as it was: only the part
+  holding the edited text (the document body, that slide, that sheet) is
+  rewritten, and every other part — styles, images, charts, parts Oxi does
+  not draw — is kept byte for byte, so the file still opens the same in Word,
+  Excel and PowerPoint
 - Large documents take a moment on first open — the engine and its font metric
   tables are a single WebAssembly module
 

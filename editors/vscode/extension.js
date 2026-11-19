@@ -1,28 +1,71 @@
-// Oxi Office viewer — opens .docx / .xlsx / .pptx in a webview that runs the
-// same WebAssembly engine as the browser demo. The document bytes are read by
-// VS Code and handed to the webview; nothing is written back (this editor is
-// read-only) and nothing leaves the machine.
+// Oxi Office editor — opens .docx / .xlsx / .pptx in a webview that runs the
+// same WebAssembly engine as the browser editor, and saves the edits back.
+//
+// The document bytes are read by VS Code and handed to the webview. On save,
+// the page builds the edited file the way it does for its download button
+// (the changed text written into the original package for .docx and .pptx,
+// the changed cells for .xlsx), hands the bytes back, and VS Code writes them.
+// Nothing leaves the machine.
 
 const vscode = require('vscode');
 
 const VIEW_TYPE = 'oxi.officeViewer';
 
-/** A document that is just its bytes — the engine does the rest. */
+/** A document is its bytes on disk; the page holds the edits until a save. */
 class OxiDocument {
   constructor(uri, bytes) {
     this.uri = uri;
     this.bytes = bytes;
+    this.panel = null;
+    this.pending = new Map();
+    this.nextId = 1;
   }
-  dispose() {}
+
+  /** Show `bytes` as the document in its webview (on open, after a save or a revert). */
+  show(bytes) {
+    this.panel?.webview.postMessage({
+      type: 'oxi:open',
+      name: basename(this.uri),
+      data: Buffer.from(bytes).toString('base64'),
+    });
+  }
+
+  /** The edited file from the page, or null when nothing has changed. */
+  edited() {
+    if (!this.panel) return Promise.resolve(null);
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.panel.webview.postMessage({ type: 'oxi:save', id });
+    });
+  }
+
+  answer(msg) {
+    const waiting = this.pending.get(msg.id);
+    if (!waiting) return;
+    this.pending.delete(msg.id);
+    if (msg.error) waiting.reject(new Error(msg.error));
+    else waiting.resolve(msg.unchanged ? null : { bytes: Buffer.from(msg.data, 'base64'), warning: msg.warning });
+  }
+
+  dispose() {
+    for (const { reject } of this.pending.values()) reject(new Error('the editor was closed'));
+    this.pending.clear();
+  }
 }
 
 class OxiEditorProvider {
   constructor(context) {
     this.context = context;
+    this.changes = new vscode.EventEmitter();
+    // VS Code marks the tab as changed when this fires, and asks to save on close.
+    this.onDidChangeCustomDocument = this.changes.event;
   }
 
-  async openCustomDocument(uri) {
-    const bytes = await vscode.workspace.fs.readFile(uri);
+  async openCustomDocument(uri, openContext) {
+    // After a crash or a restart with unsaved changes, VS Code hands back the backup.
+    const from = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
+    const bytes = await vscode.workspace.fs.readFile(from);
     return new OxiDocument(uri, bytes);
   }
 
@@ -44,24 +87,50 @@ class OxiEditorProvider {
       return;
     }
 
+    document.panel = panel;
+    panel.onDidDispose(() => { if (document.panel === panel) document.panel = null; });
     panel.webview.html = withWebviewHead(html, panel.webview, mediaRoot);
 
-    // The page tells us when its WebAssembly module is up; only then are the
-    // bytes worth sending.
     panel.webview.onDidReceiveMessage((msg) => {
-      if (msg && msg.type === 'oxi:ready') {
-        // Webview messages are JSON, so the bytes travel as base64 rather
-        // than as a Uint8Array turned inside out into an object of indices.
-        panel.webview.postMessage({
-          type: 'oxi:open',
-          name: basename(document.uri),
-          data: Buffer.from(document.bytes).toString('base64'),
-        });
-      }
-      if (msg && msg.type === 'oxi:error') {
-        vscode.window.showErrorMessage(`Oxi: ${msg.message}`);
-      }
+      if (!msg) return;
+      // The page tells us when its WebAssembly module is up; only then are the
+      // bytes worth sending.
+      if (msg.type === 'oxi:ready') document.show(document.bytes);
+      if (msg.type === 'oxi:edit') this.changes.fire({ document });
+      if (msg.type === 'oxi:saved') document.answer(msg);
+      if (msg.type === 'oxi:error') vscode.window.showErrorMessage(`Oxi: ${msg.message}`);
     });
+  }
+
+  async saveCustomDocument(document) {
+    const edited = await document.edited();
+    if (!edited) return;
+    await vscode.workspace.fs.writeFile(document.uri, edited.bytes);
+    document.bytes = edited.bytes;
+    if (edited.warning) vscode.window.showWarningMessage(`Oxi: ${edited.warning}`);
+    // The saved file is the new starting point for the next edits.
+    document.show(document.bytes);
+  }
+
+  async saveCustomDocumentAs(document, destination) {
+    const edited = await document.edited();
+    await vscode.workspace.fs.writeFile(destination, edited ? edited.bytes : document.bytes);
+  }
+
+  async revertCustomDocument(document) {
+    document.bytes = await vscode.workspace.fs.readFile(document.uri);
+    document.show(document.bytes);
+  }
+
+  async backupCustomDocument(document, context) {
+    const edited = await document.edited().catch(() => null);
+    await vscode.workspace.fs.writeFile(context.destination, edited ? edited.bytes : document.bytes);
+    return {
+      id: context.destination.toString(),
+      delete: async () => {
+        try { await vscode.workspace.fs.delete(context.destination); } catch { /* already gone */ }
+      },
+    };
   }
 }
 
@@ -99,7 +168,7 @@ function withWebviewHead(html, webview, mediaRoot) {
 
 function missingMediaHtml() {
   return `<!DOCTYPE html><html><body style="font-family: sans-serif; padding: 2rem">
-    <h2>Oxi viewer is missing its engine</h2>
+    <h2>Oxi editor is missing its engine</h2>
     <p>The extension was packaged without <code>media/</code>. Run
     <code>npm run sync-web</code> in <code>editors/vscode</code> to copy the
     WebAssembly build in, then reload.</p>
