@@ -776,6 +776,14 @@ fn overflows(value: &CellValue, style: &CellStyle) -> bool {
         && !style.shrink_to_fit
 }
 
+/// The pixels of a column whose width the file states. A stored width
+/// already carries the five-pixel gutter beside the text (ECMA-376 18.3.1.13:
+/// 2.5 in a book whose digits are 8 pixels wide is a 20-pixel column), so it
+/// is only scaled by the digit width, with Excel's rounding.
+fn column_pixels(width: f64, digit: f64) -> f64 {
+    (((256. * width + (128. / digit).trunc()) / 256.) * digit).trunc()
+}
+
 /// The look of a merged area: its top-left cell's, with each border taken from
 /// the cells along that edge. Excel draws a merged area's bottom rule from its
 /// bottom row and its right rule from its right column, so a box ruled all
@@ -835,28 +843,23 @@ fn render_area(
         false,
         false,
     ) / 0.75;
-    let digit = digit.max(1.);
+    // Excel counts the digit width in whole pixels.
+    let digit = digit.round().max(1.);
     let columns: Vec<f64> = (c1..=c2)
         .map(|c| {
             if sheet.hidden_cols.contains(&c) {
                 return 0.;
             }
-            let width = f64::from(
-                sheet
-                    .col_widths
-                    .get(c as usize)
-                    .copied()
-                    .filter(|w| *w > 0.)
-                    .unwrap_or(if sheet.default_col_width > 0. {
-                        sheet.default_col_width
-                    } else {
-                        8.43
-                    }),
-            );
-            if width < 1. {
-                (width * (digit + 5.)).floor() * 0.75
-            } else {
-                (width * digit + 5.).floor() * 0.75
+            let stored = sheet
+                .col_widths
+                .get(c as usize)
+                .copied()
+                .filter(|w| *w > 0.)
+                .or((sheet.default_col_width > 0.).then_some(sheet.default_col_width));
+            match stored {
+                Some(width) => column_pixels(f64::from(width), digit) * 0.75,
+                // No width anywhere: Excel's 8.43 characters and the gutter.
+                None => (8.43 * digit + 5.).floor() * 0.75,
             }
         })
         .collect();
@@ -1059,6 +1062,17 @@ fn render_area(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_stored_column_width_already_carries_its_gutter() {
+        // Calibri 11 (7-pixel digits): Excel's default 8.43 characters is
+        // stored as 9.140625 and drawn 64 pixels wide.
+        assert_eq!(column_pixels(9.140625, 7.), 64.);
+        // Yu Gothic 11 (8-pixel digits): 2.5 is a 20-pixel square cell.
+        assert_eq!(column_pixels(2.5, 8.), 20.);
+        // MS PGothic 11 (9-pixel digits), as a city workbook stores it.
+        assert_eq!(column_pixels(9.44140625, 9.), 85.);
+    }
+
     #[test]
     fn a_merged_area_takes_each_border_from_the_cells_on_that_edge() {
         let line = || Some(serde_json::from_str::<BorderLine>(r#"{"style":"thin"}"#).unwrap());
