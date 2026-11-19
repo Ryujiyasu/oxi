@@ -1599,9 +1599,12 @@ impl<'a> Runtime<'a> {
 
     fn class_is_predeclared(module: &Module) -> bool {
         // Native-base components use host receivers even when optional
-        // document metadata was not supplied for this invocation.
+        // document metadata was not supplied for this invocation. The generic
+        // user-class base stored by VBA does not bind a host receiver.
         !module.items.iter().any(|item| matches!(item,
-            ModuleItem::Attribute { name, .. } if name.eq_ignore_ascii_case("VB_Base")))
+            ModuleItem::Attribute { name, value, .. }
+                if name.eq_ignore_ascii_case("VB_Base")
+                    && !value.trim().eq_ignore_ascii_case("0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}")))
             && module.items.iter().any(|item| matches!(item,
             ModuleItem::Attribute { name, value, .. }
                 if name.eq_ignore_ascii_case("VB_PredeclaredId") && value.trim().eq_ignore_ascii_case("True")))
@@ -2671,10 +2674,43 @@ impl<'a> Runtime<'a> {
     fn prepare_source_dispatch_value(
         &mut self, receiver: &ObjectRef, name: &str, value: Value, property_index_count: usize, allow_scalar_members: bool, automation: bool, frame: &mut Frame, line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
         if let Some(project) = self.foreign_project(receiver) {
+            // Resolve the receiving declaration without executing the RHS in
+            // that project's context: its default getter may close the receiver.
+            let (parameter, passthrough, scalar) = self.in_application_project(project, |runtime| {
+                let (parameter, passthrough) = runtime.source_dispatch_value_parameter(
+                    receiver, name, &value, property_index_count, allow_scalar_members, automation, line)?;
+                let scalar = parameter.as_ref().is_some_and(|p| !p.is_array && !p.type_name.is_new
+                    && matches!(runtime.parameter_scalar_name(&p.type_name.name).as_str(),
+                        "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double"
+                            | "currency" | "date" | "boolean" | "string"));
+                Ok((parameter, passthrough, scalar))
+            })?;
+            if passthrough { return Ok(Some(value)); }
+            let Some(parameter) = parameter else { return Ok(None); };
+            let value = if scalar && !matches!(value, Value::Missing) {
+                self.scalar_operand(value, frame, line).map_err(|failure| if automation {
+                    language_error(13, "Automation property value type mismatch", line)
+                } else { failure })?
+            } else { value };
+            if self.disconnected_source_object(receiver) {
+                return Err(self.disconnected_source_error(line, false));
+            }
             return self.in_application_project(project, |runtime|
-                runtime.prepare_source_dispatch_value(receiver, name, value, property_index_count, allow_scalar_members, automation, frame, line));
+                runtime.coerce_source_dispatch_value(value, &parameter, frame, line, automation)).map(Some);
         }
+        let (parameter, passthrough) = self.source_dispatch_value_parameter(
+            receiver, name, &value, property_index_count, allow_scalar_members, automation, line)?;
+        if passthrough { return Ok(Some(value)); }
+        let Some(parameter) = parameter else { return Ok(None); };
+        self.coerce_source_dispatch_value(value, &parameter, frame, line, automation).map(Some)
+    }
+
+    fn source_dispatch_value_parameter(
+        &self, receiver: &ObjectRef, name: &str, value: &Value,
+        property_index_count: usize, allow_scalar_members: bool, automation: bool, line: u32,
+    ) -> Result<(Option<crate::ast::Param>, bool), RuntimeError> {
         let scalar_parameter = |kind: TypeName| {
             let scalar = self.parameter_scalar_name(&kind.name);
             (!kind.is_array && matches!(scalar.as_str(),
@@ -2688,7 +2724,7 @@ impl<'a> Runtime<'a> {
         let host_parameter = |owner: &str| self.host.as_deref()
             .filter(|host| host.automation_invocation_allowed(receiver, name, 4)
                 && (!automation || !host.property_assignment_uses_variant(receiver, name))
-                && host.property_assignment_value(Some(receiver), name, &value, false).is_none())
+                && host.property_assignment_value(Some(receiver), name, value, false).is_none())
             .and_then(|host| host.assignment_call_result(Some(owner), name))
             .and_then(|name| scalar_parameter(TypeName { name, ..TypeName::implicit() }));
         let parameter = match self.internal_objects.get(&receiver.handle) {
@@ -2703,7 +2739,7 @@ impl<'a> Runtime<'a> {
                         return Err(language_error(449, "Argument not optional", line));
                     }
                     if automation && property_index_count > 0 {
-                        return Ok(Some(value));
+                        return Ok((None, true));
                     }
                     procedure.params.last().cloned()
                 } else {
@@ -2727,8 +2763,7 @@ impl<'a> Runtime<'a> {
                 host_parameter(&receiver.kind),
             _ => None,
         };
-        let Some(parameter) = parameter else { return Ok(None); };
-        self.coerce_source_dispatch_value(value, &parameter, frame, line, automation).map(Some)
+        Ok((parameter, false))
     }
 
     fn coerce_source_dispatch_value(
@@ -4773,6 +4808,14 @@ impl<'a> Runtime<'a> {
             batch.sort_unstable();
             batch.dedup();
             for (index, &handle) in batch.iter().enumerate() {
+                // A disconnected instance has no remaining source code to run.
+                // Releasing it must not enter its ended owner and propagate
+                // that old execution's termination into the current project.
+                if matches!(self.internal_objects.get(&handle), Some(InternalObject::DisconnectedInstance)) {
+                    self.internal_objects.remove(&handle);
+                    self.object_projects.remove(&handle);
+                    continue;
+                }
                 if self.project_ended {
                     self.internal_objects.remove(&handle);
                     self.object_projects.remove(&handle);
@@ -10109,16 +10152,42 @@ impl<'a> Runtime<'a> {
             Expr::Binary { op, lhs, rhs, span } => {
                 let typed = (self.statically_typed(lhs, frame), self.statically_typed(rhs, frame));
                 let integer_op = matches!(op, BinaryOp::IntDiv | BinaryOp::Mod | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Eqv | BinaryOp::Imp);
+                let lhs_grouped = matches!(&**lhs, Expr::Group { .. });
                 let lhs = if integer_op { self.floating_integer_operand(lhs, frame)? } else { self.eval_expr(lhs, frame)? };
                 // Native VBA requires the left object before it evaluates the
                 // right expression. An invalid Variant raises 424 immediately.
                 if *op == BinaryOp::Is && !matches!(lhs, Value::Object(_) | Value::Nothing) {
                     return Err(language_error(424, "Object required", span.line));
                 }
+                // Read one source default at each operand's evaluation point.
+                // A nested object remains deferred until both operands exist.
+                let lhs = if *op != BinaryOp::Is && !lhs_grouped && matches!(&lhs, Value::Object(object)
+                    if self.source_scalar_getter(object).is_some())
+                { self.let_value(lhs, frame, span.line)? } else { lhs };
+                let nested_left = *op != BinaryOp::Is && matches!(&lhs, Value::Object(object)
+                    if self.source_scalar_getter(object).is_some());
+                let mut rhs_temporary = nested_left && self.source_operand_temporary(rhs, frame);
                 let rhs = if integer_op { self.floating_integer_operand(rhs, frame)? } else { self.eval_expr(rhs, frame)? };
                 if *op == BinaryOp::Is && !matches!(rhs, Value::Object(_) | Value::Nothing) {
                     return Err(language_error(424, "Object required", span.line));
                 }
+                let rhs_default = *op != BinaryOp::Is && matches!(&rhs, Value::Object(object)
+                    if self.source_scalar_getter(object).is_some());
+                let rhs = if rhs_default { self.let_value(rhs, frame, span.line)? } else { rhs };
+                rhs_temporary |= rhs_default;
+                if nested_left {
+                    match &rhs {
+                        Value::Nothing => return Err(language_error(91, "Object variable not set", span.line)),
+                        Value::Error(_) | Value::Missing | Value::Array(_) | Value::Record(_) =>
+                            return Err(language_error(13, "Invalid scalar operand", span.line)),
+                        Value::Null if !matches!(op, BinaryOp::Concat | BinaryOp::And | BinaryOp::Or | BinaryOp::Imp) =>
+                            return Ok(Value::Null),
+                        _ => {}
+                    }
+                }
+                let box_result = nested_left && !rhs_temporary && !matches!(&rhs, Value::Null)
+                    && !matches!(op, BinaryOp::Is | BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt
+                        | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge);
                 // `Is` asks about identity, so it keeps the objects themselves.
                 let (lhs, rhs) = if *op == BinaryOp::Is {
                     (lhs, rhs)
@@ -10128,6 +10197,7 @@ impl<'a> Runtime<'a> {
                         self.scalar_operand(rhs, frame, span.line)?,
                     )
                 };
+                let boxed = box_result.then(|| Self::nested_default_variant(&lhs)).flatten();
                 // Typed floating comparisons signal invalid arithmetic for NaN.
                 // Variant comparison has its own measured unordered semantics.
                 if typed.0 && typed.1
@@ -10156,11 +10226,13 @@ impl<'a> Runtime<'a> {
                             };
                             match binary(*op, left, right, compare_text) {
                                 Err((RuntimeErrorKind::Overflow, _)) if rank < 5 => continue,
-                                result => return result.map_err(|(kind, message)| error(kind, message, Some(span.line))),
+                                result => return result.map(|value| boxed.clone().unwrap_or(value))
+                                    .map_err(|(kind, message)| error(kind, message, Some(span.line))),
                             }
                         }
                     }
-                    result => result.map_err(|(kind, message)| error(kind, message, Some(span.line))),
+                    result => result.map(|value| boxed.unwrap_or(value))
+                        .map_err(|(kind, message)| error(kind, message, Some(span.line))),
                 }
             }
             Expr::TypeOf {
@@ -11074,6 +11146,13 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    fn source_inline_instruction(name: &str) -> bool {
+        matches!(key(name).as_str(),
+            "abs" | "sgn" | "int" | "fix" | "cbyte" | "cint" | "clng" |
+            "clnglng" | "clngptr" | "cdbl" | "csng" | "ccur" | "cstr" |
+            "cvar" | "cbool" | "cdate" | "len" | "lenb" | "instr" | "strcomp")
+    }
+
     fn source_argument_intrinsic(&self, target: &Expr, frame: &Frame) -> bool {
         let qualified = self.vba_qualified(target, frame);
         let target = qualified.as_ref().unwrap_or(target);
@@ -11082,10 +11161,67 @@ impl<'a> Runtime<'a> {
             || (qualified.is_none() && self.has_visible_procedure(name)) {
             return false;
         }
-        matches!(key(name).as_str(),
-            "abs" | "sgn" | "int" | "fix" | "cbyte" | "cint" | "clng" |
-            "clnglng" | "clngptr" | "cdbl" | "csng" | "ccur" | "cstr" |
-            "cvar" | "cbool" | "cdate" | "len" | "lenb" | "instr" | "strcomp")
+        Self::source_inline_instruction(name)
+    }
+
+    /// Calls and dispatch reads retain value temporaries. Plain places and
+    /// inline instructions do not, including a direct array-element read.
+    fn source_operand_temporary(&self, expression: &Expr, frame: &Frame) -> bool {
+        let bounds = |name: &str| matches!(key(name).as_str(), "lbound" | "ubound");
+        match expression {
+            Expr::Literal(..) | Expr::AddressOf { .. } => false,
+            Expr::Ident(name, _) | Expr::TypedIdent { name, .. } => {
+                self.lookup_slot(frame, name).is_none() && (self.has_visible_procedure(name)
+                    || self.document_globals.contains_key(&key(name))
+                    || (is_builtin_function(name) && !Self::source_inline_instruction(name) && !bounds(name)))
+            }
+            Expr::Group { expression: inner, .. } => {
+                self.source_operand_temporary(inner, frame)
+                    || self.source_expression_type(inner, frame).is_some_and(|kind|
+                        !kind.is_array && (kind.name.eq_ignore_ascii_case("Object")
+                            || self.is_specific_object_type(&kind.name)))
+                    || self.expression_slot(inner, frame).is_some_and(|slot|
+                        matches!(&*slot.borrow(), Value::Object(_) | Value::Nothing))
+            }
+            Expr::Unary { operand, .. } | Expr::TypeOf { operand, .. } =>
+                self.source_operand_temporary(operand, frame),
+            Expr::Binary { lhs, rhs, .. } => self.source_operand_temporary(lhs, frame)
+                || self.source_operand_temporary(rhs, frame),
+            Expr::Index { target, args, .. } => {
+                let qualified = self.vba_qualified(target, frame);
+                let inline = if let Some(bare) = qualified.as_ref() {
+                    expr_name(bare).is_some_and(|name| Self::source_inline_instruction(name) || bounds(name))
+                } else {
+                    self.source_argument_intrinsic(target, frame)
+                        || expr_name(target).is_some_and(|name| bounds(name)
+                            && self.lookup_slot(frame, name).is_none() && !self.has_visible_procedure(name))
+                };
+                if !inline && !self.source_argument_array_place(target, frame) { return true; }
+                self.source_operand_temporary(target, frame)
+                    || args.iter().filter_map(|arg| arg.value.as_ref())
+                        .any(|value| self.source_operand_temporary(value, frame))
+            }
+            Expr::Member { object, name, .. } => {
+                if let Some(bare) = self.vba_qualified(expression, frame) {
+                    return expr_name(&bare).is_some_and(|name| is_builtin_function(name)
+                        && !Self::source_inline_instruction(name) && !bounds(name));
+                }
+                let module_place = self.qualified_standard_member(expression, frame).is_some_and(|(module, member)|
+                    module.items.iter().any(|item| matches!(item, ModuleItem::Variables(declaration)
+                        if declaration.items.iter().any(|variable| variable.name.eq_ignore_ascii_case(member)))));
+                let enum_place = expr_name(object).is_some_and(|owner| self.lookup_slot(frame, owner).is_none()
+                    && (self.enum_member(owner, name).is_some()
+                        || self.main_module.standard_modules.iter().any(|(_, module)|
+                            module.items.iter().any(|item| matches!(item, ModuleItem::Enum(enumeration)
+                                if enumeration.name.eq_ignore_ascii_case(owner)
+                                    && enumeration.members.iter().any(|(member, _)| member.eq_ignore_ascii_case(name)))))));
+                if enum_place { false } else if module_place || self.record_rooted(frame, expression) {
+                    self.source_operand_temporary(object, frame)
+                } else { true }
+            }
+            Expr::WithMember(..) | Expr::WithBangMember(..) => !self.record_rooted(frame, expression),
+            Expr::Bang { .. } | Expr::New { .. } | Expr::EvaluateShortcut { .. } => true,
+        }
     }
 
     fn source_argument_array_place(&self, expression: &Expr, frame: &Frame) -> bool {
@@ -11847,28 +11983,8 @@ impl<'a> Runtime<'a> {
                             // both Len and LenB; unsupported subtypes need their own
                             // value representation and consumption rules below.
                             let scalar = self.scalar_operand(value, frame, line.unwrap_or(0))?;
-                            if let Value::Integer(tag) = scalar {
-                                let result = match tag {
-                                    0 => Some(Value::Empty),
-                                    1 => Some(Value::Null),
-                                    2 => Some(Value::Int16(0)),
-                                    3 => Some(Value::Integer(0)),
-                                    4 => Some(Value::Single(0.0)),
-                                    5 => Some(Value::Double(0.0)),
-                                    6 => Some(Value::Currency(0)),
-                                    7 => Some(Value::Date(0.0)),
-                                    10 => Some(Value::Error(0)),
-                                    11 => Some(Value::Boolean(false)),
-                                    17 => Some(Value::Byte(0)),
-                                    20 => Some(Value::LongLong(0)),
-                                    16 | 82 | 83 | 84 | 95 | 99 => Some(Value::AutomationVariant(tag as u16)),
-                                    _ => None,
-                                };
-                                if let Some(result) = result { return Ok(result); }
-                                read.push(Value::Integer(tag));
-                            } else {
-                                read.push(scalar);
-                            }
+                            if let Some(result) = Self::nested_default_variant(&scalar) { return Ok(result); }
+                            read.push(scalar);
                         } else {
                             read.push(if asks_about { value } else {
                                 self.scalar_operand(value, frame, line.unwrap_or(0))?
@@ -12604,6 +12720,27 @@ impl<'a> Runtime<'a> {
         Ok(value)
     }
 
+    fn nested_default_variant(value: &Value) -> Option<Value> {
+        let Value::Integer(tag) = value else { return None; };
+        let tag = *tag;
+        match tag {
+            0 => Some(Value::Empty),
+            1 => Some(Value::Null),
+            2 => Some(Value::Int16(0)),
+            3 => Some(Value::Integer(0)),
+            4 => Some(Value::Single(0.0)),
+            5 => Some(Value::Double(0.0)),
+            6 => Some(Value::Currency(0)),
+            7 => Some(Value::Date(0.0)),
+            10 => Some(Value::Error(0)),
+            11 => Some(Value::Boolean(false)),
+            17 => Some(Value::Byte(0)),
+            20 => Some(Value::LongLong(0)),
+            16 | 82 | 83 | 84 | 95 | 99 => Some(Value::AutomationVariant(tag as u16)),
+            _ => None,
+        }
+    }
+
     /// An object used where VBA wants a value stands for its default member, so
     /// `Range("A1") + 1` reads the cell rather than failing. Object contexts —
     /// `Is`, `TypeName`, `IsObject`, passing an argument — keep the object.
@@ -12624,7 +12761,14 @@ impl<'a> Runtime<'a> {
     fn source_scalar_getter(&self, receiver: &ObjectRef) -> Option<Procedure> {
         let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&receiver.handle)
             else { return None; };
-        self.source_class_procedure_view(&instance.class, "_default",
+        // The shared heap holds the instance while its owner's declarations
+        // may be suspended in another application project. Predicates and Len
+        // inspect this metadata before deciding how to read the default value.
+        let declarations = match self.foreign_project(receiver) {
+            Some(project) => self.projects.get(&project)?.as_ref(),
+            None => self,
+        };
+        declarations.source_class_procedure_view(&instance.class, "_default",
             &[ProcKind::PropertyGet, ProcKind::Function], receiver.dispatch_view.as_deref())
             .map(|(_, getter)| getter)
     }
@@ -12632,8 +12776,16 @@ impl<'a> Runtime<'a> {
     fn source_scalar_value(&mut self, receiver: &ObjectRef, line: u32)
         -> Option<Result<Value, RuntimeError>>
     {
+        if self.disconnected_source_object(receiver) {
+            return Some(Err(self.disconnected_source_error(line, false)));
+        }
         if !matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
             return None;
+        }
+        if let Some(project) = self.foreign_project(receiver) {
+            return Some(self.in_application_project(project, |runtime|
+                runtime.source_scalar_value(receiver, line).unwrap_or_else(||
+                    Err(language_error(438, "the object has no scalar default member", line)))));
         }
         Some(match self.source_scalar_getter(receiver) {
             None => Err(language_error(438, "the object has no scalar default member", line)),
