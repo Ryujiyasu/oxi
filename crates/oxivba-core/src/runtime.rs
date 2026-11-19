@@ -2674,6 +2674,7 @@ impl<'a> Runtime<'a> {
     fn prepare_source_dispatch_value(
         &mut self, receiver: &ObjectRef, name: &str, value: Value, property_index_count: usize, allow_scalar_members: bool, automation: bool, frame: &mut Frame, line: u32,
     ) -> Result<Option<Value>, RuntimeError> {
+        if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
         if let Some(project) = self.foreign_project(receiver) {
             return self.in_application_project(project, |runtime|
                 runtime.prepare_source_dispatch_value(receiver, name, value, property_index_count, allow_scalar_members, automation, frame, line));
