@@ -10515,10 +10515,10 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
             // `<w:endnote w:type="continuationSeparator" w:id="0">`, which the
             // parser used to discard outright. Reserving it moves the page
             // boundaries onto Word's (Oxi fitted one note too many per page).
-            let en_contsep_h: f32 = if !crate::env_flag!("OXI_S1257_DISABLE") {
+            let special_en_h = |sentinel: u32| -> f32 {
                 page.endnotes
                     .iter()
-                    .find(|n| n.number == u32::MAX - 2)
+                    .find(|n| n.number == sentinel)
                     .and_then(|note| {
                         note.blocks.iter().find_map(|b| match b {
                             Block::Paragraph(p) => Some(p),
@@ -10571,8 +10571,23 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         h
                     })
                     .unwrap_or(0.0)
+            };
+            let en_contsep_h: f32 = if !crate::env_flag!("OXI_S1257_DISABLE") {
+                special_en_h(u32::MAX - 2)
             } else {
                 0.0
+            };
+            // OXI_ENDNOTE_SEP_LINE (2026-11-20, default ON, opt-out _DISABLE): the separator
+            // paragraph takes one line of its own (Normal) font, whether it is a bare <w:p/>
+            // or carries <w:separator/>. `_pb_ensep_gen.py` (Normal Cambria 10 / 12 / 20,
+            // bare and rule): Word's last body baseline -> first endnote baseline =
+            // 11.5 (Arial 10 note line) + 11.72 / 14.06 / 23.4 = 23.16 / 25.56 / 34.92; Oxi
+            // reserved a fixed 14 (25.5 in all six). educational__001217ec p16 +2.25.
+            let sep_gap = if !crate::env_flag!("OXI_ENDNOTE_SEP_LINE_DISABLE") {
+                let h = special_en_h(u32::MAX);
+                if h > 0.0 { h } else { sep_gap }
+            } else {
+                sep_gap
             };
             if crate::env_flag!("OXI_DBG_CONTSEP") {
                 eprintln!("[CONTSEP] h={:.2} n_endnotes={} numbers={:?}",

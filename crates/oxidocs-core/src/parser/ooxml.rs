@@ -1355,6 +1355,15 @@ impl OoxmlParser {
                         blocks: blocks.clone(),
                     });
                 }
+                // OXI_ENDNOTE_SEP_LINE: the separator paragraph itself, measured by the
+                // layout (sentinel u32::MAX, filtered out of rendering like the others).
+                if let Some(blocks) = ctx.endnotes.get("__sep__") {
+                    endnotes_list.push(Footnote {
+                        automatic_numbering: true,
+                        number: u32::MAX,
+                        blocks: blocks.clone(),
+                    });
+                }
             }
 
             // Continuous section: merge into previous page instead of creating a new one

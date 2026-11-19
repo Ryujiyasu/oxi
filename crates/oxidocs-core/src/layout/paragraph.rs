@@ -6452,6 +6452,15 @@ impl<'a> ParagraphLayouter<'a> {
                         if line_idx == 0 && !crate::env_flag!("OXI_S792_DISABLE") {
                             cursor.set(page_top);
                             s842_apply(cursor);
+                            // OXI_ENTRY_GROWTH_NEW_PAGE (2026-11-20, default ON, opt-out _DISABLE):
+                            // the S821 marker growth taken at the paragraph entry belongs to the
+                            // first line wherever it lands; moving line 0 to the next page must
+                            // not drop it. en/administrative__001eef60: Word sets the first
+                            // bullet line of p2 (pushed from p1) and of p3 (natural top) both at
+                            // 101.42; Oxi 100.94 on p2 only (Symbol 9 over Calibri 9 = +0.48).
+                            if !crate::env_flag!("OXI_ENTRY_GROWTH_NEW_PAGE_DISABLE") {
+                                cursor.advance(s795_entry_extra);
+                            }
                         } else {
                             cursor.set(max_y + line_height);
                         }
