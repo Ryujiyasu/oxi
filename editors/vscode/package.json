@@ -1,10 +1,16 @@
 {
   "name": "oxi-office-viewer",
-  "displayName": "Oxi — Word / Excel / PowerPoint viewer",
-  "description": "Open .docx, .xlsx and .pptx files inside VS Code, rendered by the Oxi engine — a Rust + WebAssembly Office renderer measured page-by-page against Microsoft Office itself. Nothing is uploaded.",
-  "version": "0.8.0",
-  "publisher": "ryujiyasu",
+  "displayName": "Oxi — .docx / .xlsx / .pptx editor",
+  "description": "Open, edit and save .docx, .xlsx and .pptx files inside VS Code, rendered by the Oxi engine — a Rust + WebAssembly Office engine measured page by page against Microsoft Office itself. Nothing is uploaded.",
+  "version": "0.9.1",
+  "publisher": "oxidocs",
   "license": "MIT OR Apache-2.0",
+  "icon": "icon.png",
+  "pricing": "Free",
+  "galleryBanner": {
+    "color": "#1F2328",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.84.0"
   },
@@ -17,7 +23,11 @@
     "xlsx",
     "pptx",
     "word",
+    "excel",
+    "powerpoint",
     "office",
+    "editor",
+    "viewer",
     "japanese"
   ],
   "repository": {
@@ -34,11 +44,17 @@
     "customEditors": [
       {
         "viewType": "oxi.officeViewer",
-        "displayName": "Oxi Office viewer",
+        "displayName": "Oxi Office editor",
         "selector": [
-          { "filenamePattern": "*.docx" },
-          { "filenamePattern": "*.xlsx" },
-          { "filenamePattern": "*.pptx" }
+          {
+            "filenamePattern": "*.docx"
+          },
+          {
+            "filenamePattern": "*.xlsx"
+          },
+          {
+            "filenamePattern": "*.pptx"
+          }
         ],
         "priority": "default"
       }

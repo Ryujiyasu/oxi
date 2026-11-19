@@ -1,13 +1,13 @@
-# Oxi — Word / Excel / PowerPoint viewer for VS Code
+# Oxi — .docx / .xlsx / .pptx editor for VS Code
 
-Open `.docx`, `.xlsx` and `.pptx` files directly in VS Code. The rendering is
+Open, edit and save `.docx`, `.xlsx` and `.pptx` files directly in VS Code. The rendering is
 done by [Oxi](https://gitlab.com/Ryujiyasu/oxi), a Rust + WebAssembly Office
 engine whose page layout is measured, document by document, against Microsoft
 Office's own output.
 
 Everything runs locally inside the editor's webview. No server, no upload, no
-telemetry — the file is read by VS Code and handed to the WebAssembly module in
-the same window.
+telemetry — the file is read and written by VS Code and handed to the
+WebAssembly module in the same window.
 
 ## How faithful is it?
 
@@ -16,9 +16,12 @@ before measurement and never used as fix targets:
 
 | Blind set | Oxi mean SSIM vs Office | page/slide count matches |
 |---|---|---|
-| English, 50 documents | 0.875 | 48 / 50 |
-| Japanese, 50 documents | 0.842 | 43 / 50 |
-| PowerPoint, 48 decks | 0.953 | 48 / 48 |
+| Word, English, 50 documents (2026-11-03) | 0.924 | 46 / 50 |
+| Word, Japanese, 50 documents (2026-11-03) | 0.892 | 45 / 50 |
+| PowerPoint, 48 decks (2026-08-20) | 0.953 | 48 / 48 |
+
+The method, the corpora and the other engines measured on the same sets are in
+the [Oxi README](https://gitlab.com/Ryujiyasu/oxi#readme).
 
 Japanese typography is a first-class target: JIS X 4051 kinsoku line breaking,
 document grid, ruby, vertical writing, warichu, emphasis marks.
@@ -26,7 +29,12 @@ document grid, ruby, vertical writing, warichu, emphasis marks.
 ## What it does today
 
 - Renders `.docx`, `.xlsx` and `.pptx` in a VS Code tab
-- **Read-only.** Edits made in the embedded UI are not written back to the file
+- Edit text in place: Word paragraphs, Excel cells, PowerPoint text boxes
+- Save with **Ctrl+S** (or *Save As…*); the tab shows the file as modified while
+  there are unsaved edits, and *Revert File* reloads it from disk
+- Saving changes only what you edited: Oxi rewrites the edited runs and cells
+  inside the original package and keeps everything else as it was
+- Formatting buttons in the ribbon change the view only; they are not saved yet
 - Large documents take a moment on first open — the engine and its font metric
   tables are a single WebAssembly module
 
