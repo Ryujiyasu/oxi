@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.2
+
+The spreadsheet selection and the slide list use Oxi's own colours instead of
+the Excel and PowerPoint brand colours.
+
 ## 0.9.1
 
 Edits are saved. Text edited in Word paragraphs, Excel cells and PowerPoint
