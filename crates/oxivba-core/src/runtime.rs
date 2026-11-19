@@ -9520,7 +9520,11 @@ impl<'a> Runtime<'a> {
                     } else {
                         declared
                     };
-                    if kind
+                    // Replacing an object reference must not read the old
+                    // default/As New slot: that read can construct an extra
+                    // instance while Class_Terminate rebinds a cleared root.
+                    if !matches!(value, Value::Object(_) | Value::Nothing)
+                        && kind
                         .as_deref()
                         .is_some_and(|kind| !kind.eq_ignore_ascii_case("variant"))
                         && matches!(&*slot.borrow(), Value::Object(_) | Value::Nothing)
