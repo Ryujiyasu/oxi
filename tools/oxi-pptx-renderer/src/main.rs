@@ -3719,6 +3719,12 @@ fn skipwhole_on() -> bool {
     std::env::var("OXI_SKIPWHOLE_DISABLE").is_err()
 }
 
+/// S-PAGECLIP: a turned or mirrored picture is resampled only over the page,
+/// so one that a negative fillRect blows far past it keeps its flip.
+fn pageclip_on() -> bool {
+    std::env::var("OXI_PAGECLIP_DISABLE").is_err()
+}
+
 /// S-ANCHORCTR: `a:bodyPr/@anchorCtr` centres the text block; setting this
 /// draws the box as if it were absent.
 fn anchorctr_on() -> bool {
@@ -4767,6 +4773,7 @@ fn transform_picture(
     angle_deg: f64,
     flip_h: bool,
     flip_v: bool,
+    page: (i32, i32),
 ) -> Option<(image::RgbaImage, i32, i32)> {
     let (sx0, sy0, sw, sh) = src;
     let (dx, dy, dw, dh) = dest;
@@ -4784,10 +4791,20 @@ fn transform_picture(
         rotate(dx + dw, dy + dh),
         rotate(dx, dy + dh),
     ];
-    let min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min).floor() as i32;
-    let min_y = corners.iter().map(|p| p.1).fold(f64::INFINITY, f64::min).floor() as i32;
-    let max_x = corners.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max).ceil() as i32;
-    let max_y = corners.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max).ceil() as i32;
+    let mut min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min).floor() as i32;
+    let mut min_y = corners.iter().map(|p| p.1).fold(f64::INFINITY, f64::min).floor() as i32;
+    let mut max_x = corners.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max).ceil() as i32;
+    let mut max_y = corners.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max).ceil() as i32;
+    // Only the part on the page can be seen. A picture a negative fillRect
+    // blows past the page (d61 s2's flipped full-slide backdrop: 9078px
+    // square at 3x supersampling) would otherwise exceed the allocation guard
+    // below and fall back to the unflipped blit (S-PAGECLIP).
+    if pageclip_on() {
+        min_x = min_x.max(0);
+        min_y = min_y.max(0);
+        max_x = max_x.min(page.0);
+        max_y = max_y.min(page.1);
+    }
     let (out_w, out_h) = ((max_x - min_x) as i64, (max_y - min_y) as i64);
     // A negative fillRect can blow the destination up to many times the page;
     // refuse rather than allocate unboundedly (the caller keeps its old path).
@@ -6258,6 +6275,8 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
         let out_h = (pres.slide_height as f64 * dpi as f64 / 72.0).round() as u32;
         let w = (pres.slide_width as f64 * scale).round() as i32;
         let h = (pres.slide_height as f64 * scale).round() as i32;
+        // The page in device pixels, under a name no shape-level `w` shadows.
+        let page_px = (w, h);
 
         unsafe {
             let screen_dc = GetDC(HWND(std::ptr::null_mut()));
@@ -13620,6 +13639,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         angle,
                                         sh.flip_h,
                                         sh.flip_v,
+                                        page_px,
                                     )
                                 } else {
                                     None
