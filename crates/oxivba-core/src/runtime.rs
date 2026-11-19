@@ -10153,6 +10153,7 @@ impl<'a> Runtime<'a> {
                 let typed = (self.statically_typed(lhs, frame), self.statically_typed(rhs, frame));
                 let integer_op = matches!(op, BinaryOp::IntDiv | BinaryOp::Mod | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Eqv | BinaryOp::Imp);
                 let lhs_grouped = matches!(&**lhs, Expr::Group { .. });
+                let rhs_grouped = matches!(&**rhs, Expr::Group { .. });
                 let lhs = if integer_op { self.floating_integer_operand(lhs, frame)? } else { self.eval_expr(lhs, frame)? };
                 // Native VBA requires the left object before it evaluates the
                 // right expression. An invalid Variant raises 424 immediately.
@@ -10171,7 +10172,7 @@ impl<'a> Runtime<'a> {
                 if *op == BinaryOp::Is && !matches!(rhs, Value::Object(_) | Value::Nothing) {
                     return Err(language_error(424, "Object required", span.line));
                 }
-                let rhs_default = *op != BinaryOp::Is && matches!(&rhs, Value::Object(object)
+                let rhs_default = *op != BinaryOp::Is && !rhs_grouped && matches!(&rhs, Value::Object(object)
                     if self.source_scalar_getter(object).is_some());
                 let rhs = if rhs_default { self.let_value(rhs, frame, span.line)? } else { rhs };
                 rhs_temporary |= rhs_default;
@@ -10180,12 +10181,19 @@ impl<'a> Runtime<'a> {
                         Value::Nothing => return Err(language_error(91, "Object variable not set", span.line)),
                         Value::Error(_) | Value::Missing | Value::Array(_) | Value::Record(_) =>
                             return Err(language_error(13, "Invalid scalar operand", span.line)),
-                        Value::Null if !matches!(op, BinaryOp::Concat | BinaryOp::And | BinaryOp::Or | BinaryOp::Imp) =>
-                            return Ok(Value::Null),
                         _ => {}
                     }
                 }
-                let box_result = nested_left && !rhs_temporary && !matches!(&rhs, Value::Null)
+                let nested_right = *op != BinaryOp::Is && matches!(&rhs, Value::Object(object)
+                    if self.source_scalar_getter(object).is_some());
+                // Basic arithmetic propagates Null before a pending nested
+                // default on either side. Other operators still consume it.
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div)
+                    && ((nested_left && matches!(&rhs, Value::Null))
+                        || (nested_right && matches!(&lhs, Value::Null))) {
+                    return Ok(Value::Null);
+                }
+                let box_result = nested_left && !rhs_temporary
                     && !matches!(op, BinaryOp::Is | BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt
                         | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge);
                 // `Is` asks about identity, so it keeps the objects themselves.

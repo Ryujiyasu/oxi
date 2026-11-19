@@ -89,6 +89,108 @@ Public Function Boundaries(ByVal target As Object, ByVal selector As Long) As Va
 Failed:
  Boundaries = Err.Number
 End Function
+
+Public Function NullOperand() As Variant
+ Application.Note "R"
+ NullOperand = Null
+End Function
+Public Function NullOperators(ByVal target As Object, ByVal selector As Long) As Variant
+ Dim result As Variant, nullable As Variant
+ nullable = Null
+ Select Case selector
+ Case 0
+  result = target & Null
+ Case 1
+  result = target And Null
+ Case 2
+  result = target Or Null
+ Case 3
+  result = target Xor Null
+ Case 4
+  result = target Eqv Null
+ Case 5
+  result = target Imp Null
+ Case 6
+  result = target Like Null
+ Case 7
+  result = target = Null
+ Case 8
+  result = target <> Null
+ Case 9
+  result = target < Null
+ Case 10
+  result = target > Null
+ Case 11
+  result = target <= Null
+ Case 12
+  result = target >= Null
+ Case 13
+  result = target ^ Null
+ Case 14
+  result = target \ Null
+ Case 15
+  result = target Mod Null
+ Case 16
+  result = Null & target
+ Case 17
+  result = Null And target
+ Case 18
+  result = Null Or target
+ Case 19
+  result = Null Xor target
+ End Select
+ NullOperators = result
+End Function
+Public Function GroupedNullAddition(ByVal target As Object) As Variant
+ GroupedNullAddition = Null + (target)
+End Function
+Public Function NullPositions(ByVal target As Object, ByVal selector As Long) As Variant
+ Dim result As Variant, nullable As Variant
+ nullable = Null
+ Select Case selector
+ Case 0
+  result = target - Null
+ Case 1
+  result = target * Null
+ Case 2
+  result = target / Null
+ Case 3
+  result = Null + target
+ Case 4
+  result = Null - target
+ Case 5
+  result = Null * target
+ Case 6
+  result = Null / target
+ Case 7
+  result = Null ^ target
+ Case 8
+  result = Null \ target
+ Case 9
+  result = Null Mod target
+ Case 10
+  result = Null Eqv target
+ Case 11
+  result = Null Imp target
+ Case 12
+  result = Null Like target
+ Case 13
+  result = target + NullOperand()
+ Case 14
+  result = target & NullOperand()
+ Case 15
+  result = target And NullOperand()
+ Case 16
+  result = target = NullOperand()
+ Case 17
+  result = target + nullable
+ Case 18
+  result = target & nullable
+ Case 19
+  result = target = nullable
+ End Select
+ NullPositions = result
+End Function
 "#;
 
 fn probe(foreign: bool, mode: i64, procedure: &str) -> (Value, String) {
@@ -177,6 +279,313 @@ fn nested_default_error_precedence_and_operand_storage_match_excel() {
                 let actual = probe_args(foreign, mode, "Driver.Boundaries", vec![Value::Integer(selector as i64)]);
                 assert_eq!(actual, (expected, trace.to_owned()), "selector {selector}, mode {mode}, foreign {foreign}");
             }
+        }
+    }
+}
+
+#[test]
+fn nested_null_operators_keep_native_values_and_getter_order() {
+    // Native witnesses 6760: two stable captures, 240 call points.
+    for foreign in [false, true] {
+        for mode in 0..3 {
+            let cases = match (mode, foreign) {
+                (0, false) => [
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::String("3".into()), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Integer(3), "ON"),
+                    (Value::Null, "ON"),
+                ],
+                (0, true) => [
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Integer(0), "ON"),
+                    (Value::String("3".into()), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Integer(3), "ON"),
+                    (Value::Null, "ON"),
+                ],
+                (1, false) => [
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::String("7".into()), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Integer(7), "ON"),
+                    (Value::Null, "ON"),
+                ],
+                (1, true) => [
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::String("7".into()), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Integer(7), "ON"),
+                    (Value::Null, "ON"),
+                ],
+                (2, false) => [
+                    (Value::String("7".into()), "O"),
+                    (Value::Null, "O"),
+                    (Value::Int16(7), "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Int16(-8), "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::String("7".into()), "O"),
+                    (Value::Null, "O"),
+                    (Value::Int16(7), "O"),
+                    (Value::Null, "O"),
+                ],
+                (2, true) => [
+                    (Value::String("7".into()), "O"),
+                    (Value::Null, "O"),
+                    (Value::Int16(7), "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Int16(-8), "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::String("7".into()), "O"),
+                    (Value::Null, "O"),
+                    (Value::Int16(7), "O"),
+                    (Value::Null, "O"),
+                ],
+                _ => unreachable!(),
+            };
+            for (selector, (expected, trace)) in cases.into_iter().enumerate() {
+                let actual = probe_args(foreign, mode, "Driver.NullOperators", vec![Value::Integer(selector as i64)]);
+                assert_eq!(actual, (expected, trace.to_owned()), "selector {selector}, mode {mode}, foreign {foreign}");
+            }
+        }
+    }
+}
+
+#[test]
+fn null_positions_and_temporaries_keep_native_evaluation() {
+    // Native witnesses 6764: two stable captures, 240 call points.
+    for foreign in [false, true] {
+        for mode in 0..3 {
+            let cases = match (mode, foreign) {
+                (0, false) => [
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Integer(3), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "OR"),
+                    (Value::String("3".into()), "ORN"),
+                    (Value::Null, "ORN"),
+                    (Value::Null, "ORN"),
+                    (Value::Null, "O"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Null, "ON"),
+                ],
+                (0, true) => [
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Integer(3), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "OR"),
+                    (Value::String("3".into()), "ORN"),
+                    (Value::Null, "ORN"),
+                    (Value::Null, "ORN"),
+                    (Value::Null, "O"),
+                    (Value::Integer(0), "ON"),
+                    (Value::Null, "ON"),
+                ],
+                (1, false) => [
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Integer(7), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "OR"),
+                    (Value::String("7".into()), "ORN"),
+                    (Value::Null, "ORN"),
+                    (Value::Null, "ORN"),
+                    (Value::Null, "O"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Null, "ON"),
+                ],
+                (1, true) => [
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Integer(7), "ON"),
+                    (Value::Null, "ON"),
+                    (Value::Null, "OR"),
+                    (Value::String("7".into()), "ORN"),
+                    (Value::Null, "ORN"),
+                    (Value::Null, "ORN"),
+                    (Value::Null, "O"),
+                    (Value::Date(0.0), "ON"),
+                    (Value::Null, "ON"),
+                ],
+                (2, false) => [
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Int16(7), "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "OR"),
+                    (Value::String("7".into()), "OR"),
+                    (Value::Null, "OR"),
+                    (Value::Null, "OR"),
+                    (Value::Null, "O"),
+                    (Value::String("7".into()), "O"),
+                    (Value::Null, "O"),
+                ],
+                (2, true) => [
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "O"),
+                    (Value::Int16(7), "O"),
+                    (Value::Null, "O"),
+                    (Value::Null, "OR"),
+                    (Value::String("7".into()), "OR"),
+                    (Value::Null, "OR"),
+                    (Value::Null, "OR"),
+                    (Value::Null, "O"),
+                    (Value::String("7".into()), "O"),
+                    (Value::Null, "O"),
+                ],
+                _ => unreachable!(),
+            };
+            for (selector, (expected, trace)) in cases.into_iter().enumerate() {
+                let actual = probe_args(foreign, mode, "Driver.NullPositions", vec![Value::Integer(selector as i64)]);
+                assert_eq!(actual, (expected, trace.to_owned()), "selector {selector}, mode {mode}, foreign {foreign}");
+            }
+        }
+    }
+}
+
+#[test]
+fn grouped_right_default_stops_before_nested_getter_with_null_addition() {
+    // Native witness6853: two stable captures; selectors16/36/56/76.
+    for foreign in [false, true] {
+        for mode in 0..3 {
+            assert_eq!(probe(foreign, mode, "Driver.GroupedNullAddition"),
+                (Value::Null, "O".to_owned()), "mode {mode}, foreign {foreign}");
         }
     }
 }
