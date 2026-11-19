@@ -9,7 +9,7 @@
 //! command line measures and embeds this machine's font files, the browser
 //! build the faces bundled with it. Everything else (print areas, page setup,
 //! scaling, breaks, cell drawing) is the same for both.
-use crate::ir::{CellStyle, CellValue, Sheet, Visibility, Workbook};
+use crate::ir::{BorderLine, CellStyle, CellValue, MergeCell, Sheet, Visibility, Workbook};
 use oxidocs_common::{archive::OoxmlArchive, relationships::parse_relationships};
 use oxipdf_core::ir::*;
 use quick_xml::{events::Event, Reader};
@@ -776,6 +776,28 @@ fn overflows(value: &CellValue, style: &CellStyle) -> bool {
         && !style.shrink_to_fit
 }
 
+/// The look of a merged area: its top-left cell's, with each border taken from
+/// the cells along that edge. Excel draws a merged area's bottom rule from its
+/// bottom row and its right rule from its right column, so a box ruled all
+/// round carries its right and bottom borders on cells other than the first.
+fn merged_edges<'a>(
+    first: &CellStyle,
+    m: &MergeCell,
+    style_at: impl Fn(u32, u32) -> Option<&'a CellStyle>,
+) -> CellStyle {
+    let mut out = first.clone();
+    let along = |cells: Vec<(u32, u32)>, side: fn(&CellStyle) -> &Option<BorderLine>| {
+        cells.into_iter().find_map(|(r, c)| style_at(r, c).and_then(|s| side(s).clone()))
+    };
+    let cols = || m.start_col..=m.end_col;
+    let rows = || m.start_row..=m.end_row;
+    out.border_top = along(cols().map(|c| (m.start_row, c)).collect(), |s| &s.border_top);
+    out.border_bottom = along(cols().map(|c| (m.end_row, c)).collect(), |s| &s.border_bottom);
+    out.border_left = along(rows().map(|r| (r, m.start_col)).collect(), |s| &s.border_left);
+    out.border_right = along(rows().map(|r| (r, m.end_col)).collect(), |s| &s.border_right);
+    out
+}
+
 /// A cell that overflowing text may cross: no value, no fill, not merged.
 fn is_free(sheet: &Sheet, rows: &BTreeMap<u32, &crate::ir::Row>, row: u32, col: u32) -> bool {
     let merged = sheet.merge_cells.iter().any(|m| {
@@ -981,7 +1003,14 @@ fn render_area(
                     .get(&row)
                     .and_then(|r| r.cells.iter().find(|c| c.col == col));
                 let default = CellStyle::default();
-                let style = value.map_or(&default, |c| &c.style);
+                let mut style = value.map_or(&default, |c| &c.style);
+                let edged;
+                if let Some(m) = merge {
+                    edged = merged_edges(style, m, |r, c| {
+                        rows.get(&r).and_then(|x| x.cells.iter().find(|x| x.col == c)).map(|x| &x.style)
+                    });
+                    style = &edged;
+                }
                 let blank = CellValue::Empty;
                 let value = value.map_or(&blank, |c| &c.value);
                 let spill = if merge.is_none() && overflows(value, style) {
@@ -1030,6 +1059,26 @@ fn render_area(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_merged_area_takes_each_border_from_the_cells_on_that_edge() {
+        let line = || Some(serde_json::from_str::<BorderLine>(r#"{"style":"thin"}"#).unwrap());
+        let first = CellStyle { border_top: line(), border_left: line(), ..Default::default() };
+        let right = CellStyle { border_top: line(), border_right: line(), ..Default::default() };
+        let bottom = CellStyle { border_bottom: line(), border_left: line(), ..Default::default() };
+        let m: MergeCell = serde_json::from_str(r#"{"start_row":1,"end_row":2,"start_col":0,"end_col":1}"#).unwrap();
+        let edged = merged_edges(&first, &m, |r, c| match (r, c) {
+            (1, 0) => Some(&first),
+            (1, 1) => Some(&right),
+            (2, 0) => Some(&bottom),
+            _ => None,
+        });
+        assert!(edged.border_top.is_some() && edged.border_left.is_some());
+        assert!(edged.border_right.is_some(), "the right column carries the right rule");
+        assert!(edged.border_bottom.is_some(), "the bottom row carries the bottom rule");
+        let alone = merged_edges(&first, &m, |r, c| (r, c).eq(&(1, 0)).then_some(&first));
+        assert!(alone.border_right.is_none() && alone.border_bottom.is_none());
+    }
+
     #[test]
     fn print_areas_and_margins_are_validated() {
         assert!(areas("'A,B'!$D$2:$A$1").is_err());
