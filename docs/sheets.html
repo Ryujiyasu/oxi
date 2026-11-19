@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Oxicells — Free Online Excel (.xlsx) Viewer in Your Browser</title>
-<meta name="description" content="Open and view Excel .xlsx files directly in your browser. Free, open-source, Rust + WebAssembly — no upload, no account, nothing leaves your device.">
+<title>Oxicells — Free Online Excel (.xlsx) Viewer &amp; Editor in Your Browser</title>
+<meta name="description" content="Open, edit and save Excel .xlsx files directly in your browser. Free, open-source, Rust + WebAssembly — no upload, no account, nothing leaves your device.">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Oxicells — Free Online Excel (.xlsx) Viewer">
-<meta property="og:description" content="Open and view .xlsx files in the browser. Free, open-source, no upload.">
+<meta property="og:title" content="Oxicells — Free Online Excel (.xlsx) Viewer &amp; Editor">
+<meta property="og:description" content="Open, edit and save .xlsx files in the browser. Free, open-source, no upload.">
 <meta property="og:image" content="https://oxi-dd65f4.gitlab.io/oxi-logo.png">
 <meta property="og:url" content="https://oxi-dd65f4.gitlab.io/sheets.html">
 <meta property="og:site_name" content="Oxi">
@@ -16,174 +16,406 @@
 <link rel="icon" type="image/x-icon" href="./favicon.ico">
 <script src="./analytics.js" defer></script>
 <style>
+/* ---- Oxi app shell: shared by Oxicells and Oxislides (site palette) ---- */
 :root {
-  --accent: #217346;
-  --accent-h: #1A5C38;
-  --accent-l: #E9F3ED;
-  --txt: #333;
-  --bg: #E8E8E8;
-  --rail: #F3F3F3;
-  --border: #E1E1E1;
-  --shad: 0 1px 4px rgba(0,0,0,.18);
+  --ink: #1a1a1a;
+  --ink2: #5a5a5a;
+  --ink3: #8a857c;
+  --paper: #f7f5f0;
+  --desk: #ece8e1;
+  --surface: #ffffff;
+  --line: #e2ddd4;
+  --line2: #d5d0c8;
+  --brand: #264653;
+  --brand-l: #e8f0f2;
+  --shad-1: 0 1px 2px rgba(38,70,83,.08), 0 1px 1px rgba(38,70,83,.04);
+  --shad-2: 0 10px 30px -12px rgba(38,70,83,.35), 0 2px 6px rgba(38,70,83,.10);
+  --r: 8px;
 }
 * { margin: 0; padding: 0; box-sizing: border-box }
 html, body { height: 100% }
 body {
-  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-  background: var(--bg); color: var(--txt);
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Noto Sans JP', 'Yu Gothic UI', sans-serif;
+  background: var(--desk); color: var(--ink);
   display: flex; flex-direction: column; overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
+button, input, select { font: inherit; color: inherit }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
 
 /* Title bar */
 .tb {
-  display: flex; align-items: center; gap: 10px; height: 44px; flex-shrink: 0;
-  background: #fff; padding: 0 14px; font-size: 13px; user-select: none;
-  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; height: 52px; flex-shrink: 0;
+  background: var(--surface); padding: 0 12px 0 14px; font-size: 13px; user-select: none;
+  border-bottom: 1px solid var(--line); position: relative; z-index: 3;
 }
-.logo { display: flex; align-items: center; gap: 7px; font-weight: 600; letter-spacing: .2px }
+.tb::before {               /* the app's colour, as a thin band along the top */
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--accent);
+}
+.logo { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px;
+  letter-spacing: .1px; color: inherit; text-decoration: none; flex-shrink: 0 }
+.logo:hover .logo-mark { transform: translateY(-1px) }
 .logo-mark {
-  width: 22px; height: 22px; border-radius: 5px; background: var(--accent); color: #fff;
-  display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px;
+  width: 28px; height: 28px; border-radius: 7px; background: var(--accent); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,.14); transition: transform .15s ease;
 }
-.dn { color: #555; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.logo-mark svg { width: 16px; height: 16px }
+.dn-wrap { display: flex; align-items: center; gap: 6px; min-width: 0; margin-left: 6px;
+  padding-left: 12px; border-left: 1px solid var(--line) }
+.dn { color: var(--ink2); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .tb .sp { flex: 1 }
+.tb .grp { display: flex; align-items: center; gap: 6px }
+.tb .vsep { width: 1px; height: 24px; background: var(--line); margin: 0 4px }
 .tb button, .tb a.btn {
-  font: inherit; border: 1px solid var(--border); background: #fff; color: var(--txt);
-  border-radius: 5px; padding: 5px 12px; cursor: pointer; text-decoration: none;
+  border: 1px solid var(--line2); background: var(--surface); color: var(--ink);
+  border-radius: 7px; height: 32px; padding: 0 13px; cursor: pointer; text-decoration: none;
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
 }
+.tb button svg, .tb a.btn svg { width: 15px; height: 15px; flex-shrink: 0 }
 .tb button:hover, .tb a.btn:hover { background: var(--accent-l); border-color: var(--accent) }
-.tb button.primary { background: var(--accent); border-color: var(--accent); color: #fff }
-.tb button.primary:hover { background: var(--accent-h) }
-.lang { display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden }
-.lang button { border: 0; border-radius: 0; padding: 5px 9px; font-size: 12px }
-.lang button.on { background: var(--accent); color: #fff }
+.tb button:disabled { opacity: .45; cursor: default }
+.tb button:disabled:hover { background: var(--surface); border-color: var(--line2) }
+.tb button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600 }
+.tb button.primary:hover { background: var(--accent-h); border-color: var(--accent-h) }
+.tb button.primary:disabled:hover { background: var(--accent); border-color: var(--accent) }
+.tb button.quiet, .tb a.btn.quiet { border-color: transparent; background: transparent; color: var(--ink2) }
+.tb button.quiet:hover, .tb a.btn.quiet:hover { background: var(--paper); border-color: var(--line); color: var(--ink) }
+html[data-host="desktop"] .src { display: none }
 
-/* Stage */
-.stage { flex: 1; display: flex; min-height: 0 }
-.rail {
-  width: 172px; flex-shrink: 0; background: var(--rail); border-right: 1px solid var(--border);
-  overflow-y: auto; padding: 10px 8px; display: none;
+/* The three editors, one switch */
+.apps { display: flex; align-items: center; background: var(--paper); border: 1px solid var(--line);
+  border-radius: 9px; padding: 2px; gap: 2px }
+.apps > a, .apps > span {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  border-radius: 7px; font-size: 12.5px; color: var(--ink2); text-decoration: none; white-space: nowrap;
 }
-.rail.on { display: block }
-.tab {
-  display: block; width: 100%; text-align: left; font: inherit; font-size: 13px;
-  border: 1px solid transparent; background: transparent; color: var(--txt);
-  border-radius: 5px; padding: 7px 9px; cursor: pointer; margin-bottom: 3px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.tab:hover { background: #fff }
-.tab.on { background: #fff; border-color: var(--accent); color: var(--accent-h); font-weight: 600 }
-.canvas { flex: 1; overflow: auto; display: flex; flex-direction: column; align-items: center; padding: 22px 20px }
-.paper { background: #fff; box-shadow: 0 2px 14px rgba(0,0,0,.22); line-height: 0 }
-.counter { margin-top: 12px; font-size: 13px; color: #777; line-height: 1.5 }
-.opts { display: flex; gap: 14px; align-items: center; margin-top: 10px; font-size: 12px; color: #666 }
-.opts label { display: flex; gap: 5px; align-items: center; cursor: pointer }
+.apps > a:hover { background: var(--surface); color: var(--ink) }
+.apps .dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0 }
+.apps .on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: var(--shad-1) }
+.lang { display: flex; border: 1px solid var(--line2); border-radius: 7px; overflow: hidden; height: 32px }
+.tb .lang button { border: 0; border-radius: 0; height: 30px; padding: 0 9px; font-size: 12px; color: var(--ink2) }
+.tb .lang button.on { background: var(--brand); color: #fff }
+.tb .lang button:hover:not(.on) { background: var(--paper) }
 
-/* Drop zone */
-.drop {
-  margin: auto; max-width: 620px; text-align: center; padding: 46px 30px;
-  border: 2px dashed #BDBDBD; border-radius: 12px; background: #fff; color: #666;
-}
-.drop.hot { border-color: var(--accent); background: var(--accent-l) }
-.drop h1 { font-size: 21px; color: var(--txt); margin-bottom: 8px; font-weight: 600 }
-.drop p { font-size: 14px; line-height: 1.65; margin-bottom: 18px }
-.drop .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap }
-.drop button {
-  font: inherit; border: 1px solid var(--accent); background: var(--accent); color: #fff;
-  border-radius: 6px; padding: 9px 20px; cursor: pointer;
-}
-.drop button.ghost { background: #fff; color: var(--accent) }
-.drop button:disabled { opacity: .5; cursor: default }
-.note { font-size: 12px; color: #888; margin-top: 16px; line-height: 1.6 }
-.note a { color: var(--accent) }
-.msg { padding: 8px 14px; font-size: 13px; background: var(--accent-l); color: var(--accent-h); flex-shrink: 0 }
+/* Messages */
+.msg { padding: 9px 16px; font-size: 13px; background: var(--accent-l); color: var(--accent-h);
+  flex-shrink: 0; border-bottom: 1px solid var(--line) }
 .msg.err { background: #FDECEA; color: #B3261E }
 .msg[hidden] { display: none }
-@media (max-width: 720px) { .rail { display: none !important } }
+
+/* Landing card, shown until a file is open */
+.drop {
+  margin: auto; width: min(720px, 100%); text-align: center; padding: 44px 36px 30px;
+  border: 1.5px dashed var(--line2); border-radius: 16px; background: var(--surface);
+  color: var(--ink2); box-shadow: var(--shad-2); transition: border-color .15s, background .15s, transform .15s;
+}
+.drop.hot { border-color: var(--accent); background: var(--accent-l); transform: scale(1.01) }
+.drop-icon { width: 64px; height: 64px; margin: 0 auto 18px; border-radius: 16px; background: var(--accent-l);
+  color: var(--accent); display: flex; align-items: center; justify-content: center }
+.drop-icon svg { width: 34px; height: 34px }
+.drop h1 { font-size: 24px; line-height: 1.35; color: var(--ink); margin-bottom: 10px; font-weight: 700; letter-spacing: -.2px }
+.drop p { font-size: 14.5px; line-height: 1.7; margin: 0 auto 22px; max-width: 500px }
+.drop .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap }
+.drop button {
+  border: 1.5px solid var(--accent); background: var(--accent); color: #fff; font-weight: 600;
+  border-radius: 9px; padding: 11px 22px; cursor: pointer; font-size: 14.5px;
+  transition: background .12s, transform .12s;
+}
+.drop button:hover { background: var(--accent-h); border-color: var(--accent-h) }
+.drop button:active { transform: translateY(1px) }
+.drop button.ghost { background: var(--surface); color: var(--accent) }
+.drop button.ghost:hover { background: var(--accent-l) }
+.drop button:disabled { opacity: .5; cursor: default }
+.chips { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 24px }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink2);
+  background: var(--paper); border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; white-space: nowrap }
+.chip svg { width: 13px; height: 13px; color: var(--accent) }
+.note { font-size: 12px; color: var(--ink3); margin-top: 22px; line-height: 1.65 }
+.note a { color: var(--accent-h) }
+
+@media (max-width: 860px) {
+  .apps .lbl { display: none }
+  .apps > a, .apps > span { padding: 0 8px }
+  .tb .hide-s { display: none !important }
+}
+@media (max-width: 600px) {
+  .tb { gap: 6px; padding: 0 8px }
+  .apps, .dn-wrap { display: none }
+  .drop { padding: 32px 18px 24px; border-radius: 12px }
+  .drop h1 { font-size: 20px }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important } }
+
+:root { --accent: #2E7D4F; --accent-h: #23633E; --accent-l: #E8F3EC; --head: #f3f1ec; --sel: #2E7D4F }
+
+/* Formula bar */
+.fx { display: flex; align-items: center; gap: 8px; height: 42px; flex-shrink: 0; padding: 0 12px;
+  background: var(--surface); border-bottom: 1px solid var(--line); font-size: 13px }
+.fx[hidden] { display: none }
+.nbox { width: 92px; height: 28px; border: 1px solid var(--line2); border-radius: 6px; background: var(--paper);
+  text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); flex-shrink: 0; padding: 0 6px }
+.nbox:focus { background: var(--surface); border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-l); text-align: left }
+.fxmark { font-style: italic; font-family: Georgia, 'Times New Roman', serif; color: var(--ink3); font-size: 15px;
+  padding: 0 4px; flex-shrink: 0 }
+#fxIn { flex: 1; min-width: 0; height: 28px; border: 1px solid var(--line2); border-radius: 6px; padding: 0 10px;
+  background: var(--surface); font-family: Consolas, 'Cascadia Mono', 'Segoe UI', monospace; font-size: 13px }
+#fxIn:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-l) }
+#fxIn:disabled { background: var(--paper); color: var(--ink3) }
+.tb button.icon { width: 32px; padding: 0; justify-content: center }
+#btnSave[hidden], #btnUndo[hidden], #btnRedo[hidden] { display: none }
+.count { display: inline-flex; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: rgba(255,255,255,.25); font-size: 11px; align-items: center; justify-content: center;
+  font-variant-numeric: tabular-nums }
+.count:empty { display: none }
+.dirty::after { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); margin-left: 7px; vertical-align: middle }
+
+/* Stage */
+.stage { flex: 1; display: flex; flex-direction: column; min-height: 0 }
+.canvas { flex: 1; overflow: auto; display: flex; flex-direction: column; padding: 0; min-height: 0;
+  position: relative; background: var(--surface) }
+.canvas.empty { align-items: center; padding: 22px 16px; background: var(--desk) }
+.sheet { display: grid; grid-template-columns: 46px max-content; grid-template-rows: 24px max-content;
+  background: var(--surface); width: max-content; min-width: 100%; margin: 0 }
+.corner { position: sticky; top: 0; left: 0; z-index: 4; background: var(--head);
+  border-right: 1px solid var(--line2); border-bottom: 1px solid var(--line2) }
+.colhead { position: sticky; top: 0; z-index: 3; background: var(--head); border-bottom: 1px solid var(--line2);
+  height: 24px; overflow: hidden }
+.rowhead { position: sticky; left: 0; z-index: 3; background: var(--head); border-right: 1px solid var(--line2);
+  width: 46px; overflow: hidden }
+.colhead > div, .rowhead > div { position: absolute; display: flex; align-items: center; justify-content: center;
+  font-size: 11.5px; color: var(--ink2); font-variant-numeric: tabular-nums; user-select: none; overflow: hidden }
+.colhead > div { top: 0; height: 24px; border-right: 1px solid var(--line) }
+.rowhead > div { left: 0; width: 46px; border-bottom: 1px solid var(--line) }
+.colhead > div.on, .rowhead > div.on { background: var(--accent-l); color: var(--accent-h); font-weight: 700 }
+.colhead > div.on { box-shadow: inset 0 -2px 0 var(--accent) }
+.rowhead > div.on { box-shadow: inset -2px 0 0 var(--accent) }
+.paper { position: relative; background: #fff; line-height: 0; cursor: cell }
+.paper canvas { display: block }
+.paper > * { position: absolute }
+.paper > canvas { position: static }
+.selrange { pointer-events: none; background: rgba(46,125,79,.13); border: 2px solid var(--sel);
+  margin: -1px 0 0 -1px; z-index: 2; display: none }
+.active { pointer-events: none; border: 2px solid var(--sel); margin: -1px 0 0 -1px; z-index: 3;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.85) }
+.active.inrange { border-width: 1px; border-color: rgba(46,125,79,.55); box-shadow: none; margin: 0 }
+.fillh { width: 7px; height: 7px; background: var(--sel); border: 1px solid #fff; z-index: 5; cursor: crosshair }
+.fillprev { pointer-events: none; border: 1.5px dashed var(--ink2); z-index: 4; display: none; margin: -1px 0 0 -1px }
+.ants { pointer-events: none; z-index: 4; display: none; margin: -1px 0 0 -1px;
+  background: linear-gradient(90deg, var(--sel) 50%, transparent 0) repeat-x top / 8px 2px,
+              linear-gradient(90deg, var(--sel) 50%, transparent 0) repeat-x bottom / 8px 2px,
+              linear-gradient(0deg, var(--sel) 50%, transparent 0) repeat-y left / 2px 8px,
+              linear-gradient(0deg, var(--sel) 50%, transparent 0) repeat-y right / 2px 8px;
+  animation: ants .6s linear infinite }
+@keyframes ants { to { background-position: 8px 0, -8px 100%, 0 -8px, 100% 8px } }
+.refs { inset: 0; pointer-events: none; z-index: 2 }
+.refbox { position: absolute; border: 2px solid var(--c); background: color-mix(in srgb, var(--c) 10%, transparent);
+  margin: -1px 0 0 -1px }
+.cell-ed { z-index: 6; border: 2px solid var(--sel); margin: -1px 0 0 -1px; padding: 1px 3px 0;
+  background: #fff; font-size: 14.6px; line-height: 1.25; outline: none; box-shadow: var(--shad-2); resize: none;
+  overflow: hidden; white-space: pre; font-family: Calibri, Carlito, 'Segoe UI', 'Yu Gothic', sans-serif; color: #000 }
+.cell-ed.sink { opacity: 0; pointer-events: none; box-shadow: none; caret-color: transparent; z-index: 0 }
+body.dragging, body.dragging * { user-select: none }
+.edited-mark { width: 0; height: 0; border-top: 6px solid var(--accent); border-left: 6px solid transparent;
+  pointer-events: none; z-index: 1 }
+
+/* Sheet tabs, then the status bar */
+.tabbar { display: none; height: 34px; flex-shrink: 0; background: var(--paper); border-top: 1px solid var(--line);
+  padding: 0 8px; align-items: stretch }
+.tabbar.on { display: flex }
+.tabs { display: flex; align-items: stretch; gap: 2px; overflow-x: auto; min-width: 0; scrollbar-width: thin }
+.tab { border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--ink2);
+  padding: 0 16px; cursor: pointer; font-size: 13px; white-space: nowrap; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis }
+.tab:hover { background: var(--surface); color: var(--ink) }
+.tab.on { border-bottom-color: var(--accent); color: var(--accent-h); font-weight: 600; background: var(--surface) }
+.sbar { display: none; align-items: center; gap: 18px; height: 28px; flex-shrink: 0; background: var(--surface);
+  border-top: 1px solid var(--line); padding: 0 14px; font-size: 12px; color: var(--ink2) }
+.sbar.on { display: flex }
+.mode { min-width: 64px }
+.agg { display: flex; gap: 18px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink) }
+.sbar .sp { flex: 1 }
+.opts { display: flex; gap: 14px; align-items: center; white-space: nowrap }
+.opts label { display: flex; gap: 6px; align-items: center; cursor: pointer }
+.opts input { accent-color: var(--accent) }
+/* headings */
+.colhead > div.full, .rowhead > div.full { background: var(--accent); color: #fff; font-weight: 700 }
+/* context menu */
+.ctx { position: fixed; z-index: 50; min-width: 220px; background: var(--surface); border: 1px solid var(--line2);
+  border-radius: 9px; box-shadow: var(--shad-2); padding: 5px; font-size: 13px }
+.ctx[hidden] { display: none }
+.ctx button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 24px; border: 0;
+  background: transparent; padding: 7px 10px; border-radius: 6px; cursor: pointer; text-align: left }
+.ctx button:hover { background: var(--accent-l); color: var(--accent-h) }
+.ctx kbd { font-family: inherit; font-size: 11px; line-height: 1; color: var(--ink3); letter-spacing: 0 }
+.ctx hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px }
+@media (max-width: 720px) { .agg span:not(:last-child) { display: none } .opts { display: none } }
+@media (max-width: 600px) {
+  .tb .grp button > span[data-i18n] { display: none }
+  .tb .grp button { padding: 0 9px }
+  .logo > span:last-child { display: none }
+}
 </style>
 </head>
 <body>
 
 <div class="tb">
-  <span class="logo"><span class="logo-mark">O</span><span>Oxicells</span></span>
-  <span class="dn" id="docName" data-i18n="noFile">No workbook open</span>
+  <a class="logo" href="./index.html" title="Oxi"><span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg></span><span>Oxicells</span></a>
+  <span class="dn-wrap"><span class="dn" id="docName" data-i18n="noFile">No workbook open</span></span>
   <span class="sp"></span>
-  <button id="btnOpen" data-i18n="open">Open</button>
-  <a class="btn" href="./slides.html" data-i18n="slidesApp">Slides app</a>
-  <a class="btn" href="./docs.html" data-i18n="wordApp">Oxidocs</a>
-  <a class="btn" href="./index.html" data-i18n="about">About Oxi</a>
-  <a class="btn src" href="https://github.com/Ryujiyasu/oxi" target="_blank" rel="noopener" data-i18n="source">Source</a>
+  <span class="grp">
+    <button id="btnOpen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span data-i18n="open">Open</span></button>
+    <button id="btnUndo" class="icon" hidden disabled data-i18n-title="undo" title="Undo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
+    <button id="btnRedo" class="icon" hidden disabled data-i18n-title="redo" title="Redo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
+    <button id="btnSave" class="primary" hidden disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg><span data-i18n="save">Save a copy</span><span class="count" id="saveCount"></span></button>
+  </span>
+  <span class="vsep hide-s"></span>
+  <nav class="apps" aria-label="Oxi apps"><a href="./docs.html" title="Oxidocs"><span class="dot" style="background:#8B72BE"></span><span class="lbl">Oxidocs</span></a><span class="on" aria-current="page"><span class="dot" style="background:#5E8C3A"></span><span class="lbl">Oxicells</span></span><a href="./slides.html" title="Oxislides"><span class="dot" style="background:#D9765E"></span><span class="lbl">Oxislides</span></a></nav>
+  <a class="btn quiet src hide-s" href="https://github.com/Ryujiyasu/oxi" target="_blank" rel="noopener" title="GitHub"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l-6-6 6-6M15 6l6 6-6 6"/></svg><span data-i18n="source">Source</span></a>
   <span class="lang">
     <button id="langEn" class="on">EN</button><button id="langJa">JA</button>
   </span>
 </div>
 
+<div class="fx" id="fx" hidden>
+  <input class="nbox" id="cellRef" value="A1" autocomplete="off" spellcheck="false" aria-label="Name box">
+  <span class="fxmark">fx</span>
+  <input id="fxIn" type="text" autocomplete="off" spellcheck="false" data-i18n-placeholder="fxHint" placeholder="Type a value or a formula such as =SUM(A1:A3)">
+</div>
+
 <div class="msg" id="msg" hidden></div>
 
 <div class="stage">
-  <div class="rail" id="rail"></div>
-  <div class="canvas" id="canvas">
+  <div class="canvas empty" id="canvas">
     <div class="drop" id="drop">
+      <div class="drop-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg></div>
       <h1 data-i18n="title">Open an Excel file right now</h1>
-      <p data-i18n="lede">Drop a .xlsx here, or choose one. Parsing and rendering happen entirely in your browser through WebAssembly — the file never leaves your device.</p>
+      <p data-i18n="lede">Drop a .xlsx here, or choose one. Parsing, recalculation and rendering happen entirely in your browser through WebAssembly — the file never leaves your device.</p>
       <div class="row">
         <button id="btnChoose" data-i18n="choose">Choose a .xlsx</button>
         <button id="btnSample" class="ghost" disabled data-i18n="sample">Try a sample</button>
       </div>
+      <div class="chips"><span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M8 8a5 5 0 0 0-1 0 4 4 0 0 0 0 8h9m3.3-1.2A3.5 3.5 0 0 0 17 9h-.5A6 6 0 0 0 10 5.3"/></svg><span data-i18n="chipLocal">Runs in your browser</span></span><span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span data-i18n="chipPrivate">No upload, no account</span></span><span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg><span data-i18n="chipEdit">Edit and save a copy</span></span></div>
       <p class="note" data-i18n="note">Oxi is open source. The rendering engine behind this page is measured cell by cell against Excel’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.</p>
     </div>
   </div>
+  <div class="tabbar" id="tabbar">
+    <div class="tabs" id="tabs"></div>
+  </div>
+  <div class="sbar" id="sbar">
+    <span class="mode" id="mode"></span>
+    <span class="sp"></span>
+    <span class="agg" id="agg"></span>
+    <span class="opts" id="opts"></span>
+  </div>
+</div>
+
+<div class="ctx" id="ctx" hidden role="menu">
+  <button data-act="cut" role="menuitem"><span data-i18n="cut">Cut</span><kbd>Ctrl+X</kbd></button>
+  <button data-act="copy" role="menuitem"><span data-i18n="copy">Copy</span><kbd>Ctrl+C</kbd></button>
+  <button data-act="paste" role="menuitem"><span data-i18n="paste">Paste</span><kbd>Ctrl+V</kbd></button>
+  <hr>
+  <button data-act="fillDown" role="menuitem"><span data-i18n="fillDown">Fill down</span><kbd>Ctrl+D</kbd></button>
+  <button data-act="fillRight" role="menuitem"><span data-i18n="fillRight">Fill right</span><kbd>Ctrl+R</kbd></button>
+  <hr>
+  <button data-act="clear" role="menuitem"><span data-i18n="clear">Clear contents</span><kbd>Del</kbd></button>
 </div>
 
 <input type="file" id="fileIn" accept=".xlsx" hidden>
 
 <script type="module">
-import init, { parse_spreadsheet } from './oxidocs_wasm.js';
+import init, { parse_spreadsheet, edit_xlsx, recalculate_spreadsheet, format_cell_number } from './oxidocs_wasm.js';
 import { drawSheet } from './sheet-view.js';
+import { cellText } from './row-model.js';
 
 const I18N = {
   en: {
-    noFile: 'No workbook open', open: 'Open', slidesApp: 'Slides app',
-    wordApp: 'Oxidocs', about: 'About Oxi',
+    noFile: 'No workbook open', open: 'Open', save: 'Save a copy', undo: 'Undo (Ctrl+Z)', redo: 'Redo (Ctrl+Y)',
     source: 'Source',
     title: 'Open an Excel file right now',
-    lede: 'Drop a .xlsx here, or choose one. Parsing and rendering happen entirely in your browser through WebAssembly — the file never leaves your device.',
+    lede: 'Drop a .xlsx here, or choose one. Parsing, recalculation and rendering happen entirely in your browser through WebAssembly — the file never leaves your device.',
     choose: 'Choose a .xlsx', sample: 'Try a sample',
+    chipLocal: 'Runs in your browser', chipPrivate: 'No upload, no account', chipEdit: 'Edit cells and formulas, save a copy',
     note: 'Oxi is open source. The rendering engine behind this page is measured cell by cell against Excel’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.',
+    fxHint: 'Type a value or a formula such as =SUM(A1:A3)',
     loading: 'Loading the engine…', parsing: 'Parsing…',
     grid: 'Gridlines', shapes: 'Drawings',
+    ready: 'Ready', enter: 'Enter', edit: 'Edit', point: 'Point',
+    avg: 'Average', count: 'Count', sum: 'Sum',
+    cut: 'Cut', copy: 'Copy', paste: 'Paste', clear: 'Clear contents', fillDown: 'Fill down', fillRight: 'Fill right',
+    pasteBlocked: 'The browser did not hand over the clipboard here — press Ctrl+V instead.',
     parsed: (sheets, cells, ms) => `${sheets} sheets, ${cells} cells — parsed in ${ms} ms`,
-    sheetOf: (name, rows, cols) => `${name} — ${rows} rows × ${cols} columns`,
     badType: 'That is not a .xlsx file.',
     failed: 'Could not open the workbook: ',
+    editFailed: 'Could not apply that edit: ',
+    saved: 'Saved. The file was written in your browser.',
+    leave: 'You have edits that are not saved.',
     empty: 'The workbook holds no sheets.',
   },
   ja: {
-    noFile: 'ファイル未選択', open: '開く', slidesApp: 'Slides アプリ',
-    wordApp: 'Oxidocs', about: 'Oxi について',
+    noFile: 'ファイル未選択', open: '開く', save: '保存', undo: '元に戻す (Ctrl+Z)', redo: 'やり直し (Ctrl+Y)',
     source: 'ソース',
     title: 'Excel ファイルをその場で開く',
-    lede: '.xlsx をここにドロップするか、選んでください。解析も描画も WebAssembly でブラウザの中だけで行われ、ファイルは端末から出ません。',
+    lede: '.xlsx をここにドロップするか、選んでください。解析も再計算も描画も WebAssembly でブラウザの中だけで行われ、ファイルは端末から出ません。',
     choose: '.xlsx を選ぶ', sample: 'サンプルを開く',
+    chipLocal: 'ブラウザの中だけで動作', chipPrivate: 'アップロードもアカウントも不要', chipEdit: 'セルと数式を編集して保存',
     note: 'Oxi はオープンソースです。このページの描画エンジンは Excel 自身の出力とセル単位で比較して測定しています — <a href="./index.html#accuracy">測定方法</a>。',
+    fxHint: '値か、=SUM(A1:A3) のような数式を入力',
     loading: 'エンジンを読み込み中…', parsing: '解析中…',
     grid: 'グリッド線', shapes: '図形',
+    ready: '準備完了', enter: '入力', edit: '編集', point: '参照',
+    avg: '平均', count: 'データの個数', sum: '合計',
+    cut: '切り取り', copy: 'コピー', paste: '貼り付け', clear: '数式と値のクリア', fillDown: '下方向へコピー', fillRight: '右方向へコピー',
+    pasteBlocked: 'ブラウザがここではクリップボードを渡しませんでした。Ctrl+V で貼り付けてください。',
     parsed: (sheets, cells, ms) => `${sheets} シート / ${cells} セル — ${ms} ms で解析`,
-    sheetOf: (name, rows, cols) => `${name} — ${rows} 行 × ${cols} 列`,
     badType: '.xlsx ファイルではありません。',
     failed: 'ブックを開けませんでした: ',
+    editFailed: 'この編集を反映できませんでした: ',
+    saved: '保存しました。ファイルはブラウザの中で作られています。',
+    leave: '保存していない編集があります。',
     empty: 'このブックにはシートがありません。',
   },
 };
-let lang = (navigator.language || 'en').startsWith('ja') ? 'ja' : 'en';
-const t = k => I18N[lang][k];
 
-let book = null;
+/** The language the person last chose, kept under the key the other editors use. */
+function heldLang() {
+  try {
+    const held = localStorage.getItem('oxi-lang');
+    if (held === 'en' || held === 'ja') return held;
+  } catch { /* a private window has no store */ }
+  return (navigator.language || 'en').startsWith('ja') ? 'ja' : 'en';
+}
+let lang = heldLang();
+const t = k => I18N[lang][k];
+const $ = id => document.getElementById(id);
+
+// ---- state ----------------------------------------------------------------------
+let fileName = '';
+let source = null;       // the bytes the session started from (or last saved)
+let current = null;      // those bytes with the edits applied
+let origBook = null;     // `source` parsed: what an untouched cell holds
+let book = null;         // the workbook on screen (edited and recalculated)
 let shown = 0;
 let heights = {};
 let showGrid = true;
 let showShapes = true;
-let parsedFacts = null;
+let geo = null;          // geometry of the drawn sheet
+let grow = { rows: 0, cols: 0 };
+
+// Selection: the active cell, and the range it sits in (anchor = where it began).
+let act = { row: 1, col: 0 };
+let anchor = { row: 1, col: 0 };
+let range = { r0: 1, c0: 0, r1: 1, c1: 0 };
+let tabStartCol = null;  // Enter after Tabs returns to the column the Tabs began in
+
+// Cell edits travel as records to `edit_xlsx`, which patches the original archive:
+// the parts nobody touched come through untouched.
+const changes = new Map();   // "sheet,row,col" -> edit record
+const undoStack = [];        // [[{ key, before, after }]]
+const redoStack = [];
+let clip = null;             // { tsv, sheet, range, raws, cut }
 
 function applyLang() {
   document.documentElement.lang = lang;
@@ -191,14 +423,28 @@ function applyLang() {
     const v = I18N[lang][el.dataset.i18n];
     if (typeof v === 'string') el.innerHTML = v;
   });
-  document.getElementById('langEn').className = lang === 'en' ? 'on' : '';
-  document.getElementById('langJa').className = lang === 'ja' ? 'on' : '';
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    const v = I18N[lang][el.dataset.i18nTitle];
+    if (typeof v === 'string') el.title = v;
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    const v = I18N[lang][el.dataset.i18nPlaceholder];
+    if (typeof v === 'string') el.placeholder = v;
+  });
+  $('langEn').className = lang === 'en' ? 'on' : '';
+  $('langJa').className = lang === 'ja' ? 'on' : '';
+  if (fileName) $('docName').textContent = fileName;
   if (book) { tabs(); render(); }
 }
-document.getElementById('langEn').onclick = () => { lang = 'en'; applyLang(); };
-document.getElementById('langJa').onclick = () => { lang = 'ja'; applyLang(); };
+for (const picked of ['en', 'ja']) {
+  $(picked === 'en' ? 'langEn' : 'langJa').onclick = () => {
+    lang = picked;
+    try { localStorage.setItem('oxi-lang', picked); } catch { /* nothing to do */ }
+    applyLang();
+  };
+}
 
-const msgEl = document.getElementById('msg');
+const msgEl = $('msg');
 function say(text, isErr) {
   msgEl.textContent = text;
   msgEl.className = isErr ? 'msg err' : 'msg';
@@ -206,52 +452,155 @@ function say(text, isErr) {
 }
 
 const SAMPLE = './sample.xlsx';
-const canvasBox = document.getElementById('canvas');
-const railBox = document.getElementById('rail');
+const canvasBox = $('canvas');
+const dropCard = $('drop');
 
 say(t('loading'));
 await init();
 try {
   heights = await (await fetch('./row-heights.json')).json();
 } catch {
-  // The table only sharpens the row heights; without it the device's own
-  // metrics stand in.
+  // The table only sharpens the row heights; without it the device's own metrics stand in.
 }
 msgEl.hidden = true;
-document.getElementById('btnSample').disabled = false;
+$('btnSample').disabled = false;
 
-/// One button per sheet, down the rail.
+// ---- references -------------------------------------------------------------------
+function colName(index) {
+  let name = '';
+  let n = index;
+  do { name = String.fromCharCode(65 + (n % 26)) + name; n = Math.floor(n / 26) - 1; } while (n >= 0);
+  return name;
+}
+function colIndex(letters) {
+  let n = 0;
+  for (const ch of letters.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+const a1 = (row, col) => colName(col) + row;
+function parseA1(text) {
+  const m = /^\s*\$?([A-Za-z]{1,3})\$?(\d{1,7})\s*$/.exec(text);
+  return m ? { row: Number(m[2]), col: colIndex(m[1]) } : null;
+}
+const keyOf = (row, col, si = shown) => `${si},${row},${col}`;
+const norm = (p, q) => ({ r0: Math.min(p.row, q.row), c0: Math.min(p.col, q.col),
+                          r1: Math.max(p.row, q.row), c1: Math.max(p.col, q.col) });
+
+// A1 references outside string literals; not a function name (LOG10( ) nor part of a word.
+const REF = /(?<![A-Za-z0-9_.])(\$?)([A-Za-z]{1,3})(\$?)(\d{1,7})(?![A-Za-z0-9_(])/g;
+function outsideStrings(formula, fn) {
+  return formula.split('"').map((part, i) => (i % 2 ? part : fn(part))).join('"');
+}
+/** A formula moved by (dr, dc): relative parts follow, $-anchored parts stay. */
+function shiftFormula(formula, dr, dc) {
+  if (!dr && !dc) return formula;
+  return outsideStrings(formula, part => part.replace(REF, (all, dc$, letters, dr$, digits) => {
+    const col = dc$ ? colIndex(letters) : colIndex(letters) + dc;
+    const row = dr$ ? Number(digits) : Number(digits) + dr;
+    if (col < 0 || row < 1) return '#REF!';
+    return `${dc$}${colName(col)}${dr$}${row}`;
+  }));
+}
+
+// ---- cells ------------------------------------------------------------------------
+function rowsOf(sheet) {
+  if (!sheet._rowMap) Object.defineProperty(sheet, '_rowMap', {
+    value: new Map((sheet.rows || []).map(r => [r.index, r])), enumerable: false });
+  return sheet._rowMap;
+}
+function cellIn(sheet, row, col) {
+  return rowsOf(sheet).get(row)?.cells?.find(c => c.col === col);
+}
+const cellAt = (row, col) => cellIn(book.sheets[shown], row, col);
+/** What a person would type to get this cell back: the formula if there is one. */
+function rawOf(cell) {
+  if (!cell) return '';
+  if (cell.formula) return cell.formula.startsWith('=') ? cell.formula : '=' + cell.formula;
+  return cellText(cell);
+}
+/** What the cell shows, in the format it states. */
+function shownOf(cell) {
+  const v = cell?.value;
+  const f = cell?.style?.number_format;
+  if (v && typeof v === 'object' && 'Number' in v && f) {
+    try { return format_cell_number(v.Number, f); } catch { /* fall through */ }
+  }
+  return cellText(cell);
+}
+const numberOf = cell => (cell?.value && typeof cell.value === 'object' && 'Number' in cell.value)
+  ? cell.value.Number : null;
+const hasData = (row, col) => rawOf(cellAt(row, col)) !== '';
+
+function mergeOf(sheet, row, col) {
+  return (sheet.merge_cells || []).find(m =>
+    row >= m.start_row && row <= m.end_row && col >= m.start_col && col <= m.end_col);
+}
+/** A range grown until no merge sticks out of it. */
+function withMerges(r) {
+  const out = { ...r };
+  const merges = book.sheets[shown].merge_cells || [];
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const m of merges) {
+      if (m.end_row < out.r0 || m.start_row > out.r1 || m.end_col < out.c0 || m.start_col > out.c1) continue;
+      if (m.start_row < out.r0) { out.r0 = m.start_row; changed = true; }
+      if (m.end_row > out.r1) { out.r1 = m.end_row; changed = true; }
+      if (m.start_col < out.c0) { out.c0 = m.start_col; changed = true; }
+      if (m.end_col > out.c1) { out.c1 = m.end_col; changed = true; }
+    }
+  }
+  return out;
+}
+
+// The type travels with the value: `=A1` is a formula, `12` a number, `TRUE` a
+// boolean, anything else text, and an empty box clears the cell.
+function typed(text) {
+  if (text === '') return { value_type: 'empty', new_value: '' };
+  if (text.startsWith('=') && text.length > 1) return { value_type: 'formula', new_value: text };
+  const s = text.trim();
+  if (s !== '' && Number.isFinite(Number(s))) return { value_type: 'number', new_value: s };
+  if (/^(true|false)$/i.test(s)) return { value_type: 'boolean', new_value: s.toLowerCase() };
+  return { value_type: 'string', new_value: text };
+}
+
+// ---- drawing ---------------------------------------------------------------------
+/** The sheet as drawn for editing: from row 1, with room to type below and to the right. */
+function roomy(sheet) {
+  const rows = sheet.rows || [];
+  const indices = rows.map(r => r.index);
+  const last = indices.length ? Math.max(...indices) : 0;
+  const extra = [];
+  if (!indices.includes(1)) extra.push({ index: 1, cells: [] });
+  const end = Math.max(last + 20, 40) + grow.rows;
+  if (end > last) extra.push({ index: end, cells: [] });
+  const cols = Math.max((sheet.col_count || 0) + 4, 14) + grow.cols;
+  return { ...sheet, rows: [...rows, ...extra].sort((a, b) => a.index - b.index), col_count: cols };
+}
+
 function tabs() {
-  railBox.replaceChildren(...book.sheets.map((sheet, index) => {
+  $('tabs').replaceChildren(...book.sheets.map((sheet, index) => {
     const button = document.createElement('button');
     button.className = index === shown ? 'tab on' : 'tab';
     button.textContent = sheet.name || `Sheet${index + 1}`;
-    button.onclick = () => { shown = index; tabs(); render(); };
+    button.title = button.textContent;
+    button.onclick = () => switchSheet(index);
     return button;
   }));
-  railBox.className = book.sheets.length > 1 ? 'rail on' : 'rail';
+}
+function switchSheet(index) {
+  if (index < 0 || index >= book.sheets.length || index === shown) return;
+  commitEdit();
+  shown = index;
+  grow = { rows: 0, cols: 0 };
+  select({ row: 1, col: 0 });
+  tabs();
+  render();
+  canvasBox.scrollLeft = canvasBox.scrollTop = 0;
 }
 
-function render() {
-  const sheet = book.sheets[shown];
-  let drawn;
-  try {
-    drawn = drawSheet({ book, index: shown, heights, grid: showGrid, shapes: showShapes });
-  } catch (error) {
-    say(t('failed') + (error.message ?? error), true);
-    return;
-  }
-  const paper = document.createElement('div');
-  paper.className = 'paper';
-  paper.appendChild(drawn.canvas);
-
-  const counter = document.createElement('div');
-  counter.className = 'counter';
-  counter.textContent = I18N[lang].sheetOf(
-    sheet.name || `Sheet${shown + 1}`, drawn.rows.length, Math.max(sheet.col_count || 0, 1));
-
-  const opts = document.createElement('div');
-  opts.className = 'opts';
+function options() {
+  const opts = $('opts');
+  opts.replaceChildren();
   for (const [key, on, set] of [
     ['grid', showGrid, v => { showGrid = v; }],
     ['shapes', showShapes, v => { showShapes = v; }],
@@ -264,57 +613,1034 @@ function render() {
     label.append(box, document.createTextNode(t(key)));
     opts.appendChild(label);
   }
-
-  canvasBox.replaceChildren(paper, counter, opts);
-  if (parsedFacts) say(parsedFacts());
 }
 
-function open(name, bytes) {
-  say(t('parsing'));
-  const began = performance.now();
+const div = (cls, parent) => {
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  if (parent) parent.appendChild(d);
+  return d;
+};
+const place = (el, r) => {
+  el.style.left = `${r.left}px`; el.style.top = `${r.top}px`;
+  el.style.width = `${r.right - r.left + 1}px`; el.style.height = `${r.bottom - r.top + 1}px`;
+};
+
+let paper = null, ed = null;
+const layer = {};
+
+function render() {
+  const view = { ...book, sheets: book.sheets.map((s, i) => i === shown ? roomy(s) : s) };
+  let drawn;
   try {
-    book = parse_spreadsheet(new Uint8Array(bytes));
+    drawn = drawSheet({ book: view, index: shown, heights, grid: showGrid, shapes: showShapes });
   } catch (error) {
-    book = null;
     say(t('failed') + (error.message ?? error), true);
     return;
   }
-  if (!book.sheets?.length) { book = null; say(t('empty'), true); return; }
+  const first = Math.min(...view.sheets[shown].rows.map(r => r.index));
+  const tops = [0];
+  for (const px of drawn.rows) tops.push(tops[tops.length - 1] + px);
+  geo = { columns: drawn.columns, tops, first, rowCount: drawn.rows.length,
+          colCount: drawn.columns.length - 1, last: first + drawn.rows.length - 1 };
+
+  const grid = div('sheet');
+  div('corner', grid).onmousedown = e => { e.preventDefault(); selectAll(); };
+  const colhead = div('colhead', grid);
+  colhead.style.width = `${drawn.width}px`;
+  for (let c = 0; c < geo.colCount; c += 1) {
+    const w = geo.columns[c + 1] - geo.columns[c];
+    if (w <= 0) continue;
+    const d = div('', colhead);
+    d.style.left = `${geo.columns[c]}px`;
+    d.style.width = `${w}px`;
+    d.textContent = colName(c);
+    d.dataset.col = c;
+  }
+  const rowhead = div('rowhead', grid);
+  rowhead.style.height = `${drawn.height}px`;
+  for (let i = 0; i < geo.rowCount; i += 1) {
+    const h = drawn.rows[i];
+    if (h <= 0) continue;
+    const d = div('', rowhead);
+    d.style.top = `${tops[i]}px`;
+    d.style.height = `${h}px`;
+    d.textContent = first + i;
+    d.dataset.row = first + i;
+  }
+  colhead.onmousedown = e => headDown(e, 'col');
+  rowhead.onmousedown = e => headDown(e, 'row');
+  layer.colhead = colhead;
+  layer.rowhead = rowhead;
+
+  paper = div('paper', grid);
+  paper.appendChild(drawn.canvas);
+  for (const [key] of changes) {             // a small mark on every cell this session changed
+    const [si, row, col] = key.split(',').map(Number);
+    if (si !== shown) continue;
+    const box = rectOf({ r0: row, c0: col, r1: row, c1: col });
+    if (!box) continue;
+    const m = div('edited-mark', paper);
+    m.style.left = `${box.right - 6}px`;
+    m.style.top = `${box.top}px`;
+  }
+  layer.refs = div('refs', paper);
+  layer.range = div('selrange', paper);
+  layer.active = div('active', paper);
+  layer.ants = div('ants', paper);
+  layer.fillprev = div('fillprev', paper);
+  layer.fill = div('fillh', paper);
+  layer.fill.onmousedown = fillDown;
+  paper.appendChild(ed);
+  paper.onmousedown = paperDown;
+  paper.ondblclick = e => { e.preventDefault(); if (mode === 'ready') beginEdit('edit'); };
+  paper.oncontextmenu = openMenu;
+
+  const scroll = [canvasBox.scrollLeft, canvasBox.scrollTop];
+  canvasBox.className = 'canvas';
+  canvasBox.replaceChildren(grid);
+  [canvasBox.scrollLeft, canvasBox.scrollTop] = scroll;
+  options();
+  paint(false);
+  if (!isTyping()) ed.focus({ preventScroll: true });
+}
+
+/** The box of a range in paper pixels, or null when it is outside the drawn sheet. */
+function rectOf(r) {
+  if (!geo) return null;
+  const i0 = r.r0 - geo.first, i1 = r.r1 - geo.first + 1;
+  if (i0 < 0 || i1 > geo.rowCount || r.c0 < 0 || r.c1 + 1 > geo.colCount) return null;
+  return { left: geo.columns[r.c0], right: geo.columns[r.c1 + 1], top: geo.tops[i0], bottom: geo.tops[i1] };
+}
+const cellRect = (row, col) => {
+  const m = mergeOf(book.sheets[shown], row, col);
+  return rectOf(m ? { r0: m.start_row, c0: m.start_col, r1: m.end_row, c1: m.end_col }
+                  : { r0: row, c0: col, r1: row, c1: col });
+};
+
+/** Draw the selection, the headings, the name box and the status bar. */
+function paint(scrollTo = true) {
+  if (!paper) return;
+  const R = rectOf(range);
+  const A = cellRect(act.row, act.col);
+  const single = withMerges({ r0: act.row, c0: act.col, r1: act.row, c1: act.col });
+  const isSingle = single.r0 === range.r0 && single.r1 === range.r1 && single.c0 === range.c0 && single.c1 === range.c1;
+  layer.range.style.display = R && !isSingle ? 'block' : 'none';
+  if (R && !isSingle) {
+    place(layer.range, R);
+    if (A) {   // the active cell is a hole in the tint
+      const w = R.right - R.left + 1, h = R.bottom - R.top + 1;
+      const x0 = A.left - R.left, y0 = A.top - R.top, x1 = A.right - R.left + 1, y1 = A.bottom - R.top + 1;
+      layer.range.style.clipPath = `polygon(evenodd, 0 0, ${w}px 0, ${w}px ${h}px, 0 ${h}px, 0 0, ` +
+        `${x0}px ${y0}px, ${x1}px ${y0}px, ${x1}px ${y1}px, ${x0}px ${y1}px, ${x0}px ${y0}px)`;
+    }
+  }
+  layer.active.style.display = A ? 'block' : 'none';
+  layer.active.classList.toggle('inrange', !isSingle);
+  if (A) place(layer.active, A);
+  const F = R || A;
+  layer.fill.style.display = F && mode === 'ready' ? 'block' : 'none';
+  if (F) { layer.fill.style.left = `${F.right - 3}px`; layer.fill.style.top = `${F.bottom - 3}px`; }
+  // copy marquee
+  const C = clip && clip.sheet === shown ? rectOf(clip.range) : null;
+  layer.ants.style.display = C ? 'block' : 'none';
+  if (C) place(layer.ants, C);
+  // the hidden input sits on the active cell, so an IME composes where the cell is
+  if (A && mode === 'ready') placeEditor(A, false);
+
+  const fullCols = range.r0 <= geo.first && range.r1 >= geo.last;
+  const fullRows = range.c0 <= 0 && range.c1 >= geo.colCount - 1;
+  for (const d of layer.colhead.children) {
+    const c = Number(d.dataset.col);
+    d.className = c >= range.c0 && c <= range.c1 ? (fullCols ? 'full' : 'on') : '';
+  }
+  for (const d of layer.rowhead.children) {
+    const r = Number(d.dataset.row);
+    d.className = r >= range.r0 && r <= range.r1 ? (fullRows ? 'full' : 'on') : '';
+  }
+  if (document.activeElement !== $('cellRef')) $('cellRef').value = a1(act.row, act.col);
+  if (document.activeElement !== fxIn && mode === 'ready') fxIn.value = rawOf(cellAt(act.row, act.col));
+  aggregates();
+  showMode();
+  if (scrollTo && A) reveal(A);
+}
+
+function reveal(box) {
+  const px = paper.offsetLeft, py = paper.offsetTop;
+  const l = px + box.left - 48, r = px + box.right + 10;
+  const tp = py + box.top - 26, b = py + box.bottom + 10;
+  if (l < canvasBox.scrollLeft) canvasBox.scrollLeft = l;
+  else if (r > canvasBox.scrollLeft + canvasBox.clientWidth) canvasBox.scrollLeft = r - canvasBox.clientWidth;
+  if (tp < canvasBox.scrollTop) canvasBox.scrollTop = tp;
+  else if (b > canvasBox.scrollTop + canvasBox.clientHeight) canvasBox.scrollTop = b - canvasBox.clientHeight;
+}
+
+function aggregates() {
+  const out = $('agg');
+  const cellsN = (range.r1 - range.r0 + 1) * (range.c1 - range.c0 + 1);
+  if (cellsN < 2) { out.textContent = ''; return; }
+  let count = 0, nums = 0, sum = 0;
+  for (const [index, row] of rowsOf(book.sheets[shown])) {
+    if (index < range.r0 || index > range.r1) continue;
+    for (const cell of row.cells || []) {
+      if (cell.col < range.c0 || cell.col > range.c1) continue;
+      if (shownOf(cell) === '') continue;
+      count += 1;
+      const n = numberOf(cell);
+      if (n !== null) { nums += 1; sum += n; }
+    }
+  }
+  const fmt = n => Number(n.toPrecision(10)).toLocaleString(lang === 'ja' ? 'ja-JP' : 'en-US', { maximumFractionDigits: 10 });
+  const parts = [];
+  if (nums) parts.push(`${t('avg')}: ${fmt(sum / nums)}`);
+  if (count) parts.push(`${t('count')}: ${count}`);
+  if (nums) parts.push(`${t('sum')}: ${fmt(sum)}`);
+  out.replaceChildren(...parts.map(p => { const s = document.createElement('span'); s.textContent = p; return s; }));
+}
+
+// ---- selection ---------------------------------------------------------------------
+function clampCell(p) {
+  return { row: Math.min(Math.max(p.row, 1), geo ? geo.last : p.row),
+           col: Math.min(Math.max(p.col, 0), geo ? geo.colCount - 1 : p.col) };
+}
+/** Make room when the selection nears the drawn edge, the way a sheet never ends. */
+function ensureRoom(p) {
+  if (!geo) return false;
+  let more = false;
+  if (p.row > geo.last - 3) { grow.rows += 40; more = true; }
+  if (p.col > geo.colCount - 3) { grow.cols += 6; more = true; }
+  if (more) render();
+  return more;
+}
+function select(p, extend = false, scrollTo = true) {
+  if (!book) return;
+  const q = { row: Math.max(1, p.row), col: Math.max(0, p.col) };
+  ensureRoom(q);
+  const c = clampCell(q);
+  if (extend) {
+    range = withMerges(norm(anchor, c));
+  } else {
+    const m = mergeOf(book.sheets[shown], c.row, c.col);
+    act = m ? { row: m.start_row, col: m.start_col } : c;
+    anchor = { ...act };
+    range = withMerges({ r0: act.row, c0: act.col, r1: act.row, c1: act.col });
+  }
+  paint(scrollTo);
+  if (extend && scrollTo) { const b = rectOf({ r0: c.row, c0: c.col, r1: c.row, c1: c.col }); if (b) reveal(b); }
+}
+function selectRange(r, active = { row: r.r0, col: r.c0 }) {
+  act = active;
+  anchor = { ...active };
+  range = withMerges(r);
+  paint();
+}
+function selectAll() {
+  commitEdit();
+  act = { row: geo.first, col: 0 };
+  anchor = { ...act };
+  range = { r0: geo.first, c0: 0, r1: geo.last, c1: geo.colCount - 1 };
+  paint(false);
+}
+
+/** Paper pixel -> cell. */
+function hit(e) {
+  const rect = paper.getBoundingClientRect();
+  const sx = rect.width / paper.offsetWidth || 1;
+  const x = (e.clientX - rect.left) / sx, y = (e.clientY - rect.top) / sx;
+  let col = 0;
+  while (col + 1 < geo.colCount && geo.columns[col + 1] <= x) col += 1;
+  let i = 0;
+  while (i + 1 < geo.rowCount && geo.tops[i + 1] <= y) i += 1;
+  return { row: geo.first + i, col };
+}
+
+function drag(onMove, onUp) {
+  const move = e => onMove(e);
+  const up = e => {
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    document.body.classList.remove('dragging');
+    onUp?.(e);
+  };
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+  document.body.classList.add('dragging');
+}
+
+function paperDown(e) {
+  closeMenu();
+  if (e.button === 2) {           // right-click keeps a selection it lands in
+    const p = hit(e);
+    if (p.row < range.r0 || p.row > range.r1 || p.col < range.c0 || p.col > range.c1) { commitEdit(); select(p); }
+    return;
+  }
+  if (e.button !== 0) return;
+  const p = hit(e);
+  if (mode !== 'ready' && pointable()) {   // pointing at cells while writing a formula
+    e.preventDefault();
+    pointAt(p, e.shiftKey);
+    drag(ev => pointAt(hit(ev), true));
+    return;
+  }
+  e.preventDefault();
+  commitEdit();
+  tabStartCol = null;
+  select(p, e.shiftKey, false);
+  ed.focus({ preventScroll: true });
+  drag(ev => select(hit(ev), true, false));
+}
+
+function headDown(e, kind) {
+  if (e.button !== 0 || !e.target.dataset[kind]) return;
+  e.preventDefault();
+  commitEdit();
+  closeMenu();
+  const at = Number(e.target.dataset[kind]);
+  const whole = n => kind === 'col'
+    ? { row: geo.first, col: n } : { row: n, col: 0 };
+  const far = n => kind === 'col'
+    ? { row: geo.last, col: n } : { row: n, col: geo.colCount - 1 };
+  const start = e.shiftKey ? (kind === 'col' ? anchor.col : anchor.row) : at;
+  const set = n => {
+    const lo = Math.min(start, n), hi = Math.max(start, n);
+    act = whole(start); anchor = whole(start);
+    range = kind === 'col'
+      ? { r0: geo.first, c0: lo, r1: geo.last, c1: hi }
+      : { r0: lo, c0: 0, r1: hi, c1: geo.colCount - 1 };
+    paint(false);
+  };
+  set(at);
+  ed.focus({ preventScroll: true });
+  const head = e.currentTarget;
+  drag(ev => {
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    if (el && el.parentElement === head && el.dataset[kind]) set(Number(el.dataset[kind]));
+  });
+  void far;
+}
+
+/** Ctrl+arrow: to the edge of the block of data, or to the next data, or the sheet's edge. */
+function edgeFrom(p, dr, dc) {
+  const inside = q => q.row >= 1 && q.row <= geo.last && q.col >= 0 && q.col < geo.colCount;
+  const next = q => ({ row: q.row + dr, col: q.col + dc });
+  let cur = { ...p };
+  let n = next(cur);
+  if (!inside(n)) return cur;
+  if (hasData(cur.row, cur.col) && hasData(n.row, n.col)) {
+    while (inside(next(n)) && hasData(next(n).row, next(n).col)) n = next(n);
+    return n;
+  }
+  while (inside(n) && !hasData(n.row, n.col)) {
+    if (!inside(next(n))) return n;
+    n = next(n);
+  }
+  return n;
+}
+
+/** Enter / Tab inside a multi-cell range walks the range instead of leaving it. */
+function walk(dr, dc) {
+  const multi = range.r0 !== range.r1 || range.c0 !== range.c1;
+  if (!multi) {
+    if (dr === 1 && tabStartCol !== null) { const c = tabStartCol; tabStartCol = null; select({ row: act.row + 1, col: c }); return; }
+    select({ row: act.row + dr, col: act.col + dc });
+    return;
+  }
+  let { row, col } = act;
+  if (dr) {
+    row += dr;
+    if (row > range.r1) { row = range.r0; col = col + 1 > range.c1 ? range.c0 : col + 1; }
+    if (row < range.r0) { row = range.r1; col = col - 1 < range.c0 ? range.c1 : col - 1; }
+  } else {
+    col += dc;
+    if (col > range.c1) { col = range.c0; row = row + 1 > range.r1 ? range.r0 : row + 1; }
+    if (col < range.c0) { col = range.c1; row = row - 1 < range.r0 ? range.r1 : row - 1; }
+  }
+  act = { row, col };
+  paint();
+}
+
+// ---- editing ------------------------------------------------------------------------
+// One textarea lives on the active cell all the time. While the sheet is "ready" it
+// is invisible and empty; the first key — or the first IME composition — turns it
+// into the cell's editor, so typing Japanese into a cell works the same as Latin.
+let mode = 'ready';           // ready | enter | edit (point is enter + pointing)
+let point = null;             // { start, end, anchor, cell } of a reference being pointed at
+let composing = false;
+
+ed = document.createElement('textarea');
+ed.className = 'cell-ed sink';
+ed.spellcheck = false;
+ed.setAttribute('autocomplete', 'off');
+ed.setAttribute('aria-label', 'cell');
+ed.rows = 1;
+
+const isTyping = () => {
+  const a = document.activeElement;
+  return a && a !== ed && a !== document.body && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable);
+};
+
+function placeEditor(box, visible) {
+  ed.style.left = `${box.left}px`;
+  ed.style.top = `${box.top}px`;
+  ed.style.minWidth = `${box.right - box.left + 1}px`;
+  ed.style.minHeight = `${box.bottom - box.top + 1}px`;
+  if (!visible) { ed.style.width = `${box.right - box.left + 1}px`; ed.style.height = `${box.bottom - box.top + 1}px`; }
+}
+function fitEditor() {
+  ed.style.width = '0px';
+  ed.style.height = '0px';
+  ed.style.width = `${Math.min(Math.max(ed.scrollWidth + 6, parseFloat(ed.style.minWidth) || 0), 900)}px`;
+  ed.style.height = `${Math.max(ed.scrollHeight, parseFloat(ed.style.minHeight) || 0)}px`;
+}
+
+function beginEdit(how, initial) {
+  if (!book || mode !== 'ready') return;
+  const cell = cellAt(act.row, act.col);
+  const box = cellRect(act.row, act.col);
+  if (!box) return;
+  mode = how;
+  ed.classList.remove('sink');
+  const size = cell?.style?.font_size;
+  ed.style.fontSize = size ? `${Math.round(size * 96 / 72 * 10) / 10}px` : '';
+  ed.style.fontWeight = cell?.style?.bold ? '700' : '';
+  ed.style.textAlign = numberOf(cell) !== null && how === 'edit' ? 'right' : 'left';
+  if (initial !== undefined) ed.value = initial;
+  else if (how === 'edit') ed.value = rawOf(cell);
+  placeEditor(box, true);
+  fitEditor();
+  ed.focus({ preventScroll: true });
+  if (how === 'edit') { const n = ed.value.length; ed.setSelectionRange(n, n); }
+  point = null;
+  layer.fill.style.display = 'none';
+  fxIn.value = ed.value;
+  highlightRefs(ed.value);
+  showMode();
+}
+
+function endEdit() {
+  mode = 'ready';
+  point = null;
+  ed.value = '';
+  ed.classList.add('sink');
+  ed.style.fontSize = ed.style.fontWeight = ed.style.textAlign = '';
+  highlightRefs('');
+  paint(false);
+}
+function cancelEdit() { if (mode !== 'ready') endEdit(); }
+/** Write what the editor holds into the active cell (or every cell of the range). */
+function commitEdit(all = false) {
+  if (mode === 'ready') return false;
+  const text = ed.value;
+  endEdit();
+  const targets = [];
+  if (all) {
+    for (let r = range.r0; r <= range.r1; r += 1) for (let c = range.c0; c <= range.c1; c += 1) {
+      targets.push({ row: r, col: c,
+        text: text.startsWith('=') ? shiftFormula(text, r - act.row, c - act.col) : text });
+    }
+  } else targets.push({ row: act.row, col: act.col, text });
+  write(targets);
+  return true;
+}
+
+/** Is the caret where a cell reference may go (after an operator, or on a pointed one)? */
+function pointable() {
+  const v = ed.value;
+  if (!v.startsWith('=')) return false;
+  const at = ed.selectionStart;
+  if (point && at === point.end) return true;
+  return /[=+\-*/^(,:<>&;\s]$/.test(v.slice(0, at));
+}
+function pointAt(p, extend) {
+  const c = clampCell(p);
+  if (!point) {
+    const at = ed.selectionStart;
+    point = { start: at, end: ed.selectionEnd, anchor: c, cell: c };
+  }
+  if (!extend) point.anchor = c;
+  point.cell = c;
+  const r = norm(point.anchor, c);
+  const ref = r.r0 === r.r1 && r.c0 === r.c1 ? a1(r.r0, r.c0) : `${a1(r.r0, r.c0)}:${a1(r.r1, r.c1)}`;
+  ed.value = ed.value.slice(0, point.start) + ref + ed.value.slice(point.end);
+  point.end = point.start + ref.length;
+  ed.setSelectionRange(point.end, point.end);
+  ed.focus({ preventScroll: true });
+  fitEditor();
+  fxIn.value = ed.value;
+  highlightRefs(ed.value);
+  const b = rectOf({ r0: c.row, c0: c.col, r1: c.row, c1: c.col });
+  if (b) reveal(b);
+  showMode();
+}
+
+/** F4: cycle A1 -> $A$1 -> A$1 -> $A1 on the reference at the caret. */
+function cycleAnchor() {
+  const v = ed.value, at = ed.selectionStart;
+  REF.lastIndex = 0;
+  let m;
+  while ((m = REF.exec(v))) {
+    const s = m.index, e = s + m[0].length;
+    if (at < s || at > e) continue;
+    const [, c$, letters, r$, digits] = m;
+    const next = !c$ && !r$ ? ['$', '$'] : c$ && r$ ? ['', '$'] : !c$ && r$ ? ['$', ''] : ['', ''];
+    const rep = `${next[0]}${letters}${next[1]}${digits}`;
+    ed.value = v.slice(0, s) + rep + v.slice(e);
+    ed.setSelectionRange(s + rep.length, s + rep.length);
+    point = null;
+    fxIn.value = ed.value;
+    return;
+  }
+}
+
+const REF_COLOURS = ['#2F6FD1', '#C23A6B', '#7A55B8', '#0E8A7E', '#D2721B', '#3E8E2F'];
+function highlightRefs(text) {
+  if (!layer.refs) return;
+  layer.refs.replaceChildren();
+  if (!text.startsWith('=')) return;
+  const re = /(?<![A-Za-z0-9_.!])(\$?[A-Za-z]{1,3}\$?\d{1,7})(?::(\$?[A-Za-z]{1,3}\$?\d{1,7}))?(?![A-Za-z0-9_(!])/g;
+  let i = 0;
+  outsideStrings(text, part => {
+    for (const m of part.matchAll(re)) {
+      const p = parseA1(m[1]); const q = m[2] ? parseA1(m[2]) : p;
+      if (!p || !q) continue;
+      const b = rectOf(norm(p, q));
+      if (!b) continue;
+      const box = div('refbox', layer.refs);
+      box.style.setProperty('--c', REF_COLOURS[i % REF_COLOURS.length]);
+      place(box, b);
+      i += 1;
+    }
+    return part;
+  });
+}
+
+function showMode() {
+  const m = mode === 'ready' ? 'ready' : (mode === 'enter' && point ? 'point' : mode);
+  $('mode').textContent = t(m);
+}
+
+ed.addEventListener('compositionstart', () => {
+  composing = true;
+  if (mode === 'ready') beginEdit('enter', '');
+});
+ed.addEventListener('compositionend', () => { composing = false; });
+ed.addEventListener('input', () => {
+  if (mode === 'ready') { const v = ed.value; ed.value = ''; beginEdit('enter', v); return; }
+  point = null;
+  fitEditor();
+  fxIn.value = ed.value;
+  highlightRefs(ed.value);
+  showMode();
+});
+
+// ---- writing cells ----------------------------------------------------------------
+const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/** Write cells as one undoable step, then draw the workbook as the engine now reads it. */
+function write(items) {
+  const step = [];
+  for (const { row, col, text } of items) {
+    const key = keyOf(row, col);
+    const before = changes.get(key);
+    const pristine = rawOf(cellIn(origBook.sheets[shown], row, col));
+    const after = text === pristine ? undefined : { sheet_index: shown, row, col, ...typed(text) };
+    if (same(before, after)) continue;
+    if (after) changes.set(key, after); else changes.delete(key);
+    step.push({ key, before, after });
+  }
+  if (!step.length) { paint(false); return; }
+  if (!rebuild()) {                      // the engine refused: put it back as it was
+    for (const s of step) if (s.before) changes.set(s.key, s.before); else changes.delete(s.key);
+    rebuild();
+    return;
+  }
+  undoStack.push(step);
+  redoStack.length = 0;
+  markSaved();
+}
+
+function rebuild() {
+  try {
+    current = changes.size ? edit_xlsx(source, [...changes.values()]) : source;
+    let next = parse_spreadsheet(current);
+    if (changes.size) {
+      try { next = recalculate_spreadsheet(next, Date.now()); } catch { /* the cached values stand */ }
+    }
+    book = next;
+  } catch (error) {
+    say(t('editFailed') + (error.message ?? error), true);
+    return false;
+  }
+  if (msgEl.classList.contains('err')) msgEl.hidden = true;
+  render();
+  return true;
+}
+
+function replay(from, to, side) {
+  const step = from.pop();
+  if (!step) return;
+  cancelEdit();
+  for (const s of step) {
+    const v = s[side];
+    if (v) changes.set(s.key, v); else changes.delete(s.key);
+  }
+  to.push(step);
+  const cells = step.map(s => s.key.split(',').map(Number));
+  const si = cells[0][0];
+  if (si !== shown) { shown = si; tabs(); }
+  rebuild();
+  const rows = cells.map(c => c[1]), cols = cells.map(c => c[2]);
+  selectRange({ r0: Math.min(...rows), c0: Math.min(...cols), r1: Math.max(...rows), c1: Math.max(...cols) });
+  markSaved();
+}
+const undo = () => replay(undoStack, redoStack, 'before');
+const redo = () => replay(redoStack, undoStack, 'after');
+
+function markSaved() {
+  const n = changes.size;
+  $('btnSave').disabled = n === 0;
+  $('saveCount').textContent = n ? String(n) : '';
+  $('btnUndo').disabled = undoStack.length === 0;
+  $('btnRedo').disabled = redoStack.length === 0;
+  $('docName').classList.toggle('dirty', n > 0);
+}
+
+function clearRange() {
+  const items = [];
+  for (const [index, row] of rowsOf(book.sheets[shown])) {
+    if (index < range.r0 || index > range.r1) continue;
+    for (const cell of row.cells || []) {
+      if (cell.col >= range.c0 && cell.col <= range.c1 && rawOf(cell) !== '') items.push({ row: index, col: cell.col, text: '' });
+    }
+  }
+  write(items);
+}
+
+// ---- fill ---------------------------------------------------------------------------
+/** Extend the source block along one axis: numbers as a straight-line series when there
+ *  are two or more of them, formulas moved with their references, anything else repeated. */
+function fillInto(src, dest, axis) {
+  const items = [];
+  const len = axis === 'row' ? src.r1 - src.r0 + 1 : src.c1 - src.c0 + 1;
+  const lanes = axis === 'row' ? [src.c0, src.c1] : [src.r0, src.r1];
+  for (let lane = lanes[0]; lane <= lanes[1]; lane += 1) {
+    const at = k => axis === 'row' ? { row: src.r0 + k, col: lane } : { row: lane, col: src.c0 + k };
+    const seed = [...Array(len).keys()].map(k => { const p = at(k); return { p, cell: cellAt(p.row, p.col) }; });
+    const nums = seed.map(s => (s.cell && !s.cell.formula ? numberOf(s.cell) : null));
+    const series = len >= 2 && nums.every(n => n !== null);
+    const step = series ? (nums[len - 1] - nums[0]) / (len - 1) : 0;
+    const from = axis === 'row' ? dest.r0 : dest.c0, to = axis === 'row' ? dest.r1 : dest.c1;
+    for (let pos = from; pos <= to; pos += 1) {
+      const k = pos - (axis === 'row' ? src.r0 : src.c0);
+      if (k >= 0 && k < len) continue;
+      const p = axis === 'row' ? { row: pos, col: lane } : { row: lane, col: pos };
+      if (series) {
+        const v = nums[0] + step * k;
+        items.push({ ...p, text: String(Math.round(v * 1e10) / 1e10) });
+      } else {
+        const j = ((k % len) + len) % len;
+        const s = seed[j];
+        const raw = rawOf(s.cell);
+        items.push({ ...p, text: raw.startsWith('=') ? shiftFormula(raw, p.row - s.p.row, p.col - s.p.col) : raw });
+      }
+    }
+  }
+  write(items);
+}
+
+function fillDown(e) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const src = { ...range };
+  let dest = null, axis = null;
+  drag(ev => {
+    const p = clampCell(hit(ev));
+    const down = p.row - src.r1, right = p.col - src.c1;
+    const up = src.r0 - p.row, left = src.c0 - p.col;
+    const best = Math.max(down, right, up, left);
+    if (best <= 0) { dest = null; layer.fillprev.style.display = 'none'; return; }
+    if (best === down) { axis = 'row'; dest = { ...src, r1: p.row }; }
+    else if (best === up) { axis = 'row'; dest = { ...src, r0: p.row }; }
+    else if (best === right) { axis = 'col'; dest = { ...src, c1: p.col }; }
+    else { axis = 'col'; dest = { ...src, c0: p.col }; }
+    const b = rectOf(dest);
+    layer.fillprev.style.display = b ? 'block' : 'none';
+    if (b) place(layer.fillprev, b);
+  }, () => {
+    layer.fillprev.style.display = 'none';
+    if (!dest) return;
+    fillInto(src, dest, axis);
+    selectRange(dest, { ...act });
+  });
+}
+function fillDir(axis) {
+  if (axis === 'row') {
+    if (range.r0 === range.r1) { if (range.r0 <= 1) return; fillFrom({ ...range, r0: range.r0 - 1, r1: range.r0 - 1 }, range, 'row'); }
+    else fillFrom({ ...range, r1: range.r0 }, range, 'row');
+  } else {
+    if (range.c0 === range.c1) { if (range.c0 <= 0) return; fillFrom({ ...range, c0: range.c0 - 1, c1: range.c0 - 1 }, range, 'col'); }
+    else fillFrom({ ...range, c1: range.c0 }, range, 'col');
+  }
+}
+// Ctrl+D / Ctrl+R copy the first row / column (no series), as the shortcut does.
+function fillFrom(src, dest, axis) {
+  const items = [];
+  for (let r = dest.r0; r <= dest.r1; r += 1) for (let c = dest.c0; c <= dest.c1; c += 1) {
+    const s = axis === 'row' ? { row: src.r0, col: c } : { row: r, col: src.c0 };
+    if (s.row === r && s.col === c) continue;
+    const raw = rawOf(cellAt(s.row, s.col));
+    items.push({ row: r, col: c, text: raw.startsWith('=') ? shiftFormula(raw, r - s.row, c - s.col) : raw });
+  }
+  write(items);
+}
+
+// ---- clipboard --------------------------------------------------------------------
+function tsvQuote(s) { return /[\t\n"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
+function copyRange(cut) {
+  const raws = [], lines = [];
+  for (let r = range.r0; r <= range.r1; r += 1) {
+    const rawRow = [], shownRow = [];
+    for (let c = range.c0; c <= range.c1; c += 1) {
+      const cell = cellAt(r, c);
+      rawRow.push(rawOf(cell));
+      shownRow.push(tsvQuote(shownOf(cell)));
+    }
+    raws.push(rawRow);
+    lines.push(shownRow.join('\t'));
+  }
+  clip = { tsv: lines.join('\r\n') + '\r\n', sheet: shown, range: { ...range }, raws, cut };
+  paint(false);
+  return clip.tsv;
+}
+function parseTsv(text) {
+  const rows = [];
+  let row = [], cell = '', quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') { cell += '"'; i += 1; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"' && cell === '') quoted = true;
+    else if (ch === '\t') { row.push(cell); cell = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i += 1;
+      row.push(cell); rows.push(row); row = []; cell = '';
+    } else cell += ch;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+function pasteText(text) {
+  const own = clip && text.replace(/\r\n/g, '\n') === clip.tsv.replace(/\r\n/g, '\n');
+  const grid = own ? clip.raws : parseTsv(text);
+  if (!grid.length) return;
+  const h = grid.length, w = Math.max(...grid.map(r => r.length));
+  // One copied block repeats over a larger selection that it divides evenly.
+  const selH = range.r1 - range.r0 + 1, selW = range.c1 - range.c0 + 1;
+  const reps = (selH % h === 0 && selW % w === 0) ? [selH / h, selW / w] : [1, 1];
+  const items = [];
+  const written = new Set();
+  for (let rr = 0; rr < reps[0]; rr += 1) for (let cc = 0; cc < reps[1]; cc += 1) {
+    for (let i = 0; i < h; i += 1) for (let j = 0; j < w; j += 1) {
+      const row = range.r0 + rr * h + i, col = range.c0 + cc * w + j;
+      let v = grid[i][j] ?? '';
+      if (own && v.startsWith('=')) v = shiftFormula(v, row - (clip.range.r0 + i), col - (clip.range.c0 + j));
+      items.push({ row, col, text: v });
+      written.add(`${row},${col}`);
+    }
+  }
+  if (own && clip.cut && clip.sheet === shown) {   // a cut moves: what it left behind is emptied
+    for (let r = clip.range.r0; r <= clip.range.r1; r += 1) for (let c = clip.range.c0; c <= clip.range.c1; c += 1) {
+      if (!written.has(`${r},${c}`) && hasData(r, c)) items.push({ row: r, col: c, text: '' });
+    }
+    clip = null;
+  }
+  const dest = { r0: range.r0, c0: range.c0, r1: range.r0 + h * reps[0] - 1, c1: range.c0 + w * reps[1] - 1 };
+  ensureRoom({ row: dest.r1, col: dest.c1 });
+  write(items);
+  selectRange(dest, { ...act });
+}
+document.addEventListener('copy', e => {
+  if (!book || mode !== 'ready' || isTyping()) return;
+  e.preventDefault();
+  e.clipboardData.setData('text/plain', copyRange(false));
+});
+document.addEventListener('cut', e => {
+  if (!book || mode !== 'ready' || isTyping()) return;
+  e.preventDefault();
+  e.clipboardData.setData('text/plain', copyRange(true));
+});
+document.addEventListener('paste', e => {
+  if (!book || mode !== 'ready' || isTyping()) return;
+  e.preventDefault();
+  pasteText(e.clipboardData.getData('text/plain'));
+});
+
+// ---- context menu ----------------------------------------------------------------
+const ctx = $('ctx');
+function openMenu(e) {
+  e.preventDefault();
+  commitEdit();
+  ctx.hidden = false;
+  const w = ctx.offsetWidth, h = ctx.offsetHeight;
+  ctx.style.left = `${Math.min(e.clientX, innerWidth - w - 8)}px`;
+  ctx.style.top = `${Math.min(e.clientY, innerHeight - h - 8)}px`;
+}
+function closeMenu() { ctx.hidden = true; }
+ctx.addEventListener('mousedown', e => e.preventDefault());
+ctx.addEventListener('click', async e => {
+  const act = e.target.closest('button')?.dataset.act;
+  closeMenu();
+  ed.focus({ preventScroll: true });
+  if (act === 'copy' || act === 'cut') {
+    const text = copyRange(act === 'cut');
+    try { await navigator.clipboard.writeText(text); } catch { /* the in-page copy still works */ }
+  } else if (act === 'paste') {
+    try { pasteText(await navigator.clipboard.readText()); }
+    catch { if (clip) pasteText(clip.tsv); else say(t('pasteBlocked')); }
+  } else if (act === 'clear') clearRange();
+  else if (act === 'fillDown') fillDir('row');
+  else if (act === 'fillRight') fillDir('col');
+});
+document.addEventListener('mousedown', e => { if (!ctx.contains(e.target)) closeMenu(); });
+
+// ---- keys ---------------------------------------------------------------------------
+const ARROWS = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+
+function editingKey(e) {
+  const mod = e.ctrlKey || e.metaKey;
+  if (e.key === 'Enter' && e.altKey) {        // a line break inside the cell
+    e.preventDefault();
+    const s = ed.selectionStart;
+    ed.setRangeText('\n', s, ed.selectionEnd, 'end');
+    ed.dispatchEvent(new Event('input'));
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (mod) { commitEdit(true); return; }
+    commitEdit();
+    walk(e.shiftKey ? -1 : 1, 0);
+    return;
+  }
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    if (tabStartCol === null) tabStartCol = act.col;
+    commitEdit();
+    walk(0, e.shiftKey ? -1 : 1);
+    return;
+  }
+  if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); return; }
+  if (e.key === 'F2') { e.preventDefault(); mode = mode === 'edit' ? 'enter' : 'edit'; point = null; showMode(); return; }
+  if (e.key === 'F4') { e.preventDefault(); cycleAnchor(); highlightRefs(ed.value); return; }
+  const arrow = ARROWS[e.key];
+  if (arrow && mode === 'enter' && !mod) {
+    e.preventDefault();
+    if (pointable()) {
+      const from = point ? point.cell : act;
+      pointAt({ row: from.row + arrow[0], col: from.col + arrow[1] }, e.shiftKey);
+      return;
+    }
+    commitEdit();
+    select({ row: act.row + arrow[0], col: act.col + arrow[1] });
+  }
+}
+
+function readyKey(e) {
+  const mod = e.ctrlKey || e.metaKey;
+  const k = e.key;
+  if (mod && /^[zZ]$/.test(k)) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+  if (mod && /^[yY]$/.test(k)) { e.preventDefault(); redo(); return; }
+  if (mod && /^[aA]$/.test(k)) { e.preventDefault(); selectAll(); return; }
+  if (mod && /^[dD]$/.test(k)) { e.preventDefault(); fillDir('row'); return; }
+  if (mod && /^[rR]$/.test(k)) { e.preventDefault(); fillDir('col'); return; }
+  if (mod && k === 'PageDown') { e.preventDefault(); switchSheet(shown + 1); return; }
+  if (mod && k === 'PageUp') { e.preventDefault(); switchSheet(shown - 1); return; }
+  if (mod && k === 'Home') { e.preventDefault(); select({ row: 1, col: 0 }, e.shiftKey); return; }
+  if (mod && k === 'End') {
+    e.preventDefault();
+    const sheet = book.sheets[shown];
+    const lastRow = Math.max(1, ...(sheet.rows || []).filter(r => (r.cells || []).length).map(r => r.index));
+    select({ row: lastRow, col: Math.max(0, (sheet.col_count || 1) - 1) }, e.shiftKey);
+    return;
+  }
+  if (k === ' ' && mod && !e.shiftKey) { e.preventDefault(); act = { ...act }; range = { r0: geo.first, c0: range.c0, r1: geo.last, c1: range.c1 }; paint(false); return; }
+  if (k === ' ' && e.shiftKey && !mod) { e.preventDefault(); range = { r0: range.r0, c0: 0, r1: range.r1, c1: geo.colCount - 1 }; paint(false); return; }
+  const arrow = ARROWS[k];
+  if (arrow) {
+    e.preventDefault();
+    tabStartCol = null;
+    const from = e.shiftKey ? { row: anchor.row === range.r0 ? range.r1 : range.r0, col: anchor.col === range.c0 ? range.c1 : range.c0 } : act;
+    const to = mod ? edgeFrom(from, ...arrow) : { row: from.row + arrow[0], col: from.col + arrow[1] };
+    select(to, e.shiftKey);
+    return;
+  }
+  if (k === 'Home') { e.preventDefault(); select({ row: act.row, col: 0 }, e.shiftKey); return; }
+  if (k === 'PageDown' || k === 'PageUp') {
+    e.preventDefault();
+    const rows = Math.max(5, Math.floor(canvasBox.clientHeight / 20) - 2);
+    select({ row: act.row + (k === 'PageDown' ? rows : -rows), col: act.col }, e.shiftKey);
+    return;
+  }
+  if (k === 'Enter') { e.preventDefault(); walk(e.shiftKey ? -1 : 1, 0); return; }
+  if (k === 'Tab') { e.preventDefault(); if (tabStartCol === null) tabStartCol = act.col; walk(0, e.shiftKey ? -1 : 1); return; }
+  if (k === 'F2') { e.preventDefault(); beginEdit('edit'); return; }
+  if (k === 'Delete') { e.preventDefault(); clearRange(); return; }
+  if (k === 'Backspace') { e.preventDefault(); beginEdit('enter', ''); return; }
+  if (k === 'Escape') { if (clip) { clip = null; paint(false); } return; }
+  // Printable keys and IME input reach the hidden textarea and start the edit there.
+  if (document.activeElement !== ed && k.length === 1 && !mod && !e.altKey) {
+    e.preventDefault();
+    beginEdit('enter', k);
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (!book) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && /^[sS]$/.test(e.key)) {
+    e.preventDefault();
+    if (document.activeElement === fxIn) fxCommit();
+    commitEdit();
+    save();
+    return;
+  }
+  if (composing || e.isComposing || e.key === 'Process') return;
+  if (!ctx.hidden && e.key === 'Escape') { closeMenu(); return; }
+  if (mode !== 'ready') { if (document.activeElement === ed) editingKey(e); return; }
+  if (isTyping()) return;
+  readyKey(e);
+});
+
+// ---- formula bar and name box ------------------------------------------------------
+const fxIn = $('fxIn');
+function fxCommit() {
+  const text = fxIn.value;
+  fxIn.blur();
+  write([{ row: act.row, col: act.col, text }]);
+}
+fxIn.addEventListener('focus', () => {
+  if (mode !== 'ready') { const v = ed.value; endEdit(); fxIn.value = v; }
+  $('mode').textContent = t('edit');
+});
+fxIn.addEventListener('input', () => highlightRefs(fxIn.value));
+fxIn.addEventListener('keydown', e => {
+  if (e.isComposing || e.key === 'Process') return;
+  if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); fxCommit(); walk(e.shiftKey ? -1 : 1, 0); ed.focus(); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); fxIn.blur(); highlightRefs(''); paint(false); ed.focus(); }
+});
+fxIn.addEventListener('blur', () => { highlightRefs(''); showMode(); });
+
+const nameBox = $('cellRef');
+nameBox.addEventListener('focus', () => { commitEdit(); nameBox.select(); });
+nameBox.addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const [p, q] = nameBox.value.split(':').map(parseA1);
+    nameBox.blur();
+    ed.focus({ preventScroll: true });
+    if (p && q) { ensureRoom(q); selectRange(norm(p, q)); }
+    else if (p) select(p);
+    else paint(false);
+  } else if (e.key === 'Escape') { nameBox.blur(); paint(false); ed.focus(); }
+});
+
+// ---- save ---------------------------------------------------------------------------
+function save() {
+  if (!current || changes.size === 0) return;
+  const blob = new Blob([current], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = fileName || 'workbook.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  // What was saved is the new starting point.
+  source = current;
+  origBook = parse_spreadsheet(source);
+  changes.clear();
+  undoStack.length = 0;
+  redoStack.length = 0;
+  markSaved();
+  render();
+  say(t('saved'));
+}
+
+window.addEventListener('beforeunload', e => {
+  if (changes.size) { e.preventDefault(); e.returnValue = t('leave'); }
+});
+
+// ---- opening ---------------------------------------------------------------------
+function open(name, bytes) {
+  say(t('parsing'));
+  const began = performance.now();
+  let parsed;
+  try {
+    parsed = parse_spreadsheet(bytes);
+  } catch (error) {
+    say(t('failed') + (error.message ?? error), true);
+    return;
+  }
+  if (!parsed.sheets?.length) { say(t('empty'), true); return; }
   const took = Math.round(performance.now() - began);
+  book = parsed;
+  origBook = parse_spreadsheet(bytes);
+  source = current = bytes;
+  fileName = name;
+  changes.clear(); undoStack.length = 0; redoStack.length = 0; clip = null;
+  mode = 'ready';
   const cells = book.sheets.reduce((sum, sheet) =>
     sum + (sheet.rows || []).reduce((n, row) => n + (row.cells?.length || 0), 0), 0);
-  parsedFacts = () => I18N[lang].parsed(book.sheets.length, cells, took);
-  document.getElementById('docName').textContent = name;
+  $('docName').textContent = name;
+  $('fx').hidden = false;
+  $('sbar').classList.add('on');
+  $('tabbar').classList.add('on');
+  for (const id of ['btnSave', 'btnUndo', 'btnRedo']) $(id).hidden = false;
   shown = 0;
+  grow = { rows: 0, cols: 0 };
+  act = { row: 1, col: 0 }; anchor = { ...act }; range = { r0: 1, c0: 0, r1: 1, c1: 0 };
+  canvasBox.scrollLeft = canvasBox.scrollTop = 0;
+  markSaved();
   tabs();
   render();
+  say(I18N[lang].parsed(book.sheets.length, cells, took));
+  setTimeout(() => { if (!msgEl.classList.contains('err')) msgEl.hidden = true; }, 4000);
 }
 
 async function openFile(file) {
   if (!/\.xlsx$/i.test(file.name)) { say(t('badType'), true); return; }
-  open(file.name, await file.arrayBuffer());
+  if (changes.size && !confirm(t('leave'))) return;
+  open(file.name, new Uint8Array(await file.arrayBuffer()));
 }
 
-const fileIn = document.getElementById('fileIn');
-fileIn.onchange = () => { if (fileIn.files?.[0]) openFile(fileIn.files[0]); };
-document.getElementById('btnOpen').onclick = () => fileIn.click();
-document.getElementById('btnChoose').onclick = () => fileIn.click();
-document.getElementById('btnSample').onclick = async () => {
+const fileIn = $('fileIn');
+fileIn.onchange = () => { if (fileIn.files?.[0]) openFile(fileIn.files[0]); fileIn.value = ''; };
+$('btnOpen').onclick = () => fileIn.click();
+$('btnChoose').onclick = () => fileIn.click();
+$('btnSave').onclick = () => { commitEdit(); save(); };
+$('btnUndo').onclick = () => { undo(); ed.focus(); };
+$('btnRedo').onclick = () => { redo(); ed.focus(); };
+$('btnSample').onclick = async () => {
   try {
     const response = await fetch(SAMPLE);
     if (!response.ok) throw new Error(String(response.status));
-    open('sample.xlsx', await response.arrayBuffer());
+    open('sample.xlsx', new Uint8Array(await response.arrayBuffer()));
   } catch (error) {
     say(t('failed') + (error.message ?? error), true);
   }
 };
 
-const drop = document.getElementById('drop');
-document.addEventListener('dragover', e => { e.preventDefault(); drop && drop.classList.add('hot'); });
-document.addEventListener('dragleave', () => drop && drop.classList.remove('hot'));
+document.addEventListener('dragover', e => { e.preventDefault(); dropCard.classList.add('hot'); });
+document.addEventListener('dragleave', () => dropCard.classList.remove('hot'));
 document.addEventListener('drop', e => {
   e.preventDefault();
-  drop && drop.classList.remove('hot');
+  dropCard.classList.remove('hot');
   const file = e.dataTransfer?.files?.[0];
   if (file) openFile(file);
 });

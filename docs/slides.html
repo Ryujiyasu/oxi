@@ -16,146 +16,223 @@
 <link rel="icon" type="image/x-icon" href="./favicon.ico">
 <script src="./analytics.js" defer></script>
 <style>
+/* ---- Oxi app shell: shared by Oxicells and Oxislides (site palette) ---- */
 :root {
-  --accent: #C43E1C;
-  --accent-h: #A63417;
-  --accent-l: #FAEBE7;
-  --txt: #333;
-  --bg: #E8E8E8;
-  --rail: #F3F3F3;
-  --border: #E1E1E1;
-  --shad: 0 1px 4px rgba(0,0,0,.18);
+  --ink: #1a1a1a;
+  --ink2: #5a5a5a;
+  --ink3: #8a857c;
+  --paper: #f7f5f0;
+  --desk: #ece8e1;
+  --surface: #ffffff;
+  --line: #e2ddd4;
+  --line2: #d5d0c8;
+  --brand: #264653;
+  --brand-l: #e8f0f2;
+  --shad-1: 0 1px 2px rgba(38,70,83,.08), 0 1px 1px rgba(38,70,83,.04);
+  --shad-2: 0 10px 30px -12px rgba(38,70,83,.35), 0 2px 6px rgba(38,70,83,.10);
+  --r: 8px;
 }
 * { margin: 0; padding: 0; box-sizing: border-box }
 html, body { height: 100% }
 body {
-  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-  background: var(--bg); color: var(--txt);
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Noto Sans JP', 'Yu Gothic UI', sans-serif;
+  background: var(--desk); color: var(--ink);
   display: flex; flex-direction: column; overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
+button, input, select { font: inherit; color: inherit }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
 
 /* Title bar */
 .tb {
-  display: flex; align-items: center; gap: 10px; height: 44px; flex-shrink: 0;
-  background: #fff; padding: 0 14px; font-size: 13px; user-select: none;
-  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; height: 52px; flex-shrink: 0;
+  background: var(--surface); padding: 0 12px 0 14px; font-size: 13px; user-select: none;
+  border-bottom: 1px solid var(--line); position: relative; z-index: 3;
 }
-.logo { display: flex; align-items: center; gap: 7px; font-weight: 600; letter-spacing: .2px;
-  color: inherit; text-decoration: none }
-.logo:hover { opacity: .72 }
+.tb::before {               /* the app's colour, as a thin band along the top */
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--accent);
+}
+.logo { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px;
+  letter-spacing: .1px; color: inherit; text-decoration: none; flex-shrink: 0 }
+.logo:hover .logo-mark { transform: translateY(-1px) }
 .logo-mark {
-  width: 22px; height: 22px; border-radius: 5px; background: var(--accent); color: #fff;
-  display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px;
+  width: 28px; height: 28px; border-radius: 7px; background: var(--accent); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,.14); transition: transform .15s ease;
 }
-.dn { color: #555; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.logo-mark svg { width: 16px; height: 16px }
+.dn-wrap { display: flex; align-items: center; gap: 6px; min-width: 0; margin-left: 6px;
+  padding-left: 12px; border-left: 1px solid var(--line) }
+.dn { color: var(--ink2); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .tb .sp { flex: 1 }
+.tb .grp { display: flex; align-items: center; gap: 6px }
+.tb .vsep { width: 1px; height: 24px; background: var(--line); margin: 0 4px }
 .tb button, .tb a.btn {
-  font: inherit; border: 1px solid var(--border); background: #fff; color: var(--txt);
-  border-radius: 5px; padding: 5px 12px; cursor: pointer; text-decoration: none;
+  border: 1px solid var(--line2); background: var(--surface); color: var(--ink);
+  border-radius: 7px; height: 32px; padding: 0 13px; cursor: pointer; text-decoration: none;
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
 }
+.tb button svg, .tb a.btn svg { width: 15px; height: 15px; flex-shrink: 0 }
 .tb button:hover, .tb a.btn:hover { background: var(--accent-l); border-color: var(--accent) }
 .tb button:disabled { opacity: .45; cursor: default }
+.tb button:disabled:hover { background: var(--surface); border-color: var(--line2) }
+.tb button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600 }
+.tb button.primary:hover { background: var(--accent-h); border-color: var(--accent-h) }
+.tb button.primary:disabled:hover { background: var(--accent); border-color: var(--accent) }
+.tb button.quiet, .tb a.btn.quiet { border-color: transparent; background: transparent; color: var(--ink2) }
+.tb button.quiet:hover, .tb a.btn.quiet:hover { background: var(--paper); border-color: var(--line); color: var(--ink) }
 html[data-host="desktop"] .src { display: none }
-.tb button:disabled:hover { background: #fff; border-color: var(--border) }
-.tb button:not(:disabled):active { background: var(--accent-l); border-color: var(--accent) }
-.tb button:focus-visible, .tb a.btn:focus-visible {
-  outline: 2px solid var(--accent); outline-offset: 1px
+
+/* The three editors, one switch */
+.apps { display: flex; align-items: center; background: var(--paper); border: 1px solid var(--line);
+  border-radius: 9px; padding: 2px; gap: 2px }
+.apps > a, .apps > span {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  border-radius: 7px; font-size: 12.5px; color: var(--ink2); text-decoration: none; white-space: nowrap;
 }
-.tb button.primary { background: var(--accent); border-color: var(--accent); color: #fff }
-.tb button.primary:hover { background: var(--accent-h) }
-.lang { display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden }
-.lang button { border: 0; border-radius: 0; padding: 5px 9px; font-size: 12px }
-.lang button.on { background: var(--accent); color: #fff }
+.apps > a:hover { background: var(--surface); color: var(--ink) }
+.apps .dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0 }
+.apps .on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: var(--shad-1) }
+.lang { display: flex; border: 1px solid var(--line2); border-radius: 7px; overflow: hidden; height: 32px }
+.tb .lang button { border: 0; border-radius: 0; height: 30px; padding: 0 9px; font-size: 12px; color: var(--ink2) }
+.tb .lang button.on { background: var(--brand); color: #fff }
+.tb .lang button:hover:not(.on) { background: var(--paper) }
+
+/* Messages */
+.msg { padding: 9px 16px; font-size: 13px; background: var(--accent-l); color: var(--accent-h);
+  flex-shrink: 0; border-bottom: 1px solid var(--line) }
+.msg.err { background: #FDECEA; color: #B3261E }
+.msg[hidden] { display: none }
+
+/* Landing card, shown until a file is open */
+.drop {
+  margin: auto; width: min(720px, 100%); text-align: center; padding: 44px 36px 30px;
+  border: 1.5px dashed var(--line2); border-radius: 16px; background: var(--surface);
+  color: var(--ink2); box-shadow: var(--shad-2); transition: border-color .15s, background .15s, transform .15s;
+}
+.drop.hot { border-color: var(--accent); background: var(--accent-l); transform: scale(1.01) }
+.drop-icon { width: 64px; height: 64px; margin: 0 auto 18px; border-radius: 16px; background: var(--accent-l);
+  color: var(--accent); display: flex; align-items: center; justify-content: center }
+.drop-icon svg { width: 34px; height: 34px }
+.drop h1 { font-size: 24px; line-height: 1.35; color: var(--ink); margin-bottom: 10px; font-weight: 700; letter-spacing: -.2px }
+.drop p { font-size: 14.5px; line-height: 1.7; margin: 0 auto 22px; max-width: 500px }
+.drop .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap }
+.drop button {
+  border: 1.5px solid var(--accent); background: var(--accent); color: #fff; font-weight: 600;
+  border-radius: 9px; padding: 11px 22px; cursor: pointer; font-size: 14.5px;
+  transition: background .12s, transform .12s;
+}
+.drop button:hover { background: var(--accent-h); border-color: var(--accent-h) }
+.drop button:active { transform: translateY(1px) }
+.drop button.ghost { background: var(--surface); color: var(--accent) }
+.drop button.ghost:hover { background: var(--accent-l) }
+.drop button:disabled { opacity: .5; cursor: default }
+.chips { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 24px }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink2);
+  background: var(--paper); border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; white-space: nowrap }
+.chip svg { width: 13px; height: 13px; color: var(--accent) }
+.note { font-size: 12px; color: var(--ink3); margin-top: 22px; line-height: 1.65 }
+.note a { color: var(--accent-h) }
+
+@media (max-width: 860px) {
+  .apps .lbl { display: none }
+  .apps > a, .apps > span { padding: 0 8px }
+  .tb .hide-s { display: none !important }
+}
+@media (max-width: 600px) {
+  .tb { gap: 6px; padding: 0 8px }
+  .apps, .dn-wrap { display: none }
+  .drop { padding: 32px 18px 24px; border-radius: 12px }
+  .drop h1 { font-size: 20px }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important } }
+
+:root { --accent: #C24A30; --accent-h: #A13B24; --accent-l: #FBEDE8 }
 
 /* Stage */
 .stage { flex: 1; display: flex; min-height: 0 }
 .rail {
-  width: 172px; flex-shrink: 0; background: var(--rail); border-right: 1px solid var(--border);
-  overflow-y: auto; padding: 10px 8px; display: none;
+  width: 188px; flex-shrink: 0; background: var(--paper); border-right: 1px solid var(--line);
+  overflow-y: auto; padding: 14px 10px 14px 6px; display: none;
 }
-.thumb { display: flex; gap: 7px; align-items: flex-start; margin-bottom: 9px; cursor: pointer }
-.thumb-n { font-size: 11px; color: #888; width: 15px; text-align: right; padding-top: 3px; flex-shrink: 0 }
+.thumb { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 12px; cursor: pointer }
+.thumb-n { font-size: 11px; color: var(--ink3); width: 18px; text-align: right; padding-top: 2px;
+  flex-shrink: 0; font-variant-numeric: tabular-nums }
 .thumb-p {
-  width: 128px; position: relative; overflow: hidden; background: #fff;
-  border: 2px solid transparent; box-shadow: var(--shad);
+  width: 140px; position: relative; overflow: hidden; background: #fff; border-radius: 3px;
+  outline: 1px solid var(--line); box-shadow: var(--shad-1); transition: outline-color .12s, box-shadow .12s;
 }
-.thumb.on .thumb-p { border-color: var(--accent) }
-.canvas { flex: 1; overflow: auto; display: flex; flex-direction: column; align-items: center; padding: 22px 20px }
-.slide { position: relative; box-shadow: 0 2px 14px rgba(0,0,0,.22); background: #fff; overflow: hidden }
+.thumb:hover .thumb-p { outline-color: var(--line2); box-shadow: var(--shad-2) }
+.thumb.on .thumb-n { color: var(--accent); font-weight: 700 }
+.thumb.on .thumb-p { outline: 2.5px solid var(--accent); outline-offset: 1px }
+.canvas { flex: 1; overflow: auto; display: flex; flex-direction: column; align-items: center; padding: 28px 24px 22px }
+.slide { position: relative; background: #fff; overflow: hidden; border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 18px 40px -18px rgba(38,70,83,.45) }
 .slide-shape { position: absolute; overflow: visible }
 .slide-shape p { margin: 0 }
-.counter { margin-top: 12px; font-size: 13px; color: #777 }
-.nav { display: flex; gap: 8px; align-items: center; margin-top: 10px }
-.nav button { font: inherit; border: 1px solid var(--border); background: #fff; border-radius: 5px; padding: 5px 14px; cursor: pointer }
-.nav button:disabled { opacity: .4; cursor: default }
-
-/* Drop zone */
-.drop {
-  margin: auto; max-width: 620px; text-align: center; padding: 46px 30px;
-  border: 2px dashed #BDBDBD; border-radius: 12px; background: #fff; color: #666;
-}
-.drop.hot { border-color: var(--accent); background: var(--accent-l) }
-.drop h1 { font-size: 21px; color: var(--txt); margin-bottom: 8px; font-weight: 600 }
-.drop p { font-size: 14px; line-height: 1.65; margin-bottom: 18px }
-.drop .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap }
-.drop button {
-  font: inherit; border: 1px solid var(--accent); background: var(--accent); color: #fff;
-  border-radius: 6px; padding: 9px 20px; cursor: pointer;
-}
-.drop button.ghost { background: #fff; color: var(--accent) }
-.drop button:disabled { opacity: .5; cursor: default }
-.note { font-size: 12px; color: #888; margin-top: 16px; line-height: 1.6 }
-.note a { color: var(--accent) }
-.msg { padding: 8px 14px; font-size: 13px; background: var(--accent-l); color: var(--accent-h); flex-shrink: 0 }
-.msg.err { background: #FDECEA; color: #B3261E }
-.msg[hidden] { display: none }
-@media (max-width: 720px) { .rail { display: none !important } }
+.counter { margin-top: 12px; font-size: 13px; color: var(--ink2); font-variant-numeric: tabular-nums; min-width: 92px; text-align: center }
+.nav { display: flex; gap: 4px; align-items: center; margin-top: 16px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px; box-shadow: var(--shad-1) }
+.nav button { border: 0; background: transparent; border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px; color: var(--ink) }
+.nav button:hover:not(:disabled) { background: var(--accent-l); color: var(--accent-h) }
+.nav button:disabled { opacity: .35; cursor: default }
+@media (max-width: 720px) { .rail { display: none !important } .canvas { padding: 16px 12px } }
 
 /* ---- editing ---- */
-body.editing .slide-shape span[contenteditable] { outline: 1px dashed rgba(31,42,68,.28);
+body.editing .canvas { background-image: radial-gradient(rgba(38,70,83,.13) 1px, transparent 1px);
+  background-size: 18px 18px }
+body.editing .slide-shape span[contenteditable] { outline: 1px dashed rgba(38,70,83,.30);
                                                   outline-offset: 1px; cursor: text }
-body.editing .slide-shape span[contenteditable]:hover { outline-color: rgba(183,65,14,.55) }
-body.editing .slide-shape span[contenteditable]:focus { outline: 2px solid #B7410E;
+body.editing .slide-shape span[contenteditable]:hover { outline-color: rgba(194,74,48,.6) }
+body.editing .slide-shape span[contenteditable]:focus { outline: 2px solid var(--accent);
                                                         outline-offset: 1px }
 body.editing .slide-shape span[contenteditable]:empty { display: inline-block;
                                                         min-width: 2ch; min-height: 1em }
-#btnSave[hidden], #btnEdit[hidden] { display: none }
-#btnSave { font-weight: 600 }
-.dirty::after { content: '•'; color: #B7410E; margin-left: 6px }
+#btnSave[hidden], #btnEdit[hidden], #btnNew[hidden], #btnClose[hidden] { display: none }
+#btnEdit { border-color: var(--accent); color: var(--accent-h); font-weight: 600 }
+body.editing #btnEdit { background: var(--ink); border-color: var(--ink); color: #fff }
+.dirty::after { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); margin-left: 7px; vertical-align: middle }
 
 /* ---- formatting toolbar (shown only while editing) ---- */
-.fmtbar { display: flex; align-items: center; gap: 8px; height: 40px; flex-shrink: 0;
-          background: var(--accent-l, #f3eee9); padding: 0 14px; font-size: 13px;
-          user-select: none; border-bottom: 1px solid var(--border) }
+.fmtbar { display: flex; align-items: center; gap: 6px; min-height: 46px; flex-shrink: 0; flex-wrap: wrap;
+          background: var(--surface); padding: 6px 14px; font-size: 13px;
+          user-select: none; border-bottom: 1px solid var(--line); box-shadow: var(--shad-1); position: relative; z-index: 2 }
 .fmtbar[hidden] { display: none }
-.fmtbar .fmt { width: 30px; height: 26px; border: 1px solid var(--border); border-radius: 6px;
-               background: #fff; cursor: pointer; font-size: 14px; line-height: 1;
-               color: var(--ink, #1f2a44) }
-.fmtbar .fmt:hover { border-color: var(--accent, #B7410E) }
-.fmtbar .fmt.on { background: var(--accent, #B7410E); border-color: var(--accent, #B7410E); color: #fff }
-.fmtbar .fmtlabel { color: #6b7280; font-size: 12px }
-.fmtbar .fmtnum { width: 56px; height: 26px; border: 1px solid var(--border); border-radius: 6px;
-                  padding: 0 6px; font-size: 13px; box-sizing: border-box }
-.fmtbar .fmtcol { width: 34px; height: 26px; border: 1px solid var(--border); border-radius: 6px;
-                  padding: 0; background: #fff; cursor: pointer }
-.fmtbar .fsep { width: 1px; height: 22px; background: var(--border) }
+.fmtbar .fmt { width: 32px; height: 30px; border: 1px solid transparent; border-radius: 7px;
+               background: transparent; cursor: pointer; font-size: 14px; line-height: 1; color: var(--ink);
+               display: inline-flex; align-items: center; justify-content: center }
+.fmtbar .fmt svg { width: 16px; height: 16px }
+.fmtbar .fmt:hover:not(:disabled) { background: var(--paper); border-color: var(--line) }
+.fmtbar .fmt.on { background: var(--accent-l); border-color: var(--accent); color: var(--accent-h) }
+.fmtbar .fgrp { display: flex; align-items: center; gap: 2px; background: var(--paper);
+                border: 1px solid var(--line); border-radius: 9px; padding: 2px }
+.fmtbar .fgrp .fmt:hover:not(:disabled) { background: var(--surface) }
+.fmtbar .fmtlabel { color: var(--ink2); font-size: 12px; margin: 0 2px 0 4px }
+.fmtbar .fmtnum { width: 58px; height: 30px; border: 1px solid var(--line2); border-radius: 7px;
+                  padding: 0 7px; font-size: 13px; background: var(--surface); font-variant-numeric: tabular-nums }
+.fmtbar .fmtnum:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-l) }
+.fmtbar .fmtcol { width: 36px; height: 30px; border: 1px solid var(--line2); border-radius: 7px;
+                  padding: 2px; background: var(--surface); cursor: pointer }
+.fmtbar .fsep { width: 1px; height: 24px; background: var(--line); margin: 0 6px }
 .fmtbar .sp { flex: 1 }
-.fmtbar .fmthint { color: #9ca3af; font-size: 12px }
-.fmtbar button:disabled, .fmtbar input:disabled { opacity: .45; cursor: default }
-.fmtbar .fmtnum.geo { width: 50px }
+.fmtbar .fmthint { color: var(--ink3); font-size: 12px }
+.fmtbar button:disabled, .fmtbar input:disabled { opacity: .4; cursor: default }
+.fmtbar .fmtnum.geo { width: 56px }
+.fmtbar .geo-l { font-size: 11px; color: var(--ink3); margin: 0 1px 0 4px }
 
 /* ---- move / resize a shape while editing ---- */
 body.editing .slide-shape.movable { cursor: move }
 body.editing .slide-shape.sel { outline: 2px solid var(--accent); outline-offset: 0 }
-.rz-handle { position: absolute; right: -5px; bottom: -5px; width: 12px; height: 12px;
-             background: #fff; border: 2px solid var(--accent); border-radius: 3px;
-             cursor: nwse-resize; z-index: 5 }
+.rz-handle { position: absolute; right: -6px; bottom: -6px; width: 12px; height: 12px;
+             background: #fff; border: 2px solid var(--accent); border-radius: 50%;
+             cursor: nwse-resize; z-index: 5; box-shadow: var(--shad-1) }
 body.dragging, body.dragging * { cursor: inherit !important; user-select: none }
 
 /* ---- presenting ---- */
-#btnPresent { font-weight: 600 }
 body.presenting { overflow: hidden; background: #000 }
-body.presenting .tb, body.presenting .rail, body.presenting .msg,
+body.presenting .tb, body.presenting .rail, body.presenting .msg, body.presenting .fmtbar,
 body.presenting .nav { display: none !important }
 body.presenting .stage { height: 100vh }
 body.presenting .canvas { padding: 0; background: #000; display: grid;
@@ -170,7 +247,7 @@ body.presenting #presbar { display: flex }
 body.presenting.idle #presbar { opacity: 0 }
 #presbar .right { margin-left: auto; color: #b9bfcc }
 #presbar .right b { color: #fff; font-weight: 600 }
-#presrail { position: fixed; left: 0; bottom: 0; height: 3px; background: #B7410E;
+#presrail { position: fixed; left: 0; bottom: 0; height: 3px; background: var(--accent);
             display: none; transition: width .18s ease; z-index: 6 }
 body.presenting #presrail { display: block }
 @media (prefers-reduced-motion: reduce) { #presbar, #presrail { transition: none } }
@@ -179,32 +256,34 @@ body.presenting #presrail { display: block }
 <body>
 
 <div class="tb">
-  <a class="logo" href="./index.html" title="Oxi"><span class="logo-mark">O</span><span>Oxislides</span></a>
-  <span class="dn" id="docName" data-i18n="noFile">No presentation open</span>
+  <a class="logo" href="./index.html" title="Oxi"><span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M12 17v4M8 21h8"/><path d="M7 13l3-3 2 2 4-4"/></svg></span><span>Oxislides</span></a>
+  <span class="dn-wrap"><span class="dn" id="docName" data-i18n="noFile">No presentation open</span></span>
   <span class="sp"></span>
-  <button id="btnNew" data-i18n="fresh" hidden>New</button>
-  <button id="btnOpen" data-i18n="open">Open</button>
-  <button id="btnPresent" data-i18n="present" disabled>Present</button>
-  <button id="btnEdit" data-i18n="edit" hidden>Edit</button>
-  <button id="btnSave" data-i18n="save" hidden>Save a copy</button>
-  <button id="btnClose" data-i18n="close" hidden>Close</button>
-  <a class="btn" href="./docs.html" data-i18n="wordApp">Oxidocs</a>
-  <a class="btn" href="./index.html" data-i18n="about">About Oxi</a>
-  <a class="btn src" href="https://github.com/Ryujiyasu/oxi" target="_blank" rel="noopener" data-i18n="source">Source</a>
+  <span class="grp">
+    <button id="btnNew" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="fresh">New</span></button>
+    <button id="btnOpen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span data-i18n="open">Open</span></button>
+    <button id="btnEdit" data-i18n="edit" hidden>Edit</button>
+    <button id="btnSave" class="primary" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg><span data-i18n="save">Save a copy</span></button>
+    <button id="btnPresent" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5v15l12-7.5z"/></svg><span class="hide-s" data-i18n="present">Present</span></button>
+    <button id="btnClose" class="quiet" hidden data-i18n-title="close" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </span>
+  <span class="vsep hide-s"></span>
+  <nav class="apps" aria-label="Oxi apps"><a href="./docs.html" title="Oxidocs"><span class="dot" style="background:#8B72BE"></span><span class="lbl">Oxidocs</span></a><a href="./sheets.html" title="Oxicells"><span class="dot" style="background:#5E8C3A"></span><span class="lbl">Oxicells</span></a><span class="on" aria-current="page"><span class="dot" style="background:#D9765E"></span><span class="lbl">Oxislides</span></span></nav>
+  <a class="btn quiet src hide-s" href="https://github.com/Ryujiyasu/oxi" target="_blank" rel="noopener" title="GitHub"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l-6-6 6-6M15 6l6 6-6 6"/></svg><span data-i18n="source">Source</span></a>
   <span class="lang">
     <button id="langEn" class="on">EN</button><button id="langJa">JA</button>
   </span>
 </div>
 
 <div class="fmtbar" id="fmtbar" hidden>
-  <button id="fmtBold" class="fmt" data-i18n-title="fBold" title="Bold" style="font-weight:700">B</button>
+  <span class="fgrp"><button id="fmtBold" class="fmt" data-i18n-title="fBold" title="Bold" style="font-weight:700">B</button>
   <button id="fmtItalic" class="fmt" data-i18n-title="fItalic" title="Italic" style="font-style:italic">I</button>
-  <button id="fmtUnder" class="fmt" data-i18n-title="fUnder" title="Underline" style="text-decoration:underline">U</button>
+  <button id="fmtUnder" class="fmt" data-i18n-title="fUnder" title="Underline" style="text-decoration:underline">U</button></span>
   <span class="fsep"></span>
-  <button id="alnL" class="fmt aln" data-algn="l" data-i18n-title="aLeft" title="Align left">L</button>
-  <button id="alnC" class="fmt aln" data-algn="ctr" data-i18n-title="aCenter" title="Align centre">C</button>
-  <button id="alnR" class="fmt aln" data-algn="r" data-i18n-title="aRight" title="Align right">R</button>
-  <button id="alnJ" class="fmt aln" data-algn="just" data-i18n-title="aJustify" title="Justify">J</button>
+  <span class="fgrp"><button id="alnL" class="fmt aln" data-algn="l" data-i18n-title="aLeft" title="Align left"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 10h10M4 14h16M4 18h10"/></svg></button>
+  <button id="alnC" class="fmt aln" data-algn="ctr" data-i18n-title="aCenter" title="Align centre"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 10h10M4 14h16M7 18h10"/></svg></button>
+  <button id="alnR" class="fmt aln" data-algn="r" data-i18n-title="aRight" title="Align right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M10 10h10M4 14h16M10 18h10"/></svg></button>
+  <button id="alnJ" class="fmt aln" data-algn="just" data-i18n-title="aJustify" title="Justify"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg></button></span>
   <span class="fsep"></span>
   <label class="fmtlabel" data-i18n="fSize">Size</label>
   <input id="fmtSize" class="fmtnum" type="number" min="1" max="400" step="1" inputmode="numeric" />
@@ -213,10 +292,10 @@ body.presenting #presrail { display: block }
   <input id="fmtColor" class="fmtcol" type="color" value="#1f2a44" />
   <span class="fsep"></span>
   <label class="fmtlabel" data-i18n="fPos">Shape</label>
-  <input id="geoX" class="fmtnum geo" type="number" step="1" title="X" disabled />
-  <input id="geoY" class="fmtnum geo" type="number" step="1" title="Y" disabled />
-  <input id="geoW" class="fmtnum geo" type="number" min="1" step="1" title="W" disabled />
-  <input id="geoH" class="fmtnum geo" type="number" min="1" step="1" title="H" disabled />
+  <span class="geo-l">X</span><input id="geoX" class="fmtnum geo" type="number" step="1" title="X" disabled />
+  <span class="geo-l">Y</span><input id="geoY" class="fmtnum geo" type="number" step="1" title="Y" disabled />
+  <span class="geo-l">W</span><input id="geoW" class="fmtnum geo" type="number" min="1" step="1" title="W" disabled />
+  <span class="geo-l">H</span><input id="geoH" class="fmtnum geo" type="number" min="1" step="1" title="H" disabled />
   <span class="sp"></span>
   <span class="fmthint" id="fmtHint" data-i18n="fHint">Select text, then apply</span>
 </div>
@@ -233,13 +312,15 @@ body.presenting #presrail { display: block }
   <div class="rail" id="rail"></div>
   <div class="canvas" id="canvas">
     <div class="drop" id="drop">
+      <div class="drop-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M12 17v4M8 21h8"/><path d="M7 13l3-3 2 2 4-4"/></svg></div>
       <h1 data-i18n="title">Open a PowerPoint file right now</h1>
       <p data-i18n="lede">Drop a .pptx here, or choose one. Parsing and rendering happen entirely in your browser through WebAssembly — the file never leaves your device.</p>
       <div class="row">
         <button id="btnChoose" data-i18n="choose">Choose a .pptx</button>
         <button id="btnSample" class="ghost" disabled data-i18n="sample">Try a sample</button>
       </div>
-      <p class="note" data-i18n="note">Oxi is open source. The rendering engine behind this page is measured slide by slide against PowerPoint's own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.</p>
+      <div class="chips"><span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M8 8a5 5 0 0 0-1 0 4 4 0 0 0 0 8h9m3.3-1.2A3.5 3.5 0 0 0 17 9h-.5A6 6 0 0 0 10 5.3"/></svg><span data-i18n="chipLocal">Runs in your browser</span></span><span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span data-i18n="chipPrivate">No upload, no account</span></span><span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg><span data-i18n="chipEdit">Edit and save a copy</span></span></div>
+      <p class="note" data-i18n="note">Oxi is open source. The rendering engine behind this page is measured slide by slide against PowerPoint’s own output — see <a href="./index.html#accuracy">how the accuracy is measured</a>.</p>
     </div>
   </div>
 </div>
@@ -249,6 +330,7 @@ body.presenting #presrail { display: block }
 <script type="module">
 const I18N = {
   en: {
+    chipLocal: 'Runs in your browser', chipPrivate: 'No upload, no account', chipEdit: 'Edit text and shapes, save a copy',
     noFile: 'No presentation open', open: 'Open', wordApp: 'Oxidocs', about: 'About Oxi',
     title: 'Open a PowerPoint file right now',
     lede: "Drop a .pptx here, or choose one. Parsing and rendering happen entirely in your browser through WebAssembly — the file never leaves your device.",
@@ -270,6 +352,7 @@ const I18N = {
     failed: 'Could not open the presentation: ',
   },
   ja: {
+    chipLocal: 'ブラウザの中だけで動作', chipPrivate: 'アップロードもアカウントも不要', chipEdit: '文字と図形を編集して保存',
     noFile: 'ファイル未選択', open: '開く', wordApp: 'Oxidocs', about: 'Oxi について',
     title: 'PowerPoint ファイルをその場で開く',
     lede: '.pptx をここにドロップするか、選んでください。解析も描画も WebAssembly でブラウザの中だけで行われ、ファイルは端末から出ません。',
