@@ -4776,6 +4776,14 @@ impl<'a> Runtime<'a> {
             batch.sort_unstable();
             batch.dedup();
             for (index, &handle) in batch.iter().enumerate() {
+                // A disconnected instance has no remaining source code to run.
+                // Releasing it must not enter its ended owner and propagate
+                // that old execution's termination into the current project.
+                if matches!(self.internal_objects.get(&handle), Some(InternalObject::DisconnectedInstance)) {
+                    self.internal_objects.remove(&handle);
+                    self.object_projects.remove(&handle);
+                    continue;
+                }
                 if self.project_ended {
                     self.internal_objects.remove(&handle);
                     self.object_projects.remove(&handle);
