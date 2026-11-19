@@ -553,8 +553,10 @@ pub struct Shape {
     /// shapes on 628 slides in 40/40 decks, i.e. every deck. The command
     /// vocabulary they actually use is exactly four elements -- lnTo 341943 /
     /// cubicBezTo 77615 / moveTo 21382 / close 20892 -- with `arcTo` and
-    /// `quadBezTo` appearing ZERO times, so only those four are modelled and a
-    /// path using anything else is refused whole (see `unsupported`).
+    /// `quadBezTo` appearing ZERO times, so only those four are modelled. A
+    /// `quadBezTo` is stored as the cubic that traces the same curve (degree
+    /// elevation is exact); a path using `arcTo` is refused whole (see
+    /// `unsupported`).
     #[serde(default)]
     pub custom_geometry: Option<CustomGeometry>,
     /// `a:effectLst/a:outerShdw`, drawn under the shape's own fill.
@@ -596,10 +598,10 @@ pub struct Shape {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomGeometry {
     pub paths: Vec<GeomPath>,
-    /// A path command outside the modelled vocabulary (`a:arcTo`,
-    /// `a:quadBezTo`) was seen. The geometry is then incomplete, so a consumer
-    /// must NOT draw it -- an outline missing one of its curves is worse ink
-    /// than the rectangle it replaces.
+    /// A path command outside the modelled vocabulary (`a:arcTo`) was seen.
+    /// The geometry is then incomplete, so a consumer must NOT draw it -- an
+    /// outline missing one of its curves is worse ink than the rectangle it
+    /// replaces.
     #[serde(default)]
     pub unsupported: bool,
 }

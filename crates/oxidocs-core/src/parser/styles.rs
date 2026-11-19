@@ -872,11 +872,16 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
             rs.has_explicit_italic = true;
         }
         "u" => {
-            rs.underline = true;
+            // OXI_STYLE_U_NOVAL (2026-11-19, default ON, opt-out _DISABLE): a style's
+            // `<w:u w:color=".."/>` with no w:val draws nothing, as on a run (S1355).
+            // en/policies__0026b7f7's Title / Body styles carry one: Word's PDF has no
+            // rule under the banner or the footer note; Oxi underlined every Body line.
+            rs.underline = crate::env_flag!("OXI_STYLE_U_NOVAL_DISABLE");
             for attr in e.attributes().flatten() {
                 if local_name(attr.key.as_ref()) == "val" {
                     let val = String::from_utf8_lossy(&attr.value).to_string();
                     if val != "none" {
+                        rs.underline = true;
                         rs.underline_style = Some(val);
                     } else {
                         rs.underline = false;
@@ -1630,7 +1635,8 @@ fn parse_style_definition(
                             has_run_style = true;
                         }
                         "u" => {
-                            run_style.underline = true;
+                            // OXI_STYLE_U_NOVAL: see the docDefaults arm
+                            run_style.underline = crate::env_flag!("OXI_STYLE_U_NOVAL_DISABLE");
                             has_run_style = true;
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "val" {
@@ -1638,6 +1644,7 @@ fn parse_style_definition(
                                     if val == "none" {
                                         run_style.underline = false;
                                     } else {
+                                        run_style.underline = true;
                                         run_style.underline_style = Some(val);
                                     }
                                 }

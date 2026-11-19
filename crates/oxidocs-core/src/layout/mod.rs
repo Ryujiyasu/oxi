@@ -13339,6 +13339,15 @@ cells={} pitch={:.2} text={:?}",
                                 .unwrap_or(nat);
                             hdr_h += h;
                         }
+                        // OXI_HDR_TBL_BOTTOM_RULE (2026-11-19, default ON, opt-out _DISABLE):
+                        // the last row's bottom rule lies below the row box, and the
+                        // body starts under it. `_pb_tbl_bot_gen.py` (header table, then a
+                        // paragraph): Word's body moves by the drawn width, sz 4 / 12 / 24
+                        // -> +0.48 / +1.56 / +3.0; the header's own next paragraph was
+                        // already placed under it. en/legal__000e6513 (sz 4) body 0.5 high.
+                        if !crate::env_flag!("OXI_HDR_TBL_BOTTOM_RULE_DISABLE") {
+                            hdr_h += self.s1188_side(t.rows.last(), true, t.style.bottom_border.as_ref());
+                        }
                     }
                 } else if let Block::Image(img) = block {
                     // S742 (2026-07-04): an inline IMAGE in the header contributed
@@ -14057,6 +14066,7 @@ cells={} pitch={:.2} text={:?}",
                         // once per table (corpus footer tables are 1-row; the
                         // probe measured exactly this shape). Border style
                         // rides on table.style (border_width/border_style).
+                        let mut ftr_top_term = 0.0f32;
                         let tbl_border_term = if t.style.border {
                             let w = t.style.border_width.unwrap_or(0.5);
                             let m = if t.style.border_style.as_deref() == Some("double") {
@@ -14064,6 +14074,7 @@ cells={} pitch={:.2} text={:?}",
                             } else {
                                 1.0
                             };
+                            ftr_top_term = w * m;
                             2.0 * w * m
                         } else {
                             // cell-level tcBorders on the single row (top of
@@ -14082,9 +14093,20 @@ cells={} pitch={:.2} text={:?}",
                                     .map(|b| eff_bw(b.bottom.as_ref()))
                                     .fold(0.0f32, f32::max)
                             });
+                            ftr_top_term = top;
                             top + bot
                         };
-                        for row in &t.rows {
+                        // OXI_FTR_TBL_TOP_ONCE (2026-11-19, default ON, opt-out _DISABLE): a first
+                        // row sized by its trHeight already holds the top rule (binding atLeast =
+                        // trH + the drawn width, ROWBOX2) or leaves it out (exact = trH), so the
+                        // border term must not add the top once more. `_pb_ftr_tbl_gen.py` (footer
+                        // = paragraph + 1-row table + 0/2 paragraphs, top sz4, bottom nil/4/12/24,
+                        // footer 365 and 720): Oxi's footer sat 0.53-0.60 high in every atLeast and
+                        // exact arm and within 0.1 in the natural-row arms.
+                        // en/administrative__001eef60's footer «Form No» row -0.69.
+                        let ftr_top_once = !crate::env_flag!("OXI_FTR_TBL_TOP_ONCE_DISABLE");
+                        let mut ftr_top_credit = 0.0f32;
+                        for (ri, row) in t.rows.iter().enumerate() {
                             let nat = self.estimate_table_row_natural_h_with_border_padding(
                                 row,
                                 &col_widths,
@@ -14107,6 +14129,18 @@ cells={} pitch={:.2} text={:?}",
                                     _ => (th + self.rowbox2_trh_bw(t, row)).max(nat),
                                 })
                                 .unwrap_or(nat);
+                            if ftr_top_once && ri == 0 {
+                                if let Some(th) = row.height {
+                                    let bw = self.rowbox2_trh_bw(t, row);
+                                    ftr_top_credit = if row.height_rule.as_deref() == Some("exact") {
+                                        ftr_top_term
+                                    } else if th + bw >= nat {
+                                        bw.min(ftr_top_term)
+                                    } else {
+                                        0.0
+                                    };
+                                }
+                            }
                             if crate::env_flag!("OXI_DBG_FTR") {
                                 eprintln!(
                                     "[FTR-T] row nat={:.3} h={:.3} trh={:?}",
@@ -14115,7 +14149,7 @@ cells={} pitch={:.2} text={:?}",
                             }
                             footer_h += h;
                         }
-                        footer_h += tbl_border_term;
+                        footer_h += tbl_border_term - ftr_top_credit;
                         // A table breaks the paragraph spacing chain (the S813
                         // rule the header arm applies): flush the pending after.
                         if let Some(last) = s803_prev_sa.take() {
