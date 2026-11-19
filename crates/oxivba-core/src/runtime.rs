@@ -2676,9 +2676,41 @@ impl<'a> Runtime<'a> {
     ) -> Result<Option<Value>, RuntimeError> {
         if self.disconnected_source_object(receiver) { return Err(self.disconnected_source_error(line,false)); }
         if let Some(project) = self.foreign_project(receiver) {
+            // Resolve the receiving declaration without executing the RHS in
+            // that project's context: its default getter may close the receiver.
+            let (parameter, passthrough, scalar) = self.in_application_project(project, |runtime| {
+                let (parameter, passthrough) = runtime.source_dispatch_value_parameter(
+                    receiver, name, &value, property_index_count, allow_scalar_members, automation, line)?;
+                let scalar = parameter.as_ref().is_some_and(|p| !p.is_array && !p.type_name.is_new
+                    && matches!(runtime.parameter_scalar_name(&p.type_name.name).as_str(),
+                        "byte" | "integer" | "long" | "longlong" | "longptr" | "single" | "double"
+                            | "currency" | "date" | "boolean" | "string"));
+                Ok((parameter, passthrough, scalar))
+            })?;
+            if passthrough { return Ok(Some(value)); }
+            let Some(parameter) = parameter else { return Ok(None); };
+            let value = if scalar && !matches!(value, Value::Missing) {
+                self.scalar_operand(value, frame, line).map_err(|failure| if automation {
+                    language_error(13, "Automation property value type mismatch", line)
+                } else { failure })?
+            } else { value };
+            if self.disconnected_source_object(receiver) {
+                return Err(self.disconnected_source_error(line, false));
+            }
             return self.in_application_project(project, |runtime|
-                runtime.prepare_source_dispatch_value(receiver, name, value, property_index_count, allow_scalar_members, automation, frame, line));
+                runtime.coerce_source_dispatch_value(value, &parameter, frame, line, automation)).map(Some);
         }
+        let (parameter, passthrough) = self.source_dispatch_value_parameter(
+            receiver, name, &value, property_index_count, allow_scalar_members, automation, line)?;
+        if passthrough { return Ok(Some(value)); }
+        let Some(parameter) = parameter else { return Ok(None); };
+        self.coerce_source_dispatch_value(value, &parameter, frame, line, automation).map(Some)
+    }
+
+    fn source_dispatch_value_parameter(
+        &self, receiver: &ObjectRef, name: &str, value: &Value,
+        property_index_count: usize, allow_scalar_members: bool, automation: bool, line: u32,
+    ) -> Result<(Option<crate::ast::Param>, bool), RuntimeError> {
         let scalar_parameter = |kind: TypeName| {
             let scalar = self.parameter_scalar_name(&kind.name);
             (!kind.is_array && matches!(scalar.as_str(),
@@ -2692,7 +2724,7 @@ impl<'a> Runtime<'a> {
         let host_parameter = |owner: &str| self.host.as_deref()
             .filter(|host| host.automation_invocation_allowed(receiver, name, 4)
                 && (!automation || !host.property_assignment_uses_variant(receiver, name))
-                && host.property_assignment_value(Some(receiver), name, &value, false).is_none())
+                && host.property_assignment_value(Some(receiver), name, value, false).is_none())
             .and_then(|host| host.assignment_call_result(Some(owner), name))
             .and_then(|name| scalar_parameter(TypeName { name, ..TypeName::implicit() }));
         let parameter = match self.internal_objects.get(&receiver.handle) {
@@ -2707,7 +2739,7 @@ impl<'a> Runtime<'a> {
                         return Err(language_error(449, "Argument not optional", line));
                     }
                     if automation && property_index_count > 0 {
-                        return Ok(Some(value));
+                        return Ok((None, true));
                     }
                     procedure.params.last().cloned()
                 } else {
@@ -2731,8 +2763,7 @@ impl<'a> Runtime<'a> {
                 host_parameter(&receiver.kind),
             _ => None,
         };
-        let Some(parameter) = parameter else { return Ok(None); };
-        self.coerce_source_dispatch_value(value, &parameter, frame, line, automation).map(Some)
+        Ok((parameter, false))
     }
 
     fn coerce_source_dispatch_value(
@@ -12636,7 +12667,14 @@ impl<'a> Runtime<'a> {
     fn source_scalar_getter(&self, receiver: &ObjectRef) -> Option<Procedure> {
         let Some(InternalObject::Instance(instance)) = self.internal_objects.get(&receiver.handle)
             else { return None; };
-        self.source_class_procedure_view(&instance.class, "_default",
+        // The shared heap holds the instance while its owner's declarations
+        // may be suspended in another application project. Predicates and Len
+        // inspect this metadata before deciding how to read the default value.
+        let declarations = match self.foreign_project(receiver) {
+            Some(project) => self.projects.get(&project)?.as_ref(),
+            None => self,
+        };
+        declarations.source_class_procedure_view(&instance.class, "_default",
             &[ProcKind::PropertyGet, ProcKind::Function], receiver.dispatch_view.as_deref())
             .map(|(_, getter)| getter)
     }
@@ -12644,8 +12682,16 @@ impl<'a> Runtime<'a> {
     fn source_scalar_value(&mut self, receiver: &ObjectRef, line: u32)
         -> Option<Result<Value, RuntimeError>>
     {
+        if self.disconnected_source_object(receiver) {
+            return Some(Err(self.disconnected_source_error(line, false)));
+        }
         if !matches!(self.internal_objects.get(&receiver.handle), Some(InternalObject::Instance(_))) {
             return None;
+        }
+        if let Some(project) = self.foreign_project(receiver) {
+            return Some(self.in_application_project(project, |runtime|
+                runtime.source_scalar_value(receiver, line).unwrap_or_else(||
+                    Err(language_error(438, "the object has no scalar default member", line)))));
         }
         Some(match self.source_scalar_getter(receiver) {
             None => Err(language_error(438, "the object has no scalar default member", line)),
