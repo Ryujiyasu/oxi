@@ -2701,9 +2701,29 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     let dy = if (*y1 - *y2).abs() < 0.01
                         && std::env::var_os("OXI_PDF_HRULE_BELOW_DISABLE").is_none() { bw * 0.5 } else { 0.0 };
                     let (ax, ay, bx, by) = (*x1 as f64, *y1 as f64 + dy, *x2 as f64, *y2 as f64 + dy);
-                    let operations = match dash_pattern_widths(style.as_deref()) {
-                        Some(pattern) => dashed_segments(ax, ay, bx, by, &pattern, bw),
-                        None => vec![PathOp::MoveTo(ax, ay), PathOp::LineTo(bx, by)],
+                    // OXI_PDF_DOUBLE_RULE (2026-11-20, default ON, opt-out _DISABLE): a double
+                    // table rule is two strokes of the rule width, a width apart. Word's PDF of
+                    // en/technical__00501ca3's Table S.2.1 (tblBorders double sz4): horizontal
+                    // rules fill [y, y+w] and [y+2w, y+3w] (top, row edge and bottom alike:
+                    // 355.01 / 355.97 for y 354.98; 687.82 / 688.78 for 687.71); vertical rules
+                    // sit symmetric about x (90.02 / 90.98 for x 90.75). Oxi drew one stroke.
+                    let double_rule = style.as_deref() == Some("double")
+                        && std::env::var_os("OXI_PDF_DOUBLE_RULE_DISABLE").is_none();
+                    let operations = if double_rule {
+                        let horizontal = (*y1 - *y2).abs() < 0.01;
+                        let offs: [f64; 2] = if horizontal { [0.0, 2.0 * bw] } else { [-bw, bw] };
+                        let mut ops = Vec::new();
+                        for o in offs {
+                            let (px, py) = if horizontal { (0.0, o) } else { (o, 0.0) };
+                            ops.push(PathOp::MoveTo(ax + px, ay + py));
+                            ops.push(PathOp::LineTo(bx + px, by + py));
+                        }
+                        ops
+                    } else {
+                        match dash_pattern_widths(style.as_deref()) {
+                            Some(pattern) => dashed_segments(ax, ay, bx, by, &pattern, bw),
+                            None => vec![PathOp::MoveTo(ax, ay), PathOp::LineTo(bx, by)],
+                        }
                     };
                     contents.push(ContentElement::Path(PathData {
                         operations,

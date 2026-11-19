@@ -41,6 +41,11 @@ pub struct OoxmlParser {
 
 /// Context passed through parsing functions for resource resolution
 thread_local! {
+    /// OXI_RUNIN_INDENT: the document declares compatibility mode 15 or later.
+    static RUNIN_COMPAT15: std::cell::Cell<bool> = std::cell::Cell::new(true);
+}
+
+thread_local! {
     /// OXI_BR_CLEAR: set by a clearing text-wrapping break inside the paragraph
     /// being parsed (saved and restored around nested paragraphs).
     static BR_CLEAR_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -1005,6 +1010,11 @@ impl OoxmlParser {
         self.parse_font_table(&mut styles);
         let numbering = self.parse_numbering()?;
         let ctx = self.build_context_with_theme(numbering, theme, &styles)?;
+        {
+            // OXI_RUNIN_INDENT: the run-in join below needs the compatibility mode.
+            let (cm, cme) = self.parse_compat_mode();
+            RUNIN_COMPAT15.with(|c| c.set(cm >= 15 && cme));
+        }
         let sections = self.parse_document_xml(&ctx, &styles)?;
         let metadata = self.parse_metadata();
         let adjust_line_height_in_table = self.parse_adjust_line_height_in_table();
@@ -3045,7 +3055,32 @@ fn parse_body(
                                     // nyserda joined 'Section 4.01' line at x=126 =
                                     // margin + para1's firstLine=720; para2's pPr wins
                                     // for everything else).
-                                    if joined.style.indent_first_line.is_none() {
+                                    // OXI_RUNIN_INDENT (2026-11-20, default ON, opt-out _DISABLE): the
+                                    // joined first line starts where the HIDDEN paragraph's first line
+                                    // does; the later lines sit at the hidden paragraph's left indent in
+                                    // compatibility mode 15 and at the continuation's below it.
+                                    // `_pb_specvanish_ind_gen.py` (heading ind none / l720 h360 / l1440
+                                    // fl360 x continuation none / l360 / l1080 h360): first line 72 / 90
+                                    // / 162 in every arm; second line 72 / 108 / 144 (mode 15) and the
+                                    // continuation's 72 / 90 / 126 (mode 14 and none). Oxi took the
+                                    // continuation's left with the heading's first-line offset (54..126).
+                                    // en/technical__00501ca3 «S.2.1. Provision for Sealing.» (Heading4
+                                    // l720 h360 into ind l360, mode 15): Word 90 then 108.
+                                    let runin_chars = prev.style.indent_left_chars.is_some()
+                                        || prev.style.indent_first_line_chars.is_some()
+                                        || joined.style.indent_left_chars.is_some()
+                                        || joined.style.indent_first_line_chars.is_some();
+                                    if !runin_chars && !crate::env_flag!("OXI_RUNIN_INDENT_DISABLE") {
+                                        let h_left = prev.style.indent_left.unwrap_or(0.0);
+                                        let first_pos = h_left + prev.style.indent_first_line.unwrap_or(0.0);
+                                        let cont_left = if RUNIN_COMPAT15.with(|c| c.get()) {
+                                            h_left
+                                        } else {
+                                            joined.style.indent_left.unwrap_or(0.0)
+                                        };
+                                        joined.style.indent_left = Some(cont_left);
+                                        joined.style.indent_first_line = Some(first_pos - cont_left);
+                                    } else if joined.style.indent_first_line.is_none() {
                                         joined.style.indent_first_line =
                                             prev.style.indent_first_line;
                                     }
