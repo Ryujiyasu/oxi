@@ -3806,6 +3806,14 @@ fn markfall_on() -> bool {
     std::env::var("OXI_MARKFALL_DISABLE").is_err()
 }
 
+/// S-MISNAME: a part filed under a typeface whose own family differs gives way
+/// to a machine face of that family at that style when it is a byte copy of a
+/// part filed under its own family, or when no part claims the typeface.
+/// Setting this keeps every misnamed part.
+fn misname_on() -> bool {
+    std::env::var("OXI_MISNAME_DISABLE").is_err()
+}
+
 /// S-SKIPWHOLE: a typeface's embedded parts are skipped only when the machine
 /// serves EVERY slot the deck filed for it; setting this restores the per-slot
 /// skip, which can leave a family half cloud, half embedded.
@@ -4012,6 +4020,97 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
     if std::env::var("OXI_EMBEDFONT_DISABLE").is_ok() {
         return 0;
     }
+    // S-MISNAME: a part filed under typeface T whose own family is another
+    // name ranks BELOW a machine face (installed or cloud cache) of family T
+    // at that style. Cut from d51 itself (gen_pptx_misname_cut.py, PowerPoint
+    // PDF 2026-11-20): its "Josefin Sans SemiBold" runs draw the cache's
+    // SemiBold whether or not the slot part is a copy of a part filed under
+    // "Josefin Sans" (arm B drops that entry: still the cache), and draw the
+    // embedded part only when no machine face has the name (arm C renames the
+    // typeface: numbered font "9"). Also dev d58 ("Roboto Medium" -> cache
+    // Roboto Medium), blind 20 (SemiBold b=1 -> the cache's w600 face, named
+    // and unwidened), blind 50 ("Montserrat Medium" b=1 -> its Bold copy: the
+    // cache's Medium is w500), d16/d10 ("Montserrat" regular -> its Medium/
+    // SemiBold part: the cache's Montserrat is the Bold member only).
+    //
+    // The dropped part still answers for its OWN family: d58's honest
+    // "Roboto" parts collide with the cloud Roboto's name (0x10f) and its
+    // Roboto text is drawn by the identical bytes filed under "Roboto Medium".
+    let honest = |f: &oxislides_core::ir::EmbeddedFont| -> bool {
+        match eot_identity(&f.data) {
+            Some((own, _, _)) => norm_family(&own) == norm_family(&f.typeface),
+            None => true,
+        }
+    };
+    let mut misnamed: Vec<&oxislides_core::ir::EmbeddedFont> = Vec::new();
+    let kept: Vec<_> = pres
+        .embedded_fonts
+        .iter()
+        .filter(|font| {
+            if !misname_on() || !skipembed_on() || honest(font) {
+                return true;
+            }
+            // Where any part calls itself T, PowerPoint's private font table
+            // has a T and the machine's T is not consulted: d16/d10 and blind
+            // 44 file "Montserrat" with honest bold/italic parts and a
+            // Montserrat Medium (d10: SemiBold) regular slot, the cache has
+            // Montserrat Regular, and PowerPoint draws the regular runs with
+            // the slot part (pen widths 6787/6887 per 1000 em for "Ready to
+            // use, ": Medium 6782, Regular 6672).
+            let t_claimed = pres.embedded_fonts.iter().any(|f| {
+                norm_family(&f.typeface) == norm_family(&font.typeface) && honest(f)
+            });
+            // A byte COPY of a part the deck files under its own family gives
+            // way to the machine even where T is claimed: blind 20's "Josefin
+            // Sans SemiBold" (honest R w600 + I) draws its b=1 runs with the
+            // cache's SemiBold w600 at plain advances, not the Josefin Sans
+            // Bold copy in the bold slot. With no machine face it is used:
+            // dev d38 Rubik / d26 Darker Grotesque / d21 Podkova SemiBold have
+            // the same shape and no cloud face, and their bold runs are the
+            // embedded copy ("6,Bold"/"7,Bold"); blind 50's "Montserrat
+            // Medium" b=1 keeps its Bold copy (the cache's Medium is w500).
+            let digest = |d: &[u8]| -> u64 {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                d.hash(&mut h);
+                h.finish()
+            };
+            let own = eot_identity(&font.data).map(|(own, _, _)| own).unwrap_or_default();
+            let me = digest(&font.data);
+            let is_copy = pres.embedded_fonts.iter().any(|f| {
+                norm_family(&f.typeface) == norm_family(&own) && digest(&f.data) == me
+            });
+            if (t_claimed && !is_copy)
+                || !style_installed_named(&font.typeface, font.bold, font.italic)
+            {
+                return true;
+            }
+            if sf_debug() {
+                eprintln!(
+                    "INSTALL typeface={:?} bold={} italic={} SKIPPED -- misnamed part, another face answers",
+                    font.typeface, font.bold, font.italic
+                );
+            }
+            misnamed.push(font);
+            false
+        })
+        .collect();
+    for (n, font) in misnamed.iter().enumerate() {
+        let Some((fam, weight, ital)) = eot_identity(&font.data) else {
+            continue;
+        };
+        let address = format!("{fam} #misname{n}");
+        if load_font_as(&font.data, &address) {
+            PART_IDS.with(|ids| {
+                ids.borrow_mut().push(PartId {
+                    address,
+                    family: fam,
+                    weight,
+                    italic: ital,
+                })
+            });
+        }
+    }
     const TTLOAD_PRIVATE: u32 = 0x0000_0001;
     const LICENSE_INSTALLABLE: u32 = 0x0000_0000;
     // How many UPRIGHT parts each typeface has. A family with only one cannot
@@ -4021,10 +4120,16 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
     // each, and aliasing them made its body text wrap a line early (-0.0033).
     let mut upright_parts: std::collections::HashMap<&str, usize> =
         std::collections::HashMap::new();
-    for font in &pres.embedded_fonts {
+    // Counted over every FILED part: a part S-MISNAME drops from its slot
+    // still made the family a multi-part one, and recounting without it left
+    // d58's "Roboto Medium" bold part unaliased -- loaded under the plain name
+    // the cloud's Roboto Medium already holds -- so its bold runs fell to GDI.
+    for font in pres.embedded_fonts.iter() {
         if !font.italic {
             *upright_parts.entry(font.typeface.as_str()).or_default() += 1;
         }
+    }
+    for font in kept.iter().copied() {
         // Which typefaces the FILE declares a bold for. S-BOLDADV keys off this
         // and not off the part's own weight -- see `runtime_advance_em`.
         if font.bold && !font.italic {
@@ -4032,10 +4137,10 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
         }
     }
     if boldonlykeep_on() {
-        for font in &pres.embedded_fonts {
-            let has_regular = pres
-                .embedded_fonts
-                .iter()
+        for font in kept.iter().copied() {
+            // Over every FILED part, as `upright_parts`: a regular slot
+            // S-MISNAME handed to the machine is not a missing regular.
+            let has_regular = pres.embedded_fonts.iter()
                 .any(|f| f.typeface == font.typeface && !f.bold && !f.italic);
             if font.bold && !font.italic && !has_regular {
                 BOLD_ONLY.with(|s| s.borrow_mut().insert(font.typeface.clone()));
@@ -4046,9 +4151,7 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
     // Which families the MACHINE already has, asked before anything private is
     // added (see `family_installed`).
     let installed: std::collections::HashSet<(&str, bool, bool)> = if skipembed_on() {
-        let per_slot: std::collections::HashSet<(&str, bool, bool)> = pres
-            .embedded_fonts
-            .iter()
+        let per_slot: std::collections::HashSet<(&str, bool, bool)> = kept.iter()
             .map(|f| (f.typeface.as_str(), f.bold, f.italic))
             .filter(|(f, b, i)| {
                 if styleskip_on() {
@@ -4060,7 +4163,7 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             .collect();
         FILED_TYPEFACES.with(|f| {
             let mut f = f.borrow_mut();
-            for font in &pres.embedded_fonts {
+            for font in kept.iter().copied() {
                 f.insert(font.typeface.clone());
             }
         });
@@ -4074,15 +4177,13 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             // d28 Open Sans, d47 Caladea) it wins as before.
             let mut filed: std::collections::HashMap<&str, Vec<(bool, bool)>> =
                 std::collections::HashMap::new();
-            for font in &pres.embedded_fonts {
+            for font in kept.iter().copied() {
                 filed
                     .entry(font.typeface.as_str())
                     .or_default()
                     .push((font.bold, font.italic));
             }
-            let whole: std::collections::HashSet<(&str, bool, bool)> = pres
-                .embedded_fonts
-                .iter()
+            let whole: std::collections::HashSet<(&str, bool, bool)> = kept.iter()
                 .map(|f| (f.typeface.as_str(), f.bold, f.italic))
                 .filter(|(f, _b, _i)| {
                     // S-BOLDONLYKEEP: a typeface filed with no regular slot keeps
@@ -4107,7 +4208,7 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
     } else {
         Default::default()
     };
-    for font in &pres.embedded_fonts {
+    for font in kept.iter().copied() {
         if installed.contains(&(font.typeface.as_str(), font.bold, font.italic)) {
             if sf_debug() {
                 eprintln!(
@@ -16365,6 +16466,71 @@ fn family_installed(family: &str) -> bool {
         );
     }
     found
+}
+
+/// S-MISNAME: does the machine have a face whose FAMILY name is exactly
+/// `family` that answers this style (its non-bold member at any weight for a
+/// regular request, >= 600 for a bold one)? Enumeration by name also answers for faces whose
+/// full name merely equals it (the cache's "Montserrat Bold" is family
+/// "Montserrat"), which PowerPoint does not count.
+#[cfg(windows)]
+fn style_installed_named(family: &str, bold: bool, italic: bool) -> bool {
+    use windows::Win32::Graphics::Gdi::*;
+
+    struct Want {
+        name: String,
+        bold: bool,
+        italic: bool,
+        found: bool,
+    }
+    unsafe extern "system" fn cb(
+        lf: *const LOGFONTW,
+        tm: *const TEXTMETRICW,
+        _kind: u32,
+        want: windows::Win32::Foundation::LPARAM,
+    ) -> i32 {
+        let want = &mut *(want.0 as *mut Want);
+        let face = &(*lf).lfFaceName;
+        let len = face.iter().position(|&c| c == 0).unwrap_or(face.len());
+        let name = String::from_utf16_lossy(&face[..len]);
+        // A regular request takes the family's non-bold member at any weight
+        // (the cache's SemiBold answers d51's plain runs; the cache's lone
+        // Montserrat Bold does not answer d16's); a bold one only a face GDI
+        // would not have to embolden. NEWTEXTMETRICW.ntmFlags NTM_BOLD (0x20)
+        // is the member's own style bit, whatever its weight number says.
+        let ntm_bold = (*(tm as *const NEWTEXTMETRICW)).ntmFlags & 0x20 != 0;
+        if name.eq_ignore_ascii_case(&want.name)
+            && if want.bold { (*lf).lfWeight >= 600 } else { !ntm_bold }
+            && ((*lf).lfItalic != 0) == want.italic
+        {
+            want.found = true;
+            return 0;
+        }
+        1
+    }
+    let dc = probe_dc();
+    let mut lf = LOGFONTW {
+        lfCharSet: DEFAULT_CHARSET,
+        ..Default::default()
+    };
+    let wide: Vec<u16> = family.encode_utf16().take(31).collect();
+    lf.lfFaceName[..wide.len()].copy_from_slice(&wide);
+    let mut want = Want {
+        name: family.to_string(),
+        bold,
+        italic,
+        found: false,
+    };
+    unsafe {
+        EnumFontFamiliesExW(
+            dc,
+            &mut lf,
+            Some(cb),
+            windows::Win32::Foundation::LPARAM(&mut want as *mut Want as isize),
+            0,
+        );
+    }
+    want.found
 }
 
 /// Is the STYLE `family` + (bold, italic) available on this machine?
