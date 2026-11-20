@@ -44,6 +44,7 @@ __all__ = [
     "Result",
     "UnsupportedContent",
     "binary_path",
+    "docx_to_docling",
     "docx_to_pdf",
     "pptx_to_pdf",
     "xlsx_to_pdf",
@@ -296,3 +297,36 @@ def xlsx_to_pdf(
     """
     with Converter(threads=1) as converter:
         return converter.convert(xlsx, pdf, strict=strict, timeout=timeout)
+
+
+def docx_to_docling(docx: PathLike, *, timeout: Optional[float] = None) -> dict[str, Any]:
+    """Read a .docx as a DoclingDocument whose items know their page.
+
+    Nothing is drawn: Oxi lays the document out as Word would and returns its
+    structure and text (headings, paragraphs, lists, tables, pictures) as a
+    `DoclingDocument <https://github.com/docling-project/docling-core>`_
+    dict. Every item's ``prov`` holds the page it is laid out on
+    (``page_no``, from 1) and its box there in points from the page's top
+    left; an item that runs onto the next page has one entry per page.
+    ``pages`` holds each page's size.
+
+    Load it with ``DoclingDocument.model_validate(...)`` to use docling-core's
+    exports, such as ``export_to_markdown(page_no=n)`` for one page.
+
+    Raises :class:`ConversionError` when the file cannot be read. ``timeout``
+    is in seconds.
+    """
+    try:
+        done = subprocess.run(
+            [binary_path(), "docx-to-docling", "--quiet", os.fspath(docx)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ConversionError(f"{os.fspath(docx)}: timed out after {timeout} s") from e
+    if done.returncode != 0:
+        message = done.stderr.strip() or f"oxidocs exited with status {done.returncode}"
+        raise ConversionError(message, done.returncode)
+    return json.loads(done.stdout)

@@ -89,6 +89,32 @@ Excelとの完全な印刷一致を保証する段階ではありません。グ
 条件付き書式、印刷タイトル、ヘッダー／フッターなどは未対応として報告し、
 `strict=True` を指定すると出力前に `UnsupportedContent` で停止します。
 
+## Pages without drawing: which page is each paragraph on?
+
+A .docx stores no pages: Word works them out when it lays the document out. Tools that read .docx therefore cannot say on which page a heading or a paragraph sits, and a search or RAG pipeline cites every passage of a long Word file as "page 1". The page break markers Word leaves in a file are only as fresh as its last save in Word, and files written by programs have none.
+
+`docx_to_docling` lays the document out as Word would and returns its structure and text as a [DoclingDocument](https://github.com/docling-project/docling-core), nothing drawn. Every heading, paragraph, list item, table and picture carries the page it is on and its box there:
+
+```python
+import oxidocs
+
+doc = oxidocs.docx_to_docling("contract.docx")
+for item in doc["texts"]:
+    for p in item["prov"]:
+        print(p["page_no"], p["bbox"], item["text"][:40])
+```
+
+With [docling-core](https://pypi.org/project/docling-core/) installed, the same dict loads as a `DoclingDocument`, so docling's own exports work page by page:
+
+```python
+from docling_core.types.doc import DoclingDocument
+
+doc = DoclingDocument.model_validate(oxidocs.docx_to_docling("contract.docx"))
+page_3 = doc.export_to_markdown(page_no=3)
+```
+
+Boxes are in points from the page's top left (`coord_origin: "TOPLEFT"`). An item that runs onto the next page has one entry per page. How headings, lists, tables, text boxes and equations are mapped is described in [oxidocs-docling](https://github.com/Ryujiyasu/oxi/tree/main/crates/oxidocs-docling#readme). Pages come from the same layout as the PDF output, so they are as close to Word's as the figures under [How faithful is it?](#how-faithful-is-it) show.
+
 ## Command line
 
 Installing the package also puts the `oxidocs` command on your PATH:
@@ -97,6 +123,7 @@ Installing the package also puts the `oxidocs` command on your PATH:
 oxidocs docx-to-pdf report.docx report.pdf
 oxidocs docx-to-pdf --strict report.docx report.pdf   # exit status 3 on content Oxi does not draw
 oxidocs pptx-to-pdf deck.pptx deck.pdf
+oxidocs docx-to-docling report.docx report.json        # stdout without the second path
 ```
 
 `python -m oxidocs ...` runs the same command. The `OXIDOCS_BINARY` environment variable points the package at another oxidocs binary.
@@ -118,4 +145,4 @@ Fonts: Oxi does not bundle Microsoft fonts. It lays text out with metrics measur
 
 ## License
 
-The bundled `oxidocs` binary is the Oxi engine under MPL-2.0. This package's Python code is MIT OR Apache-2.0.
+The bundled `oxidocs` binary is the Oxi engine under MPL-2.0. This package's Python code is MIT OR Apache-2.0. The equation converter used by `docx_to_docling` is a port of docling's and dwml's OMML converters (MIT and Apache-2.0); their notices ship in the package as `oxidocs/THIRD_PARTY_NOTICES.md`.

@@ -4,14 +4,14 @@ build-backend = "maturin"
 
 [project]
 name = "oxidocs"
-description = "Convert .docx, .pptx and .xlsx to PDF without LibreOffice or Microsoft Office: the Oxi engine, as a Python package."
+description = "Convert .docx, .pptx and .xlsx to PDF without LibreOffice or Microsoft Office, and read a .docx with the page each part is on: the Oxi engine, as a Python package."
 readme = "README.md"
 requires-python = ">=3.9"
 # The bundled oxidocs binary is MPL-2.0; this package's Python code is MIT OR Apache-2.0.
 license = "MPL-2.0 AND (MIT OR Apache-2.0)"
 # The engine inside is oxidocs 0.9.0 (its number is a measured score, see
 # CHANGELOG.md); a post-release marks a packaging-level addition on top of it.
-version = "0.9.0.post2"
+version = "0.9.0.post3"
 keywords = ["docx", "pptx", "xlsx", "pdf", "word", "powerpoint", "excel", "office", "converter", "libreoffice"]
 classifiers = [
     "Development Status :: 4 - Beta",

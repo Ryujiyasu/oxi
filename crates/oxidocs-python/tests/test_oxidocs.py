@@ -75,3 +75,55 @@ def test_converter_takes_documents_and_presentations(tmp_path):
         doc = converter.convert(SIMPLE, tmp_path / "doc.pdf")
         deck = converter.convert(SLIDES, tmp_path / "deck.pdf")
     assert doc.pages >= 1 and deck.pages == 3
+
+
+def _docx_with_page_breaks(path, texts):
+    """A minimal .docx: one paragraph per text, a page break between them."""
+    import zipfile
+
+    body = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'.join(
+        f"<w:p><w:r><w:t>{t}</w:t></w:r></w:p>" for t in texts
+    )
+    w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("[Content_Types].xml",
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>")
+        z.writestr("_rels/.rels",
+            '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+            "</Relationships>")
+        z.writestr("word/document.xml",
+            f'<?xml version="1.0"?><w:document xmlns:w="{w}"><w:body>{body}'
+            '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>')
+    return path
+
+
+def test_docx_to_docling_gives_each_item_its_page(tmp_path):
+    src = _docx_with_page_breaks(tmp_path / "three.docx", ["First page", "Second page", "Third page"])
+    doc = oxidocs.docx_to_docling(src)
+    assert doc["schema_name"] == "DoclingDocument"
+    assert len(doc["pages"]) == 3
+    # A4 in points.
+    assert round(doc["pages"]["1"]["size"]["width"]) == 595
+    pages = {t["text"]: [p["page_no"] for p in t["prov"]] for t in doc["texts"] if t["text"]}
+    assert pages == {"First page": [1], "Second page": [2], "Third page": [3]}
+    box = next(t for t in doc["texts"] if t["text"] == "Second page")["prov"][0]["bbox"]
+    assert box["coord_origin"] == "TOPLEFT" and 0 < box["l"] < box["r"] and 0 < box["t"] < box["b"]
+
+
+def test_docx_to_docling_reports_unreadable_files(tmp_path):
+    junk = tmp_path / "junk.docx"
+    junk.write_bytes(b"not a zip")
+    with pytest.raises(oxidocs.ConversionError):
+        oxidocs.docx_to_docling(junk)
+
+
+def test_ships_the_notices_for_the_ported_equation_converter():
+    from importlib.resources import files
+
+    notices = files("oxidocs").joinpath("THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    assert "Copyright The Docling Contributors" in notices and "dwml" in notices
