@@ -9050,6 +9050,9 @@ fn parse_drawing_inner(
         ((0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (1.0, 1.0));
     let mut s839_grp_seen = false;
     let mut s839_wsp: Option<S839Wsp> = None;
+    // OXI_TOP_CUSTGEOM: a standalone wps shape's custGeom (cmds, pts, path w/h); group
+    // members keep the S839 collector.
+    let mut top_cg: Option<(Vec<char>, Vec<(f32, f32)>, Option<(f32, f32)>)> = None;
 
     loop {
         match reader.read_event()? {
@@ -9219,6 +9222,36 @@ fn parse_drawing_inner(
                     }
                     "close" if s839_wsp.is_some() => {
                         s839_wsp.as_mut().unwrap().cmds.push('Z');
+                    }
+                    "custGeom" if s839_wsp.is_none() && !s839_in_wgp => {
+                        top_cg = Some((Vec::new(), Vec::new(), None));
+                    }
+                    "path" if s839_wsp.is_none() && top_cg.is_some() => {
+                        let (mut pw, mut ph) = (0.0f32, 0.0f32);
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            if key == "w" {
+                                pw = val.parse().unwrap_or(0.0);
+                            } else if key == "h" {
+                                ph = val.parse().unwrap_or(0.0);
+                            }
+                        }
+                        let cg = top_cg.as_mut().unwrap();
+                        if cg.2.is_none() && pw > 0.0 && ph > 0.0 {
+                            cg.2 = Some((pw, ph));
+                        }
+                    }
+                    "moveTo" | "lnTo" | "cubicBezTo" | "quadBezTo" | "arcTo"
+                        if s839_wsp.is_none() && top_cg.is_some() =>
+                    {
+                        top_cg.as_mut().unwrap().0.push(match local.as_str() {
+                            "moveTo" => 'M',
+                            "lnTo" => 'L',
+                            "cubicBezTo" => 'C',
+                            "quadBezTo" => 'Q',
+                            _ => 'A',
+                        });
                     }
                     "anchor" => {
                         is_anchor = true;
@@ -10771,6 +10804,22 @@ fn parse_drawing_inner(
                         }
                         s839_wsp.as_mut().unwrap().pts.push((x, y));
                     }
+                    "close" if s839_wsp.is_none() && top_cg.is_some() => {
+                        top_cg.as_mut().unwrap().0.push('Z');
+                    }
+                    "pt" if s839_wsp.is_none() && top_cg.is_some() => {
+                        let (mut x, mut y) = (0.0f32, 0.0f32);
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            if key == "x" {
+                                x = val.parse().unwrap_or(0.0);
+                            } else if key == "y" {
+                                y = val.parse().unwrap_or(0.0);
+                            }
+                        }
+                        top_cg.as_mut().unwrap().1.push((x, y));
+                    }
                     // Shape line/outline properties (as empty element)
                     "ln" => {
                         for attr in e.attributes().flatten() {
@@ -11680,7 +11729,7 @@ fn parse_drawing_inner(
     if text_scene3d && !crate::env_flag!("OXI_TXBX_SCENE3D_BLACK_DISABLE") {
         scene3d_blacken(&mut shape_text_blocks);
     }
-    let text_box = if (!is_outline_shape
+    let mut text_box = if (!is_outline_shape
         && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty() || group_drawn
             // OXI_GROUP_MEMBERS_VISIBLE (2026-11-18, default ON, opt-out _DISABLE): a group with
             // drawable members is visible whatever the last-win noFill / ln noFill
@@ -11799,6 +11848,53 @@ fn parse_drawing_inner(
     } else {
         None
     };
+    // OXI_TOP_CUSTGEOM (2026-11-20, default ON, opt-out _DISABLE): a standalone (not grouped)
+    // text-less wps shape with a custom geometry is painted along its outline, holes and
+    // curves included -- not as its filled box. en/creative__010300e3's four contact icons
+    // (Freeform 20-24, 9.3-10.3pt, 2-5 subpaths of cubicBezTo with counter-holes): Word's
+    // PDF draws the LinkedIn / Facebook / Instagram / Skype glyphs; Oxi drew dark squares.
+    if let (Some(tb), Some((cmds, pts, wh))) = (text_box.as_mut(), top_cg.as_ref()) {
+        if tb.blocks.is_empty() && tb.vector_shapes.is_empty() && shape_type.is_none()
+            && !cmds.is_empty() && tb.width > 0.0 && tb.height > 0.0
+            && !crate::env_flag!("OXI_TOP_CUSTGEOM_DISABLE")
+        {
+            let (pw, ph) = wh.unwrap_or((tb.width * 12700.0, tb.height * 12700.0));
+            let (pw, ph) = (pw.max(1.0), ph.max(1.0));
+            let n = |k: usize| pts.get(k).map(|&(x, y)| (x / pw, y / ph));
+            let mut segs = Vec::new();
+            let mut i = 0usize;
+            for &c in cmds {
+                match c {
+                    'M' => { if let Some((x, y)) = n(i) { segs.push(crate::ir::PathSeg::M(x, y)); } i += 1; }
+                    'L' => { if let Some((x, y)) = n(i) { segs.push(crate::ir::PathSeg::L(x, y)); } i += 1; }
+                    'C' => {
+                        if let (Some(a), Some(b), Some(c3)) = (n(i), n(i + 1), n(i + 2)) {
+                            segs.push(crate::ir::PathSeg::C(a.0, a.1, b.0, b.1, c3.0, c3.1));
+                        }
+                        i += 3;
+                    }
+                    'Q' => {
+                        if let (Some(a), Some(b)) = (n(i), n(i + 1)) {
+                            segs.push(crate::ir::PathSeg::C(a.0, a.1, a.0, a.1, b.0, b.1));
+                        }
+                        i += 2;
+                    }
+                    'Z' => segs.push(crate::ir::PathSeg::Z),
+                    _ => {}
+                }
+            }
+            if !segs.is_empty() {
+                let stroke = if tb.border { tb.stroke_color.clone() } else { None };
+                let sw = if stroke.is_some() { tb.stroke_width.unwrap_or(0.75) } else { 0.0 };
+                tb.vector_shapes.push(crate::ir::VectorShape {
+                    x: 0.0, y: 0.0, w: tb.width, h: tb.height,
+                    fill: tb.fill.take(), stroke, stroke_width: sw,
+                    is_line: false, path: segs, image: None, arrow: None,
+                });
+                tb.border = false;
+            }
+        }
+    }
 
     // S535b: flow reservation for ALL inline text-bearing drawings TRIED +
     // REVERTED (3a4f pagination 0.9931 -> 0.8076, 282 paras +1..+3): the
