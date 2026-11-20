@@ -1251,6 +1251,7 @@ const I18N = {
         loadingSample: 'Loading sample...',
         wasmLoading: 'Wasm is still loading...',
         engineLoading: 'Loading WASM engine (~47 MB, first visit only)...',
+        engineStarting: 'Starting the engine...',
         unsupported: 'Supported formats: .docx, .xlsx, .xlsm, .pptx, .pdf',
         noChanges: 'No changes to save',
         noMatches: 'No matches found',
@@ -1303,6 +1304,7 @@ const I18N = {
         loadingSample: 'サンプルを読み込み中...',
         wasmLoading: 'Wasmを読み込み中...',
         engineLoading: 'WASMエンジンを読み込み中（約47MB・初回のみ）...',
+        engineStarting: 'エンジンを起動中...',
         unsupported: '対応形式: .docx, .xlsx, .xlsm, .pptx, .pdf',
         noChanges: '変更がありません',
         noMatches: '一致なし',
@@ -1780,7 +1782,10 @@ function renderCellBlocks(blocks, container) {
 }
 
 async function initialize() {
-    showStatus(t('engineLoading'), 'info');
+    // In VS Code the engine ships inside the extension, so nothing is
+    // downloaded; it is only started, and that happens for every editor.
+    const inVsCode = typeof acquireVsCodeApi === 'function';
+    showStatus(t(inVsCode ? 'engineStarting' : 'engineLoading'), 'info');
     try {
         await init();
         wasmReady = true;
