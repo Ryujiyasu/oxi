@@ -60,8 +60,8 @@ The published benchmarks compare Oxi with Microsoft Office's own output on fixed
 
 | Reference and corpus | Mean visual similarity (SSIM) | Matching page / slide counts | Measurement |
 |----------------------|-------------------------------|-----------------------------|-------------|
-| **Word — English, 50 documents** | **0.924** | **46 / 50** | 2026-11-03, blind-J50 |
-| **Word — Japanese, 50 documents** | **0.892** | **45 / 50** | 2026-11-03, jaBlindJ50 |
+| **Word — English, 50 documents** | **0.926** | **49 / 50** | 2026-11-20, blind-L50 |
+| **Word — Japanese, 50 documents** | **0.884** | **43 / 50** | 2026-11-20, jaBlindL50 |
 | **Word — Chinese (Simplified), 50 documents** | **0.874** | **48 / 50** | 2026-11-09, zhBlindA50 |
 | **PowerPoint — 48 usable decks from 50 sampled files** | **0.953** | **48 / 48** | 2026-08-20 |
 
@@ -85,6 +85,19 @@ The blind sets are drawn from the public [superdoc-dev/docx-corpus](https://docx
 Everything below is measured against **Microsoft Word's own render** of the same file (Microsoft 365 16.0.20527.20088, 150 DPI, resize-to-match, structural similarity; one fresh Word process per document). Nobody grades their own homework.
 
 One measurement note, because it would otherwise flatter a competitor: **OfficeCLI is measured with `--render html`, its own layout engine.** Its default `--render auto` is documented as "native on Windows w/ Word", and on a host with Word installed that path hands the rendering to Word itself — 0.996 SSIM against Word, because it *is* Word. Its own engine scores 0.972 on that same page. Only the second is a comparison.
+
+### Latest blind sets — blind-L50 and jaBlindL50 (2026-11-20)
+
+Frozen 2026-11-20 (`pipeline_data/FROZEN_BLIND_L.md`) by the same rule as every set below — the next unclaimed SHA-256 ranks per type, declared before anything was fetched — and measured once on a clean build of commit `e39af0a4` (DWrite renderer, the `<w:lastRenderedPageBreak/>` hint ignored), declared in the freeze file before its first render. Word opened and exported all 100 documents; Oxi rendered all 100. The same three English manifest entries as blind-J/K failed the mechanical quarantine at the draw, and the Japanese `technical` type is still exhausted, so its five slots went to `forms` by the top-up rule.
+
+| Set | Engine | mean SSIM (common pages) | penalized | page count matches Word | documents scored |
+|-----|--------|--------------------------|-----------|-------------------------|------------------|
+| English (blind-L50) | **Oxi `e39af0a4`** | **0.926** | **0.920** | **49 / 50** | 50 |
+| | LibreOffice 26.8.2.2 | 0.862 | 0.851 | 43 / 50 | 50 |
+| Japanese (jaBlindL50) | **Oxi `e39af0a4`** | **0.884** | **0.862** | **43 / 50** | 50 |
+| | LibreOffice 26.8.2.2 | 0.794 | 0.754 | 40 / 50 | 50 |
+
+Per document (common-page SSIM), Oxi is ahead of LibreOffice on 39 of the 50 English documents and 44 of the 50 Japanese ones. Only LibreOffice was re-run beside Oxi this time; the full field of engines was last measured on blind-J, below. These are different documents from blind-J, so the two rotations are not comparable number for number.
 
 ### English blind set — blind-J50, 50 never-seen documents
 
@@ -162,6 +175,7 @@ Three independently frozen Japanese blind sets, each measured once against the b
 | blind-H50 (next unclaimed ranks, 2026-10-02) | 0.857 | 41 / 50 |
 | blind-I50 (next unclaimed ranks, 2026-10-25) | 0.905 | 47 / 50 |
 | blind-J50 (next unclaimed ranks, 2026-11-03) | 0.892 | 45 / 50 |
+| blind-L50 (next unclaimed ranks, 2026-11-20) | 0.884 | 43 / 50 |
 
 B50 and C50 were measured the same day on the same binary, so the 0.040 between them is set difficulty and nothing else. Roughly a quarter of that is a known defect — 19 of the 50 blind-C documents contain an anchored floating text box whose text Oxi drops, and those documents average 0.06-0.10 lower than the rest — and the remainder is simply that one sample of fifty wild documents is harder than another. **A single blind number carries about ±0.02, and a page-count rate can move 90% → 70% between samples.**
 
@@ -173,7 +187,9 @@ I50, three weeks and 219 commits later (145 of them layout fixes derived from Wo
 
 J50, nine days and 126 commits later, came in lower: 0.892, 45 of 50. Nothing was tuned against it, so that is the ±0.02 at work — and a reminder that the Japanese number has not yet settled above 0.90.
 
-The English sets moved too — 0.903 on C50, 0.837 on D50, 0.874 on H50, 0.903 on I50, 0.924 on J50 — but C50 had been rotated into the development corpus by then, so set difficulty and tuning cannot be separated there and the C50 English number is retired rather than quoted.
+L50, seventeen days and 872 commits later, reads 0.884 with 43 of 50 page counts matching — inside the ±0.02 band again, and still below 0.90. The English set rose to 0.926 with 49 of 50 page counts matching.
+
+The English sets moved too — 0.903 on C50, 0.837 on D50, 0.874 on H50, 0.903 on I50, 0.924 on J50, 0.926 on L50 — but C50 had been rotated into the development corpus by then, so set difficulty and tuning cannot be separated there and the C50 English number is retired rather than quoted.
 
 Two honest caveats about the two engine tables together: (1) the English and Japanese sets are different documents, so the numbers are not comparable across languages — each is only comparable *within* its table; (2) engine rankings do not transfer between corpora (ONLYOFFICE leads English and comes ninth in Japanese), which is exactly why blind sets per language exist.
 
@@ -479,7 +495,7 @@ Oxi and Word both draw average SSIM 0.90 against Word's own render of the same f
 and 0.892; two-decimal truncation of the two-language mean, 0.908). The penalized figure — a
 page Oxi adds or drops scores zero — is reported beside it (0.911 and 0.866). Until 0.8.9 the
 number was the penalized mean; it changed with this release (blind-J's penalized mean, 0.889,
-would have read 0.8.8). The number is measured, not tuned — a blind set is spent once its
+would have read 0.8.8). Blind-L (2026-11-20) reads 0.926 and 0.884, a two-language mean of 0.905, so the number stays 0.9. The number is measured, not tuned — a blind set is spent once its
 number is written down and a new one is frozen before the next release — and `1.0` is the
 project's stop condition rather than its finish line. Per-release detail: [CHANGELOG.md](CHANGELOG.md).
 
