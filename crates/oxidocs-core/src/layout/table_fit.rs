@@ -130,14 +130,21 @@ impl<'a> TableFitLayouter<'a> {
         // 15 float ignores tblInd (76.22 for 108 and 300). Oxi took S1158's whole-table
         // shift AND S496's per-cell one, dropping tblInd: 65.45 for every positive tblInd.
         // en/reports__00156ad9 (compat 14, three floating tables, tblInd 108): 10.8 left.
+        // OXI_FLOAT_LEGACY_UNSET (2026-11-20, default ON, opt-out _DISABLE): a document with no
+        // compatibilityMode is a legacy document here too (Word lays it out as compat <= 14).
+        // `_pb_cell_anchor_col_gen.py` float arms (no compat): Word cell text at tblpX for cellMar
+        // 0 / 108 / 300; Oxi +0 / +5.4 / +15 (S1158 read compat_mode <= 14 only, and an unset
+        // mode reads 15). compat 15 arm: border at tblpX, text +margin (Oxi already right).
+        let float_legacy = self.compat_mode <= 14
+            || (!self.compat_mode_explicit && !crate::env_flag!("OXI_FLOAT_LEGACY_UNSET_DISABLE"));
         let float_tblind_c14 = if !crate::env_flag!("OXI_FLOAT_TBLIND_C14_DISABLE")
-            && self.compat_mode <= 14
+            && float_legacy
             && table.style.position.as_ref().is_some_and(|p| p.h_align.is_none())
         {
             table.style.indent.filter(|v| *v > 0.1).unwrap_or(0.0)
         } else { 0.0 };
         let s1158_float_absorb = !crate::env_flag!("OXI_S1158_DISABLE")
-            && self.compat_mode <= 14
+            && float_legacy
             && table.style.position.is_some()
             && float_tblind_c14 <= 0.0;
         // The shift is the cell margin ALONE -- no border/2. Word's tblpX=567 arm
@@ -9331,10 +9338,18 @@ impl<'a> TableFitLayouter<'a> {
                                             // A positioned tab has a fixed stop advance; it is
                                             // never a stretchable word space. Keep its advance
                                             // independent of the justified line's remaining slack.
+                                            // OXI_CELL_IDEO_SPACE_NOT_WORD (2026-11-20, default ON, opt-out _DISABLE):
+                                            // an ideographic space (U+3000) is a character, not a stretchable word
+                                            // space (`str::trim` strips it, so a run holding only «　» counted as
+                                            // one and took the whole line slack). The body path already counts
+                                            // ASCII spaces only. ja/reports__136d1ce5 p2 «　保護者・教員の…» (cell,
+                                            // linesAndChars): Word sets all 36 cells at 12.24; Oxi 12.05 with the
+                                            // leading «　» 19.49 wide.  Merging «　» into the next run already gave 12.26.
+                                            let cell_ideo_not_word_space = !crate::env_flag!("OXI_CELL_IDEO_SPACE_NOT_WORD_DISABLE");
                                             if slack > 0.0 {
                                                 let space_count = line.iter()
                                         .enumerate()
-                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty() && !text.contains('\t'))
+                                        .filter(|(i, (text, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _))| *i < line.len() - 1 && text.trim().is_empty() && !text.contains('\t') && !(text.contains('\u{3000}') && cell_ideo_not_word_space))
                                         .count();
                                                 if space_count > 0 {
                                                     let per_space = slack / space_count as f32;
@@ -9363,6 +9378,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     {
                                                         if fi < line.len() - 1
                                                             && text.trim().is_empty() && !text.contains('\t')
+                                                            && !(text.contains('\u{3000}') && cell_ideo_not_word_space)
                                                         {
                                                             frag_spacing[fi] += per_space;
                                                         }
@@ -10075,6 +10091,52 @@ impl<'a> TableFitLayouter<'a> {
                                             let d = (cell_group_top - (cell_text_y_off + asc)).max(0.0);
                                             lh += d;
                                             cell_text_y_off + d
+                                        } else {
+                                            cell_text_y_off
+                                        };
+                                        // OXI_CELL_GRID_TALL_CJK_WINBOX (2026-11-20, default ON, opt-out _DISABLE):
+                                        // a grid-snapped cell line set in a tall CJK face (win ascent +
+                                        // descent over 1.05 em -- Meiryo / Meiryo UI; the natbox arm above needs single spacing)
+                                        // centres its win box in the snapped line, as the body line does.
+                                        // `_pb_exactrow_valign_gen.py` (exact 1cm rows, vAlign top/center/
+                                        // bottom, Meiryo UI 10.5 / 14 / 18, lines 312): Word baseline from the
+                                        // row top 20.2 / 21.6 / 23.3 whatever the vAlign = (31.2 - win) / 2 +
+                                        // win ascent (20.06 / 21.55 / 23.25); Oxi 19.13 / 19.84 / 20.58 from the
+                                        // half-rounded table-cell box. ja/educational__05a78ecd every line 1.83 high.
+                                        let cell_text_y_off = if row_line_pitch.map_or(false, |p| p > 0.0)
+                                            && para.style.snap_to_grid
+                                            && matches!(effective_line_rule, None | Some("auto"))
+                                            && !line.is_empty()
+                                            && !crate::env_flag!("OXI_CELL_GRID_TALL_CJK_WINBOX_DISABLE")
+                                        {
+                                            let mut asc = 0.0f32;
+                                            let mut desc = 0.0f32;
+                                            let mut tall = true;
+                                            let mut any = false;
+                                            let has_cjk = line.iter().any(|t| t.0.chars().any(kinsoku::is_cjk));
+                                            for t in line.iter() {
+                                                if t.0.trim().is_empty() { continue; }
+                                                if !has_cjk { tall = false; break; }
+                                                let mut rs = RunStyle::default();
+                                                rs.font_size = Some(t.1);
+                                                rs.bold = t.3;
+                                                rs.italic = t.4;
+                                                if let Some(ff) = &t.8 { rs.font_family = Some(ff.clone()); }
+                                                if let Some(e) = &t.14 {
+                                                    rs.font_family_east_asia = Some(e.clone());
+                                                    rs.has_explicit_east_asia = true;
+                                                }
+                                                let m = &*self.metrics_for_text(&t.0, &rs, &para.style);
+                                                if m.win_ascent + m.win_descent < 1.05 { tall = false; break; }
+                                                any = true;
+                                                asc = asc.max(m.win_ascent * t.1);
+                                                desc = desc.max(m.win_descent * t.1);
+                                            }
+                                            if tall && any && asc + desc <= lh + 0.01 {
+                                                1.0 + (lh - (asc + desc)) / 2.0
+                                            } else {
+                                                cell_text_y_off
+                                            }
                                         } else {
                                             cell_text_y_off
                                         };

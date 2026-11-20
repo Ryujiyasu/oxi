@@ -11159,9 +11159,31 @@ cells={} pitch={:.2} text={:?}",
                         img.paragraph_space_before.max(0.0)
                     } else { 0.0 };
                     cursor.advance(img_sb);
+                    // OXI_TXBX_GRID_IMAGE (2026-11-20, default ON, opt-out _DISABLE): on a typed
+                    // line grid a picture alone in a text-box paragraph takes whole cells and
+                    // sits centred in them, as in the body (OXI_GRID_OBJ_CENTER).
+                    // `_pb_txbx_gridimg_gen.py` (picture 75.55 / 50 / 30 in a box, tIns 3.6):
+                    // lines 360 -> 10.83 / 5.6 / 6.6 below the box top (3.6 + (n x 18 - h) / 2),
+                    // lines 312 -> 4.82 / 9.8 / 4.2, no grid -> 3.6 everywhere; Oxi 3.6 always.
+                    // ja/reference__0ae2d13d's QR code (75.55 in a box, lines 360) 7.23 high.
+                    // Only a picture in a text-box PARAGRAPH: a group's picture child (no host) sits
+                    // where its xfrm says (ja/creative__13152ea1 header children, 2026-11-20).
+                    let txbx_img_cells = if !page.doc_grid_no_type
+                        && page.grid_line_pitch.is_some_and(|p| p > 0.1)
+                        && img.host_paragraph.as_deref().is_some_and(|h| h.style.snap_to_grid
+                            && matches!(h.style.line_spacing_rule.as_deref(), None | Some("auto")))
+                        && img.height > 0.0
+                        && !crate::env_flag!("OXI_TXBX_GRID_IMAGE_DISABLE")
+                    {
+                        let p = page.grid_line_pitch.unwrap_or(0.0);
+                        Some(((img.height / p) - 0.001).ceil().max(1.0) * p)
+                    } else {
+                        None
+                    };
+                    let txbx_img_off = txbx_img_cells.map_or(0.0, |c| ((c - img.height) * 0.5).max(0.0));
                     elements.push(LayoutElement::new(
                         inner_x,
-                        cursor.visual_y,
+                        cursor.visual_y + txbx_img_off,
                         img.width.min(inner_width),
                         img.height,
                         LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
@@ -11173,7 +11195,7 @@ cells={} pitch={:.2} text={:?}",
                                 .map(|c| (c.top, c.right, c.bottom, c.left)),
                         },
                     ));
-                    cursor.advance(img.height);
+                    cursor.advance(txbx_img_cells.unwrap_or(img.height));
                     // OXI_TXBX_IMAGE_LINE (2026-11-06, default ON, opt-out _DISABLE): the
                     // picture's line takes its paragraph's auto multiple over the run
                     // face's natural height on top of the picture, and its after collapses

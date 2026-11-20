@@ -4322,7 +4322,9 @@ fn parse_paragraph_with_inline_images_impl(
                                             && tp.v_relative.as_deref() == Some("paragraph")
                                     })
                                 {
-                                    run.style.inline_object_extent = Some((tb.width, tb.height));
+                                    // OXI_INLINE_GROUP_EFFECT: the line holds the effect box.
+                                    let eff = tb.position.as_ref().map_or(0.0, |p| p.eff_t + p.eff_b);
+                                    run.style.inline_object_extent = Some((tb.width, tb.height + eff));
                                     run.style.inline_group_object = tb.children_on_line
                                         && std::env::var_os("OXI_INLINE_GROUP_LINE_DISABLE").is_none();
                                 }
@@ -11848,6 +11850,23 @@ fn parse_drawing_inner(
     } else {
         None
     };
+    // OXI_INLINE_GROUP_EFFECT (2026-11-20, default ON, opt-out _DISABLE): an inline text-less
+    // group (SmartArt / chart / wpg) occupies its extent grown by wp:effectExtent t + b in the
+    // line, like an inline picture on a line (OXI_INLINE_EFFECT_TEXT_LINE / S1238). Carried on
+    // the synthetic inline position. en/technical__0043bfe0 p11: the «Support Category ->
+    // Support Purpose» chevron SmartArt (cy 28.35, effectExtent b 3.2): Word's next line 54.27
+    // below the previous, Oxi 50.99.
+    if let Some(tb) = text_box.as_mut() {
+        if inline_tb && tb.blocks.is_empty() && !tb.vector_shapes.is_empty()
+            && (effect_extent_t > 0.0 || effect_extent_b > 0.0)
+            && !crate::env_flag!("OXI_INLINE_GROUP_EFFECT_DISABLE")
+        {
+            if let Some(p) = tb.position.as_mut() {
+                p.eff_t = effect_extent_t.max(0.0);
+                p.eff_b = effect_extent_b.max(0.0);
+            }
+        }
+    }
     // OXI_TOP_CUSTGEOM (2026-11-20, default ON, opt-out _DISABLE): a standalone (not grouped)
     // text-less wps shape with a custom geometry is painted along its outline, holes and
     // curves included -- not as its filled box. en/creative__010300e3's four contact icons

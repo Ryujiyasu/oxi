@@ -9108,7 +9108,10 @@ impl<'a> ParagraphLayouter<'a> {
                         } else {
                             emit_y + line_height
                         };
-                        let oy = baseline - tb.height;
+                        // OXI_INLINE_GROUP_EFFECT: the drawn group sits effectExtent b above
+                        // the baseline (its line box holds t + h + b).
+                        let oy = baseline - tb.height
+                            - tb.position.as_ref().map_or(0.0, |p| p.eff_b);
                         // OXI_EXACT_INLINE_CLIP (2026-11-05, default ON, opt-out
                         // _DISABLE): Word clips the inline object of an exact line
                         // to the line box. `_pb_exact_inline_chart_gen.py` exact12 /
