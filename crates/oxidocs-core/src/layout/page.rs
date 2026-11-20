@@ -1627,9 +1627,21 @@ impl<'a> PageLayouter<'a> {
                     // 451pt column left a lane and Word kept its empty anchor
                     // paragraph at the page top; a band there added a page.
                     let s1387_col_w = page.size.width - page.margin.left - page.margin.right;
-                    if matches!(tb.wrap_type, Some(crate::ir::WrapType::Square | crate::ir::WrapType::Tight))
+                    // OXI_TTB_ABS_BAND (2026-11-20, default ON, opt-out _DISABLE): a
+                    // wrapTopAndBottom box placed relative to the page or the margin
+                    // is a wall at its absolute y, whatever its width -- the lines
+                    // after its anchor that would cross it resume below it.
+                    // `_pb_ttb_margin_gen.py` (margin posV 378.7, 79.5 tall, anchor at
+                    // 307): Word sets the empty paragraphs at 331..402, the next at
+                    // 519.7 under the box and «MARK» at 544; Oxi ran them through it
+                    // (MARK 449.7). ja/correspondence__0333046c p2: the logo anchored
+                    // five paragraphs later sat 94pt high.
+                    let s_ttb_abs = !crate::env_flag!("OXI_TTB_ABS_BAND_DISABLE")
+                        && tb.wrap_type == Some(crate::ir::WrapType::TopAndBottom)
+                        && tb.position.as_ref().map_or(false, |tp| matches!(tp.v_relative.as_deref(), Some("page") | Some("margin")));
+                    if s_ttb_abs || (matches!(tb.wrap_type, Some(crate::ir::WrapType::Square | crate::ir::WrapType::Tight))
                         && tb.width >= s1387_col_w - 30.0
-                        && tb.position.as_ref().map_or(false, |tp| tp.v_relative.as_deref() == Some("page"))
+                        && tb.position.as_ref().map_or(false, |tp| tp.v_relative.as_deref() == Some("page")))
                     {
                         m.entry(tb.anchor_block_index).or_default().push(ti);
                     }
@@ -2519,9 +2531,20 @@ impl<'a> PageLayouter<'a> {
                             let dl = tp.dist_l.unwrap_or(9.0);
                             let dr = tp.dist_r.unwrap_or(9.0);
                             let bounds=wrap_contour_bounds(tb.wrap_type,&tb.wrap_polygon);
-                            let nb = (current_page_idx, tp.y + bounds.1*tb.height, tp.y + bounds.3*tb.height,
-                                      x0 + bounds.0*tb.width - dl, x0 + bounds.2*tb.width + dr,
-                                      tb.wrap_type == Some(crate::ir::WrapType::Tight), BodyWrapPolicy::OBJECT);
+                            // OXI_TTB_ABS_BAND: a margin-relative y counts from the top
+                            // margin, and a top-and-bottom wall closes the whole column.
+                            let ttb = tb.wrap_type == Some(crate::ir::WrapType::TopAndBottom);
+                            let y0 = tp.y + if tp.v_relative.as_deref() == Some("margin") { page.margin.top } else { 0.0 };
+                            let nb = if ttb {
+                                (current_page_idx, y0 - tp.dist_t.unwrap_or(0.0).max(0.0),
+                                 y0 + tb.height + tp.dist_b.unwrap_or(0.0).max(0.0),
+                                 page.margin.left - 1.0, page.margin.left + total_content_width + 1.0,
+                                 false, BodyWrapPolicy::OBJECT)
+                            } else {
+                                (current_page_idx, y0 + bounds.1*tb.height, y0 + bounds.3*tb.height,
+                                 x0 + bounds.0*tb.width - dl, x0 + bounds.2*tb.width + dr,
+                                 tb.wrap_type == Some(crate::ir::WrapType::Tight), BodyWrapPolicy::OBJECT)
+                            };
                             if crate::env_flag!("OXI_DBG1387") {
                                 eprintln!("[S1387] blk={} band={:?}", block_idx, nb);
                             }

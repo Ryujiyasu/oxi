@@ -6936,7 +6936,16 @@ impl<'a> ParagraphLayouter<'a> {
                 // so a trailing one keeps its width: 2ea81a8441cc / d1e8ac8fd1cc /
                 // index-14/17/20 (jc right, «…日　», «法人番号：　　　　») all keep it in
                 // Word, and the first ALIGN_TRAIL_WS cost them 0.0016-0.0038.
-                let hangs = |c: char| c.is_whitespace() && !(c == '\u{3000}' && !para.style.word_wrap);
+                // OXI_ALIGN_TRAIL_NBSP (2026-11-20, default ON, opt-out _DISABLE): a NO-BREAK
+                // SPACE is set like text -- it never hangs, and the hanging tail stops at it.
+                // `_pb_trail_right_compat_gen.py` (jc right, ＭＳ Ｐゴシック 12, compat 14 / 15):
+                // «あいう»+3 NBSP ends «う» at 499.37 (3 x 3.6 inside), «あいう NBSP» at 503.09
+                // (space + NBSP inside), «あいう NBSP + 1 or 2 spaces» at 506.69 (the spaces
+                // hang); plain spaces 510.29. ja/creative__097ed6a9's «野中　涼 »+3 NBSP sat 18pt
+                // right of Word's.
+                let nbsp_text = !crate::env_flag!("OXI_ALIGN_TRAIL_NBSP_DISABLE");
+                let hangs = |c: char| c.is_whitespace() && !(c == '\u{3000}' && !para.style.word_wrap)
+                    && !(nbsp_text && c == '\u{a0}');
                 for f in line.fragments.iter().rev() {
                     if f.tab_alignment.is_some() {
                         break;

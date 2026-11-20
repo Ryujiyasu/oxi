@@ -2357,6 +2357,15 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>, theme: &ThemeColors)
                                 _ => {}
                             }
                         }
+                        // OXI_TBLSTYLE_TRPR_DEPTH (2026-11-20, default ON, opt-out _DISABLE): the
+                        // loop above consumed </w:trPr>, so the generic `depth += 1` below
+                        // was never undone and every later <w:tblStylePr> was read at depth 1
+                        // and skipped. en/technical__0043bfe0 (Grid Table 4 Accent 1, whose
+                        // style carries <w:trPr><w:cantSplit/></w:trPr>): no blue header row,
+                        // no banding, on every table of its 112 pages.
+                        if !crate::env_flag!("OXI_TBLSTYLE_TRPR_DEPTH_DISABLE") {
+                            continue;
+                        }
                     }
                     "pPr" if depth == 0 && !in_tbl_pr => {
                         // Table style base paragraph properties

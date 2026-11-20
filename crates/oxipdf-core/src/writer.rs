@@ -171,8 +171,14 @@ impl PdfWriter {
                 .map(|(name, e)| (name.clone(), e.cid_to_unicode.clone()))
                 .collect();
 
+        let uni_fonts = unicode_fallback_fonts(doc, &cid_font_chars);
+
         // Write font objects.
         for (name, obj_num) in &font_objs {
+            if let Some(used) = uni_fonts.get(name) {
+                self.write_unicode_fallback_font(name, *obj_num, used);
+                continue;
+            }
             if let Some(used_chars) = cid_font_chars.get(name) {
                 // Type0 composite font for CJK/Unicode text.
                 let cid_font_num = self.alloc_obj();
@@ -464,7 +470,7 @@ impl PdfWriter {
 
             // Build content stream data (with image references).
             let content_data =
-                build_content_stream_with_images(page, &page_images[i], &cid_font_chars, encodings);
+                build_content_stream_with_images(page, &page_images[i], &cid_font_chars, encodings, &uni_fonts);
             let compressed = compress(&content_data);
 
             // Write content stream object.
@@ -551,6 +557,7 @@ fn build_content_stream_with_images(
     images: &[(usize, u32)],
     cid_fonts: &std::collections::HashMap<String, std::collections::BTreeSet<u16>>,
     encodings: &crate::glyph_encoding::FontEncodings,
+    uni_fonts: &std::collections::HashMap<String, std::collections::BTreeSet<char>>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut img_counter = 0usize;
@@ -584,7 +591,9 @@ fn build_content_stream_with_images(
                 } else {
                     write!(buf, "{} {} Td\n", span.x, pdf_y).unwrap();
                 }
-                if cid_fonts.contains_key(&font_key) {
+                if uni_fonts.contains_key(&font_key) {
+                    write!(buf, "{} Tj\n", utf16_hex(&span.text)).unwrap();
+                } else if cid_fonts.contains_key(&font_key) {
                     write!(
                         buf,
                         "<{}> Tj\n",
@@ -720,6 +729,127 @@ fn write_color_op(buf: &mut Vec<u8>, color: &Color, stroke: bool) {
             let op = if stroke { "K" } else { "k" };
             write!(buf, "{c} {m} {y} {k} {op}\n").unwrap();
         }
+    }
+}
+
+/// The fonts that carry text other than ASCII but no font program: a name the
+/// caller could not find a file for. Written as a simple Type1 font, their text
+/// went into the content stream as raw UTF-8 and every viewer read the bytes as
+/// WinAnsi -- 知 came out as «ç\x9f¥» on screen and in the extracted text alike.
+/// These go out as a composite font over the predefined Unicode CMap instead, so
+/// a viewer draws them with a substitute Japanese face and extracts the real
+/// characters. Keyed by the escaped font name, with every character the font
+/// draws (for its ToUnicode map).
+fn unicode_fallback_fonts(
+    doc: &PdfDocument,
+    cid_fonts: &std::collections::HashMap<String, std::collections::BTreeSet<u16>>,
+) -> std::collections::HashMap<String, std::collections::BTreeSet<char>> {
+    let mut out: std::collections::HashMap<String, std::collections::BTreeSet<char>> = Default::default();
+    if std::env::var_os("OXI_PDF_UNI_FALLBACK_DISABLE").is_some() {
+        return out;
+    }
+    let mut non_ascii: std::collections::HashSet<String> = Default::default();
+    for page in &doc.pages {
+        for el in &page.contents {
+            let Some(span) = el.text_span() else { continue };
+            let key = escape_name(&span.font_name);
+            if cid_fonts.contains_key(&key) || doc.embedded_fonts.contains_key(&span.font_name) {
+                continue;
+            }
+            if !span.text.is_ascii() {
+                non_ascii.insert(key.clone());
+            }
+            out.entry(key).or_default().extend(span.text.chars());
+        }
+    }
+    out.retain(|k, _| non_ascii.contains(k));
+    out
+}
+
+/// `s` as UTF-16BE in a hex string: the codes of the `UniJIS-UTF16-H` CMap.
+fn utf16_hex(s: &str) -> String {
+    let mut out = String::with_capacity(2 + s.len() * 4);
+    out.push('<');
+    for unit in s.encode_utf16() {
+        out.push_str(&format!("{unit:04X}"));
+    }
+    out.push('>');
+    out
+}
+
+impl PdfWriter {
+    /// A composite font with no font program over `UniJIS-UTF16-H` (Adobe-Japan1):
+    /// the viewer supplies the outlines, the CMap names the characters.
+    fn write_unicode_fallback_font(&mut self, name: &str, obj_num: u32, used: &std::collections::BTreeSet<char>) {
+        let cid_num = self.alloc_obj();
+        let desc_num = self.alloc_obj();
+        let tu_num = self.alloc_obj();
+        self.begin_obj(obj_num);
+        write!(
+            self.buf,
+            "<< /Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /UniJIS-UTF16-H \
+             /DescendantFonts [{cid_num} 0 R] /ToUnicode {tu_num} 0 R >>\n"
+        )
+        .unwrap();
+        self.end_obj();
+        // Adobe-Japan1 CIDs 1-95 are the proportional ASCII the CMap maps
+        // U+0020-007E to (given Helvetica's widths: a sans is what a viewer
+        // substitutes); 231-632 are the half-width forms.
+        const ASCII_W: [u16; 95] = [
+            278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278,
+            556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556,
+            1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778,
+            667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556,
+            333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
+            556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
+        ];
+        let ascii_w: Vec<String> = ASCII_W.iter().map(|w| w.to_string()).collect();
+        self.begin_obj(cid_num);
+        write!(
+            self.buf,
+            "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /{name} \
+             /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 6 >> \
+             /FontDescriptor {desc_num} 0 R /DW 1000 /W [1 [{}] 231 632 500] >>\n",
+            ascii_w.join(" ")
+        )
+        .unwrap();
+        self.end_obj();
+        self.begin_obj(desc_num);
+        write!(
+            self.buf,
+            "<< /Type /FontDescriptor /FontName /{name} /Flags 6 /FontBBox [0 -141 1000 859] \
+             /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >>\n"
+        )
+        .unwrap();
+        self.end_obj();
+        let mut cmap = String::from(
+            "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n\
+             /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n\
+             /CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n\
+             3 begincodespacerange\n<0000> <D7FF>\n<D800DC00> <DBFFDFFF>\n<E000> <FFFF>\nendcodespacerange\n",
+        );
+        let pairs: Vec<String> = used
+            .iter()
+            .map(|c| {
+                let hex = utf16_hex(&c.to_string());
+                format!("{hex} {hex}")
+            })
+            .collect();
+        for chunk in pairs.chunks(100) {
+            cmap.push_str(&format!("{} beginbfchar\n", chunk.len()));
+            for p in chunk {
+                cmap.push_str(p);
+                cmap.push('\n');
+            }
+            cmap.push_str("endbfchar\n");
+        }
+        cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+        let data = compress(cmap.as_bytes());
+        self.begin_obj(tu_num);
+        write!(self.buf, "<< /Length {} /Filter /FlateDecode >>\nstream\n", data.len()).unwrap();
+        self.buf.extend_from_slice(&data);
+        write!(self.buf, "\nendstream\n").unwrap();
+        self.end_obj();
     }
 }
 
@@ -1238,9 +1368,12 @@ mod tests {
             s.contains("/Subtype /Type1"),
             "expected Type1 for ASCII font"
         );
+        // The Japanese run's face has no data: it goes out over the predefined
+        // Unicode CMap (UniJIS-UTF16-H), which a viewer can resolve without a
+        // font file -- never over Identity-H, whose raw glyph ids it cannot.
         assert!(
-            !s.contains("/Subtype /Type0"),
-            "a face with no font data must not go out as a composite font"
+            s.contains("/BaseFont /MSGothic /Encoding /UniJIS-UTF16-H"),
+            "a face with no font data and Japanese text goes out over the Unicode CMap"
         );
         assert!(
             !s.contains("/Encoding /Identity-H"),
@@ -1315,9 +1448,79 @@ mod tests {
             "every composite font must carry its font program"
         );
         assert!(
-            s.contains("/BaseFont /NoData") && s.contains("/Subtype /Type1"),
-            "the face with no data falls back to a named Type1"
+            s.contains("/BaseFont /NoData /Encoding /UniJIS-UTF16-H"),
+            "the face with no data falls back to the Unicode CMap, not raw bytes"
         );
+    }
+
+    /// A face with no font program and Japanese text: the text must not go out
+    /// as raw UTF-8 under a bare Type1 font (every viewer read those bytes as
+    /// WinAnsi), but as UTF-16 codes of a composite font over UniJIS-UTF16-H
+    /// with a ToUnicode map, so it draws in a substitute face and extracts.
+    #[test]
+    fn test_missing_face_japanese_is_unicode_composite() {
+        let doc = PdfDocument {
+            version: PdfVersion::new(1, 7),
+            info: DocumentInfo::default(),
+            pages: vec![Page {
+                width: 612.0,
+                height: 792.0,
+                media_box: Rectangle { llx: 0.0, lly: 0.0, urx: 612.0, ury: 792.0 },
+                crop_box: None,
+                contents: vec![
+                    ContentElement::Text(TextSpan {
+                        x: 72.0, y: 72.0, text: "知恵 abc".into(), font_name: "NoSuchMincho".into(),
+                        font_size: 12.0, fill_color: Color::Gray(0.0),
+                        character_spacing: 0.0, stroke_width: 0.0, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
+                    }),
+                    ContentElement::Text(TextSpan {
+                        x: 72.0, y: 90.0, text: "plain".into(), font_name: "NoSuchMincho".into(),
+                        font_size: 12.0, fill_color: Color::Gray(0.0),
+                        character_spacing: 0.0, stroke_width: 0.0, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
+                    }),
+                    ContentElement::Text(TextSpan {
+                        x: 72.0, y: 108.0, text: "ascii only".into(), font_name: "Helvetica".into(),
+                        font_size: 12.0, fill_color: Color::Gray(0.0),
+                        character_spacing: 0.0, stroke_width: 0.0, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
+                    }),
+                ],
+                rotation: 0,
+            }],
+            outline: Vec::new(),
+            embedded_fonts: HashMap::new(),
+        };
+        let bytes = write_pdf(&doc);
+        let s = String::from_utf8_lossy(&bytes);
+        if let Some(path) = std::env::var_os("OXI_DUMP_TEST_PDF") {
+            std::fs::write(path, &bytes).unwrap();
+        }
+        assert!(s.contains("/BaseFont /NoSuchMincho /Encoding /UniJIS-UTF16-H"), "missing face must be a Unicode composite");
+        assert!(s.contains("/Ordering (Japan1)"));
+        // the content streams, inflated
+        let mut text = String::new();
+        let mut rest = &bytes[..];
+        while let Some(at) = rest.windows(7).position(|w| w == b"stream
+") {
+            let body = &rest[at + 7..];
+            let end = body.windows(9).position(|w| w == b"endstream").unwrap_or(body.len());
+            let mut out = Vec::new();
+            use std::io::Read;
+            if flate2::read::ZlibDecoder::new(&body[..end]).read_to_end(&mut out).is_ok() {
+                text.push_str(&String::from_utf8_lossy(&out));
+            } else {
+                text.push_str(&String::from_utf8_lossy(&body[..end]));
+            }
+            rest = &body[(end + 9).min(body.len())..];
+        }
+        // the ASCII span in the same font uses the same 2-byte codes
+        assert!(text.contains("<77E560750020006100620063> Tj"), "知恵 abc as UTF-16BE");
+        assert!(text.contains("<0070006C00610069006E> Tj"), "plain as UTF-16BE");
+        assert!(text.contains("<77E5> <77E5>"), "ToUnicode maps 知 to itself");
+        // the raw UTF-8 of 知 (E7 9F A5) never appears
+        assert!(!bytes.windows(3).any(|w| w == [0xE7, 0x9F, 0xA5]));
+        // an ASCII-only missing face stays the simple base-14 font
+        assert!(s.contains("/Subtype /Type1 /BaseFont /Helvetica"));
+        assert!(text.contains("(ascii only) Tj"));
     }
 
     /// A face we hold font data for must be embedded even when its text is
