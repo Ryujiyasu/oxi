@@ -13,8 +13,9 @@ export class RuntimeFontLoader {
     this.cssFaceRevisions = new Map();
     this.localFonts = null;
     // A host that can read the machine's fonts itself (the VS Code extension)
-    // sets `provider(family, bold, italic)` to resolve to the program's bytes,
-    // or null when the machine has no such face.
+    // sets `provider(family, bold, italic)` to resolve to {bytes, index} (the
+    // program, and its member in a collection), or null when the machine has
+    // no such face.
     this.provider = null;
     // With `standIns`, a face the machine does not have is painted in the
     // face Oxi ships for it (Carlito for Calibri, OxiMincho for a Mincho…)
@@ -76,8 +77,10 @@ export class RuntimeFontLoader {
       return;
     }
     if (this.provider) {
-      const bytes = await this.provider(family, !!bold, !!italic);
-      if (bytes && this.api.try_register_font_program_family(family, !!bold, !!italic, bytes)) {
+      // {bytes, index}: the program and, in a collection, the member the host
+      // chose. The member's own name table must still say it is this face.
+      const font = await this.provider(family, !!bold, !!italic);
+      if (font && this.registerMember(family, bold, italic, font.bytes, font.index || 0)) {
         await this.addCssFace(family, bold, italic);
         return;
       }
@@ -113,6 +116,15 @@ export class RuntimeFontLoader {
       return;
     }
     return this.standInFace(family, bold, italic);
+  }
+
+  registerMember(family, bold, italic, bytes, index) {
+    try {
+      this.api.register_font_program(family, !!bold, !!italic, bytes, index);
+      return true;
+    } catch {
+      return this.api.try_register_font_program_family(family, !!bold, !!italic, bytes);
+    }
   }
 
   // Paint a face the machine lacks. A bold or italic face falls back to the

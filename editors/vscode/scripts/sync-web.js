@@ -198,9 +198,16 @@ if (__oxiVscode) {
         __oxiVscode.postMessage({ type: 'oxi:font', id, family, bold, italic });
     });
 
-    document.addEventListener('oxi:document-edited', () => {
-        __oxiVscode.postMessage({ type: 'oxi:edit' });
+    // Undo: each step the page begins becomes an edit on VS Code's own stack,
+    // whose undo and redo (Ctrl+Z, Ctrl+Y, the Edit menu, the page's buttons)
+    // come back here as 'oxi:undo' and 'oxi:redo'. VS Code then also knows
+    // when undoing returns the file to what was saved.
+    hostOwnsUndo = true;
+    document.addEventListener('oxi:document-edited', (event) => {
+        __oxiVscode.postMessage({ type: 'oxi:edit', step: !!(event.detail && event.detail.step) });
     });
+    document.addEventListener('oxi:request-undo', () => __oxiVscode.postMessage({ type: 'oxi:requestUndo' }));
+    document.addEventListener('oxi:request-redo', () => __oxiVscode.postMessage({ type: 'oxi:requestRedo' }));
 
     // The page's own save (its button, the File menu, Ctrl+S) saves through
     // VS Code, which owns the file.
@@ -223,10 +230,15 @@ if (__oxiVscode) {
         if (msg.type === 'oxi:font') {
             const resolve = __oxiFontWaiters.get(msg.id);
             __oxiFontWaiters.delete(msg.id);
-            if (resolve) resolve(msg.data ? __oxiFromBase64(msg.data) : null);
+            if (resolve) resolve(msg.data ? { bytes: __oxiFromBase64(msg.data), index: msg.index || 0 } : null);
             return;
         }
+        if (msg.type === 'oxi:undo') { undoEdit(); return; }
+        if (msg.type === 'oxi:redo') { redoEdit(); return; }
         if (msg.type === 'oxi:save') {
+            // Typing after a save is a new step, so undoing it comes back to
+            // exactly what was saved.
+            breakUndoGroup();
             if (!currentDocx) {
                 __oxiVscode.postMessage({ type: 'oxi:saved', id: msg.id, error: 'no document is open' });
             } else {

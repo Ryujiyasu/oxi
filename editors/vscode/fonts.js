@@ -104,7 +104,10 @@ async function readFace(handle, offset) {
   if (name.length < 6) return null;
   const count = name.readUInt16BE(2);
   const strings = name.readUInt16BE(4);
-  const families = new Set();
+  // Each family name with whether the face gives it as its own (ID 1) or
+  // only as the typographic family it belongs to (ID 16, as "Yu Gothic" is
+  // for Yu Gothic Light).
+  const families = new Map();
   for (let i = 0; i < count; i++) {
     const at = 6 + i * 12;
     if (at + 12 > name.length) break;
@@ -114,17 +117,19 @@ async function readFace(handle, offset) {
     const start = strings + name.readUInt16BE(at + 10);
     if (start + length > name.length) continue;
     const text = decodeName(name.readUInt16BE(at), name.readUInt16BE(at + 2), name.subarray(start, start + length));
-    if (text) families.add(key(text));
+    if (text && !(families.get(key(text)) === 1)) families.set(key(text), id);
   }
   let bold = false;
   let italic = false;
+  let weight = 400;
   if (tables['OS/2'] && tables['OS/2'].length >= 64) {
+    weight = (await readAt(handle, tables['OS/2'].offset + 4, 2)).readUInt16BE(0) || 400;
     const fsSelection = (await readAt(handle, tables['OS/2'].offset + 62, 2)).readUInt16BE(0);
     bold = (fsSelection & 0x20) !== 0;
     // Oblique (bit 9) is a style of its own, not italic, as in ttf-parser.
     italic = (fsSelection & 0x200) === 0 && (fsSelection & 0x1) !== 0;
   }
-  return { families: [...families], bold, italic };
+  return { families, bold, italic, weight };
 }
 
 async function indexFile(file, faces) {
@@ -140,12 +145,18 @@ async function indexFile(file, faces) {
       offsets = [];
       for (let i = 0; i + 4 <= table.length; i += 4) offsets.push(table.readUInt32BE(i));
     }
-    for (const offset of offsets) {
+    for (const [index, offset] of offsets.entries()) {
       const face = await readFace(handle, offset);
       if (!face) continue;
-      for (const family of face.families) {
+      for (const [family, nameId] of face.families) {
         const k = `${family}\u0000${face.bold}\u0000${face.italic}`;
-        if (!faces.has(k)) faces.set(k, file);
+        // Several faces can claim one family/style: Yu Gothic Light and
+        // Yu Gothic Regular both say "Yu Gothic", not bold, not italic. The
+        // face whose own name it is wins, then the weight nearest the
+        // regular (or bold) one; otherwise the earlier folder and file.
+        const rank = (nameId === 1 ? 0 : 10000) + Math.abs(face.weight - (face.bold ? 700 : 400));
+        const held = faces.get(k);
+        if (!held || rank < held.rank) faces.set(k, { file, index, rank });
       }
     }
   } catch {
@@ -161,7 +172,7 @@ class InstalledFonts {
     this.index = null;
   }
 
-  /** Map of "family\0bold\0italic" → file, built once on first use. */
+  /** Map of "family\0bold\0italic" → {file, index}, built once on first use. */
   faces() {
     if (!this.index) {
       this.index = (async () => {
@@ -175,13 +186,19 @@ class InstalledFonts {
     return this.index;
   }
 
-  /** The bytes of the program holding this face, or null. */
-  async resolve(family, bold, italic) {
+  /** Where this face is: {file, index} (its member in a collection), or null. */
+  async locate(family, bold, italic) {
     const faces = await this.faces();
-    const file = faces.get(`${key(family)}\u0000${!!bold}\u0000${!!italic}`);
-    if (!file) return null;
+    const found = faces.get(`${key(family)}\u0000${!!bold}\u0000${!!italic}`);
+    return found ? { file: found.file, index: found.index } : null;
+  }
+
+  /** The program holding this face, {bytes, index, file}, or null. */
+  async resolve(family, bold, italic) {
+    const found = await this.locate(family, bold, italic);
+    if (!found) return null;
     try {
-      return await fs.promises.readFile(file);
+      return { bytes: await fs.promises.readFile(found.file), index: found.index, file: found.file };
     } catch {
       return null;
     }

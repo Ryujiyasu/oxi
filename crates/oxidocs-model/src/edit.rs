@@ -2736,6 +2736,58 @@ fn max_revision_id(model: &DocxModel) -> i64 {
     m
 }
 
+/// The edits Word's Backspace makes at the start of a numbered paragraph:
+/// the number comes off (`w:numId` 0) and the text stays where it stood, at
+/// the list level's left indent with no first-line indent. Empty when the
+/// paragraph has no number.
+pub fn unnumber_edits(model: &DocxModel, at: &Pos) -> Result<Vec<Edit>, EditError> {
+    let paras = paragraphs(model, &at.story)?;
+    let Some(p) = paras.get(at.para) else { return err(format!("no paragraph {}", at.para)) };
+    let own = p.props.as_ref();
+    let styles = model.styles.as_ref();
+    let by_id = |id: &str| styles.and_then(|s| s.styles.iter().find(|s| attr(&s.attrs, "w:styleId") == Some(id)));
+    // numId and ilvl, each from the paragraph or else the nearest style that sets it.
+    let mut chain: Vec<&Props> = own.into_iter().collect();
+    let mut id = own.and_then(|p| p.get("w:pStyle")).and_then(|e| e.attr("w:val")).map(str::to_string)
+        .or_else(|| default_style(model, "paragraph"));
+    for _ in 0..32 {
+        let Some(style) = id.as_deref().and_then(by_id) else { break };
+        chain.extend(style.paragraph.as_ref());
+        id = style.meta.iter().find(|m| m.name == "w:basedOn").and_then(|m| m.attr("w:val")).map(str::to_string);
+    }
+    let num_field = |name: &str| chain.iter()
+        .find_map(|props| props.get("w:numPr").and_then(|n| n.child(name)).and_then(|e| e.attr("w:val")).map(str::to_string));
+    let Some(num_id) = num_field("w:numId").filter(|v| v != "0") else { return Ok(Vec::new()) };
+    let level = num_field("w:ilvl").unwrap_or_else(|| "0".into());
+
+    // The level's own w:ind: an override in the w:num first, else the abstract one.
+    let numbering = model.numbering.as_ref();
+    let num = numbering.and_then(|n| n.nums.iter().find(|n| attr(&n.attrs, "w:numId") == Some(num_id.as_str())));
+    let Some(num) = num else { return Ok(Vec::new()) };
+    let overridden = num.overrides.iter()
+        .filter(|o| attr(&o.attrs, "w:ilvl") == Some(level.as_str()))
+        .find_map(|o| o.level.as_ref());
+    let abstract_level = numbering
+        .and_then(|n| n.abstracts.iter().find(|a| attr(&a.attrs, "w:abstractNumId") == Some(num.abstract_id.as_str())))
+        .and_then(|a| a.levels.iter().find(|l| attr(&l.attrs, "w:ilvl") == Some(level.as_str())));
+    let level_ind = overridden.or(abstract_level).and_then(|l| l.paragraph.as_ref()).and_then(|p| p.get("w:ind"));
+    // A paragraph's own indent outranks the list's; a style's is outranked by it.
+    let direct_ind = own.and_then(|p| p.get("w:ind"));
+    let left_of = |e: &Element| e.attr("w:left").or_else(|| e.attr("w:start")).map(str::to_string);
+    let left = direct_ind.and_then(left_of).or_else(|| level_ind.and_then(left_of));
+
+    let mut set = vec![Element::new("w:numPr").with_child(val("w:ilvl", "0")).with_child(val("w:numId", "0"))];
+    if let Some(left) = left {
+        let mut ind = Element::new("w:ind").with_attr("w:left", &left);
+        if let Some(right) = direct_ind.and_then(|e| e.attr("w:right").or_else(|| e.attr("w:end"))) {
+            ind = ind.with_attr("w:right", right);
+        }
+        set.push(ind.with_attr("w:firstLine", "0"));
+    }
+    let here = Pos { story: at.story.clone(), para: at.para, offset: 0 };
+    Ok(vec![Edit::FormatParagraphs { from: here.clone(), to: here, patch: Patch { set, ..Default::default() } }])
+}
+
 fn all_stories(model: &DocxModel) -> Vec<Story> {
     let mut out = vec![Story::Body];
     out.extend((0..model.headers_footers.len()).map(Story::HeaderFooter));

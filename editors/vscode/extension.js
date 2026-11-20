@@ -14,6 +14,20 @@ const VIEW_TYPE = 'oxi.officeViewer';
 const installedFonts = new InstalledFonts();
 
 /**
+ * Output › Oxi lists each face a Word document asked for and where it came
+ * from, once per face: the file on this machine, or the open stand-in Oxi
+ * draws when the machine does not have it.
+ */
+let output = null;
+const reported = new Set();
+function reportFace(family, bold, italic, file) {
+  const face = `${family}${bold ? ' Bold' : ''}${italic ? ' Italic' : ''}`;
+  if (!output || reported.has(face)) return;
+  reported.add(face);
+  output.appendLine(file ? `font  ${face}  ←  ${file}` : `font  ${face}  ←  not on this machine; drawn with Oxi's stand-in`);
+}
+
+/**
  * The page each format opens in: Word documents in the Word editor, which
  * edits through the document model (typing, Enter, Backspace across
  * paragraphs, tables, notes, comments); workbooks and decks in the suite page.
@@ -137,7 +151,25 @@ class OxiEditorProvider {
           document.show();
           break;
         case 'oxi:edit':
-          this.changes.fire({ document });
+          if (msg.step === undefined) {
+            // The suite page has no undo stack: the file is just modified.
+            this.changes.fire({ document });
+          } else if (msg.step) {
+            // The Word page began an undo step: VS Code keeps the step, and its
+            // undo and redo are carried out by the page.
+            this.changes.fire({
+              document,
+              label: 'Edit',
+              undo: () => document.panel?.webview.postMessage({ type: 'oxi:undo' }),
+              redo: () => document.panel?.webview.postMessage({ type: 'oxi:redo' }),
+            });
+          }
+          break;
+        case 'oxi:requestUndo':
+          vscode.commands.executeCommand('undo');
+          break;
+        case 'oxi:requestRedo':
+          vscode.commands.executeCommand('redo');
           break;
         case 'oxi:saved':
           document.settle(msg);
@@ -150,15 +182,21 @@ class OxiEditorProvider {
           break;
         // The Word editor draws with the font programs themselves, which a
         // webview cannot read; the bytes are sent to this page only.
-        case 'oxi:font':
-          installedFonts.resolve(String(msg.family || ''), !!msg.bold, !!msg.italic)
+        case 'oxi:font': {
+          const family = String(msg.family || '');
+          installedFonts.resolve(family, !!msg.bold, !!msg.italic)
             .catch(() => null)
-            .then((bytes) => panel.webview.postMessage({
-              type: 'oxi:font',
-              id: msg.id,
-              data: bytes ? Buffer.from(bytes).toString('base64') : null,
-            }));
+            .then((font) => {
+              reportFace(family, !!msg.bold, !!msg.italic, font && font.file);
+              return panel.webview.postMessage({
+                type: 'oxi:font',
+                id: msg.id,
+                data: font ? Buffer.from(font.bytes).toString('base64') : null,
+                index: font ? font.index : 0,
+              });
+            });
           break;
+        }
       }
     });
   }
@@ -229,9 +267,8 @@ function withWebviewHead(html, webview, mediaRoot, page) {
   // has loaded. Saving is VS Code's own (Ctrl+S, the title bar's save button).
   const hidden = (page === 'docs.html'
     ? [
-      // New, open, rename, and the exports a webview cannot download or print;
-      // undo and redo have no action in the page yet.
-      '#btnNew', '#btnOpen', '#btnPdf', '#btnUndo', '#btnRedo',
+      // New, open, rename, and the exports a webview cannot download or print.
+      '#btnNew', '#btnOpen', '#btnPdf',
       '#fmNew', '#fmOpen', '#fmCopy', '#fmExport', '#fmPrint', '#fmRename',
     ]
     : ['#landingHeader', '#dropZone', '#sampleButtons', '.side-door', '#toolbar']
@@ -258,6 +295,8 @@ function missingMediaHtml() {
 }
 
 function activate(context) {
+  output = vscode.window.createOutputChannel('Oxi');
+  context.subscriptions.push(output);
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(
       VIEW_TYPE,
