@@ -974,8 +974,11 @@ input[type="file"] { display: none; }
     align-items: flex-start;
 }
 .slide-thumbnails {
-    width: 160px;
-    min-width: 160px;
+    /* Narrows with the window (a VS Code pane) instead of holding its width
+       and pushing the slide off; the previews scale to fit (--thumb-zoom). */
+    width: clamp(56px, 18%, 160px);
+    min-width: 0;
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -1007,13 +1010,16 @@ input[type="file"] { display: none; }
     background: white;
     position: relative;
     width: 120px;
+    zoom: var(--thumb-zoom, 1);
 }
+.slide-main .slide-wrapper { zoom: var(--slide-zoom, 1); }
 .slide-thumb.active .slide-thumb-preview {
     border-color: #C24A30;
     border-width: 2px;
 }
 .slide-main {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -4748,7 +4754,20 @@ function renderEditablePptx(presentation) {
     layout.appendChild(thumbPanel);
     layout.appendChild(mainArea);
     container.appendChild(layout);
+
+    // Fit to the window as it changes: the previews to the panel's width
+    // (which narrows with the window), the slide to the main area's.
+    pptxResize?.disconnect();
+    const slideWidth = presentation.slide_width * scale;
+    pptxResize = new ResizeObserver(() => {
+        const room = thumbPanel.clientWidth - 18 - 8 - 8; // number, gap, padding
+        thumbPanel.style.setProperty('--thumb-zoom', String(Math.max(0.25, Math.min(1, room / 120))));
+        mainArea.style.setProperty('--slide-zoom', String(Math.min(1, mainArea.clientWidth / slideWidth)));
+    });
+    pptxResize.observe(thumbPanel);
+    pptxResize.observe(mainArea);
 }
+let pptxResize = null;
 
 /** The slide shown in the editor, where "From Current Slide" starts. */
 let currentSlideIndex = 0;
