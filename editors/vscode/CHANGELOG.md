@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Word documents open in Oxi's Word editor, which edits through the document
+model: Enter splits a paragraph, Backspace at the start of one joins it to the
+one before (and takes a list number off), and bold, italic, font, size,
+colour, alignment, tables, links, footnotes, comments, headers, footers and
+fields are saved into the file. Text is drawn with the machine's own fonts,
+read by the extension and handed to the page in the same window; a face the
+machine does not have is drawn in the open face Oxi ships for it (Carlito for
+Calibri, Liberation for Arial and Times New Roman, OxiMincho and OxiGothic
+for Japanese faces), and the layout keeps Word's measured widths either way.
+
 ## 0.9.4
 
 In a narrow pane the slide list and the slide shrink to fit, instead of the
