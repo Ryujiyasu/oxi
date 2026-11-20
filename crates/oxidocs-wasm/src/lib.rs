@@ -475,12 +475,43 @@ pub fn edit_docx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
 ///   { type: "insert_table_row", table_index, row_index, cells }
 ///   { type: "delete_table_row", table_index, row_index }
 ///   { type: "set_cell_text", table_index, row, col, text }
+///   { type: "set_table_run_text", table_index, row, col, paragraph_index, run_index, new_text }
+///     (one run of a cell, the rest of the cell left as it stands)
 ///
 /// Images:
 ///   { type: "insert_image", index, data (base64), width_pt, height_pt, content_type }
 ///
 /// style (RunProps): { bold?, italic?, underline?, font_family?, font_size?, color?, highlight? }
 /// para_style (ParaProps): { alignment?, space_before?, space_after?, line_spacing?, indent_left?, style_id? }
+/// The runs and table cells `edit_docx_advanced` can address, as the editor
+/// counts them, as JSON: `{"paragraphs": [[run text, …], …], "tables":
+/// [[[{"text", "runs", "paragraphs": [[run text, …], …]}, …cells], …rows], …]}`.
+///
+/// `paragraph_index` in `set_run_text` counts the body's own top-level
+/// paragraphs, which is not how the parsed document (paginated, tables folded
+/// in) lays them out; a page that edits text matches its runs against this
+/// before it lets them be edited, so an edit lands where it was typed.
+#[wasm_bindgen]
+pub fn docx_addressable(data: &[u8]) -> Result<String, JsError> {
+    let editor = oxidocs_core::DocxEditor::new(data).map_err(|e| JsError::new(&e.to_string()))?;
+    let paragraphs = editor.addressable_runs().map_err(|e| JsError::new(&e.to_string()))?;
+    let tables = editor.addressable_cells().map_err(|e| JsError::new(&e.to_string()))?;
+    let tables: Vec<Vec<Vec<serde_json::Value>>> = tables
+        .into_iter()
+        .map(|rows| {
+            rows.into_iter()
+                .map(|cells| {
+                    cells
+                        .into_iter()
+                        .map(|c| serde_json::json!({ "text": c.text, "runs": c.runs, "paragraphs": c.paragraphs }))
+                        .collect()
+                })
+                .collect()
+        })
+        .collect();
+    Ok(serde_json::json!({ "paragraphs": paragraphs, "tables": tables }).to_string())
+}
+
 #[wasm_bindgen]
 pub fn edit_docx_advanced(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
     let js_edits: Vec<JsDocxEdit> = serde_wasm_bindgen::from_value(edits)
@@ -571,6 +602,16 @@ pub fn edit_docx_advanced(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsErro
                     row: js_edit.row.unwrap_or(0),
                     col: js_edit.col.unwrap_or(0),
                     text: js_edit.text.unwrap_or_default(),
+                });
+            }
+            "set_table_run_text" => {
+                editor.add_edit(oxidocs_core::editor::DocxEdit::SetTableRunText {
+                    table_index: js_edit.table_index.unwrap_or(0),
+                    row: js_edit.row.unwrap_or(0),
+                    col: js_edit.col.unwrap_or(0),
+                    paragraph_index: js_edit.paragraph_index.unwrap_or(0),
+                    run_index: js_edit.run_index.unwrap_or(0),
+                    new_text: js_edit.new_text.unwrap_or_default(),
                 });
             }
             "insert_image" => {

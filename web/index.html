@@ -227,6 +227,9 @@ input[type="file"] { display: none; }
     display: flex;
     flex-direction: column;
     align-items: center;
+    /* A page wider than the window would spill past both edges, and the
+       left one cannot be scrolled to; "safe" keeps it at the start instead. */
+    align-items: safe center;
     gap: 24px;
 }
 .page-wrapper {
@@ -260,6 +263,13 @@ input[type="file"] { display: none; }
     background: var(--oxi-primary-dark);
 }
 
+/* Inside the VS Code extension the file comes from the editor and goes back
+   with Ctrl+S: the page's own ways in and out only take room. */
+.oxi-vscode-host #dropZone,
+.oxi-vscode-host #sampleButtons,
+.oxi-vscode-host .side-door,
+.oxi-vscode-host #toolbar { display: none !important; }
+
 /* Ribbon menu bar — Oxi style */
 .ribbon {
     display: none;
@@ -273,6 +283,9 @@ input[type="file"] { display: none; }
 .ribbon-tabs {
     display: flex;
     gap: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    white-space: nowrap;
     background: var(--ribbon-tab-bg);
     border-bottom: 1px solid var(--border);
     padding-left: 0;
@@ -322,13 +335,17 @@ input[type="file"] { display: none; }
     padding: 4px 6px 2px 6px;
     min-height: 80px;
     background: var(--ribbon-bg);
+    /* In a narrow window (a VS Code pane, a phone) the groups keep their
+       shape and the ribbon scrolls sideways rather than squeezing them. */
+    overflow-x: auto;
+    scrollbar-width: thin;
 }
 .ribbon-group {
     display: flex;
     flex-direction: column;
     padding: 0 8px;
     border-right: 1px solid var(--border);
-    min-width: 0;
+    flex-shrink: 0;
 }
 .ribbon-group:last-child { border-right: none; }
 .ribbon-group-items {
@@ -339,6 +356,7 @@ input[type="file"] { display: none; }
 }
 .ribbon-group-label {
     font-size: 10px;
+    white-space: nowrap;
     color: var(--text-secondary);
     text-align: center;
     padding: 2px 0 1px 0;
@@ -807,6 +825,13 @@ input[type="file"] { display: none; }
 .edit-page .edit-run:focus {
     border-bottom-color: var(--oxi-primary);
 }
+/* What takes typing shows it on hover; what does not (headers, text boxes,
+   ruby, tracked changes, runs the saver cannot address) keeps the arrow. */
+.edit-page .edit-run[contenteditable="true"]:hover {
+    background: rgba(31, 111, 235, 0.07);
+    border-bottom-color: rgba(31, 111, 235, 0.45);
+}
+.edit-page .edit-run[contenteditable="false"] { cursor: default; }
 .edit-page .edit-table {
     border-collapse: collapse;
     margin: 12px 0;
@@ -1541,7 +1566,7 @@ document.addEventListener('keydown', (e) => {
 </script>
 
 <script type="module">
-import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_xlsx, edit_xlsx_from_workbook, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, spreadsheet_vba_source, save_spreadsheet_vba_source, format_cell_number } from './oxidocs_wasm.js';
+import init, { parse_document, parse_spreadsheet, parse_presentation, edit_docx, edit_docx_advanced, docx_addressable, edit_xlsx, edit_xlsx_from_workbook, edit_pptx, break_slide_paragraph, slide_family_measurable, create_blank_docx, parse_pdf, pdf_extract_text, create_pdf, pdf_verify_signatures, generate_hanko_svg, preview_hanko, list_spreadsheet_vba_procedures, spreadsheet_vba_source, save_spreadsheet_vba_source, format_cell_number } from './oxidocs_wasm.js';
 import { collectAdvances, familyPresent } from './face-metrics.js';
 import { cancelActiveVbaExecution, closeVbaProject, getVbaSourceForSave, parseVbaArguments, recordVbaSourceChange, runVbaInWorker, prepareVbaSaveInWorker, saveVbaWorkbookInWorker, compileVbaProjectInWorker, getVbaObjectReferences, releaseAllVbaObjectsInWorker, bindVbaWorkbookPicker, vbaWorkbookExtension, vbaWorkbookMimeType } from './vba-runner.js';
 import { bindVbaEditorSettings, preferredVbaProcedure } from './vba-editor-settings.js';
@@ -1617,6 +1642,13 @@ function renderCellBlocks(blocks, container) {
             for (const run of cellPara.runs) {
                 const span = document.createElement('span');
                 span.textContent = run.text;
+                const target = docxEditTargets?.get(run);
+                if (target && target.table !== undefined && !run.ruby && !run.tracked_change && !run.footnote_ref && !run.endnote_ref) {
+                    span.className = 'edit-run edit-cell-run';
+                    span.contentEditable = 'true';
+                    Object.assign(span.dataset, { table: target.table, row: target.row, col: target.col, para: target.para, run: target.run, original: run.text });
+                    span.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+                }
                 // Apply default_run_style from paragraph, then run overrides
                 const drs = cellPara.style && cellPara.style.default_run_style;
                 if (drs) {
@@ -2355,19 +2387,103 @@ document.getElementById('frReplaceAll').addEventListener('click', () => {
     document.getElementById('frStatus').textContent = I18N[currentLang].replaced(count);
 });
 
+/**
+ * The text edits typed into the page, as edit_docx_advanced takes them: one
+ * per run whose text changed, at the coordinates the saver counts. A run
+ * shown in pieces (split at its tabs) is put back together first, so an
+ * untouched run with a tab in it is not mistaken for an edit.
+ */
 function collectDocxEdits() {
+    const runs = new Map();
+    for (const el of document.querySelectorAll('.edit-run[contenteditable="true"][data-run]')) {
+        const d = el.dataset;
+        const key = d.table !== undefined ? `t${d.table}:${d.row}:${d.col}:${d.para}:${d.run}` : `p${d.para}:${d.run}`;
+        const held = runs.get(key);
+        if (held) held.parts.push(el.textContent);
+        else runs.set(key, { d, parts: [el.textContent] });
+    }
     const edits = [];
-    const runs = document.querySelectorAll('.edit-run[data-para][data-run]');
-    for (const el of runs) {
-        const paraIdx = parseInt(el.dataset.para);
-        const runIdx = parseInt(el.dataset.run);
-        const originalText = el.dataset.original;
-        const currentText = el.textContent;
-        if (currentText !== originalText) {
-            edits.push({ paragraph_index: paraIdx, run_index: runIdx, new_text: currentText });
+    for (const { d, parts } of runs.values()) {
+        const text = parts.join('\t');
+        if (text === d.original) continue;
+        if (d.table !== undefined) {
+            edits.push({ type: 'set_table_run_text', table_index: +d.table, row: +d.row, col: +d.col,
+                paragraph_index: +d.para, run_index: +d.run, new_text: text });
+        } else {
+            edits.push({ type: 'set_run_text', paragraph_index: +d.para, run_index: +d.run, new_text: text });
         }
     }
     return edits;
+}
+
+/** Runs the saver can address, matched to the page's runs: Map(run → coordinates). */
+let docxEditTargets = null;
+
+/**
+ * Match the parsed document's runs to the runs edit_docx_advanced addresses.
+ *
+ * The parsed document is laid out in pages and folds tables in, so counting
+ * its paragraphs does not give the index the saver uses (the body's own
+ * top-level paragraphs). Each paragraph is matched to the next addressable
+ * paragraph whose runs carry the same texts; a table to the next addressable
+ * table, row by row and cell by cell, the same way. Anything not matched
+ * exactly (a paragraph the parser splits or merges, a header, a text box)
+ * gets no coordinates and stays read-only: an edit there could not be put
+ * back where it was typed.
+ */
+function matchDocxEditTargets(doc, addressable) {
+    const targets = new Map();
+    const same = (runs, texts) => runs.length === texts.length && runs.every((r, i) => r.text === texts[i]);
+    const LOOKAHEAD = 8;
+    let p = 0;
+    const paras = addressable.paragraphs || [];
+    const tables = addressable.tables || [];
+    let t = 0, rowOffset = 0;
+    const matchParagraphs = (irParas, xmlParas, place) => {
+        let k = 0;
+        for (const para of irParas) {
+            for (let j = k; j < Math.min(xmlParas.length, k + LOOKAHEAD); j++) {
+                if (same(para.runs, xmlParas[j])) {
+                    para.runs.forEach((run, ri) => targets.set(run, { ...place, para: j, run: ri }));
+                    k = j + 1;
+                    break;
+                }
+            }
+        }
+    };
+    for (const page of doc.pages || []) {
+        for (const block of page.blocks || []) {
+            if (block.Paragraph) {
+                const para = block.Paragraph;
+                for (let j = p; j < Math.min(paras.length, p + LOOKAHEAD); j++) {
+                    if (same(para.runs, paras[j])) {
+                        para.runs.forEach((run, ri) => targets.set(run, { para: j, run: ri }));
+                        p = j + 1;
+                        break;
+                    }
+                }
+            } else if (block.Table) {
+                const rows = block.Table.rows || [];
+                // A table the pages split continues in the same addressable table.
+                let table = tables[t];
+                const fits = (tb, at) => tb && at + rows.length <= tb.length
+                    && rows.every((row, i) => (row.cells || []).length === tb[at + i].length);
+                if (!fits(table, rowOffset)) {
+                    if (fits(tables[t + 1], 0)) { t += 1; rowOffset = 0; table = tables[t]; }
+                    else continue;
+                }
+                rows.forEach((row, i) => {
+                    (row.cells || []).forEach((cell, c) => {
+                        const irParas = (cell.blocks || []).filter((b) => b.Paragraph).map((b) => b.Paragraph);
+                        matchParagraphs(irParas, table[rowOffset + i][c].paragraphs || [], { table: t, row: rowOffset + i, col: c });
+                    });
+                });
+                rowOffset += rows.length;
+                if (rowOffset >= table.length) { t += 1; rowOffset = 0; }
+            }
+        }
+    }
+    return targets;
 }
 
 function xlsxEditKey(sheetIdx, row, col) {
@@ -3008,7 +3124,7 @@ async function downloadEdited() {
             if (!nativeExecution.save.package_bytes) throw new Error('The saved file is not available.');
             editedBytes = new Uint8Array(nativeExecution.save.package_bytes);
             wholeWorkbook = true;
-        } else if (currentFileType === 'docx') editedBytes = edit_docx(data, edits);
+        } else if (currentFileType === 'docx') editedBytes = edit_docx_advanced(data, edits);
         else if (wholeWorkbook) editedBytes = edit_xlsx_from_workbook(data, currentDocIR);
         else if (currentFileType === 'xlsx') editedBytes = edit_xlsx(data, edits);
         else editedBytes = edit_pptx(data, edits);
@@ -3086,7 +3202,13 @@ function renderEditableDocx(doc) {
     const container = document.getElementById('pages-container');
     container.innerHTML = '';
 
-    // We only track body-level paragraphs (not inside tables) for editing
+    let addressable = null;
+    try {
+        addressable = JSON.parse(docx_addressable(new Uint8Array(currentFileBytes)));
+    } catch (error) {
+        console.warn('docx_addressable failed; the document is shown read-only', error);
+    }
+    docxEditTargets = addressable ? matchDocxEditTargets(doc, addressable) : new Map();
     let bodyParaIdx = 0;
 
     for (const page of doc.pages) {
@@ -3357,9 +3479,17 @@ function renderEditableDocx(doc) {
                             span.textContent = segments[si];
                         }
 
-                        span.dataset.para = bodyParaIdx;
-                        span.dataset.run = ri;
-                        if (si === 0) span.dataset.original = run.text;
+                        // Editable only where the run is matched to the one the
+                        // saver will write (see docxEditTargets); the rest of the
+                        // page shows but does not take typing.
+                        const target = docxEditTargets?.get(run);
+                        if (target && span.contentEditable === 'true') {
+                            span.dataset.para = target.para;
+                            span.dataset.run = target.run;
+                            span.dataset.original = run.text;
+                        } else {
+                            span.contentEditable = 'false';
+                        }
 
                     // Tracked changes styling
                     if (run.tracked_change) {
