@@ -31,7 +31,7 @@ function lift(name, source = page) {
 }
 const functions = ['xlsxEditKey', 'collectXlsxEdits', 'defaultCellStyle', 'cellStringValue', 'cellUtf16Text', 'setWorkbookCellString',
   'syncPendingXlsxEditsToIr', 'workbookCellMap', 'typedXlsxEdit', 'recordVbaWorkbookChanges',
-  'xlsxRuntimeOptions', 'captureVbaWorkbookView', 'applyVbaWorkbookView', 'clearClosedVbaWorkbookView', 'formatVbaResult', 'formatVbaExecution', 'updateVbaReferenceButton', 'applyVbaExecution', 'executeVbaFromDialog', 'releaseVbaResultsFromDialog', 'compileVbaFromDialog', 'downloadEdited'];
+  'xlsxRuntimeOptions', 'captureVbaWorkbookView', 'applyVbaWorkbookView', 'clearClosedVbaWorkbookView', 'formatVbaResult', 'formatVbaExecution', 'updateVbaReferenceButton', 'applyVbaExecution', 'executeVbaFromDialog', 'releaseVbaResultsFromDialog', 'compileVbaFromDialog', 'buildEditedFile', 'downloadEdited'];
 const macroSource = await readFile(path.join(root, 'tests/fixtures/vba/failure_state.bas'), 'utf8');
 const applicationSource = await readFile(path.join(root, 'tests/fixtures/vba/application_state.bas'), 'utf8');
 const applicationFixture = JSON.parse(await readFile(path.join(root, 'tests/fixtures/vba/application_state.json'), 'utf8'));
