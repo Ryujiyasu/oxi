@@ -98,6 +98,44 @@ impl<'a> PageLayouter<'a> {
                     lp.elements.splice(0..0, behind);
                 }
             }
+            // OXI_VERTICAL_HF_TEXT (2026-11-20, default ON, opt-out _DISABLE): the header
+            // and footer paragraphs of a tbRl section run horizontally, laid out as on any
+            // horizontal page. `_pb_tbrl_footer_gen.py` (landscape tbRl, centred PAGE footer,
+            // footer 992): Word draws «1» at x 410.7 / top 520.8 -- the same as the horz
+            // section; Oxi drew no footer. ja/educational__047ff775: all 17 page numbers
+            // missing. Each page lays out a body-less copy of the section, numbered as
+            // that page, and takes its header/footer layer.
+            if !crate::env_flag!("OXI_VERTICAL_HF_TEXT_DISABLE")
+                && (!page.header.is_empty() || !page.footer.is_empty() || !page.header_first.is_empty()
+                    || !page.footer_first.is_empty() || !page.header_even.is_empty() || !page.footer_even.is_empty())
+            {
+                for (page_idx, lp) in out.iter_mut().enumerate() {
+                    let mut hp = page.clone();
+                    hp.vertical_section = false;
+                    hp.blocks.clear();
+                    // Only the header/footer layer: the body's floating objects, notes,
+                    // watermark and page border are the vertical builder's (047ff775's
+                    // floating word table was drawn a second time, horizontally).
+                    hp.floating_images.clear();
+                    hp.text_boxes.clear();
+                    hp.shapes.clear();
+                    hp.footnotes.clear();
+                    hp.endnotes.clear();
+                    hp.watermark = None;
+                    hp.page_borders = None;
+                    hp.hf_text_boxes.clear();
+                    for r in hp.header_runs.iter_mut() { r.hf_text_boxes.clear(); }
+                    hp.title_pg = page.title_pg && page_idx == 0;
+                    for r in hp.header_runs.iter_mut() { r.title_pg = r.title_pg && page_idx == 0; }
+                    hp.page_number_start = Some(first_logical + page_idx as u32);
+                    hp.section_start_type = None;
+                    let mut lg = 0u32;
+                    let hf = self.layout_page(&hp, &mut lg, ir_index, column_search, references, source_anchors);
+                    if let Some(first) = hf.into_iter().next() {
+                        lp.elements.splice(0..0, first.elements);
+                    }
+                }
+            }
             // The parts these pages would show (the vertical builder draws only
             // their boxes, so text they hold counts as not drawn).
             if let Some(run) = page.header_runs.first() {

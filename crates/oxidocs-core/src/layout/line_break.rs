@@ -3526,6 +3526,26 @@ impl<'a> LineBreaker<'a> {
                 let mut char_width =
                     self.registry
                         .char_width_pt_with_gdi_map(ch, font_size, &char_metrics, gdi_map);
+                // OXI_PUA_EM (2026-11-20, default ON, opt-out _DISABLE): a private-use
+                // character (EUDC, U+E000..U+F8FF) in an East Asian face advances one em.
+                // `_pb_pua_gen.py`: Word gives U+E000 / U+E001 18.0 in ＭＳ Ｐ明朝 and ＭＳ 明朝
+                // 18pt, 10.56 / 10.44 in ＭＳ Ｐ明朝 10.5, 12.0 in ＭＳ ゴシック 12 and メイリオ 12
+                // (hint eastAsia); Oxi measured Segoe UI Symbol's glyph (9.36 / 11.25 / 7.5).
+                // ja/technical__742dd29b's logo glyph before «三喜工業株式会社» (fitText 168pt):
+                // the name started 6.7pt early, over the logo.
+                // A w:sym glyph (Wingdings F0xx etc.) lives in the same range: only a face
+                // whose ideographs are one em counts, never a symbol font.
+                if ('\u{E000}'..='\u{F8FF}').contains(&ch)
+                    && {
+                        let fam = char_metrics.family.to_ascii_lowercase();
+                        !(fam.contains("wingdings") || fam.contains("symbol") || fam.contains("webdings")
+                            || fam.contains("marlett") || fam.contains("mt extra"))
+                    }
+                    && (char_metrics.char_width_pt('\u{4E09}', font_size) - font_size).abs() < 0.02 * font_size
+                    && !crate::env_flag!("OXI_PUA_EM_DISABLE")
+                {
+                    char_width = font_size;
+                }
                 // KERNBREAK (2026-07-07, ★default ON, opt-out
                 // OXI_KERNBREAK_DISABLE): a
                 // KERN-ACTIVE Latin char (w:kern set, fs >= threshold —

@@ -6477,7 +6477,11 @@ impl<'a> ParagraphLayouter<'a> {
                 // role is Phase-2 VISUAL position, not pagination). Word applies
                 // it to d77a but apparently not b837 despite both being CJK
                 // small-leading grid docs — discriminator unknown, needs COM.
+                // OXI_NO_CONT_HL (2026-11-20, default ON, opt-out _DISABLE): Word sets a
+                // paragraph's continuation line at the next page top exactly where a new
+                // paragraph's first line sits -- no half-leading (see the mid-para site).
                 if line_idx > 0
+                    && crate::env_flag!("OXI_NO_CONT_HL_DISABLE")
                     && !skip_hl_w
                     && grid_pitch.map_or(false, |p| p > 0.0)
                     && para.style.snap_to_grid
@@ -6674,8 +6678,16 @@ impl<'a> ParagraphLayouter<'a> {
                     let s396_default = std::env::var("OXI_S396_LRPB_SKIPS_HL")
                         .map(|v| v != "0" && v != "false")
                         .unwrap_or(true);
+                    // OXI_NO_CONT_HL (2026-11-20, default ON, opt-out _DISABLE): Word adds no
+                    // half-leading to a continuation line at all. _pb_pg2top_gen.py (MS Mincho 12,
+                    // lines 344): a paragraph crossing the page sets its p2 line at margin + 13.01,
+                    // the same as a new paragraph or pageBreakBefore (Oxi +0.82). d77a58 (Session
+                    // 107's own doc, new-PC Word PDF): every p2-p12 top line at 84.24, continuation
+                    // or not; Oxi 85.43 on continuations, 84.21 without the advance, the same 12
+                    // page breaks. ja/technical__52b9cff8 p2 +0.72 the whole page.
                     let s396_skip_cont_hl = (s396_default && s391_lrpb_break)
-                        || crate::env_flag!("OXI_S396_NO_CONT_HL");
+                        || crate::env_flag!("OXI_S396_NO_CONT_HL")
+                        || !crate::env_flag!("OXI_NO_CONT_HL_DISABLE");
                     if !s396_skip_cont_hl
                         && line_idx > 0
                         && !skip_half_leading
@@ -9244,6 +9256,34 @@ impl<'a> ParagraphLayouter<'a> {
                 // S1650: a spread ruby base draws half a spread share right of
                 // its field start (the advance is unchanged; see ruby_lead).
                 let s1650_lead = if frag.style.ruby_spread { frag.style.ruby_lead } else { 0.0 };
+                // OXI_GRID_LATIN_SPREAD (2026-11-20, default ON, opt-out _DISABLE): on a
+                // linesAndChars grid with balanceSingleByteDoubleByteWidth, every half-width
+                // character of a Latin word carries half the charSpace (S1449 / S1337 at
+                // break time) -- after EACH letter, not as one gap after the word.
+                // ja/reference__0828db3f (TNR 10.5, charSpace 3430 = 0.837): Word advances
+                // «L i s t» 6.8 / 3.4 / 4.5 / 3.3 (natural + 0.42 each) and ends the line where
+                // Oxi does; Oxi drew the letters at natural width and opened the word's
+                // 4 x 0.42 before the next space.
+                let grid_latin_cs = if !is_vert_frag
+                    && leader_grid.is_none()
+                    && tab_leader_text.is_none()
+                    && page.doc_grid_lines_and_chars
+                    && self.balance_single_byte_double_byte_width
+                    && frag.style.fit_text.is_none()
+                    && !frag.style.ruby_spread
+                    && frag.field_type.is_none()
+                    && frag.text.chars().count() > 1
+                    && frag.text.chars().all(|c| !kinsoku::is_cjk(c) && !crate::font::is_fullwidth(c)
+                        && !c.is_whitespace() && c != '\u{a0}')
+                    && !crate::env_flag!("OXI_GRID_LATIN_SPREAD_DISABLE")
+                {
+                    match (effective_char_pitch, page.grid_char_cw_ratio) {
+                        (Some(pitch), Some(ratio)) if pitch > 0.0 && ratio > 0.0 => 0.5 * (pitch - pitch / ratio),
+                        _ => 0.0,
+                    }
+                } else {
+                    0.0
+                };
                 let mut el = LayoutElement::new(
                     leader_grid.map_or(el_x + s1650_lead, |g| g.0),
                     emit_y,
@@ -9299,7 +9339,7 @@ impl<'a> ParagraphLayouter<'a> {
                             frag.style.character_spacing.unwrap_or(0.0) + justify_char_spacing
                         } else {
                             snap_character_spacing(frag.style.character_spacing.unwrap_or(0.0))
-                                + justify_char_spacing
+                                + justify_char_spacing + grid_latin_cs
                         },
                         text_scale: frag.style.text_scale.unwrap_or(100.0),
                         is_vertical: is_vert_frag,
