@@ -32,7 +32,7 @@ document grid, ruby, vertical writing, warichu, emphasis marks.
 - Edit text in place: Word paragraphs, Excel cells, PowerPoint text boxes
 - Word documents: Enter and Backspace split and join paragraphs; formatting,
   tables, links, footnotes, comments, headers, footers and fields from the
-  ribbon are saved into the file
+  ribbon are saved into the file; undo and redo with Ctrl+Z / Ctrl+Y
 - Word text is drawn with your machine's fonts; a face you do not have (Calibri
   on a Mac, for instance) is drawn in an open look-alike Oxi ships, while the
   layout keeps Word's own measured widths

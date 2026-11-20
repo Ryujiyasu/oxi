@@ -287,6 +287,16 @@ impl DocxDocument {
         Ok(serde_json::json!({ "edits": edits, "end": end }).to_string())
     }
 
+    /// The edits Word's Backspace makes at the start of a numbered paragraph
+    /// at a model position (`{para, offset}`): the number comes off and the
+    /// text keeps the list's indent. A JSON array, empty when the paragraph
+    /// has no number.
+    pub fn unnumber_edits(&self, at_json: &str) -> Result<String, JsError> {
+        let at: oxidocs_model::edit::Pos = serde_json::from_str(at_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let edits = oxidocs_model::edit::unnumber_edits(&self.model, &at).map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(serde_json::to_string(&edits).unwrap())
+    }
+
     /// The edits that give the section holding body paragraph `para` a
     /// header (or, with `footer`, a footer) holding `text`, as a JSON array.
     pub fn header_footer_edits(&self, para: usize, footer: bool, text: &str) -> Result<String, JsError> {

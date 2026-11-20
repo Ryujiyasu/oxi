@@ -306,3 +306,60 @@ fn edits_read_from_json() {
     let back = DocxModel::read(&bytes).unwrap();
     assert_eq!(texts(&back), vec!["Hi AAAA", "BB", "BB"]);
 }
+
+fn numbered_doc(direct_ind: Option<Element>) -> DocxModel {
+    use oxidocs_model::docparts::{AbstractNum, Level, Num, Numbering};
+    let mut level_ppr = Props::new("w:pPr");
+    level_ppr.set(Element::new("w:ind").with_attr("w:left", "720").with_attr("w:hanging", "360")).unwrap();
+    let numbering = Numbering {
+        abstracts: vec![AbstractNum {
+            attrs: vec![("w:abstractNumId".into(), "3".into())],
+            levels: vec![Level { attrs: vec![("w:ilvl".into(), "0".into())], paragraph: Some(level_ppr), ..Default::default() }],
+            ..Default::default()
+        }],
+        nums: vec![Num { attrs: vec![("w:numId".into(), "5".into())], abstract_id: "3".into(), ..Default::default() }],
+        ..Default::default()
+    };
+    let mut ppr = Props::new("w:pPr");
+    ppr.set(Element::new("w:numPr")
+        .with_child(Element::new("w:ilvl").with_attr("w:val", "0"))
+        .with_child(Element::new("w:numId").with_attr("w:val", "5"))).unwrap();
+    if let Some(ind) = direct_ind {
+        ppr.set(ind).unwrap();
+    }
+    let item = Block::Paragraph(Paragraph { props: Some(ppr), content: vec![run("Item", &[])], attrs: vec![] });
+    DocxModel { body: vec![para(vec![run("Lead", &[])], None), item], numbering: Some(numbering), ..Default::default() }
+}
+
+fn ppr_of(m: &DocxModel, n: usize) -> Props {
+    edit::paragraphs(m, &Story::Body).unwrap()[n].props.clone().unwrap()
+}
+
+#[test]
+fn backspace_on_a_number_takes_it_off_and_keeps_the_text_at_the_list_indent() {
+    let mut m = numbered_doc(None);
+    let edits = edit::unnumber_edits(&m, &Pos::body(1, 0)).unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let p = ppr_of(&m, 1);
+    assert_eq!(p.get("w:numPr").and_then(|n| n.child("w:numId")).and_then(|e| e.attr("w:val")), Some("0"));
+    let ind = p.get("w:ind").unwrap();
+    assert_eq!((ind.attr("w:left"), ind.attr("w:firstLine"), ind.attr("w:hanging")), (Some("720"), Some("0"), None));
+    assert_eq!(texts(&m), ["Lead", "Item"]);
+    // Taken off once, there is nothing left to take off.
+    assert!(edit::unnumber_edits(&m, &Pos::body(1, 0)).unwrap().is_empty());
+}
+
+#[test]
+fn a_paragraphs_own_indent_outranks_the_lists_when_the_number_comes_off() {
+    let mut m = numbered_doc(Some(Element::new("w:ind").with_attr("w:left", "1080").with_attr("w:right", "200").with_attr("w:hanging", "360")));
+    let edits = edit::unnumber_edits(&m, &Pos::body(1, 0)).unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let ind = ppr_of(&m, 1).get("w:ind").cloned().unwrap();
+    assert_eq!((ind.attr("w:left"), ind.attr("w:right"), ind.attr("w:firstLine")), (Some("1080"), Some("200"), Some("0")));
+}
+
+#[test]
+fn a_paragraph_without_a_number_has_nothing_to_take_off() {
+    let m = numbered_doc(None);
+    assert!(edit::unnumber_edits(&m, &Pos::body(0, 0)).unwrap().is_empty());
+}

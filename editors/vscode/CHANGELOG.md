@@ -4,13 +4,21 @@
 
 Word documents open in Oxi's Word editor, which edits through the document
 model: Enter splits a paragraph, Backspace at the start of one joins it to the
-one before (and takes a list number off), and bold, italic, font, size,
+one before, and bold, italic, font, size,
 colour, alignment, tables, links, footnotes, comments, headers, footers and
 fields are saved into the file. Text is drawn with the machine's own fonts,
 read by the extension and handed to the page in the same window; a face the
 machine does not have is drawn in the open face Oxi ships for it (Carlito for
 Calibri, Liberation for Arial and Times New Roman, OxiMincho and OxiGothic
 for Japanese faces), and the layout keeps Word's measured widths either way.
+Output › Oxi lists which file each face came from, or that it was drawn with
+a stand-in.
+
+Backspace at the start of a numbered paragraph takes the number off first and
+leaves the text where it stood, as Word does. Undo and redo work in Word
+documents: Ctrl+Z, Ctrl+Y, the Edit menu and the buttons in the title bar.
+Typing is undone a run at a time, and undoing back to what was saved shows
+the file as unmodified again.
 
 ## 0.9.4
 

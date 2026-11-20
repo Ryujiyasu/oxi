@@ -753,9 +753,86 @@ const $ = id => document.getElementById(id);
 const canvasArea = $('canvasArea');
 const emptyState = $('emptyState');
 let currentDocx = null;
-// Every change to the open document's bytes is announced, so a host that
-// owns the file (the VS Code extension) can mark it modified.
-function documentEdited() { document.dispatchEvent(new CustomEvent('oxi:document-edited')); }
+// ---- Undo / redo ----
+// A step is the document's bytes before an edit. Characters typed one after
+// another are one step, as Word undoes typing a run at a time; anything else
+// (Enter, Backspace, formatting, an insert) is a step of its own.
+const undoSteps = [], redoSteps = [];
+const UNDO_LIMIT = 200;
+let historyBytes = null;      // the bytes the newest step leads to
+let lastEditKind = null, lastEditAt = 0;
+let editKind = null;          // set by typing for the edit it makes
+// A host that keeps its own undo stack (the VS Code extension) sets this;
+// it then calls undoEdit() and redoEdit() itself, and Ctrl+Z, Ctrl+Y and the
+// undo buttons are passed to it instead of acted on here.
+let hostOwnsUndo = false;
+
+function resetHistory(bytes) {
+  undoSteps.length = 0;
+  redoSteps.length = 0;
+  historyBytes = bytes;
+  breakUndoGroup();
+}
+// The next edit starts a step of its own, even if it is more typing.
+function breakUndoGroup() { lastEditKind = null; lastEditAt = 0; }
+
+// Every change to the open document's bytes goes through here. It is
+// announced, with whether it began a new undo step, so a host that owns the
+// file can mark it modified and keep its own stack in step.
+function documentEdited() {
+  const now = performance.now();
+  const typing = editKind === 'typing';
+  const step = !(typing && lastEditKind === 'typing' && now - lastEditAt < 1500 && undoSteps.length);
+  if (step) {
+    undoSteps.push(historyBytes);
+    if (undoSteps.length > UNDO_LIMIT) undoSteps.shift();
+  }
+  redoSteps.length = 0;
+  historyBytes = currentDocx;
+  lastEditKind = typing ? 'typing' : null;
+  lastEditAt = now;
+  updateUndoButtons();
+  document.dispatchEvent(new CustomEvent('oxi:document-edited', { detail: { step } }));
+}
+
+function restoreBytes(bytes) {
+  const at = modelDoc ? cursorModelPos() : null;
+  currentDocx = bytes;
+  pendingEdit = null;
+  pendingCursorRestore = null;
+  clearSelection();
+  // The model is read again from the bytes it is going back to.
+  if (modelDoc) openModel(bytes);
+  pendingModelCursor = at;
+  if (at) { cursorPos = null; modelCursorOnly = at; }
+  breakUndoGroup();
+  updateUndoButtons();
+  scheduleRender();
+}
+function undoEdit() {
+  if (!undoSteps.length) return false;
+  redoSteps.push(historyBytes);
+  historyBytes = undoSteps.pop();
+  restoreBytes(historyBytes);
+  return true;
+}
+function redoEdit() {
+  if (!redoSteps.length) return false;
+  undoSteps.push(historyBytes);
+  historyBytes = redoSteps.pop();
+  restoreBytes(historyBytes);
+  return true;
+}
+function updateUndoButtons() {
+  if (hostOwnsUndo) return;
+  $('btnUndo').disabled = !undoSteps.length;
+  $('btnRedo').disabled = !redoSteps.length;
+}
+function requestUndo(redo) {
+  if (hostOwnsUndo) document.dispatchEvent(new CustomEvent(redo ? 'oxi:request-redo' : 'oxi:request-undo'));
+  else if (redo) redoEdit();
+  else undoEdit();
+}
 // The open document in oxidocs-model, which edits by position and keeps
 // every run's formatting; null when the model refused the file (the old
 // run-text editor is used then).
@@ -1525,6 +1602,10 @@ function scheduleRender() {
 
 async function insertText(text) {
   if (!(cursorPos || modelCursorOnly) || !layoutResult) return;
+  editKind = 'typing';
+  try { await insertTextNow(text); } finally { editKind = null; }
+}
+async function insertTextNow(text) {
   if (modelDoc) { modelInsert(text); return; }
   clearSelection(); // v1: typing does not replace the selection, it just clears it
   const page = layoutResult.pages[cursorPos.pageIndex];
@@ -1995,18 +2076,6 @@ function modelInsert(text) {
   return applyModelEdits([{ op: 'insert_text', at, text }], { para: at.para, offset: at.offset + text.length });
 }
 
-// Whether the cursor is at the start of a paragraph whose first line carries
-// a list number: the layout draws the number as text of no paragraph on the
-// same line, before the paragraph's first character.
-function cursorOnListedLine() {
-  if (!cursorPos || !layoutResult || cursorPos.charOffset !== 0) return false;
-  const page = layoutResult.pages[cursorPos.pageIndex];
-  const el = page && page.elements[cursorPos.elemIndex];
-  if (!el || el.paragraph_index == null || (el.char_offset || 0) !== 0) return false;
-  return page.elements.some(m => m.kind === 'text' && m.paragraph_index == null && m.text
-    && Math.abs(m.y - el.y) < 1 && m.x + m.width <= el.x + 0.5);
-}
-
 function modelDelete(dir) {
   const sel = selectionModelRange();
   if (sel) return applyModelEdits([{ op: 'delete', from: sel.from, to: sel.to }], sel.from);
@@ -2016,12 +2085,10 @@ function modelDelete(dir) {
   if (dir < 0) {
     if (at.offset === 0) {
       // As in Word, Backspace at the start of a numbered paragraph takes the
-      // number off first; the next Backspace joins it to the one before.
-      if (cursorOnListedLine()) {
-        const unnumber = { set: [{ name: 'w:numPr', children: [
-          { name: 'w:ilvl', attrs: [['w:val', '0']] }, { name: 'w:numId', attrs: [['w:val', '0']] }] }] };
-        return applyModelEdits([{ op: 'format_paragraphs', from: at, to: at, patch: unnumber }], at);
-      }
+      // number off first and leaves the text at the list's indent; the next
+      // Backspace joins it to the one before.
+      const unnumber = JSON.parse(modelDoc.unnumber_edits(JSON.stringify(at)));
+      if (unnumber.length) return applyModelEdits(unnumber, at);
       if (at.para === 0) return true;
       const prevLen = paragraphEnd(modelDoc.paragraph_text(at.para - 1));
       return applyModelEdits([{ op: 'join_paragraphs', para: at.para - 1 }], { para: at.para - 1, offset: prevLen });
@@ -2243,6 +2310,7 @@ async function openFile(file) {
   const ab = await file.arrayBuffer();
   currentDocx = new Uint8Array(ab);
   openModel(currentDocx);
+  resetHistory(currentDocx);
   await renderDocument(currentDocx);
 }
 
@@ -2260,6 +2328,7 @@ $('fileIn').addEventListener('change', async e => {
 function doNew() {
   fontRenderEpoch++;
   currentDocx = null;
+  resetHistory(null);
   modelDoc = null;
   modelCursorOnly = null;
   layoutResult = null;
@@ -2765,8 +2834,18 @@ document.addEventListener('keydown', e => {
     if (e.key === 's') { e.preventDefault(); $('btnSave').click(); }
     if (e.key === 'o') { e.preventDefault(); $('btnOpen').click(); }
     if (e.key === 'p') { e.preventDefault(); printDoc(); }
+    const k = e.key.toLowerCase();
+    // A field of a dialog or the ribbon keeps its own undo.
+    const field = e.target !== hiddenInput && e.target.closest?.('input, textarea, select, .ov');
+    if (!e.altKey && (k === 'z' || k === 'y') && !field) {
+      e.preventDefault();
+      requestUndo(k === 'y' || (k === 'z' && e.shiftKey));
+    }
   }
 });
+$('btnUndo').addEventListener('click', () => requestUndo(false));
+$('btnRedo').addEventListener('click', () => requestUndo(true));
+updateUndoButtons();
 
 // ---- i18n init ----
 $('langSel').value = curLang;
