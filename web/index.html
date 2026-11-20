@@ -751,6 +751,7 @@ input[type="file"] { display: none; }
 /* Excel formula bar */
 .formula-bar {
     display: flex;
+    align-self: stretch;
     align-items: center;
     background: white;
     border: 1px solid #d0d0d0;
@@ -839,14 +840,38 @@ input[type="file"] { display: none; }
 }
 .edit-page .edit-table td {
     border: 1px solid #ccc;
-    padding: 6px 8px;
-    min-width: 60px;
+    /* Word's default cell margins: 0.08 in either side, none above or below. */
+    padding: 0 5.4pt;
+    min-width: 0;
 }
 .edit-page .edit-table .edit-run {
     display: inline;
 }
 .edit-page .edit-table thead { display: table-header-group; }
 @media print { .edit-page .edit-table thead { display: table-header-group; } }
+
+/* Slide show: one slide at a time on black, covering the window */
+.slideshow {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+    cursor: pointer;
+}
+.slideshow-stage { display: flex; align-items: center; justify-content: center; }
+.slideshow-slide { position: relative; overflow: hidden; }
+.slideshow-hint {
+    position: absolute;
+    right: 12px;
+    bottom: 8px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.45);
+    pointer-events: none;
+}
 
 /* Spreadsheet styles */
 .sheet-tabs {
@@ -856,6 +881,14 @@ input[type="file"] { display: none; }
     padding: 0 4px;
     background: #e0e0e0;
     border-top: 1px solid #ccc;
+    /* Kept in view above the status bar, the way Excel keeps its sheet tabs,
+       instead of waiting below the last row of a long sheet. */
+    align-self: stretch;
+    position: sticky;
+    bottom: 26px;
+    z-index: 5;
+    overflow-x: auto;
+    scrollbar-width: thin;
 }
 .sheet-tab {
     padding: 6px 16px;
@@ -2103,7 +2136,8 @@ function buildRibbon(format) {
             ]},
             { name: 'Slide Show', groups: [
                 { label: 'Start', items: [
-                    { text: '▶', title: 'From Beginning' }, { text: '▷', title: 'From Current Slide' },
+                    { text: '▶', title: 'From Beginning', action: () => startSlideShow(0) },
+                    { text: '▷', title: 'From Current Slide', action: () => startSlideShow(currentSlideIndex) },
                 ]},
             ]},
         ];
@@ -3240,6 +3274,11 @@ function renderEditableDocx(doc) {
         if (page.size) {
             pageDiv.style.width = page.size.width + 'pt';
             pageDiv.style.maxWidth = page.size.width + 'pt';
+            // A sheet of the document's paper (A4 is 595 x 842 pt), so the
+            // page reads as a page; content that runs longer is not cut off.
+            pageDiv.style.minHeight = page.size.height + 'pt';
+            pageDiv.style.boxSizing = 'border-box';
+            pageDiv.style.flexShrink = '0';
         }
         if (page.margin) {
             pageDiv.style.paddingTop = page.margin.top + 'pt';
@@ -3804,7 +3843,13 @@ function renderEditableDocx(doc) {
                     }
                 }
 
-                const tblLook = table.style && table.style.tbl_look;
+                // The first-row / banding colours below stand in for a built-in
+                // coloured table style (Grid Table 4, List Table 3, …); a plain
+                // grid such as TableGrid has no shading at all, whatever its
+                // tblLook flags say.
+                const colouredStyle = /^(GridTable|ListTable|Light(Shading|List|Grid)|Medium(Shading|List|Grid)|Dark(List)|Colorful(Shading|List|Grid))/i
+                    .test((table.style && table.style.style_id) || '');
+                const tblLook = colouredStyle ? table.style.tbl_look : null;
                 for (let ri = 0; ri < table.rows.length; ri++) {
                     const row = table.rows[ri];
                     const tr = document.createElement('tr');
@@ -4633,6 +4678,7 @@ function renderEditableXlsx(workbook) {
 function renderEditablePptx(presentation) {
     const container = document.getElementById('pages-container');
     container.innerHTML = '';
+    currentSlideIndex = 0;
 
     const layout = document.createElement('div');
     layout.className = 'pptx-layout';
@@ -4688,6 +4734,7 @@ function renderEditablePptx(presentation) {
             thumbPanel.querySelectorAll('.slide-thumb').forEach(t => t.classList.remove('active'));
             thumb.classList.add('active');
             slideWrappers.forEach((w, i) => w.style.display = i === slideIdx ? '' : 'none');
+            currentSlideIndex = slideIdx;
             counter.textContent = `Slide ${slideIdx + 1} / ${presentation.slides.length}`;
         });
         thumbPanel.appendChild(thumb);
@@ -4701,6 +4748,86 @@ function renderEditablePptx(presentation) {
     layout.appendChild(thumbPanel);
     layout.appendChild(mainArea);
     container.appendChild(layout);
+}
+
+/** The slide shown in the editor, where "From Current Slide" starts. */
+let currentSlideIndex = 0;
+
+/**
+ * Play the presentation from slide `from`: one slide at a time, as large as
+ * the window allows, on black. Right / Space / click go on, Left goes back,
+ * Home / End jump, Esc ends; running past the last slide ends too. It asks
+ * for full screen and does without where that is refused (a VS Code webview
+ * does not allow it), covering the window instead.
+ */
+function startSlideShow(from = 0) {
+    const pres = currentDocIR;
+    if (currentFileType !== 'pptx' || !pres || !pres.slides || !pres.slides.length) return;
+    const count = pres.slides.length;
+    let index = Math.max(0, Math.min(count - 1, from || 0));
+
+    const overlay = document.createElement('div');
+    overlay.className = 'slideshow';
+    overlay.tabIndex = 0;
+    const stage = document.createElement('div');
+    stage.className = 'slideshow-stage';
+    const hint = document.createElement('div');
+    hint.className = 'slideshow-hint';
+    overlay.append(stage, hint);
+
+    const show = () => {
+        const scale = Math.min(overlay.clientWidth / pres.slide_width, overlay.clientHeight / pres.slide_height);
+        const slide = pres.slides[index];
+        const box = document.createElement('div');
+        box.className = 'slideshow-slide';
+        box.style.width = (pres.slide_width * scale) + 'px';
+        box.style.height = (pres.slide_height * scale) + 'px';
+        applyStyles(box, slideBackgroundCss(slide));
+        buildSlideContent(box, slide, index, scale, false);
+        stage.replaceChildren(box);
+        hint.textContent = `${index + 1} / ${count}　→ 次へ　← 前へ　Esc 終了`;
+    };
+    let ended = false;
+    const end = () => {
+        if (ended) return;
+        ended = true;
+        document.removeEventListener('keydown', onKey, true);
+        document.removeEventListener('fullscreenchange', onFullscreen);
+        window.removeEventListener('resize', show);
+        if (document.fullscreenElement === overlay) document.exitFullscreen().catch(() => {});
+        overlay.remove();
+    };
+    const go = (next) => {
+        if (next >= count) return end();
+        index = Math.max(0, next);
+        show();
+    };
+    const onKey = (event) => {
+        const key = event.key;
+        if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter', 'n', 'N'].includes(key)) go(index + 1);
+        else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace', 'p', 'P'].includes(key)) go(index - 1);
+        else if (key === 'Home') go(0);
+        else if (key === 'End') go(count - 1);
+        else if (key === 'Escape') end();
+        else return;
+        event.preventDefault();
+        event.stopPropagation();
+    };
+    // Esc in full screen is taken by the browser to leave it; end the show then.
+    const onFullscreen = () => { if (!document.fullscreenElement) end(); };
+    overlay.addEventListener('click', () => go(index + 1));
+    overlay.addEventListener('contextmenu', (event) => { event.preventDefault(); go(index - 1); });
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', show);
+    document.body.appendChild(overlay);
+    overlay.focus();
+    show();
+    if (overlay.requestFullscreen) {
+        overlay.requestFullscreen().then(() => {
+            document.addEventListener('fullscreenchange', onFullscreen);
+            show();
+        }).catch(() => { /* not allowed here: the overlay covers the window */ });
+    }
 }
 
 // Where the engine breaks this paragraph, if it can measure the family.
