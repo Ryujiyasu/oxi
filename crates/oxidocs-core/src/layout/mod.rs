@@ -10673,7 +10673,15 @@ cells={} pitch={:.2} text={:?}",
             let height = (inner_height - 2.0 * outline).max(0.0);
             let mut box_page = page.clone();
             box_page.blocks = text_box.blocks.clone();
-            box_page.grid_line_pitch = None;
+            // OXI_VERT_TXBX_GRID (2026-11-20, default ON, opt-out _DISABLE): an eaVert box
+            // keeps the document's line grid for its column pitch, as a horizontal box
+            // keeps it for its lines. `_pb_txbx_vert_grid_gen.py` (ＭＳ 明朝 10.5/14/19 in a
+            // box, lines 360): Word's column steps 28.9 / 34.8 / 44.2 / 41.3 / 43.9 with the
+            // grid, 24.4 / 25.1 / 29.9 / 30.5 / 37.7 without it; Oxi gave the no-grid steps
+            // either way. blind-L ja/correspondence__1f1b44c0's HGP創英角ﾎﾟｯﾌﾟ体 19 headline box.
+            if crate::env_flag!("OXI_VERT_TXBX_GRID_DISABLE") || page.doc_grid_no_type {
+                box_page.grid_line_pitch = None;
+            }
             box_page.grid_char_pitch = None;
             box_page.grid_char_cw_ratio = None;
             box_page.grid_char_quantized_runs.clear();
@@ -10681,9 +10689,12 @@ cells={} pitch={:.2} text={:?}",
             box_page.grid_char_runs.clear();
             box_page.doc_grid_lines_and_chars = false;
             IN_VERT_TEXT_BOX.with(|c| c.set(true));
+            // OXI_VERT_TXBX_GRID: with the grid kept, the columns take the grid pitch the
+            // body's vertical sections use (natural columns only without a grid).
+            let vgrid = box_page.grid_line_pitch.filter(|p| *p > 0.1);
             let (recipes, columns) = self.vertical_section_columns(
                 &box_page, 0, box_page.blocks.len(), height,
-                self.default_font_size.max(1.0), true,
+                vgrid.unwrap_or(self.default_font_size.max(1.0)), vgrid.is_none(),
             );
             let used: f32 = columns.iter().map(|column| column.pitch).sum();
             let slack = (width - used).max(0.0);
