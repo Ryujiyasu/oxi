@@ -4,10 +4,23 @@
 // machine.
 
 const vscode = require('vscode');
+const { InstalledFonts } = require('./fonts');
 
 // The id from the first (view-only) release is kept so that editor associations
 // users already set keep working.
 const VIEW_TYPE = 'oxi.officeViewer';
+
+/** The machine's fonts, indexed once for every Word editor that asks. */
+const installedFonts = new InstalledFonts();
+
+/**
+ * The page each format opens in: Word documents in the Word editor, which
+ * edits through the document model (typing, Enter, Backspace across
+ * paragraphs, tables, notes, comments); workbooks and decks in the suite page.
+ */
+function pageFor(uri) {
+  return /\.docx$/i.test(uri.path) ? 'docs.html' : 'index.html';
+}
 
 /** A save that waits longer than this is reported as failed. */
 const SAVE_TIMEOUT_MS = 120000;
@@ -97,10 +110,11 @@ class OxiEditorProvider {
       localResourceRoots: [mediaRoot],
     };
 
+    const page = pageFor(document.uri);
     let html;
     try {
       const raw = await vscode.workspace.fs.readFile(
-        vscode.Uri.joinPath(mediaRoot, 'index.html')
+        vscode.Uri.joinPath(mediaRoot, page)
       );
       html = new TextDecoder('utf-8').decode(raw);
     } catch (err) {
@@ -112,7 +126,7 @@ class OxiEditorProvider {
     panel.onDidDispose(() => {
       if (document.panel === panel) document.panel = null;
     });
-    panel.webview.html = withWebviewHead(html, panel.webview, mediaRoot);
+    panel.webview.html = withWebviewHead(html, panel.webview, mediaRoot, page);
 
     panel.webview.onDidReceiveMessage((msg) => {
       if (!msg) return;
@@ -133,6 +147,17 @@ class OxiEditorProvider {
           break;
         case 'oxi:error':
           vscode.window.showErrorMessage(`Oxi: ${msg.message}`);
+          break;
+        // The Word editor draws with the font programs themselves, which a
+        // webview cannot read; the bytes are sent to this page only.
+        case 'oxi:font':
+          installedFonts.resolve(String(msg.family || ''), !!msg.bold, !!msg.italic)
+            .catch(() => null)
+            .then((bytes) => panel.webview.postMessage({
+              type: 'oxi:font',
+              id: msg.id,
+              data: bytes ? Buffer.from(bytes).toString('base64') : null,
+            }));
           break;
       }
     });
@@ -187,7 +212,7 @@ function basename(uri) {
  * <base> pointing at the extension's media directory, and a policy that lets
  * WebAssembly compile.
  */
-function withWebviewHead(html, webview, mediaRoot) {
+function withWebviewHead(html, webview, mediaRoot, page) {
   const base = webview.asWebviewUri(mediaRoot).toString();
   const csp = [
     "default-src 'none'",
@@ -202,9 +227,15 @@ function withWebviewHead(html, webview, mediaRoot) {
   // VS Code owns the file, so the browser page's ways of picking, leaving and
   // downloading a document are hidden from the first paint, before the engine
   // has loaded. Saving is VS Code's own (Ctrl+S, the title bar's save button).
-  const hidden = [
-    '#landingHeader', '#dropZone', '#sampleButtons', '.side-door', '#toolbar',
-  ].join(', ');
+  const hidden = (page === 'docs.html'
+    ? [
+      // New, open, rename, and the exports a webview cannot download or print;
+      // undo and redo have no action in the page yet.
+      '#btnNew', '#btnOpen', '#btnPdf', '#btnUndo', '#btnRedo',
+      '#fmNew', '#fmOpen', '#fmCopy', '#fmExport', '#fmPrint', '#fmRename',
+    ]
+    : ['#landingHeader', '#dropZone', '#sampleButtons', '.side-door', '#toolbar']
+  ).join(', ');
 
   const head =
     `<base href="${base}/">\n` +

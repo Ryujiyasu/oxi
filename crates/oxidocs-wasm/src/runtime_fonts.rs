@@ -133,3 +133,64 @@ fn register_in_memory(
 pub fn font_program_revision() -> u64 {
     FONT_REVISION.with(|revision| revision.get())
 }
+
+/// The face Oxi ships to draw `family` when the machine does not have it:
+/// Carlito for Calibri, Liberation for Arial / Times New Roman / Courier New,
+/// Caladea for Cambria, OxiMincho / OxiGothic for a Japanese family. Null
+/// for a family with no stand-in.
+///
+/// It is for painting only. Registering it as `family`'s program would lay
+/// the text out with the stand-in's widths instead of the measured ones, so a
+/// caller hands it to CSS (`FontFace`) and the layout keeps its own metrics.
+/// The Japanese pair has no bold or italic member; the browser slants or
+/// emboldens the regular one.
+#[wasm_bindgen]
+pub fn stand_in_font_program(family: &str, bold: bool, italic: bool) -> Option<Vec<u8>> {
+    if let Some(base) = crate::latin_stand_in(family) {
+        let key = match (bold, italic) {
+            (false, false) => base.to_string(),
+            (true, false) => format!("{base}-B"),
+            (false, true) => format!("{base}-I"),
+            (true, true) => format!("{base}-BI"),
+        };
+        return oxidocs_fonts::face(&key).map(<[u8]>::to_vec);
+    }
+    if !east_asian_family(family) { return None; }
+    oxidocs_fonts::face(oxidocs_fonts::cjk_stand_in(family).0).map(<[u8]>::to_vec)
+}
+
+/// A family named in Japanese, or one of the Latin-spelled Japanese families
+/// Word documents carry (MS Gothic, Yu Mincho, Meiryo, BIZ UDPGothic,
+/// HGSoeiKakugothicUB, UD Digi Kyokasho…). The Latin "Gothic" faces are not.
+fn east_asian_family(family: &str) -> bool {
+    if family.chars().any(|c| c as u32 > 0x2E7F) { return true; }
+    let lower = family.to_lowercase();
+    const LATIN_GOTHICS: [&str; 6] =
+        ["century gothic", "franklin gothic", "trade gothic", "news gothic", "letter gothic", "highway gothic"];
+    if LATIN_GOTHICS.iter().any(|latin| lower.starts_with(latin)) { return false; }
+    ["gothic", "mincho", "meiryo", "kyokasho", "hiragino", "osaka", "kozuka"].iter().any(|word| lower.contains(word))
+}
+
+#[cfg(test)]
+mod stand_in_tests {
+    use super::*;
+
+    #[test]
+    fn latin_and_japanese_families_get_their_shipped_face() {
+        assert_eq!(stand_in_font_program("Calibri", true, false).as_deref(), oxidocs_fonts::face("Carlito-B"));
+        assert_eq!(stand_in_font_program("Times New Roman", false, true).as_deref(), oxidocs_fonts::face("LiberationSerif-I"));
+        assert_eq!(stand_in_font_program("ＭＳ 明朝", false, false).as_deref(), Some(oxidocs_fonts::OXI_MINCHO));
+        assert_eq!(stand_in_font_program("Yu Gothic", true, false).as_deref(), Some(oxidocs_fonts::OXI_GOTHIC));
+        assert_eq!(stand_in_font_program("Meiryo UI", false, false).as_deref(), Some(oxidocs_fonts::OXI_GOTHIC));
+        assert_eq!(stand_in_font_program("HGSoeiKakugothicUB", false, false).as_deref(), Some(oxidocs_fonts::OXI_GOTHIC));
+        assert_eq!(stand_in_font_program("UD Digi Kyokasho N-R", false, false).as_deref(), Some(oxidocs_fonts::OXI_GOTHIC));
+    }
+
+    #[test]
+    fn latin_families_without_a_stand_in_get_none() {
+        assert!(stand_in_font_program("Century Gothic", false, false).is_none());
+        assert!(stand_in_font_program("Segoe Script", false, false).is_none());
+        assert!(stand_in_font_program("Brush Script MT", false, false).is_none());
+        assert!(stand_in_font_program("MS Sans Serif", false, false).is_none());
+    }
+}

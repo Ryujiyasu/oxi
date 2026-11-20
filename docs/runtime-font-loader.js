@@ -12,6 +12,17 @@ export class RuntimeFontLoader {
     this.cssFaces = new Map();
     this.cssFaceRevisions = new Map();
     this.localFonts = null;
+    // A host that can read the machine's fonts itself (the VS Code extension)
+    // sets `provider(family, bold, italic)` to resolve to the program's bytes,
+    // or null when the machine has no such face.
+    this.provider = null;
+    // With `standIns`, a face the machine does not have is painted in the
+    // face Oxi ships for it (Carlito for Calibri, OxiMincho for a Mincho…)
+    // instead of stopping the page. Only the glyphs change: the layout keeps
+    // its measured widths, because the stand-in is given to CSS and never
+    // registered as the family's program.
+    this.standIns = false;
+    this.cssOnly = new Set();
   }
 
   key(family, bold, italic) { return JSON.stringify([family, !!bold, !!italic]); }
@@ -64,14 +75,32 @@ export class RuntimeFontLoader {
       await this.addCssFace(family, bold, italic);
       return;
     }
+    if (this.provider) {
+      const bytes = await this.provider(family, !!bold, !!italic);
+      if (bytes && this.api.try_register_font_program_family(family, !!bold, !!italic, bytes)) {
+        await this.addCssFace(family, bold, italic);
+        return;
+      }
+      return this.standInFace(family, bold, italic);
+    }
     const invoke = this.host.__TAURI__?.core?.invoke;
     if (invoke) {
-      const bytes = await invoke('load_font_program', { family, bold: !!bold, italic: !!italic });
-      this.api.register_font_program_family(family, !!bold, !!italic, new Uint8Array(bytes));
-      await this.addCssFace(family, bold, italic);
-      return;
+      try {
+        const bytes = await invoke('load_font_program', { family, bold: !!bold, italic: !!italic });
+        this.api.register_font_program_family(family, !!bold, !!italic, new Uint8Array(bytes));
+        await this.addCssFace(family, bold, italic);
+        return;
+      } catch (error) {
+        if (!this.standIns) throw error;
+        return this.standInFace(family, bold, italic);
+      }
     }
-    const list = await this.localFontList();
+    let list;
+    try { list = await this.localFontList(); }
+    catch (error) {
+      if (!this.standIns) throw error;
+      return this.standInFace(family, bold, italic);
+    }
     // The browser's family strings are hints only: localized name-table aliases
     // and TTC members are matched by the real font parser, never a name map.
     const canonical = name => name.split(/\s+/).filter(Boolean).join(' ').toLocaleLowerCase();
@@ -83,7 +112,41 @@ export class RuntimeFontLoader {
       await this.addCssFace(family, bold, italic);
       return;
     }
-    throw new Error(`Font unavailable: ${family}${bold ? ' bold' : ''}${italic ? ' italic' : ''}`);
+    return this.standInFace(family, bold, italic);
+  }
+
+  // Paint a face the machine lacks. A bold or italic face falls back to the
+  // machine's own regular face first (the browser emboldens or slants it, as
+  // Word does for a family with no bold member), then to Oxi's stand-in.
+  // A family with neither is left to the browser's fallback; the page never
+  // stops for it.
+  async standInFace(family, bold, italic) {
+    if (!this.standIns) {
+      throw new Error(`Font unavailable: ${family}${bold ? ' bold' : ''}${italic ? ' italic' : ''}`);
+    }
+    const key = this.key(family, bold, italic);
+    this.cssOnly.add(key);
+    if (bold || italic) {
+      try {
+        await this.loadFace(family, false, false);
+        if (this.api.has_font_program(family, false, false)) return;
+      } catch { /* fall through to the stand-in */ }
+    }
+    if (this.cssFaces.has(key)) return;
+    const bytes = typeof this.api.stand_in_font_program === 'function'
+      ? this.api.stand_in_font_program(family, !!bold, !!italic) : null;
+    if (!bytes) return;
+    // The Japanese stand-ins have only a regular member. Declared as what it
+    // is, the browser emboldens or slants it for a bold or italic run instead
+    // of drawing it upright and thin under a bold label.
+    const regular = (bold || italic) ? this.api.stand_in_font_program(family, false, false) : null;
+    const synthesized = !!regular && regular.length === bytes.length;
+    const face = new this.host.FontFace(family, bytes, synthesized
+      ? { weight: '400', style: 'normal' }
+      : { weight: bold ? '700' : '400', style: italic ? 'italic' : 'normal' });
+    await face.load();
+    this.host.document.fonts.add(face);
+    this.cssFaces.set(key, face);
   }
 
   async ensure(layout) {
@@ -109,7 +172,7 @@ export class RuntimeFontLoader {
       finally {
         if (this.pending.get(key) === pending) this.pending.delete(key);
       }
-      await this.addCssFace(...args);
+      if (!this.cssOnly.has(key)) await this.addCssFace(...args);
     }
   }
 

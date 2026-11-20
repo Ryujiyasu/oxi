@@ -16,8 +16,8 @@ before measurement and never used as fix targets:
 
 | Blind set | Oxi mean SSIM vs Office | page/slide count matches |
 |---|---|---|
-| Word, English, 50 documents (2026-11-03) | 0.924 | 46 / 50 |
-| Word, Japanese, 50 documents (2026-11-03) | 0.892 | 45 / 50 |
+| Word, English, 50 documents (2026-11-20) | 0.926 | 49 / 50 |
+| Word, Japanese, 50 documents (2026-11-20) | 0.884 | 43 / 50 |
 | PowerPoint, 48 decks (2026-08-20) | 0.953 | 48 / 48 |
 
 The method, the corpora and the other engines measured on the same sets are in
@@ -30,11 +30,18 @@ document grid, ruby, vertical writing, warichu, emphasis marks.
 
 - Renders `.docx`, `.xlsx` and `.pptx` in a VS Code tab
 - Edit text in place: Word paragraphs, Excel cells, PowerPoint text boxes
+- Word documents: Enter and Backspace split and join paragraphs; formatting,
+  tables, links, footnotes, comments, headers, footers and fields from the
+  ribbon are saved into the file
+- Word text is drawn with your machine's fonts; a face you do not have (Calibri
+  on a Mac, for instance) is drawn in an open look-alike Oxi ships, while the
+  layout keeps Word's own measured widths
 - Save with **Ctrl+S** (or *Save As…*); the tab shows the file as modified while
   there are unsaved edits, and *Revert File* reloads it from disk
 - Saving changes only what you edited: Oxi rewrites the edited runs and cells
   inside the original package and keeps everything else as it was
-- Formatting buttons in the ribbon change the view only; they are not saved yet
+- In spreadsheets and decks, the formatting buttons change the view only; they
+  are not saved yet
 - Large documents take a moment on first open — the engine and its font metric
   tables are a single WebAssembly module
 

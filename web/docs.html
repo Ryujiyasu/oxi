@@ -753,6 +753,9 @@ const $ = id => document.getElementById(id);
 const canvasArea = $('canvasArea');
 const emptyState = $('emptyState');
 let currentDocx = null;
+// Every change to the open document's bytes is announced, so a host that
+// owns the file (the VS Code extension) can mark it modified.
+function documentEdited() { document.dispatchEvent(new CustomEvent('oxi:document-edited')); }
 // The open document in oxidocs-model, which edits by position and keeps
 // every run's formatting; null when the model refused the file (the old
 // run-text editor is used then).
@@ -1288,6 +1291,7 @@ function deleteSelection() {
   }
   if (!edits.length) return false;
   currentDocx = new Uint8Array(edit_docx_advanced(currentDocx, edits));
+  documentEdited();
   pendingCursorRestore = {
     paraIndex: p,
     runIndex: aEl.run_index,
@@ -1404,6 +1408,7 @@ function editDocxNow(paraIndex, runIndex, newText) {
   const edits = [{ type: 'set_run_text', paragraph_index: paraIndex, run_index: runIndex, new_text: newText }];
   const edited = edit_docx_advanced(currentDocx, edits);
   currentDocx = new Uint8Array(edited);
+  documentEdited();
 }
 
 function scheduleRender() {
@@ -1710,6 +1715,8 @@ function splitParagraphAtCursor() {
   edits.push({ type: 'insert_paragraph', index: p + 1, text: tail });
 
   currentDocx = new Uint8Array(edit_docx_advanced(currentDocx, edits));
+  documentEdited();
+
   // Cursor to the start of the new paragraph (falls back to no cursor when the tail is empty)
   pendingCursorRestore = { paraIndex: p + 1, runIndex: 0, charOff: 0 };
   clearSelection();
@@ -1871,6 +1878,7 @@ function applyModelEdits(edits, cursorAfter) {
   try { modelDoc.apply(JSON.stringify(edits)); }
   catch (e) { console.warn('Edit refused:', e); $('statusText').textContent = String(e.message || e); return false; }
   currentDocx = new Uint8Array(modelDoc.save());
+  documentEdited();
   pendingEdit = null;
   pendingCursorRestore = null;
   pendingModelCursor = cursorAfter || null;
@@ -1987,6 +1995,18 @@ function modelInsert(text) {
   return applyModelEdits([{ op: 'insert_text', at, text }], { para: at.para, offset: at.offset + text.length });
 }
 
+// Whether the cursor is at the start of a paragraph whose first line carries
+// a list number: the layout draws the number as text of no paragraph on the
+// same line, before the paragraph's first character.
+function cursorOnListedLine() {
+  if (!cursorPos || !layoutResult || cursorPos.charOffset !== 0) return false;
+  const page = layoutResult.pages[cursorPos.pageIndex];
+  const el = page && page.elements[cursorPos.elemIndex];
+  if (!el || el.paragraph_index == null || (el.char_offset || 0) !== 0) return false;
+  return page.elements.some(m => m.kind === 'text' && m.paragraph_index == null && m.text
+    && Math.abs(m.y - el.y) < 1 && m.x + m.width <= el.x + 0.5);
+}
+
 function modelDelete(dir) {
   const sel = selectionModelRange();
   if (sel) return applyModelEdits([{ op: 'delete', from: sel.from, to: sel.to }], sel.from);
@@ -1995,6 +2015,13 @@ function modelDelete(dir) {
   const text = modelDoc.paragraph_text(at.para);
   if (dir < 0) {
     if (at.offset === 0) {
+      // As in Word, Backspace at the start of a numbered paragraph takes the
+      // number off first; the next Backspace joins it to the one before.
+      if (cursorOnListedLine()) {
+        const unnumber = { set: [{ name: 'w:numPr', children: [
+          { name: 'w:ilvl', attrs: [['w:val', '0']] }, { name: 'w:numId', attrs: [['w:val', '0']] }] }] };
+        return applyModelEdits([{ op: 'format_paragraphs', from: at, to: at, patch: unnumber }], at);
+      }
       if (at.para === 0) return true;
       const prevLen = paragraphEnd(modelDoc.paragraph_text(at.para - 1));
       return applyModelEdits([{ op: 'join_paragraphs', para: at.para - 1 }], { para: at.para - 1, offset: prevLen });
@@ -2352,6 +2379,7 @@ function cursorEl() {
 
 function applyDocxEdits(edits, el) {
   currentDocx = new Uint8Array(edit_docx_advanced(currentDocx, edits));
+  documentEdited();
   pendingCursorRestore = {
     paraIndex: el.paragraph_index,
     runIndex: el.run_index ?? 0,
@@ -2393,6 +2421,7 @@ function applyRunFormat(patch) {
     }
     if (edits.length) {
       currentDocx = new Uint8Array(edit_docx_advanced(currentDocx, edits));
+      documentEdited();
       pendingCursorRestore = {
         paraIndex: sel.anchor.paragraph_index,
         runIndex: sel.anchor.run_index ?? 0,
@@ -2422,6 +2451,7 @@ function applyParaFormat(patch) {
     }
     if (edits.length) {
       currentDocx = new Uint8Array(edit_docx_advanced(currentDocx, edits));
+      documentEdited();
       pendingCursorRestore = {
         paraIndex: sel.anchor.paragraph_index,
         runIndex: sel.anchor.run_index ?? 0,
