@@ -13011,7 +13011,15 @@ cells={} pitch={:.2} text={:?}",
                         && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
                         && !crate::env_flag!("OXI_HEADER_TEXT_MULTIPLE_DISABLE")
                     {
-                        let factor = para.style.line_spacing.unwrap_or(1.0).max(1.0);
+                        // OXI_HDR_SUBUNIT_MULTIPLE (2026-11-20, default ON, opt-out _DISABLE):
+                        // an auto multiple below one shrinks the header line too, as it
+                        // does when the header is drawn. blind-L en/policies__00ee0705:
+                        // nine header paragraphs at line=14 (0.058 lines) before the
+                        // header table -- Word and Oxi's drawing both put the table at
+                        // 85; the body-top estimate charged 9 x 12.2 and started the
+                        // body 122pt low (5 pages for Word's 3).
+                        let sub = !crate::env_flag!("OXI_HDR_SUBUNIT_MULTIPLE_DISABLE");
+                        let factor = para.style.line_spacing.unwrap_or(1.0).max(if sub { 0.0 } else { 1.0 });
                         if hf_cjk_mult && factor > 1.0 && metrics.is_cjk_83_64_font() {
                             lh = (metrics.win_ascent + metrics.win_descent) * fs * (83.0 / 64.0);
                         }
@@ -13061,7 +13069,9 @@ cells={} pitch={:.2} text={:?}",
                         && para.runs.iter().all(|r| r.text.trim().is_empty())
                         && matches!(para.style.line_spacing_rule.as_deref(), Some("auto") | None);
                     let lh_used = if s1064_empty {
-                        let factor = para.style.line_spacing.map(|l| l.max(1.0)).unwrap_or(1.0);
+                        // OXI_HDR_SUBUNIT_MULTIPLE: a sub-one multiple counts here too.
+                        let sub = !crate::env_flag!("OXI_HDR_SUBUNIT_MULTIPLE_DISABLE");
+                        let factor = para.style.line_spacing.map(|l| l.max(if sub { 0.0 } else { 1.0 })).unwrap_or(1.0);
                         lh * factor
                     } else {
                         lh

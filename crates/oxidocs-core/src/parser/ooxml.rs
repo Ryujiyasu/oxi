@@ -2132,6 +2132,11 @@ impl OoxmlParser {
             .map_err(|_| ParseError::MissingPart(name.to_string()))?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
+        if name.ends_with(".xml") && !crate::env_flag!("OXI_COLLAPSE_EMPTY_PAIRS_DISABLE") {
+            if let Some(collapsed) = collapse_empty_element_pairs(&contents) {
+                return Ok(collapsed);
+            }
+        }
         Ok(contents)
     }
 
@@ -16979,6 +16984,79 @@ struct SectionProperties {
     /// vertical writing (tategaki/縦書き): chars stack top-to-bottom, lines
     /// advance right-to-left.
     text_direction: Option<String>,
+}
+
+/// OXI_COLLAPSE_EMPTY_PAIRS (2026-11-20, default ON, opt-out _DISABLE): an element
+/// written with no content as an explicit pair, `<w:sz w:val="19"></w:sz>`, read as
+/// the self-closing `<w:sz w:val="19"/>` Word itself writes. The parser reads most
+/// property elements from empty-element events only, so a producer that writes
+/// pairs (PDF-to-Word converters do, for every element) lost its page margins,
+/// font sizes, colours and tabs. blind-L ja/reports__900fdb5c («pgMar» all 0, run
+/// sizes 9pt): Oxi laid it out with 72pt margins at 10pt, 9 pages for Word's 1.
+/// `None` when the text holds no such pair (every Word-written part), so those parse
+/// byte-for-byte as before.
+fn collapse_empty_element_pairs(xml: &str) -> Option<String> {
+    if !xml.contains("></") {
+        return None;
+    }
+    let bytes = xml.as_bytes();
+    let mut out = String::with_capacity(xml.len());
+    let mut last = 0usize;
+    let mut changed = false;
+    let mut search = 0usize;
+    while let Some(rel) = xml[search..].find("></") {
+        let gt = search + rel; // the '>' that closes the opening tag
+        search = gt + 3;
+        // the opening tag this '>' ends
+        let Some(lt) = xml[last..gt].rfind('<').map(|i| last + i) else { continue };
+        let open = &xml[lt + 1..gt];
+        if open.starts_with('/') || open.starts_with('?') || open.starts_with('!') || open.ends_with('/') {
+            continue;
+        }
+        let name_end = open.find(|c: char| c.is_whitespace()).unwrap_or(open.len());
+        let name = &open[..name_end];
+        if name.is_empty() {
+            continue;
+        }
+        let close_start = gt + 1; // "</"
+        let after_name = close_start + 2 + name.len();
+        if after_name >= bytes.len()
+            || &xml[close_start + 2..after_name] != name
+            || bytes[after_name] != b'>'
+        {
+            continue;
+        }
+        out.push_str(&xml[last..gt]);
+        out.push_str("/>");
+        last = after_name + 1;
+        search = last;
+        changed = true;
+    }
+    if !changed {
+        return None;
+    }
+    out.push_str(&xml[last..]);
+    Some(out)
+}
+
+#[cfg(test)]
+mod collapse_empty_pairs_tests {
+    use super::collapse_empty_element_pairs as c;
+
+    #[test]
+    fn pairs_become_self_closing_and_content_stays() {
+        assert_eq!(c("<w:p><w:r><w:t>a</w:t></w:r></w:p>"), None);
+        assert_eq!(
+            c(r#"<w:rPr><w:sz w:val="19"></w:sz><w:b></w:b></w:rPr><w:t>x</w:t><w:t xml:space="preserve"></w:t>"#).as_deref(),
+            Some(r#"<w:rPr><w:sz w:val="19"/><w:b/></w:rPr><w:t>x</w:t><w:t xml:space="preserve"/>"#)
+        );
+        // a mismatched close or a self-closing tag before "></" is left alone
+        assert_eq!(c("<a></b><c/></d>"), None);
+        assert_eq!(
+            c(r#"<w:pgMar w:top="0" w:left="0"></w:pgMar>"#).as_deref(),
+            Some(r#"<w:pgMar w:top="0" w:left="0"/>"#)
+        );
+    }
 }
 
 /// Parse w:sectPr (section properties - page size, margins, document grid)
