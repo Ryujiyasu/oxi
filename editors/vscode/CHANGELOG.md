@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.4
+
+In a narrow pane the slide list and the slide shrink to fit, instead of the
+slide being cut off. Word layout fixes: no extra space above the second line
+of a paragraph, text in vertical headers and footers is drawn, letter spacing
+on a document grid is spread per letter in Latin text, and private-use
+characters take one em in Japanese fonts.
+
 ## 0.9.3
 
 Table cells in Word documents can be edited and saved; the cell's other runs
