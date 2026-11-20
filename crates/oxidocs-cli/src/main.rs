@@ -121,6 +121,23 @@ fn main() {
             };
             finish(input, output, convert_png(input, output, strict, page, size));
         }
+        Some("docx-to-docling") => {
+            let usage = "Usage: oxi docx-to-docling [--quiet] <input.docx> [output.json]";
+            let Some(input) = args.get(2) else {
+                eprintln!("{usage}");
+                std::process::exit(1);
+            };
+            // The export walks nested tables and groups recursively; Windows
+            // gives the main thread 1 MB.
+            let (input, output) = (input.clone(), args.get(3).cloned());
+            let worker = std::thread::Builder::new()
+                .stack_size(256 * 1024 * 1024)
+                .spawn(move || docx_to_docling(&input, output.as_deref()))
+                .expect("cannot start the export thread");
+            if worker.join().is_err() {
+                std::process::exit(101);
+            }
+        }
         Some("serve") => {
             let threads = args[2..]
                 .windows(2)
@@ -239,6 +256,9 @@ fn main() {
             eprintln!("  oxi pptx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.pptx> <output.png>");
             eprintln!("  oxi xlsx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.xlsx> <output.png>");
             eprintln!("      page N (default 1), fitted inside the given width and/or height (default 96 dpi)");
+            eprintln!("  oxi docx-to-docling [--quiet] <input.docx> [output.json]");
+            eprintln!("      the document as a DoclingDocument (JSON) whose items carry the page");
+            eprintln!("      they are laid out on and their box there; stdout without an output");
             eprintln!("  oxi serve [--threads N]");
             eprintln!("      one JSON request per stdin line, {{\"input\", \"output\", \"strict\", \"id\"}};");
             eprintln!("      an output ending in .png draws one page: add \"page\", \"width\", \"height\"");
@@ -644,6 +664,35 @@ fn unescape_xml(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// The document's structure and text, each item with the page Oxi lays it out
+/// on and its box there, as a DoclingDocument. Nothing is drawn.
+fn docx_to_docling(input: &str, output: Option<&str>) {
+    let data = std::fs::read(input).unwrap_or_else(|e| {
+        eprintln!("{input}: {e}");
+        std::process::exit(1);
+    });
+    let name = std::path::Path::new(input)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| input.to_string());
+    let (doc, stats) = oxidocs_docling::docx_to_docling(&data, &name).unwrap_or_else(|e| {
+        eprintln!("{input}: {e}");
+        std::process::exit(2);
+    });
+    note!(
+        "{input}: {} pages, {} items, {} with a page",
+        stats.pages, stats.items, stats.items_with_prov
+    );
+    let text = serde_json::to_string(&doc).expect("a DoclingDocument serializes");
+    match output {
+        Some(path) => std::fs::write(path, text).unwrap_or_else(|e| {
+            eprintln!("{path}: {e}");
+            std::process::exit(1);
+        }),
+        None => println!("{text}"),
+    }
 }
 
 fn docx_to_pdf(input: &str, output: &str, strict: bool) {
