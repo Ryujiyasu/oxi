@@ -1,4 +1,4 @@
-# Oxi — Word / Excel / PowerPoint editor for VS Code
+# Oxi — .docx / .xlsx / .pptx editor for VS Code
 
 Open, edit and save `.docx`, `.xlsx` and `.pptx` files directly in VS Code. The rendering is
 done by [Oxi](https://gitlab.com/Ryujiyasu/oxi), a Rust + WebAssembly Office
@@ -6,8 +6,8 @@ engine whose page layout is measured, document by document, against Microsoft
 Office's own output.
 
 Everything runs locally inside the editor's webview. No server, no upload, no
-telemetry — the file is read by VS Code and handed to the WebAssembly module in
-the same window.
+telemetry — the file is read and written by VS Code and handed to the
+WebAssembly module in the same window.
 
 ## How faithful is it?
 
@@ -16,9 +16,12 @@ before measurement and never used as fix targets:
 
 | Blind set | Oxi mean SSIM vs Office | page/slide count matches |
 |---|---|---|
-| English, 50 documents | 0.875 | 48 / 50 |
-| Japanese, 50 documents | 0.842 | 43 / 50 |
-| PowerPoint, 48 decks | 0.953 | 48 / 48 |
+| Word, English, 50 documents (2026-11-03) | 0.924 | 46 / 50 |
+| Word, Japanese, 50 documents (2026-11-03) | 0.892 | 45 / 50 |
+| PowerPoint, 48 decks (2026-08-20) | 0.953 | 48 / 48 |
+
+The method, the corpora and the other engines measured on the same sets are in
+the [Oxi README](https://gitlab.com/Ryujiyasu/oxi#readme).
 
 Japanese typography is a first-class target: JIS X 4051 kinsoku line breaking,
 document grid, ruby, vertical writing, warichu, emphasis marks.
@@ -26,16 +29,12 @@ document grid, ruby, vertical writing, warichu, emphasis marks.
 ## What it does today
 
 - Renders `.docx`, `.xlsx` and `.pptx` in a VS Code tab
-- Edit the text of Word documents and slides, and the cells of workbooks, in
-  place; **Ctrl+S** saves back to the file, **Save As** writes a copy, and
-  **Revert File** goes back to what is on disk. A tab with unsaved edits is
-  marked like any other, and the edits survive a restart (hot exit)
-- **Only what you change is written.** A save puts the changed text into the
-  original package and leaves the rest of the file as it was: only the part
-  holding the edited text (the document body, that slide, that sheet) is
-  rewritten, and every other part — styles, images, charts, parts Oxi does
-  not draw — is kept byte for byte, so the file still opens the same in Word,
-  Excel and PowerPoint
+- Edit text in place: Word paragraphs, Excel cells, PowerPoint text boxes
+- Save with **Ctrl+S** (or *Save As…*); the tab shows the file as modified while
+  there are unsaved edits, and *Revert File* reloads it from disk
+- Saving changes only what you edited: Oxi rewrites the edited runs and cells
+  inside the original package and keeps everything else as it was
+- Formatting buttons in the ribbon change the view only; they are not saved yet
 - Large documents take a moment on first open — the engine and its font metric
   tables are a single WebAssembly module
 

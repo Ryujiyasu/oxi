@@ -685,6 +685,10 @@ pub struct RunStyle {
     #[serde(default)]
     pub has_explicit_double_strikethrough: bool,
     pub color: Option<String>,
+    /// OXI_STYLE_COLOR_AUTO: a style's own `<w:color w:val="auto"/>` (no theme
+    /// colour): it resets the colour inherited through basedOn / docDefaults.
+    #[serde(default)]
+    pub color_auto: bool,
     pub highlight: Option<String>,
     pub vertical_align: Option<VerticalAlign>,
     /// Character spacing in points (w:spacing w:val in twips, converted to pt)
@@ -891,6 +895,7 @@ impl Default for RunStyle {
             has_explicit_bold: false,
             italic: false,
             has_explicit_italic: false,
+            color_auto: false,
             underline: false,
             underline_style: None,
             strikethrough: false,

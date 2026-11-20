@@ -578,8 +578,15 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
         child.font_size = parent.font_size;
         child.font_size_from_defaults = parent.font_size_from_defaults;
     }
-    if child.color.is_none() {
+    // OXI_STYLE_COLOR_AUTO (2026-11-20, default ON, opt-out _DISABLE): a style's own
+    // color val="auto" resets the colour its basedOn parent carries. en/technical__0043bfe0:
+    // Heading2 (color auto, sz 28) is basedOn Heading3 (6B2976 accent4); Word draws every
+    // Heading2 «Support Items / Support Purposes» black, Oxi drew them purple.
+    if child.color.is_none()
+        && !(child.color_auto && !crate::env_flag!("OXI_STYLE_COLOR_AUTO_DISABLE"))
+    {
         child.color = parent.color.clone();
+        child.color_auto = parent.color_auto;
     }
     if child.highlight.is_none() {
         child.highlight = parent.highlight.clone();
@@ -872,11 +879,16 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
             rs.has_explicit_italic = true;
         }
         "u" => {
-            rs.underline = true;
+            // OXI_STYLE_U_NOVAL (2026-11-19, default ON, opt-out _DISABLE): a style's
+            // `<w:u w:color=".."/>` with no w:val draws nothing, as on a run (S1355).
+            // en/policies__0026b7f7's Title / Body styles carry one: Word's PDF has no
+            // rule under the banner or the footer note; Oxi underlined every Body line.
+            rs.underline = crate::env_flag!("OXI_STYLE_U_NOVAL_DISABLE");
             for attr in e.attributes().flatten() {
                 if local_name(attr.key.as_ref()) == "val" {
                     let val = String::from_utf8_lossy(&attr.value).to_string();
                     if val != "none" {
+                        rs.underline = true;
                         rs.underline_style = Some(val);
                     } else {
                         rs.underline = false;
@@ -946,10 +958,10 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
                     }
                     rs.color = Some(hex);
                 } else if let Some(ref cv) = color_val {
-                    if cv != "auto" { rs.color = Some(cv.clone()); }
+                    if cv != "auto" { rs.color = Some(cv.clone()); } else { rs.color_auto = true; }
                 }
             } else if let Some(ref cv) = color_val {
-                if cv != "auto" { rs.color = Some(cv.clone()); }
+                if cv != "auto" { rs.color = Some(cv.clone()); } else { rs.color_auto = true; }
             }
         }
         // TODO: rFonts theme attributes (asciiTheme, hAnsiTheme, eastAsiaTheme) are
@@ -1630,7 +1642,8 @@ fn parse_style_definition(
                             has_run_style = true;
                         }
                         "u" => {
-                            run_style.underline = true;
+                            // OXI_STYLE_U_NOVAL: see the docDefaults arm
+                            run_style.underline = crate::env_flag!("OXI_STYLE_U_NOVAL_DISABLE");
                             has_run_style = true;
                             for attr in e.attributes().flatten() {
                                 if local_name(attr.key.as_ref()) == "val" {
@@ -1638,6 +1651,7 @@ fn parse_style_definition(
                                     if val == "none" {
                                         run_style.underline = false;
                                     } else {
+                                        run_style.underline = true;
                                         run_style.underline_style = Some(val);
                                     }
                                 }
@@ -1708,10 +1722,12 @@ fn parse_style_definition(
                                     run_style.color = Some(hex);
                                     has_run_style = true;
                                 } else if let Some(ref cv) = color_val {
-                                    if cv != "auto" { run_style.color = Some(cv.clone()); has_run_style = true; }
+                                    if cv != "auto" { run_style.color = Some(cv.clone()); } else { run_style.color_auto = true; }
+                                    has_run_style = true;
                                 }
                             } else if let Some(ref cv) = color_val {
-                                if cv != "auto" { run_style.color = Some(cv.clone()); has_run_style = true; }
+                                if cv != "auto" { run_style.color = Some(cv.clone()); } else { run_style.color_auto = true; }
+                                has_run_style = true;
                             }
                         }
                         "lang" => {

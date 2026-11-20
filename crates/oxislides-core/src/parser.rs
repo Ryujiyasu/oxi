@@ -705,6 +705,42 @@ fn take_custom_geometry(paths: &mut Vec<GeomPath>, unsupported: &mut bool) -> Op
     })
 }
 
+/// `a:quadBezTo` (control `c`, end `e`) as the cubic that traces the same
+/// curve: degree elevation puts the cubic's controls two thirds of the way
+/// from each end point toward `c`, which is exact, not an approximation.
+/// The quadratic starts at the path's current point -- the last command's end
+/// point, or after `close` the start of that subpath. With no current point
+/// (a path that opens on a curve) there is nothing to convert from.
+///
+/// Probe `curvebox` arm `quad` (tools/metrics/gen_pptx_curvebox.py): two
+/// quadratics whose controls touch the box edges; PowerPoint's picture box
+/// lands on the quadratic curve's own extremes to 0.1pt, i.e. it draws the
+/// standard quadratic Bezier.
+fn quad_as_cubic(commands: &[GeomCmd], c: (f32, f32), e: (f32, f32)) -> Option<GeomCmd> {
+    let mut cur = None;
+    let mut start = None;
+    for cmd in commands {
+        match *cmd {
+            GeomCmd::MoveTo(x, y) => {
+                cur = Some((x, y));
+                start = cur;
+            }
+            GeomCmd::LineTo(x, y) | GeomCmd::CubicTo(_, _, _, _, x, y) => cur = Some((x, y)),
+            GeomCmd::Close => cur = start,
+        }
+    }
+    let p = cur?;
+    let k = 2.0 / 3.0;
+    Some(GeomCmd::CubicTo(
+        p.0 + k * (c.0 - p.0),
+        p.1 + k * (c.1 - p.1),
+        e.0 + k * (c.0 - e.0),
+        e.1 + k * (c.1 - e.1),
+        e.0,
+        e.1,
+    ))
+}
+
 /// The per-level text styles each LAYOUT placeholder declares in its own
 /// `a:lstStyle`, keyed like the geometry map.
 ///
@@ -2120,17 +2156,18 @@ fn parse_slide(
                             commands: Vec::new(),
                         });
                     }
-                    "moveTo" | "lnTo" | "cubicBezTo" if in_cust_geom => {
+                    "moveTo" | "lnTo" | "cubicBezTo" | "quadBezTo" if in_cust_geom => {
                         let kind = match name.as_str() {
                             "moveTo" => "moveTo",
                             "lnTo" => "lnTo",
+                            "quadBezTo" => "quadBezTo",
                             _ => "cubicBezTo",
                         };
                         cg_pending = Some((kind, Vec::new()));
                     }
                     // Outside the measured vocabulary: refuse the whole geometry
                     // rather than draw an outline with a segment missing.
-                    "arcTo" | "quadBezTo" if in_cust_geom => {
+                    "arcTo" if in_cust_geom => {
                         cg_unsupported = true;
                     }
                     "close" if in_cust_geom => {
@@ -3514,7 +3551,7 @@ fn parse_slide(
                     "prstGeom" if in_prst_geom => {
                         in_prst_geom = false;
                     }
-                    "moveTo" | "lnTo" | "cubicBezTo" if in_cust_geom => {
+                    "moveTo" | "lnTo" | "cubicBezTo" | "quadBezTo" if in_cust_geom => {
                         // The points are complete only at the end tag. A command
                         // with the wrong arity is a shape we do not understand,
                         // so it poisons the whole geometry rather than silently
@@ -3535,6 +3572,14 @@ fn parse_slide(
                                     if let Some(p) = cg_cur.as_mut() {
                                         p.commands
                                             .push(GeomCmd::CubicTo(*x1, *y1, *x2, *y2, *x3, *y3));
+                                    }
+                                }
+                                ("quadBezTo", [c, e]) => {
+                                    if let Some(p) = cg_cur.as_mut() {
+                                        match quad_as_cubic(&p.commands, *c, *e) {
+                                            Some(cmd) => p.commands.push(cmd),
+                                            None => cg_unsupported = true,
+                                        }
                                     }
                                 }
                                 _ => cg_unsupported = true,
@@ -5122,7 +5167,7 @@ fn parse_inherited_shapes(
                         }
                     }
                     "spPr" if nest > 0 => in_sp_pr = false,
-                    "moveTo" | "lnTo" | "cubicBezTo" if ig_in => {
+                    "moveTo" | "lnTo" | "cubicBezTo" | "quadBezTo" if ig_in => {
                         if let Some((k, pts)) = ig_pending.take() {
                             match (k, pts.as_slice()) {
                                 ("moveTo", [(px, py)]) => {
@@ -5139,6 +5184,14 @@ fn parse_inherited_shapes(
                                     if let Some(c) = ig_cur.as_mut() {
                                         c.commands
                                             .push(GeomCmd::CubicTo(*a1, *b1, *a2, *b2, *a3, *b3));
+                                    }
+                                }
+                                ("quadBezTo", [ctl, end]) => {
+                                    if let Some(c) = ig_cur.as_mut() {
+                                        match quad_as_cubic(&c.commands, *ctl, *end) {
+                                            Some(cmd) => c.commands.push(cmd),
+                                            None => ig_bad = true,
+                                        }
                                     }
                                 }
                                 _ => ig_bad = true,
@@ -5431,17 +5484,18 @@ fn parse_inherited_shapes(
                     commands: Vec::new(),
                 });
             }
-            "moveTo" | "lnTo" | "cubicBezTo" if ig_in => {
+            "moveTo" | "lnTo" | "cubicBezTo" | "quadBezTo" if ig_in => {
                 ig_pending = Some((
                     match name.as_str() {
                         "moveTo" => "moveTo",
                         "lnTo" => "lnTo",
+                        "quadBezTo" => "quadBezTo",
                         _ => "cubicBezTo",
                     },
                     Vec::new(),
                 ));
             }
-            "arcTo" | "quadBezTo" if ig_in => ig_bad = true,
+            "arcTo" if ig_in => ig_bad = true,
             "close" if ig_in => {
                 if let Some(c) = ig_cur.as_mut() {
                     c.commands.push(GeomCmd::Close);
@@ -7232,6 +7286,28 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quad_bezier_becomes_the_same_cubic() {
+        // From (500,100) through control (1000,500) to (500,900): the cubic's
+        // controls sit two thirds of the way to the quadratic's control.
+        let cmds = [GeomCmd::MoveTo(500.0, 100.0)];
+        let Some(GeomCmd::CubicTo(a, b, c, d, e, f)) = quad_as_cubic(&cmds, (1000.0, 500.0), (500.0, 900.0)) else {
+            panic!("expected a cubic");
+        };
+        let close = |x: f32, y: f32| (x - y).abs() < 1e-3;
+        assert!(close(a, 500.0 + 2.0 / 3.0 * 500.0) && close(b, 100.0 + 2.0 / 3.0 * 400.0));
+        assert!(close(c, 500.0 + 2.0 / 3.0 * 500.0) && close(d, 900.0 - 2.0 / 3.0 * 400.0));
+        assert_eq!((e, f), (500.0, 900.0));
+        // After `close` the current point is the subpath's start.
+        let closed = [GeomCmd::MoveTo(10.0, 20.0), GeomCmd::LineTo(90.0, 20.0), GeomCmd::Close];
+        let Some(GeomCmd::CubicTo(a, b, ..)) = quad_as_cubic(&closed, (10.0, 80.0), (40.0, 40.0)) else {
+            panic!("expected a cubic");
+        };
+        assert!(close(a, 10.0) && close(b, 20.0 + 2.0 / 3.0 * 60.0));
+        // No current point: nothing to start the curve from.
+        assert!(quad_as_cubic(&[], (0.0, 0.0), (1.0, 1.0)).is_none());
+    }
 
     #[test]
     fn test_parse_presentation_slides() {

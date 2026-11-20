@@ -1,56 +1,79 @@
 // Oxi Office editor — opens .docx / .xlsx / .pptx in a webview that runs the
-// same WebAssembly engine as the browser editor, and saves the edits back.
-//
-// The document bytes are read by VS Code and handed to the webview. On save,
-// the page builds the edited file the way it does for its download button
-// (the changed text written into the original package for .docx and .pptx,
-// the changed cells for .xlsx), hands the bytes back, and VS Code writes them.
-// Nothing leaves the machine.
+// same WebAssembly engine as the browser demo, and saves edits back to the
+// file. The document bytes are read and written by VS Code; nothing leaves the
+// machine.
 
 const vscode = require('vscode');
 
+// The id from the first (view-only) release is kept so that editor associations
+// users already set keep working.
 const VIEW_TYPE = 'oxi.officeViewer';
 
-/** A document is its bytes on disk; the page holds the edits until a save. */
+/** A save that waits longer than this is reported as failed. */
+const SAVE_TIMEOUT_MS = 120000;
+
+/**
+ * The file as the webview page last received it. The page applies its edits
+ * to these bytes, so a save with no edits writes them back unchanged.
+ */
 class OxiDocument {
   constructor(uri, bytes) {
     this.uri = uri;
     this.bytes = bytes;
     this.panel = null;
     this.pending = new Map();
-    this.nextId = 1;
+    this.nextRequest = 1;
   }
 
-  /** Show `bytes` as the document in its webview (on open, after a save or a revert). */
-  show(bytes) {
-    this.panel?.webview.postMessage({
+  dispose() {
+    for (const { reject } of this.pending.values()) {
+      reject(new Error('the editor was closed'));
+    }
+    this.pending.clear();
+  }
+
+  /** Send the current bytes to the page, which lays the document out again. */
+  show() {
+    if (!this.panel) return;
+    this.panel.webview.postMessage({
       type: 'oxi:open',
       name: basename(this.uri),
-      data: Buffer.from(bytes).toString('base64'),
+      // Webview messages are JSON, so the bytes travel as base64 rather than
+      // as a Uint8Array turned inside out into an object of indices.
+      data: Buffer.from(this.bytes).toString('base64'),
     });
   }
 
-  /** The edited file from the page, or null when nothing has changed. */
-  edited() {
-    if (!this.panel) return Promise.resolve(null);
-    const id = this.nextId++;
+  /** Ask the page for the file with its edits applied. */
+  requestBytes() {
+    if (!this.panel) return Promise.resolve(this.bytes);
+    const id = this.nextRequest++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error('the editor did not produce the file in time'));
+      }, SAVE_TIMEOUT_MS);
+      this.pending.set(id, {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (err) => { clearTimeout(timer); reject(err); },
+      });
       this.panel.webview.postMessage({ type: 'oxi:save', id });
     });
   }
 
-  answer(msg) {
-    const waiting = this.pending.get(msg.id);
-    if (!waiting) return;
+  /** The page's answer to requestBytes. */
+  settle(msg) {
+    const waiter = this.pending.get(msg.id);
+    if (!waiter) return;
     this.pending.delete(msg.id);
-    if (msg.error) waiting.reject(new Error(msg.error));
-    else waiting.resolve(msg.unchanged ? null : { bytes: Buffer.from(msg.data, 'base64'), warning: msg.warning });
-  }
-
-  dispose() {
-    for (const { reject } of this.pending.values()) reject(new Error('the editor was closed'));
-    this.pending.clear();
+    if (msg.error) {
+      waiter.reject(new Error(msg.error));
+    } else if (msg.data) {
+      waiter.resolve(new Uint8Array(Buffer.from(msg.data, 'base64')));
+    } else {
+      // No edits: the file is the one the page was given.
+      waiter.resolve(this.bytes);
+    }
   }
 }
 
@@ -58,14 +81,12 @@ class OxiEditorProvider {
   constructor(context) {
     this.context = context;
     this.changes = new vscode.EventEmitter();
-    // VS Code marks the tab as changed when this fires, and asks to save on close.
     this.onDidChangeCustomDocument = this.changes.event;
   }
 
   async openCustomDocument(uri, openContext) {
-    // After a crash or a restart with unsaved changes, VS Code hands back the backup.
-    const from = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
-    const bytes = await vscode.workspace.fs.readFile(from);
+    const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
+    const bytes = await vscode.workspace.fs.readFile(source);
     return new OxiDocument(uri, bytes);
   }
 
@@ -88,47 +109,69 @@ class OxiEditorProvider {
     }
 
     document.panel = panel;
-    panel.onDidDispose(() => { if (document.panel === panel) document.panel = null; });
+    panel.onDidDispose(() => {
+      if (document.panel === panel) document.panel = null;
+    });
     panel.webview.html = withWebviewHead(html, panel.webview, mediaRoot);
 
     panel.webview.onDidReceiveMessage((msg) => {
       if (!msg) return;
-      // The page tells us when its WebAssembly module is up; only then are the
-      // bytes worth sending.
-      if (msg.type === 'oxi:ready') document.show(document.bytes);
-      if (msg.type === 'oxi:edit') this.changes.fire({ document });
-      if (msg.type === 'oxi:saved') document.answer(msg);
-      if (msg.type === 'oxi:error') vscode.window.showErrorMessage(`Oxi: ${msg.message}`);
+      switch (msg.type) {
+        // The page tells us when its WebAssembly module is up; only then are
+        // the bytes worth sending.
+        case 'oxi:ready':
+          document.show();
+          break;
+        case 'oxi:edit':
+          this.changes.fire({ document });
+          break;
+        case 'oxi:saved':
+          document.settle(msg);
+          break;
+        case 'oxi:requestSave':
+          vscode.commands.executeCommand('workbench.action.files.save');
+          break;
+        case 'oxi:error':
+          vscode.window.showErrorMessage(`Oxi: ${msg.message}`);
+          break;
+      }
     });
   }
 
   async saveCustomDocument(document) {
-    const edited = await document.edited();
-    if (!edited) return;
-    await vscode.workspace.fs.writeFile(document.uri, edited.bytes);
-    document.bytes = edited.bytes;
-    if (edited.warning) vscode.window.showWarningMessage(`Oxi: ${edited.warning}`);
-    // The saved file is the new starting point for the next edits.
-    document.show(document.bytes);
+    await this.writeTo(document, document.uri);
   }
 
   async saveCustomDocumentAs(document, destination) {
-    const edited = await document.edited();
-    await vscode.workspace.fs.writeFile(destination, edited ? edited.bytes : document.bytes);
+    await this.writeTo(document, destination);
+  }
+
+  async writeTo(document, target) {
+    const bytes = await document.requestBytes();
+    await vscode.workspace.fs.writeFile(target, bytes);
   }
 
   async revertCustomDocument(document) {
     document.bytes = await vscode.workspace.fs.readFile(document.uri);
-    document.show(document.bytes);
+    document.show();
   }
 
   async backupCustomDocument(document, context) {
-    const edited = await document.edited().catch(() => null);
-    await vscode.workspace.fs.writeFile(context.destination, edited ? edited.bytes : document.bytes);
+    let bytes;
+    try {
+      bytes = await document.requestBytes();
+    } catch {
+      bytes = document.bytes;
+    }
+    await vscode.workspace.fs.writeFile(context.destination, bytes);
     return {
       id: context.destination.toString(),
       delete: async () => {
-        try { await vscode.workspace.fs.delete(context.destination); } catch { /* already gone */ }
+        try {
+          await vscode.workspace.fs.delete(context.destination);
+        } catch {
+          // Already gone.
+        }
       },
     };
   }
@@ -156,9 +199,17 @@ function withWebviewHead(html, webview, mediaRoot) {
     `connect-src ${webview.cspSource} data: blob:`,
   ].join('; ');
 
+  // VS Code owns the file, so the browser page's ways of picking, leaving and
+  // downloading a document are hidden from the first paint, before the engine
+  // has loaded. Saving is VS Code's own (Ctrl+S, the title bar's save button).
+  const hidden = [
+    '#landingHeader', '#dropZone', '#sampleButtons', '.side-door', '#toolbar',
+  ].join(', ');
+
   const head =
     `<base href="${base}/">\n` +
-    `<meta http-equiv="Content-Security-Policy" content="${csp}">\n`;
+    `<meta http-equiv="Content-Security-Policy" content="${csp}">\n` +
+    `<style>${hidden} { display: none !important; }</style>\n`;
 
   if (html.includes('<head>')) {
     return html.replace('<head>', `<head>\n${head}`);

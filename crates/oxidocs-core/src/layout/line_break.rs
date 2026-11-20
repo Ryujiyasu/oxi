@@ -42,6 +42,22 @@ impl<'a> LineBreaker<'a> {
         self.natural_autospace_after(ch, style, para, size, cs)
     }
 
+    /// The origin of the default tab stops for a line that starts at `line_start_abs`
+    /// (measured from the margin): the margin itself, except below compatibility
+    /// mode 15 on a line shifted into a lane beside a float (OXI_LEGACY_LANE_TAB).
+    fn legacy_lane_tab_origin(&self, line_start_abs: f32) -> f32 {
+        let legacy = self.compat_mode < 15 || !self.compat_mode_explicit;
+        if legacy
+            && self.s1636_lane_shift.get() > 0.01
+            && !crate::env_flag!("OXI_S1636_DISABLE")
+            && !crate::env_flag!("OXI_LEGACY_LANE_TAB_DISABLE")
+        {
+            line_start_abs
+        } else {
+            0.0
+        }
+    }
+
     pub(super) fn break_into_lines_with_grid(
         &self,
         fragments: &[(&str, &RunStyle, Option<FieldType>, usize, usize)],
@@ -4628,8 +4644,17 @@ impl<'a> LineBreaker<'a> {
                                 (None, Some(imp)) => (imp, TabStopAlignment::Left),
                                 (None, None) => {
                                     let tab_stop = self.default_tab_stop;
+                                    // OXI_LEGACY_LANE_TAB (2026-11-19, default ON, opt-out _DISABLE):
+                                    // below compatibility mode 15 the default stops of a line set
+                                    // beside a float count from that line's start, not from the
+                                    // margin (S1636 holds for mode 15). `_pb_float_tab_gen.py`
+                                    // (left wrapSquare picture 20..95pt wide, «<tab/>Lead ab<tab/>Tail»):
+                                    // compat none / 14 -> Lead at edge + 36, Tail at edge + 108 for
+                                    // all five widths; compat 15 -> 108 / 144 / 180 from the margin.
+                                    // en/educational__00201982 (no compat): Word 192.05 = 156.02 + 36.
+                                    let origin = self.legacy_lane_tab_origin(line_start_abs);
                                     (
-                                        ((abs_pos / tab_stop).floor() + 1.0) * tab_stop,
+                                        (((abs_pos - origin) / tab_stop).floor() + 1.0) * tab_stop + origin,
                                         TabStopAlignment::Left,
                                     )
                                 }
@@ -4829,7 +4854,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                                     Some(ts) => (ts.position, ts.alignment),
                                     None => {
                                         let t = self.default_tab_stop;
-                                        (((abs2 / t).floor() + 1.0) * t, TabStopAlignment::Left)
+                                        let origin = self.legacy_lane_tab_origin(abs2);
+                                        ((((abs2 - origin) / t).floor() + 1.0) * t + origin, TabStopAlignment::Left)
                                     }
                                 };
                                 next_pos = np;

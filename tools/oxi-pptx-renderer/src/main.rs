@@ -2281,6 +2281,88 @@ fn picfillbox_on() -> bool {
     std::env::var("OXI_PICFILLBOX_DISABLE").is_err()
 }
 
+/// S-CURVEBOX: the picture of a custom geometry fills its drawn outline's
+/// bounding box unless this is set (then the shape's box, as before).
+#[cfg(windows)]
+fn curvebox_on() -> bool {
+    std::env::var("OXI_CURVEBOX_DISABLE").is_err()
+}
+
+/// The bounding box, in the shape's own unrotated frame (pt from its top-left),
+/// of the filled paths of a custom geometry as DRAWN: every line vertex plus
+/// each cubic's end points and the extremes of the curve between them. A
+/// geometry with no filled path gives None.
+#[cfg(windows)]
+fn geom_outline_bounds(
+    sh: &Shape,
+    geom: &oxislides_core::ir::CustomGeometry,
+) -> Option<(f32, f32, f32, f32)> {
+    use oxislides_core::ir::GeomCmd;
+    let (w, h) = (sh.width.max(0.0) as f64, sh.height.max(0.0) as f64);
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    let mut add = |x: f64, y: f64| {
+        x0 = x0.min(x);
+        y0 = y0.min(y);
+        x1 = x1.max(x);
+        y1 = y1.max(y);
+    };
+    // Parameters in (0, 1) where one coordinate of a cubic is extreme.
+    let extremes = |p0: f64, p1: f64, p2: f64, p3: f64| -> Vec<f64> {
+        let (a, b, c) = (-p0 + 3.0 * p1 - 3.0 * p2 + p3, 2.0 * (p0 - 2.0 * p1 + p2), p1 - p0);
+        let mut roots = Vec::new();
+        if a.abs() < 1e-12 {
+            if b.abs() > 1e-12 {
+                roots.push(-c / b);
+            }
+        } else {
+            let d = b * b - 4.0 * a * c;
+            if d >= 0.0 {
+                let s = d.sqrt();
+                roots.push((-b + s) / (2.0 * a));
+                roots.push((-b - s) / (2.0 * a));
+            }
+        }
+        roots.into_iter().filter(|t| *t > 0.0 && *t < 1.0).collect()
+    };
+    let mut any = false;
+    for path in geom.paths.iter().filter(|p| !p.fill_none && !p.commands.is_empty()) {
+        let sx = if path.w > 0.0 { w / path.w as f64 } else { 1.0 / 12700.0 };
+        let sy = if path.h > 0.0 { h / path.h as f64 } else { 1.0 / 12700.0 };
+        let mut cur = (0.0f64, 0.0f64);
+        for cmd in &path.commands {
+            match *cmd {
+                GeomCmd::MoveTo(x, y) | GeomCmd::LineTo(x, y) => {
+                    cur = (x as f64 * sx, y as f64 * sy);
+                    add(cur.0, cur.1);
+                    any = true;
+                }
+                GeomCmd::CubicTo(ax, ay, bx, by, ex, ey) => {
+                    let (p1, p2, p3) = (
+                        (ax as f64 * sx, ay as f64 * sy),
+                        (bx as f64 * sx, by as f64 * sy),
+                        (ex as f64 * sx, ey as f64 * sy),
+                    );
+                    let at = |t: f64, a: f64, b: f64, c: f64, d: f64| {
+                        let u = 1.0 - t;
+                        u * u * u * a + 3.0 * u * u * t * b + 3.0 * u * t * t * c + t * t * t * d
+                    };
+                    add(p3.0, p3.1);
+                    for t in extremes(cur.0, p1.0, p2.0, p3.0) {
+                        add(at(t, cur.0, p1.0, p2.0, p3.0), at(t, cur.1, p1.1, p2.1, p3.1));
+                    }
+                    for t in extremes(cur.1, p1.1, p2.1, p3.1) {
+                        add(at(t, cur.0, p1.0, p2.0, p3.0), at(t, cur.1, p1.1, p2.1, p3.1));
+                    }
+                    cur = p3;
+                    any = true;
+                }
+                GeomCmd::Close => {}
+            }
+        }
+    }
+    any.then_some((x0 as f32, y0 as f32, x1 as f32, y1 as f32))
+}
+
 /// The box a PICTURE is poured into: the bounding box of the geometry PATH,
 /// which is not always the shape's own box.
 ///
@@ -2312,6 +2394,18 @@ fn picture_fill_box(sh: &Shape) -> (f32, f32, f32, f32) {
     let full = (sh.x, sh.y, sh.width, sh.height);
     if !picfillbox_on() || sh.rotation != 0.0 || sh.flip_h || sh.flip_v {
         return full;
+    }
+    // S-CURVEBOX: a custom geometry's picture is stretched over the bounding
+    // box of the outline it DRAWS -- curve extremes, not control points, and
+    // not the xfrm box. Probe `curvebox` (cubic, quadratic, straight, each
+    // with and without a negative fillRect) lands on that box to 0.1pt; d50
+    // s9, blind 46 s18 and 31 s2 agree to 1-5px at 150dpi.
+    if curvebox_on() {
+        if let Some((x0, y0, x1, y1)) = drawable_geometry(sh).and_then(|g| geom_outline_bounds(sh, g)) {
+            if x1 - x0 > 0.0 && y1 - y0 > 0.0 {
+                return (sh.x + x0, sh.y + y0, x1 - x0, y1 - y0);
+            }
+        }
     }
     let pie = matches!(sh.shape_type.as_deref(), Some("pie"));
     if !pie && !matches!(sh.shape_type.as_deref(), Some("chord")) {
@@ -3719,6 +3813,12 @@ fn skipwhole_on() -> bool {
     std::env::var("OXI_SKIPWHOLE_DISABLE").is_err()
 }
 
+/// S-PAGECLIP: a turned or mirrored picture is resampled only over the page,
+/// so one that a negative fillRect blows far past it keeps its flip.
+fn pageclip_on() -> bool {
+    std::env::var("OXI_PAGECLIP_DISABLE").is_err()
+}
+
 /// S-ANCHORCTR: `a:bodyPr/@anchorCtr` centres the text block; setting this
 /// draws the box as if it were absent.
 fn anchorctr_on() -> bool {
@@ -4767,6 +4867,7 @@ fn transform_picture(
     angle_deg: f64,
     flip_h: bool,
     flip_v: bool,
+    page: (i32, i32),
 ) -> Option<(image::RgbaImage, i32, i32)> {
     let (sx0, sy0, sw, sh) = src;
     let (dx, dy, dw, dh) = dest;
@@ -4784,10 +4885,20 @@ fn transform_picture(
         rotate(dx + dw, dy + dh),
         rotate(dx, dy + dh),
     ];
-    let min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min).floor() as i32;
-    let min_y = corners.iter().map(|p| p.1).fold(f64::INFINITY, f64::min).floor() as i32;
-    let max_x = corners.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max).ceil() as i32;
-    let max_y = corners.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max).ceil() as i32;
+    let mut min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min).floor() as i32;
+    let mut min_y = corners.iter().map(|p| p.1).fold(f64::INFINITY, f64::min).floor() as i32;
+    let mut max_x = corners.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max).ceil() as i32;
+    let mut max_y = corners.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max).ceil() as i32;
+    // Only the part on the page can be seen. A picture a negative fillRect
+    // blows past the page (d61 s2's flipped full-slide backdrop: 9078px
+    // square at 3x supersampling) would otherwise exceed the allocation guard
+    // below and fall back to the unflipped blit (S-PAGECLIP).
+    if pageclip_on() {
+        min_x = min_x.max(0);
+        min_y = min_y.max(0);
+        max_x = max_x.min(page.0);
+        max_y = max_y.min(page.1);
+    }
     let (out_w, out_h) = ((max_x - min_x) as i64, (max_y - min_y) as i64);
     // A negative fillRect can blow the destination up to many times the page;
     // refuse rather than allocate unboundedly (the caller keeps its old path).
@@ -6258,6 +6369,8 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
         let out_h = (pres.slide_height as f64 * dpi as f64 / 72.0).round() as u32;
         let w = (pres.slide_width as f64 * scale).round() as i32;
         let h = (pres.slide_height as f64 * scale).round() as i32;
+        // The page in device pixels, under a name no shape-level `w` shadows.
+        let page_px = (w, h);
 
         unsafe {
             let screen_dc = GetDC(HWND(std::ptr::null_mut()));
@@ -13620,6 +13733,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                         angle,
                                         sh.flip_h,
                                         sh.flip_v,
+                                        page_px,
                                     )
                                 } else {
                                     None

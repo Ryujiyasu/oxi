@@ -2240,6 +2240,12 @@ impl FontMetricsRegistry {
             return metrics.char_width_pt(c, font_size);
         }
 
+        // OXI_LATIN_SYMBOL_WIDTH: a Latin face's own symbol advance before the CJK fallback
+        if latin_face_symbol(c) && metrics.units_per_em != 256 && !is_cjk_font_family(&metrics.family) {
+            if let Some(w) = self.runtime_width_fallback(c, font_size, metrics) {
+                return w;
+            }
+        }
         // CJK character + Latin font → GDI fallback to MS UI Gothic
         if is_cjk_or_symbol(c) && !is_cjk_font_family(&metrics.family) {
             if let Some(fallback) = self
@@ -2486,7 +2492,7 @@ impl FontMetricsRegistry {
             && !metrics.char_widths.is_empty()
             && metrics.units_per_em != 256
             && !is_cjk_font_family(&metrics.family)
-            && !is_fullwidth(c)
+            && (!is_fullwidth(c) || latin_face_symbol(c))
         {
             if let Some(w) = self.runtime_width_fallback(c, font_size, metrics) {
                 return w;
@@ -3133,6 +3139,16 @@ pub fn s1416_jis_fullwidth(c: char) -> bool {
 /// The curly quotes U+2018 / U+2019 / U+201C / U+201D.
 pub fn is_curly_quote(c: char) -> bool {
     matches!(c, '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}')
+}
+
+/// OXI_LATIN_SYMBOL_WIDTH (2026-11-19, default ON, opt-out _DISABLE): letterlike symbols,
+/// arrows and mathematical operators (U+2100..U+22FF) set in a Latin face take that face's
+/// own advance. `is_fullwidth` counts them full-width for the CJK faces, and a Latin face
+/// whose measured table lacks them fell through to the MS UI Gothic em: en/reference__0029c1c1
+/// «AHI ≥ 30/h» (Book Antiqua 12): Word steps ≥ 6.59, Oxi 12.0, and every such line broke
+/// a word early.  Only when the installed face itself carries the glyph.
+fn latin_face_symbol(c: char) -> bool {
+    matches!(c as u32, 0x2100..=0x22FF) && !crate::env_flag!("OXI_LATIN_SYMBOL_WIDTH_DISABLE")
 }
 
 pub fn is_fullwidth(ch: char) -> bool {

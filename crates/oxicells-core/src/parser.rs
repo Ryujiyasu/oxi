@@ -2445,6 +2445,33 @@ fn conditional_from(
 ///
 /// The same part holds the notes, which is why the two are read together: a
 /// sheet can name a legacy drawing and have no notes in it at all.
+#[cfg(test)]
+mod form_control_caption_tests {
+    #[test]
+    fn native_textbox_attributes_are_not_part_of_the_caption() {
+        let vml = r#"<xml><v:shape id="BoundButton"><v:textbox style='mso-direction-alt:auto' o:singleclick="f"><div style='text-align:center'><font face="Yu Gothic">BoundButton</font></div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>0,26,3,11,3,10,5,1</x:Anchor><x:FmlaMacro>Module1.Probe</x:FmlaMacro></x:ClientData></v:shape></xml>"#;
+        let controls = super::parse_form_controls(vml);
+        assert_eq!(controls.len(), 1);
+        assert_eq!(controls[0].text.as_deref(), Some("BoundButton"));
+    }
+
+    #[test]
+    fn native_caption_line_breaks_spaceruns_tabs_and_entities_are_preserved() {
+        for (html, expected) in [
+            ("<font>Line\r\n   1<br />\r\n      Line 2</font>", "Line 1\nLine 2"),
+            ("<font><span style='mso-spacerun:yes'>&#160; </span>A<span style='mso-spacerun:yes'>&#160;\r\n   </span>B<span style='mso-spacerun:yes'>&#160; </span></font>", "  A  B  "),
+            ("<font>A\tB</font>", "A\tB"),
+            ("<font>A &amp;amp; &lt;B&gt;</font>", "A &amp; <B>"),
+            ("<font>A&nbsp;B</font>", "A\u{a0}B"),
+            ("<font><span style='mso-spacerun:yes'>&#160;</span>A <br />\r\n <span style='mso-spacerun:yes'>&#160;</span>B </font>", " A \n B "),
+        ] {
+            let vml = format!("<xml><v:shape id='Caption'><v:textbox style='mso-direction-alt:auto'>\r\n <div>{html}</div>\r\n </v:textbox><x:ClientData ObjectType=\"Button\"><x:Anchor>0,0,0,0,2,0,1,0</x:Anchor></x:ClientData></v:shape></xml>");
+            let controls = super::parse_form_controls(&vml);
+            assert_eq!(controls[0].text.as_deref(), Some(expected));
+        }
+    }
+}
+
 fn parse_form_controls(vml: &str) -> Vec<crate::ir::FormControl> {
     use crate::ir::{Anchor, FormControl};
     let mut held = Vec::new();
@@ -2486,23 +2513,97 @@ fn parse_form_controls(vml: &str) -> Vec<crate::ir::FormControl> {
         };
         // The caption is HTML inside the shape's text box: a div, sometimes a
         // font, and the words between them.
-        let text = shape
-            .split("<v:textbox")
-            .nth(1)
-            .and_then(|rest| rest.split("</v:textbox>").next())
-            .map(|held| {
-                let mut out = String::new();
-                let mut inside_tag = false;
-                for letter in held.chars() {
-                    match letter {
-                        '<' => inside_tag = true,
-                        '>' => inside_tag = false,
-                        _ if !inside_tag => out.push(letter),
-                        _ => {}
+        let text = shape.find("<v:textbox").and_then(|at| {
+            let rest = &shape[at..];
+            let end = rest.find("</v:textbox>")? + "</v:textbox>".len();
+            let mut reader = Reader::from_str(&rest[..end]);
+            let mut out = String::new();
+            let mut pending_space = false;
+            let mut pending_wrap = false;
+            let mut spaceruns = Vec::new();
+            loop {
+                let event = reader.read_event().ok()?;
+                let empty = matches!(event, Event::Empty(_));
+                match event {
+                    Event::Start(start) | Event::Empty(start) => {
+                        if start.local_name().as_ref() == b"br" {
+                            if pending_space && !pending_wrap && !out.is_empty() {
+                                out.push(' ');
+                            }
+                            pending_space = false;
+                            pending_wrap = false;
+                            out.push('\n');
+                        } else if !empty && start.local_name().as_ref() == b"span" {
+                            let preserve = start.attributes().filter_map(Result::ok).any(|attr| {
+                                attr.key.as_ref() == b"style"
+                                    && std::str::from_utf8(attr.value.as_ref()).is_ok_and(|style| {
+                                        style.split(';').any(|item| {
+                                            item.split_once(':').is_some_and(|(name, value)| {
+                                                name.trim().eq_ignore_ascii_case("mso-spacerun")
+                                                    && value.trim().eq_ignore_ascii_case("yes")
+                                            })
+                                        })
+                                    })
+                            });
+                            spaceruns.push(preserve || spaceruns.last().copied().unwrap_or(false));
+                        }
                     }
+                    Event::End(end) if end.local_name().as_ref() == b"span" => {
+                        if spaceruns.pop().unwrap_or(false) && pending_space {
+                            out.push(' ');
+                            pending_space = false;
+                            pending_wrap = false;
+                        }
+                    }
+                    Event::End(end) if matches!(end.local_name().as_ref(), b"font" | b"div" | b"p") => {
+                        if pending_space && !pending_wrap && !out.is_empty() {
+                            out.push(' ');
+                        }
+                        pending_space = false;
+                        pending_wrap = false;
+                    }
+                    Event::Text(text) => {
+                        // Excel wraps its HTML source with indentation, but
+                        // uses br and spacerun spans for actual caption whitespace.
+                        let text = text.unescape_with(|entity| {
+                            if entity == "nbsp" {
+                                Some("\u{a0}")
+                            } else {
+                                quick_xml::escape::resolve_predefined_entity(entity)
+                            }
+                        }).ok()?;
+                        for ch in text.chars() {
+                            if matches!(ch, ' ' | '\r' | '\n') {
+                                pending_space = true;
+                                pending_wrap |= matches!(ch, '\r' | '\n');
+                            } else {
+                                if pending_space && !out.is_empty() && !out.ends_with('\n') {
+                                    out.push(' ');
+                                }
+                                pending_space = false;
+                                pending_wrap = false;
+                                out.push(if ch == '\u{a0}' && spaceruns.last().copied().unwrap_or(false) {
+                                    ' '
+                                } else {
+                                    ch
+                                });
+                            }
+                        }
+                    }
+                    Event::CData(text) => {
+                        if pending_space && !out.is_empty() && !out.ends_with('\n') {
+                            out.push(' ');
+                        }
+                        pending_space = false;
+                        pending_wrap = false;
+                        out.push_str(std::str::from_utf8(text.as_ref()).ok()?);
+                    }
+                    Event::Eof => break,
+                    _ => {}
                 }
-                out.split_whitespace().collect::<Vec<_>>().join(" ")
-            })
+            }
+            Some(out)
+        })
             .filter(|held| !held.is_empty());
         held.push(FormControl {
             kind: kind.to_string(),

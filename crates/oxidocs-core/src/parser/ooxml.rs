@@ -41,6 +41,11 @@ pub struct OoxmlParser {
 
 /// Context passed through parsing functions for resource resolution
 thread_local! {
+    /// OXI_RUNIN_INDENT: the document declares compatibility mode 15 or later.
+    static RUNIN_COMPAT15: std::cell::Cell<bool> = std::cell::Cell::new(true);
+}
+
+thread_local! {
     /// OXI_BR_CLEAR: set by a clearing text-wrapping break inside the paragraph
     /// being parsed (saved and restored around nested paragraphs).
     static BR_CLEAR_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -1005,6 +1010,11 @@ impl OoxmlParser {
         self.parse_font_table(&mut styles);
         let numbering = self.parse_numbering()?;
         let ctx = self.build_context_with_theme(numbering, theme, &styles)?;
+        {
+            // OXI_RUNIN_INDENT: the run-in join below needs the compatibility mode.
+            let (cm, cme) = self.parse_compat_mode();
+            RUNIN_COMPAT15.with(|c| c.set(cm >= 15 && cme));
+        }
         let sections = self.parse_document_xml(&ctx, &styles)?;
         let metadata = self.parse_metadata();
         let adjust_line_height_in_table = self.parse_adjust_line_height_in_table();
@@ -1342,6 +1352,15 @@ impl OoxmlParser {
                     endnotes_list.push(Footnote {
                         automatic_numbering: true,
                         number: u32::MAX - 2,
+                        blocks: blocks.clone(),
+                    });
+                }
+                // OXI_ENDNOTE_SEP_LINE: the separator paragraph itself, measured by the
+                // layout (sentinel u32::MAX, filtered out of rendering like the others).
+                if let Some(blocks) = ctx.endnotes.get("__sep__") {
+                    endnotes_list.push(Footnote {
+                        automatic_numbering: true,
+                        number: u32::MAX,
                         blocks: blocks.clone(),
                     });
                 }
@@ -3045,7 +3064,32 @@ fn parse_body(
                                     // nyserda joined 'Section 4.01' line at x=126 =
                                     // margin + para1's firstLine=720; para2's pPr wins
                                     // for everything else).
-                                    if joined.style.indent_first_line.is_none() {
+                                    // OXI_RUNIN_INDENT (2026-11-20, default ON, opt-out _DISABLE): the
+                                    // joined first line starts where the HIDDEN paragraph's first line
+                                    // does; the later lines sit at the hidden paragraph's left indent in
+                                    // compatibility mode 15 and at the continuation's below it.
+                                    // `_pb_specvanish_ind_gen.py` (heading ind none / l720 h360 / l1440
+                                    // fl360 x continuation none / l360 / l1080 h360): first line 72 / 90
+                                    // / 162 in every arm; second line 72 / 108 / 144 (mode 15) and the
+                                    // continuation's 72 / 90 / 126 (mode 14 and none). Oxi took the
+                                    // continuation's left with the heading's first-line offset (54..126).
+                                    // en/technical__00501ca3 «S.2.1. Provision for Sealing.» (Heading4
+                                    // l720 h360 into ind l360, mode 15): Word 90 then 108.
+                                    let runin_chars = prev.style.indent_left_chars.is_some()
+                                        || prev.style.indent_first_line_chars.is_some()
+                                        || joined.style.indent_left_chars.is_some()
+                                        || joined.style.indent_first_line_chars.is_some();
+                                    if !runin_chars && !crate::env_flag!("OXI_RUNIN_INDENT_DISABLE") {
+                                        let h_left = prev.style.indent_left.unwrap_or(0.0);
+                                        let first_pos = h_left + prev.style.indent_first_line.unwrap_or(0.0);
+                                        let cont_left = if RUNIN_COMPAT15.with(|c| c.get()) {
+                                            h_left
+                                        } else {
+                                            joined.style.indent_left.unwrap_or(0.0)
+                                        };
+                                        joined.style.indent_left = Some(cont_left);
+                                        joined.style.indent_first_line = Some(first_pos - cont_left);
+                                    } else if joined.style.indent_first_line.is_none() {
                                         joined.style.indent_first_line =
                                             prev.style.indent_first_line;
                                     }
@@ -3849,6 +3893,11 @@ fn preceding_page_boundaries(runs: &[Run]) -> usize {
 const PTAB_LEFT_MARK: char = '\u{F8F0}';
 const PTAB_RIGHT_SENTINEL: f32 = 1.0e6;
 const PTAB_CENTER_SENTINEL: f32 = 2.0e6;
+/// OXI_PTAB_ONLY: marks a paragraph whose tabs are all positional (removed on resolve).
+const PTAB_ONLY_SENTINEL: f32 = 3.0e6;
+thread_local! {
+    static PARA_PLAIN_TAB: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 thread_local! {
     static PTAB_STOPS: std::cell::RefCell<Vec<TabStopAlignment>> = std::cell::RefCell::new(Vec::new());
 }
@@ -3859,10 +3908,14 @@ fn resolve_ptab_sentinels(document: &mut Document) {
         for block in blocks.iter_mut() {
             match block {
                 Block::Paragraph(p) => {
+                    if p.style.tab_stops.iter().any(|t| t.position >= PTAB_ONLY_SENTINEL) {
+                        p.style.tab_stops.retain(|t| t.position >= PTAB_RIGHT_SENTINEL && t.position < PTAB_ONLY_SENTINEL);
+                    }
                     if p.style.tab_stops.iter().any(|t| t.position >= PTAB_RIGHT_SENTINEL) {
                         let width = (column - p.style.indent_left.unwrap_or(0.0)
                             - p.style.indent_right.unwrap_or(0.0)).max(0.0);
                         for t in p.style.tab_stops.iter_mut() {
+                            if t.position >= PTAB_ONLY_SENTINEL { continue; }
                             if t.position >= PTAB_CENTER_SENTINEL { t.position = width * 0.5; }
                             else if t.position >= PTAB_RIGHT_SENTINEL { t.position = width; }
                         }
@@ -4269,7 +4322,9 @@ fn parse_paragraph_with_inline_images_impl(
                                             && tp.v_relative.as_deref() == Some("paragraph")
                                     })
                                 {
-                                    run.style.inline_object_extent = Some((tb.width, tb.height));
+                                    // OXI_INLINE_GROUP_EFFECT: the line holds the effect box.
+                                    let eff = tb.position.as_ref().map_or(0.0, |p| p.eff_t + p.eff_b);
+                                    run.style.inline_object_extent = Some((tb.width, tb.height + eff));
                                     run.style.inline_group_object = tb.children_on_line
                                         && std::env::var_os("OXI_INLINE_GROUP_LINE_DISABLE").is_none();
                                 }
@@ -5326,7 +5381,9 @@ fn parse_paragraph_with_inline_images_impl(
             if !para_rs.east_asia_hint && doc_rs.east_asia_hint {
                 para_rs.east_asia_hint = true;
             }
-            if para_rs.color.is_none() {
+            if para_rs.color.is_none()
+                && !(para_rs.color_auto && !crate::env_flag!("OXI_STYLE_COLOR_AUTO_DISABLE"))
+            {
                 para_rs.color = doc_rs.color.clone();
             }
             // S547 (2026-06-12): w:kern gates the yakumono pair halving — must
@@ -5903,7 +5960,18 @@ fn parse_paragraph_with_inline_images_impl(
 
     // OXI_PTAB: the positional stops of this paragraph (positions resolved per
     // section in resolve_ptab_sentinels), and its left ptabs.
-    for alignment in PTAB_STOPS.with(|v| std::mem::take(&mut *v.borrow_mut())) {
+    let ptab_plain = PARA_PLAIN_TAB.with(|c| c.replace(false));
+    let ptab_list = PTAB_STOPS.with(|v| std::mem::take(&mut *v.borrow_mut()));
+    // OXI_PTAB_ONLY (2026-11-19, default ON, opt-out _DISABLE): a positional tab goes
+    // straight to its own place; the paragraph's ordinary stops do not catch it.
+    // en/administrative__001eef60's footers «<w:ptab alignment=right/>Page N» (Footer
+    // style: centre 4680, right 9360): Word sets «Page N» right-aligned at the
+    // margin (518.5); the '\t' took the centre stop first (277). Scope: every tab of
+    // the paragraph is positional.
+    if !ptab_list.is_empty() && !ptab_plain && std::env::var_os("OXI_PTAB_ONLY_DISABLE").is_none() {
+        style.tab_stops.push(TabStop { position: PTAB_ONLY_SENTINEL, alignment: TabStopAlignment::Left, leader: None, clear: false });
+    }
+    for alignment in ptab_list {
         style.tab_stops.push(TabStop {
             position: if alignment == TabStopAlignment::Center { PTAB_CENTER_SENTINEL } else { PTAB_RIGHT_SENTINEL },
             alignment,
@@ -6185,8 +6253,14 @@ fn parse_paragraph_with_inline_images_impl(
         // drawing at its run position lets the common line model account for
         // text descent and explicit breaks. Empty/tab-only hosts retain their
         // image-only line model, which has no visible text descent.
+        // OXI_HDR_TAB_IMAGE (2026-11-19, default ON, opt-out _DISABLE): a tab before the
+        // picture positions it too. en/administrative__001eef60's default header
+        // «<tab/>[logo]» (Header style centre 4680 / right 9360): Word draws the logo at
+        // 256..320 on every page after the first; the tab-only host fell between the
+        // image-only and the visible-text routes and the logo was dropped.
         || (preserve_header_image_host
-            && runs.iter().any(|run| run.text.chars().any(|c| !c.is_whitespace()))
+            && runs.iter().any(|run| run.text.chars().any(|c| !c.is_whitespace())
+                || (run.text.contains('\t') && std::env::var_os("OXI_HDR_TAB_IMAGE_DISABLE").is_none()))
             && inline_img_runs.iter().all(|(_, im)| !im.data.is_empty()))
     {
         if std::env::var("OXI_DBG_S854").is_ok() {
@@ -7969,7 +8043,7 @@ fn parse_run(
                         }
                         if in_text { t_br_floor = text.len(); }
                     }
-                    "tab" => text.push('\t'),
+                    "tab" => { text.push('\t'); PARA_PLAIN_TAB.with(|c| c.set(true)); }
                     // S747: <w:noBreakHyphen/> renders as a hyphen that FORBIDS
                     // a line break — map to U+2011 NON-BREAKING HYPHEN (the
                     // breaker's is_break_after covers '-' only, so U+2011 adds
@@ -8978,6 +9052,9 @@ fn parse_drawing_inner(
         ((0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (1.0, 1.0));
     let mut s839_grp_seen = false;
     let mut s839_wsp: Option<S839Wsp> = None;
+    // OXI_TOP_CUSTGEOM: a standalone wps shape's custGeom (cmds, pts, path w/h); group
+    // members keep the S839 collector.
+    let mut top_cg: Option<(Vec<char>, Vec<(f32, f32)>, Option<(f32, f32)>)> = None;
 
     loop {
         match reader.read_event()? {
@@ -9147,6 +9224,36 @@ fn parse_drawing_inner(
                     }
                     "close" if s839_wsp.is_some() => {
                         s839_wsp.as_mut().unwrap().cmds.push('Z');
+                    }
+                    "custGeom" if s839_wsp.is_none() && !s839_in_wgp => {
+                        top_cg = Some((Vec::new(), Vec::new(), None));
+                    }
+                    "path" if s839_wsp.is_none() && top_cg.is_some() => {
+                        let (mut pw, mut ph) = (0.0f32, 0.0f32);
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            if key == "w" {
+                                pw = val.parse().unwrap_or(0.0);
+                            } else if key == "h" {
+                                ph = val.parse().unwrap_or(0.0);
+                            }
+                        }
+                        let cg = top_cg.as_mut().unwrap();
+                        if cg.2.is_none() && pw > 0.0 && ph > 0.0 {
+                            cg.2 = Some((pw, ph));
+                        }
+                    }
+                    "moveTo" | "lnTo" | "cubicBezTo" | "quadBezTo" | "arcTo"
+                        if s839_wsp.is_none() && top_cg.is_some() =>
+                    {
+                        top_cg.as_mut().unwrap().0.push(match local.as_str() {
+                            "moveTo" => 'M',
+                            "lnTo" => 'L',
+                            "cubicBezTo" => 'C',
+                            "quadBezTo" => 'Q',
+                            _ => 'A',
+                        });
                     }
                     "anchor" => {
                         is_anchor = true;
@@ -10699,6 +10806,22 @@ fn parse_drawing_inner(
                         }
                         s839_wsp.as_mut().unwrap().pts.push((x, y));
                     }
+                    "close" if s839_wsp.is_none() && top_cg.is_some() => {
+                        top_cg.as_mut().unwrap().0.push('Z');
+                    }
+                    "pt" if s839_wsp.is_none() && top_cg.is_some() => {
+                        let (mut x, mut y) = (0.0f32, 0.0f32);
+                        for attr in e.attributes().flatten() {
+                            let key = local_name(attr.key.as_ref());
+                            let val = String::from_utf8_lossy(&attr.value);
+                            if key == "x" {
+                                x = val.parse().unwrap_or(0.0);
+                            } else if key == "y" {
+                                y = val.parse().unwrap_or(0.0);
+                            }
+                        }
+                        top_cg.as_mut().unwrap().1.push((x, y));
+                    }
                     // Shape line/outline properties (as empty element)
                     "ln" => {
                         for attr in e.attributes().flatten() {
@@ -11608,7 +11731,7 @@ fn parse_drawing_inner(
     if text_scene3d && !crate::env_flag!("OXI_TXBX_SCENE3D_BLACK_DISABLE") {
         scene3d_blacken(&mut shape_text_blocks);
     }
-    let text_box = if (!is_outline_shape
+    let mut text_box = if (!is_outline_shape
         && (!shape_text_blocks.is_empty() || has_visual || !s839_text_children.is_empty() || group_drawn
             // OXI_GROUP_MEMBERS_VISIBLE (2026-11-18, default ON, opt-out _DISABLE): a group with
             // drawable members is visible whatever the last-win noFill / ln noFill
@@ -11727,6 +11850,70 @@ fn parse_drawing_inner(
     } else {
         None
     };
+    // OXI_INLINE_GROUP_EFFECT (2026-11-20, default ON, opt-out _DISABLE): an inline text-less
+    // group (SmartArt / chart / wpg) occupies its extent grown by wp:effectExtent t + b in the
+    // line, like an inline picture on a line (OXI_INLINE_EFFECT_TEXT_LINE / S1238). Carried on
+    // the synthetic inline position. en/technical__0043bfe0 p11: the «Support Category ->
+    // Support Purpose» chevron SmartArt (cy 28.35, effectExtent b 3.2): Word's next line 54.27
+    // below the previous, Oxi 50.99.
+    if let Some(tb) = text_box.as_mut() {
+        if inline_tb && tb.blocks.is_empty() && !tb.vector_shapes.is_empty()
+            && (effect_extent_t > 0.0 || effect_extent_b > 0.0)
+            && !crate::env_flag!("OXI_INLINE_GROUP_EFFECT_DISABLE")
+        {
+            if let Some(p) = tb.position.as_mut() {
+                p.eff_t = effect_extent_t.max(0.0);
+                p.eff_b = effect_extent_b.max(0.0);
+            }
+        }
+    }
+    // OXI_TOP_CUSTGEOM (2026-11-20, default ON, opt-out _DISABLE): a standalone (not grouped)
+    // text-less wps shape with a custom geometry is painted along its outline, holes and
+    // curves included -- not as its filled box. en/creative__010300e3's four contact icons
+    // (Freeform 20-24, 9.3-10.3pt, 2-5 subpaths of cubicBezTo with counter-holes): Word's
+    // PDF draws the LinkedIn / Facebook / Instagram / Skype glyphs; Oxi drew dark squares.
+    if let (Some(tb), Some((cmds, pts, wh))) = (text_box.as_mut(), top_cg.as_ref()) {
+        if tb.blocks.is_empty() && tb.vector_shapes.is_empty() && shape_type.is_none()
+            && !cmds.is_empty() && tb.width > 0.0 && tb.height > 0.0
+            && !crate::env_flag!("OXI_TOP_CUSTGEOM_DISABLE")
+        {
+            let (pw, ph) = wh.unwrap_or((tb.width * 12700.0, tb.height * 12700.0));
+            let (pw, ph) = (pw.max(1.0), ph.max(1.0));
+            let n = |k: usize| pts.get(k).map(|&(x, y)| (x / pw, y / ph));
+            let mut segs = Vec::new();
+            let mut i = 0usize;
+            for &c in cmds {
+                match c {
+                    'M' => { if let Some((x, y)) = n(i) { segs.push(crate::ir::PathSeg::M(x, y)); } i += 1; }
+                    'L' => { if let Some((x, y)) = n(i) { segs.push(crate::ir::PathSeg::L(x, y)); } i += 1; }
+                    'C' => {
+                        if let (Some(a), Some(b), Some(c3)) = (n(i), n(i + 1), n(i + 2)) {
+                            segs.push(crate::ir::PathSeg::C(a.0, a.1, b.0, b.1, c3.0, c3.1));
+                        }
+                        i += 3;
+                    }
+                    'Q' => {
+                        if let (Some(a), Some(b)) = (n(i), n(i + 1)) {
+                            segs.push(crate::ir::PathSeg::C(a.0, a.1, a.0, a.1, b.0, b.1));
+                        }
+                        i += 2;
+                    }
+                    'Z' => segs.push(crate::ir::PathSeg::Z),
+                    _ => {}
+                }
+            }
+            if !segs.is_empty() {
+                let stroke = if tb.border { tb.stroke_color.clone() } else { None };
+                let sw = if stroke.is_some() { tb.stroke_width.unwrap_or(0.75) } else { 0.0 };
+                tb.vector_shapes.push(crate::ir::VectorShape {
+                    x: 0.0, y: 0.0, w: tb.width, h: tb.height,
+                    fill: tb.fill.take(), stroke, stroke_width: sw,
+                    is_line: false, path: segs, image: None, arrow: None,
+                });
+                tb.border = false;
+            }
+        }
+    }
 
     // S535b: flow reservation for ALL inline text-bearing drawings TRIED +
     // REVERTED (3a4f pagination 0.9931 -> 0.8076, 282 paras +1..+3): the
@@ -15187,6 +15374,55 @@ fn parse_table(
             for (row_idx, row) in rows.iter_mut().enumerate() {
                 let num_cols = row.cells.len();
                 for (col_idx, cell) in row.cells.iter_mut().enumerate() {
+                    // OXI_TBLSTYLE_LAYERED (2026-11-20, default ON, opt-out _DISABLE): Word
+                    // stacks the table style's conditional parts -- bands, then first/last
+                    // column, then first/last row, then the corner cells -- and each part
+                    // overrides only what it declares. en/technical__0043bfe0 p11 (Grid Table 4
+                    // Accent 4, firstRow fill 6B2976 + white, firstCol bold only, band1Horz
+                    // E8CAED): Word keeps the purple header and the lilac band in the first
+                    // column; Oxi picked firstCol alone and left both cells white. A run's own
+                    // <w:b w:val="0"/> also beats the style's bold (the part only sets it
+                    // where the run says nothing).
+                    if !crate::env_flag!("OXI_TBLSTYLE_LAYERED_DISABLE") {
+                        let mut fmt = crate::ir::TableConditionalFormat::default();
+                        let mut any = false;
+                        for key in resolve_conditional_layers(row_idx, col_idx, num_rows, num_cols, &look) {
+                            if let Some(part) = cond_fmts.get(key) {
+                                any = true;
+                                if part.shading.is_some() { fmt.shading = part.shading.clone(); }
+                                if part.borders.is_some() { fmt.borders = part.borders.clone(); }
+                                if part.bold.is_some() { fmt.bold = part.bold; }
+                                if part.color.is_some() { fmt.color = part.color.clone(); }
+                            }
+                        }
+                        if any {
+                            if cell.shading.is_none() {
+                                cell.shading = fmt.shading.clone();
+                            }
+                            if cell.borders.is_none() {
+                                cell.borders = fmt.borders.clone();
+                            }
+                            if fmt.bold.is_some() || fmt.color.is_some() {
+                                for block in &mut cell.blocks {
+                                    if let Block::Paragraph(para) = block {
+                                        for run in &mut para.runs {
+                                            if let Some(b) = fmt.bold {
+                                                if !run.style.bold && !run.style.has_explicit_bold {
+                                                    run.style.bold = b;
+                                                }
+                                            }
+                                            if let Some(ref c) = fmt.color {
+                                                if run.style.color.is_none() {
+                                                    run.style.color = Some(c.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     // Determine which conditional format applies (priority: corner > row/col > band)
                     let cond_key =
                         resolve_conditional_type(row_idx, col_idx, num_rows, num_cols, &look);
@@ -15231,6 +15467,43 @@ fn parse_table(
         style,
         grid_columns,
     })
+}
+
+/// Every tblStylePr part that applies to a cell, lowest priority first
+/// (bands, first/last column, first/last row, corner) -- OXI_TBLSTYLE_LAYERED.
+/// `_pb_tblstyle_layer_gen.py`: with firstRow and firstCol both filled, Word's top-left cell
+/// takes the firstRow fill; an nwCell fill beats both; the band reaches the first column.
+fn resolve_conditional_layers(
+    row_idx: usize,
+    col_idx: usize,
+    num_rows: usize,
+    num_cols: usize,
+    look: &crate::ir::TableLook,
+) -> Vec<&'static str> {
+    let is_first_row = row_idx == 0 && look.first_row;
+    let is_last_row = row_idx + 1 == num_rows && look.last_row;
+    let is_first_col = col_idx == 0 && look.first_column;
+    let is_last_col = col_idx + 1 == num_cols && look.last_column;
+    let mut out = Vec::new();
+    if look.banded_columns && !is_first_col && !is_last_col {
+        let band_size = look.col_band_size.max(1) as usize;
+        let c = if look.first_column { col_idx.saturating_sub(1) } else { col_idx };
+        out.push(if (c / band_size) % 2 == 0 { "band1Vert" } else { "band2Vert" });
+    }
+    if look.banded_rows && !is_first_row && !is_last_row {
+        let band_size = look.row_band_size.max(1) as usize;
+        let r = if look.first_row { row_idx.saturating_sub(1) } else { row_idx };
+        out.push(if (r / band_size) % 2 == 0 { "band1Horz" } else { "band2Horz" });
+    }
+    if is_first_col { out.push("firstCol"); }
+    if is_last_col { out.push("lastCol"); }
+    if is_first_row { out.push("firstRow"); }
+    if is_last_row { out.push("lastRow"); }
+    if is_first_row && is_first_col { out.push("nwCell"); }
+    if is_first_row && is_last_col { out.push("neCell"); }
+    if is_last_row && is_first_col { out.push("swCell"); }
+    if is_last_row && is_last_col { out.push("seCell"); }
+    out
 }
 
 /// Determine which tblStylePr condition type applies to a cell.

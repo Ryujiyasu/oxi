@@ -6893,6 +6893,11 @@ impl LayoutEngine {
         if let Some(ref c) = run_style.color {
             return Some(c.as_str());
         }
+        // OXI_STYLE_COLOR_AUTO: a character style's own colour "auto" beats the
+        // paragraph style's colour (`_pb_color_auto_gen.py` Cstyle: Word black).
+        if run_style.color_auto && !crate::env_flag!("OXI_STYLE_COLOR_AUTO_DISABLE") {
+            return None;
+        }
         if let Some(ref drs) = para_style.default_run_style {
             if let Some(ref c) = drs.color {
                 return Some(c.as_str());
@@ -11154,9 +11159,31 @@ cells={} pitch={:.2} text={:?}",
                         img.paragraph_space_before.max(0.0)
                     } else { 0.0 };
                     cursor.advance(img_sb);
+                    // OXI_TXBX_GRID_IMAGE (2026-11-20, default ON, opt-out _DISABLE): on a typed
+                    // line grid a picture alone in a text-box paragraph takes whole cells and
+                    // sits centred in them, as in the body (OXI_GRID_OBJ_CENTER).
+                    // `_pb_txbx_gridimg_gen.py` (picture 75.55 / 50 / 30 in a box, tIns 3.6):
+                    // lines 360 -> 10.83 / 5.6 / 6.6 below the box top (3.6 + (n x 18 - h) / 2),
+                    // lines 312 -> 4.82 / 9.8 / 4.2, no grid -> 3.6 everywhere; Oxi 3.6 always.
+                    // ja/reference__0ae2d13d's QR code (75.55 in a box, lines 360) 7.23 high.
+                    // Only a picture in a text-box PARAGRAPH: a group's picture child (no host) sits
+                    // where its xfrm says (ja/creative__13152ea1 header children, 2026-11-20).
+                    let txbx_img_cells = if !page.doc_grid_no_type
+                        && page.grid_line_pitch.is_some_and(|p| p > 0.1)
+                        && img.host_paragraph.as_deref().is_some_and(|h| h.style.snap_to_grid
+                            && matches!(h.style.line_spacing_rule.as_deref(), None | Some("auto")))
+                        && img.height > 0.0
+                        && !crate::env_flag!("OXI_TXBX_GRID_IMAGE_DISABLE")
+                    {
+                        let p = page.grid_line_pitch.unwrap_or(0.0);
+                        Some(((img.height / p) - 0.001).ceil().max(1.0) * p)
+                    } else {
+                        None
+                    };
+                    let txbx_img_off = txbx_img_cells.map_or(0.0, |c| ((c - img.height) * 0.5).max(0.0));
                     elements.push(LayoutElement::new(
                         inner_x,
-                        cursor.visual_y,
+                        cursor.visual_y + txbx_img_off,
                         img.width.min(inner_width),
                         img.height,
                         LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
@@ -11168,7 +11195,7 @@ cells={} pitch={:.2} text={:?}",
                                 .map(|c| (c.top, c.right, c.bottom, c.left)),
                         },
                     ));
-                    cursor.advance(img.height);
+                    cursor.advance(txbx_img_cells.unwrap_or(img.height));
                     // OXI_TXBX_IMAGE_LINE (2026-11-06, default ON, opt-out _DISABLE): the
                     // picture's line takes its paragraph's auto multiple over the run
                     // face's natural height on top of the picture, and its after collapses
@@ -13157,7 +13184,8 @@ cells={} pitch={:.2} text={:?}",
                     // run sizes reserve the same height as the painted paragraph.
                     let has_inline_image = para.runs.iter().any(|r| r.style.inline_object_image.is_some());
                     let mixed_inline_header = has_inline_image
-                        && para.runs.iter().any(|r| r.text.chars().any(|c| !c.is_whitespace()));
+                        && para.runs.iter().any(|r| r.text.chars().any(|c| !c.is_whitespace())
+                            || (r.text.contains('\t') && !crate::env_flag!("OXI_HDR_TAB_IMAGE_DISABLE")));
                     let inline_header = has_inline_image
                         && (mixed_inline_header || crate::env_flag!("OXI_HEADER_INLINE_OBJECTS"));
                     let text_height = if (!self.doc_body_has_real_cjk || inline_header)
@@ -13337,6 +13365,15 @@ cells={} pitch={:.2} text={:?}",
                                 })
                                 .unwrap_or(nat);
                             hdr_h += h;
+                        }
+                        // OXI_HDR_TBL_BOTTOM_RULE (2026-11-19, default ON, opt-out _DISABLE):
+                        // the last row's bottom rule lies below the row box, and the
+                        // body starts under it. `_pb_tbl_bot_gen.py` (header table, then a
+                        // paragraph): Word's body moves by the drawn width, sz 4 / 12 / 24
+                        // -> +0.48 / +1.56 / +3.0; the header's own next paragraph was
+                        // already placed under it. en/legal__000e6513 (sz 4) body 0.5 high.
+                        if !crate::env_flag!("OXI_HDR_TBL_BOTTOM_RULE_DISABLE") {
+                            hdr_h += self.s1188_side(t.rows.last(), true, t.style.bottom_border.as_ref());
                         }
                     }
                 } else if let Block::Image(img) = block {
@@ -14056,6 +14093,7 @@ cells={} pitch={:.2} text={:?}",
                         // once per table (corpus footer tables are 1-row; the
                         // probe measured exactly this shape). Border style
                         // rides on table.style (border_width/border_style).
+                        let mut ftr_top_term = 0.0f32;
                         let tbl_border_term = if t.style.border {
                             let w = t.style.border_width.unwrap_or(0.5);
                             let m = if t.style.border_style.as_deref() == Some("double") {
@@ -14063,6 +14101,7 @@ cells={} pitch={:.2} text={:?}",
                             } else {
                                 1.0
                             };
+                            ftr_top_term = w * m;
                             2.0 * w * m
                         } else {
                             // cell-level tcBorders on the single row (top of
@@ -14081,9 +14120,20 @@ cells={} pitch={:.2} text={:?}",
                                     .map(|b| eff_bw(b.bottom.as_ref()))
                                     .fold(0.0f32, f32::max)
                             });
+                            ftr_top_term = top;
                             top + bot
                         };
-                        for row in &t.rows {
+                        // OXI_FTR_TBL_TOP_ONCE (2026-11-19, default ON, opt-out _DISABLE): a first
+                        // row sized by its trHeight already holds the top rule (binding atLeast =
+                        // trH + the drawn width, ROWBOX2) or leaves it out (exact = trH), so the
+                        // border term must not add the top once more. `_pb_ftr_tbl_gen.py` (footer
+                        // = paragraph + 1-row table + 0/2 paragraphs, top sz4, bottom nil/4/12/24,
+                        // footer 365 and 720): Oxi's footer sat 0.53-0.60 high in every atLeast and
+                        // exact arm and within 0.1 in the natural-row arms.
+                        // en/administrative__001eef60's footer «Form No» row -0.69.
+                        let ftr_top_once = !crate::env_flag!("OXI_FTR_TBL_TOP_ONCE_DISABLE");
+                        let mut ftr_top_credit = 0.0f32;
+                        for (ri, row) in t.rows.iter().enumerate() {
                             let nat = self.estimate_table_row_natural_h_with_border_padding(
                                 row,
                                 &col_widths,
@@ -14106,6 +14156,18 @@ cells={} pitch={:.2} text={:?}",
                                     _ => (th + self.rowbox2_trh_bw(t, row)).max(nat),
                                 })
                                 .unwrap_or(nat);
+                            if ftr_top_once && ri == 0 {
+                                if let Some(th) = row.height {
+                                    let bw = self.rowbox2_trh_bw(t, row);
+                                    ftr_top_credit = if row.height_rule.as_deref() == Some("exact") {
+                                        ftr_top_term
+                                    } else if th + bw >= nat {
+                                        bw.min(ftr_top_term)
+                                    } else {
+                                        0.0
+                                    };
+                                }
+                            }
                             if crate::env_flag!("OXI_DBG_FTR") {
                                 eprintln!(
                                     "[FTR-T] row nat={:.3} h={:.3} trh={:?}",
@@ -14114,7 +14176,7 @@ cells={} pitch={:.2} text={:?}",
                             }
                             footer_h += h;
                         }
-                        footer_h += tbl_border_term;
+                        footer_h += tbl_border_term - ftr_top_credit;
                         // A table breaks the paragraph spacing chain (the S813
                         // rule the header arm applies): flush the pending after.
                         if let Some(last) = s803_prev_sa.take() {
@@ -19797,6 +19859,24 @@ cells={} pitch={:.2} text={:?}",
         // ﾎﾟｯﾌﾟ体 line=0 atLeast): Word's baseline 32.66 below the content top =
         // (41.5 - 32)/2 + 27.5 (+0.4 bearing); the arm below put it at 36.05.
         let natbox_atleast_on = !crate::env_flag!("OXI_NATBOX_ATLEAST_DISABLE");
+        // OXI_ATLEAST_UNDER_LATIN_S1652 (2026-11-20, default ON, opt-out _DISABLE): a body
+        // pure-Latin atLeast line keeps the S1652 arm even when the value is under the
+        // font -- that arm (1.0 + line - cell) already IS the auto placement there, and
+        // the auto arm's grid branch (S695) prices the line differently.
+        // `_pb_atl_base_gen.py` (TNR 12 atLeast 220/240/270/276/300, auto, TNR 11 atLeast
+        // 220, TNR 10 atLeast 200; compat 14 and 15): Word baseline 11.16 for every
+        // under-font arm = auto; Oxi 11.7 / 10.77 / 9.84 (+0.5) on the 220/240 arms and
+        // within 0.07 everywhere with this. en/legal__000e6513 (TNR 12 atLeast 220) +0.55.
+        let atl_under_latin = !in_shape_context
+            && !crate::env_flag!("OXI_ATLEAST_UNDER_LATIN_S1652_DISABLE")
+            && !crate::env_flag!("OXI_S504_DISABLE")
+            && !crate::env_flag!("OXI_S1652_DISABLE")
+            && !line.fragments.is_empty()
+            && line.fragments.iter().all(|frag| {
+                !self
+                    .metrics_for_text(&frag.text, &frag.style, para_style)
+                    .is_cjk_83_64_font()
+            });
         match (
             para_style.line_spacing_rule.as_deref(),
             para_style.line_spacing,
@@ -19811,6 +19891,7 @@ cells={} pitch={:.2} text={:?}",
             (Some(rule @ ("exact" | "atLeast")), Some(v))
                 if (rule == "exact" || v > 0.01 || !natbox_atleast_on)
                     && !(rule == "atLeast" && v + 0.5 < line_height
+                        && !atl_under_latin
                         && !crate::env_flag!("OXI_ATLEAST_UNDER_FONT_AUTO_DISABLE")) =>
             {
                 // S1261 (2026-08-30, OPT-IN `OXI_S1261=1` pending gates): under

@@ -7,9 +7,9 @@
 <link rel="icon" type="image/x-icon" href="./favicon.ico">
 <style>
 :root {
-  --accent: #217346;
-  --accent-d: #1B5E3A;
-  --accent-l: #E4F0E9;
+  --accent: #2E7D4F;
+  --accent-d: #23633E;
+  --accent-l: #E8F3EC;
   --rule: #D0D7DE;
   --head: #F3F5F7;
   --txt: #24292F;
@@ -250,7 +250,7 @@ aside ul li::before { content: '·'; position: absolute; left: 4px; color: var(-
 #drop {
   position: absolute;
   inset: 0;
-  background: rgba(33, 115, 70, .08);
+  background: rgba(46, 125, 79, .08);
   border: 2px dashed var(--accent);
   display: none;
   align-items: center;
@@ -2210,7 +2210,7 @@ function paintSelection(ink, view) {
   const w = far.x + far.w - corner.x;
   const h = far.y + far.h - corner.y;
   if (spread()) {
-    ink.fillStyle = 'rgba(33, 115, 70, .10)';
+    ink.fillStyle = 'rgba(46, 125, 79, .10)';
     ink.fillRect(x, y, w, h);
     // The cell that takes what is typed stays white inside the block.
     const here = rectOf(at.row, at.col);
@@ -2220,11 +2220,11 @@ function paintSelection(ink, view) {
       paintOne(ink, at.row, at.col, here);
     }
   }
-  ink.strokeStyle = '#217346';
+  ink.strokeStyle = '#2E7D4F';
   ink.lineWidth = 2;
   ink.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
   if (!filling) {
-    ink.fillStyle = '#217346';
+    ink.fillStyle = '#2E7D4F';
     ink.fillRect(x + w - HANDLE, y + h - HANDLE, HANDLE, HANDLE);
   }
   if (cutFrom) {
@@ -2233,7 +2233,7 @@ function paintSelection(ink, view) {
     if (from && to) {
       ink.setLineDash([4, 3]);
       ink.lineWidth = 1;
-      ink.strokeStyle = '#217346';
+      ink.strokeStyle = '#2E7D4F';
       ink.strokeRect(from.x + .5, from.y + .5,
         to.x + to.w - from.x - 1, to.y + to.h - from.y - 1);
       ink.setLineDash([]);
@@ -2494,7 +2494,7 @@ function pickTabColor(index) {
   if (!sheet) return;
   const input = document.createElement('input');
   input.type = 'color';
-  input.value = sheet.tab_color ? '#' + sheet.tab_color : '#217346';
+  input.value = sheet.tab_color ? '#' + sheet.tab_color : '#2E7D4F';
   input.style.position = 'fixed';
   input.style.left = '-9999px';
   document.body.appendChild(input);

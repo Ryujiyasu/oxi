@@ -256,7 +256,18 @@ def run(args) -> dict:
     rows: list[dict] = []
     to_score = targets
     if reuse:
-        keep = [p for p in targets if deck_id(p) in reuse and unchanged_vs(args.tag, args.vs, deck_id(p))]
+        # A score is only reusable when the TRUTH is also the one it was taken
+        # against: a PowerPoint PDF replaced after the reference result was
+        # written (2026-11-20: d06/d51 re-exported after a cloud-font download
+        # race) must be re-scored, or the A/B reports a false 0 change.
+        prior_time = (RESULT_ROOT / f"{args.vs}.json").stat().st_mtime
+        keep = [
+            p
+            for p in targets
+            if deck_id(p) in reuse
+            and unchanged_vs(args.tag, args.vs, deck_id(p))
+            and (PDF_DIR / f"{deck_id(p)}.pdf").stat().st_mtime < prior_time
+        ]
         rows.extend(reuse[deck_id(p)] for p in keep)
         to_score = [p for p in targets if p not in set(keep)]
         print(
