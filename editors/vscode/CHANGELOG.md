@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.3
+
+Table cells in Word documents can be edited and saved; the cell's other runs
+keep their formatting. Only text that the save can put back exactly where it
+was typed takes editing — it shows on hover — and the rest (headers, text
+boxes) is read-only, where before an edit could land in the wrong paragraph.
+A Word document with a tab inside a run no longer loses text on save. In a
+narrow pane the ribbon scrolls sideways instead of squeezing, and a wide page
+starts at the left edge instead of being cut off.
+
 ## 0.9.2
 
 The spreadsheet selection and the slide list use Oxi's own colours instead of
