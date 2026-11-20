@@ -1643,6 +1643,37 @@ const HIGHLIGHT_COLORS = {
     black: '#000000', white: '#FFFFFF',
 };
 
+/**
+ * Put a list number where Word puts it. A list paragraph's hanging indent
+ * (a negative first-line indent) already pulls the first line back to where
+ * the number goes, so the number fills that hang and the text starts at the
+ * paragraph's left indent. Pulling the number back again would push it out
+ * past the margin. Only without a hang does it sit to the left of the text.
+ */
+function placeListMarker(marker, style) {
+    // An inline block inherits the paragraph's text-indent, which would pull
+    // the number back once more inside its own box.
+    marker.style.textIndent = '0';
+    const hanging = style && style.indent_first_line < 0 ? -style.indent_first_line : 0;
+    if (hanging > 0) {
+        marker.style.minWidth = hanging + 'pt';
+    } else {
+        const listIndent = (style && style.list_indent) || 18;
+        marker.style.width = listIndent + 'pt';
+        marker.style.marginLeft = '-' + listIndent + 'pt';
+    }
+}
+
+/** The number takes the letters of the text it numbers, as in Word. */
+function dressListMarker(paraDiv) {
+    const marker = paraDiv.querySelector(':scope > .edit-list-marker');
+    const first = marker && paraDiv.querySelector(':scope > span:not(.edit-list-marker):not(.edit-tab)');
+    if (!first) return;
+    for (const prop of ['fontFamily', 'fontSize', 'color', 'fontWeight', 'fontStyle']) {
+        if (first.style[prop]) marker.style[prop] = first.style[prop];
+    }
+}
+
 // Render blocks inside a table cell (recursive for nested tables)
 function renderCellBlocks(blocks, container) {
     for (const cellBlock of blocks) {
@@ -1675,9 +1706,8 @@ function renderCellBlocks(blocks, container) {
                 markerSpan.contentEditable = 'false';
                 markerSpan.style.display = 'inline-block';
                 markerSpan.style.userSelect = 'none';
-                const listIndent = cellPara.style.list_indent || 18;
-                markerSpan.style.width = listIndent + 'pt';
-                markerSpan.style.marginLeft = '-' + listIndent + 'pt';
+                markerSpan.className = 'edit-list-marker';
+                placeListMarker(markerSpan, cellPara.style);
                 cellParaDiv.appendChild(markerSpan);
             }
             for (const run of cellPara.runs) {
@@ -1702,6 +1732,7 @@ function renderCellBlocks(blocks, container) {
                 applyRunStyle(span, run);
                 cellParaDiv.appendChild(span);
             }
+            dressListMarker(cellParaDiv);
             container.appendChild(cellParaDiv);
         } else if (cellBlock.Table) {
             // Nested table
@@ -3472,9 +3503,7 @@ function renderEditableDocx(doc) {
                     markerSpan.contentEditable = 'false';
                     markerSpan.style.display = 'inline-block';
                     markerSpan.style.userSelect = 'none';
-                    const listIndent = para.style.list_indent || 18;
-                    markerSpan.style.width = listIndent + 'pt';
-                    markerSpan.style.marginLeft = '-' + listIndent + 'pt';
+                    placeListMarker(markerSpan, para.style);
                     markerSpan.style.textAlign = 'left';
                     paraDiv.appendChild(markerSpan);
                 }
@@ -3635,9 +3664,14 @@ function renderEditableDocx(doc) {
                         if (run.style.color && !run.url) span.style.color = '#' + run.style.color;
                         if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
                         if (run.style.font_family || run.style.font_family_east_asia) {
-                            const ea = run.style.font_family_east_asia ? "'" + run.style.font_family_east_asia + "', " : '';
-                            const la = run.style.font_family || 'Calibri';
-                            span.style.fontFamily = ea + la + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                            // Word sets Latin letters in the Latin face and Japanese
+                            // in the East Asian one. A Latin face has no kana or
+                            // kanji, so naming it first lets those fall through to
+                            // the East Asian face, while English text no longer
+                            // comes out in ＭＳ 明朝.
+                            const ea = run.style.font_family_east_asia ? ", '" + run.style.font_family_east_asia + "'" : '';
+                            const la = "'" + (run.style.font_family || 'Calibri') + "'";
+                            span.style.fontFamily = la + ea + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
                         }
                         if (run.style.highlight) {
                             span.style.backgroundColor = HIGHLIGHT_COLORS[run.style.highlight] || run.style.highlight;
@@ -3773,6 +3807,7 @@ function renderEditableDocx(doc) {
                     paraDiv.appendChild(span);
                 }
 
+                dressListMarker(paraDiv);
                 blocksContainer.appendChild(paraDiv);
                 prevParaStyleId = (para.style && para.style.style_id) || null;
                 bodyParaIdx++;
@@ -4101,9 +4136,14 @@ function renderEditableDocx(doc) {
                                 if (run.style.color) span.style.color = '#' + run.style.color;
                                 if (run.style.font_size) span.style.fontSize = run.style.font_size + 'pt';
                                 if (run.style.font_family || run.style.font_family_east_asia) {
-                            const ea = run.style.font_family_east_asia ? "'" + run.style.font_family_east_asia + "', " : '';
-                            const la = run.style.font_family || 'Calibri';
-                            span.style.fontFamily = ea + la + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                            // Word sets Latin letters in the Latin face and Japanese
+                            // in the East Asian one. A Latin face has no kana or
+                            // kanji, so naming it first lets those fall through to
+                            // the East Asian face, while English text no longer
+                            // comes out in ＭＳ 明朝.
+                            const ea = run.style.font_family_east_asia ? ", '" + run.style.font_family_east_asia + "'" : '';
+                            const la = "'" + (run.style.font_family || 'Calibri') + "'";
+                            span.style.fontFamily = la + ea + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
                         }
                             }
                             tbPara.appendChild(span);
