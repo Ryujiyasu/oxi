@@ -2910,6 +2910,41 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // `--pivot`: print every pivot table's computed grid as JSON, for
+    // `_xlsx_pivot_check.py` to hold against Excel's own refresh.
+    if args.get(2).map(String::as_str) == Some("--pivot") {
+        let ui = if std::env::var("OXI_XLSX_UI_LANG").is_ok_and(|v| v.starts_with("en")) {
+            oxicells_core::pivot::Ui::English
+        } else {
+            oxicells_core::pivot::Ui::Japanese
+        };
+        let bytes = std::fs::read(&args[1]).unwrap_or_default();
+        let mut out = Vec::new();
+        for spec in oxicells_core::pivot::read_pivots(&bytes) {
+            let get = oxicells_core::pivot::source_reader(&workbook, &spec.source_sheet);
+            let grid = oxicells_core::pivot::compute(&spec, &get, ui);
+            let rows: Vec<serde_json::Value> = grid
+                .cells
+                .iter()
+                .map(|row| {
+                    serde_json::Value::Array(
+                        row.iter()
+                            .map(|v| match v {
+                                CellValue::Empty => serde_json::Value::Null,
+                                CellValue::Number(n) => serde_json::json!(n),
+                                CellValue::Boolean(b) => serde_json::json!(b),
+                                other => serde_json::json!(cell_text(other, &CellStyle::default())),
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+            out.push(serde_json::json!({"name": spec.name, "sheet": spec.sheet,
+                "origin": [grid.origin.0, grid.origin.1], "grid": rows}));
+        }
+        println!("{}", serde_json::Value::Array(out));
+        return;
+    }
     let Some(sheet) = workbook.sheets.first() else {
         eprintln!("the workbook holds no sheets");
         std::process::exit(1);
