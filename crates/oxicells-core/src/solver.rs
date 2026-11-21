@@ -710,6 +710,173 @@ fn solve_all_different(probe: &mut Probe<'_>, start: &[f64]) -> Result<Vec<f64>,
     }
 }
 
+/// Each variable's own bounds and integrality, read off the constraints
+/// that name it alone against a number (`A1:A2 <= 5`, int, bin).
+fn variable_bounds(workbook: &Workbook, model: &Model) -> (Vec<f64>, Vec<f64>, Vec<bool>) {
+    let n = model.variables.len();
+    let mut lo = vec![if model.non_negative { 0.0 } else { f64::NEG_INFINITY }; n];
+    let mut hi = vec![f64::INFINITY; n];
+    let mut int = vec![false; n];
+    for c in &model.constraints {
+        for (i, cell) in c.lhs.iter().enumerate() {
+            let Some(j) = model.variables.iter().position(|v| v == cell) else { continue };
+            let rhs = match &c.rhs {
+                Rhs::Number(v) => Some(*v),
+                Rhs::Cells(cells) => cells.get(i.min(cells.len().saturating_sub(1))).map(|at| get_number(workbook, *at)),
+            };
+            match (c.relation, rhs) {
+                (Relation::Le, Some(v)) => hi[j] = hi[j].min(v),
+                (Relation::Ge, Some(v)) => lo[j] = lo[j].max(v),
+                (Relation::Eq, Some(v)) => {
+                    lo[j] = v;
+                    hi[j] = v;
+                }
+                (Relation::Bin, _) => {
+                    lo[j] = lo[j].max(0.0);
+                    hi[j] = hi[j].min(1.0);
+                    int[j] = true;
+                }
+                (Relation::Int, _) => int[j] = true,
+                _ => {}
+            }
+        }
+    }
+    (lo, hi, int)
+}
+
+/// The Evolutionary engine. Solver's own is a randomised genetic search
+/// that wants every variable bounded; this one is deterministic: a Halton
+/// sample of the bounded box (the start included), the best few points
+/// polished -- by GRG for continuous models, by unit steps for integer
+/// ones -- and the best feasible point kept. A model with an unbounded
+/// variable goes to GRG Nonlinear from the start.
+///
+/// Excel's own answers could not be read: under COM its Evolutionary run
+/// stops on Solver's 試行状況の表示 form, which neither Enter nor Esc
+/// dismisses (`_xlsx_solver_evo_probe.py`). What this engine is held to is
+/// the model's optimum.
+fn solve_evolutionary(probe: &mut Probe<'_>, start: &[f64]) -> Result<Vec<f64>, Failure> {
+    let model = probe.model;
+    let n = model.variables.len();
+    let (lo, hi, int) = variable_bounds(probe.workbook, model);
+    if lo.iter().chain(&hi).any(|v| !v.is_finite()) {
+        return solve_nonlinear(probe, start.to_vec());
+    }
+    let sign = match model.goal {
+        Goal::Max => -1.0,
+        _ => 1.0,
+    };
+    // Objective (minimised) plus a heavy price on any constraint broken.
+    let measure = |probe: &mut Probe<'_>, x: &[f64]| -> (f64, f64) {
+        let (f, rows) = probe.eval(x);
+        let broken: f64 = rows
+            .iter()
+            .map(|(lhs, rel, rhs)| match rel {
+                Relation::Eq => (lhs - rhs).abs(),
+                Relation::Le => (lhs - rhs).max(0.0),
+                _ => (rhs - lhs).max(0.0),
+            })
+            .sum();
+        let f = match model.goal {
+            Goal::Value(_) => (f - model.target).abs(),
+            _ => sign * f,
+        };
+        (if f.is_finite() { f } else { f64::INFINITY }, broken)
+    };
+    let price = |(f, broken): (f64, f64)| f + 1e6 * broken;
+    let fit = |x: &mut Vec<f64>| {
+        for j in 0..n {
+            x[j] = x[j].clamp(lo[j], hi[j]);
+            if int[j] {
+                x[j] = x[j].round().clamp(lo[j].ceil(), hi[j].floor());
+            }
+        }
+    };
+    fn halton(mut i: usize, base: usize) -> f64 {
+        let (mut f, mut r) = (1.0, 0.0);
+        while i > 0 {
+            f /= base as f64;
+            r += f * (i % base) as f64;
+            i /= base;
+        }
+        r
+    }
+    const PRIMES: [usize; 16] = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53];
+    let samples = (80 * n).clamp(80, 800);
+    let mut pool: Vec<(f64, Vec<f64>)> = Vec::new();
+    let mut first = start.to_vec();
+    fit(&mut first);
+    let m = measure(probe, &first);
+    pool.push((price(m), first));
+    for i in 1..=samples {
+        let mut x: Vec<f64> = (0..n).map(|j| lo[j] + halton(i, PRIMES[j % PRIMES.len()]) * (hi[j] - lo[j])).collect();
+        fit(&mut x);
+        let m = measure(probe, &x);
+        pool.push((price(m), x));
+    }
+    pool.sort_by(|a, b| a.0.total_cmp(&b.0));
+    pool.truncate(4);
+    let any_int = int.iter().any(|i| *i);
+    let mut best: Option<(f64, Vec<f64>)> = None;
+    for (_, seed) in pool {
+        let polished = if any_int {
+            // Unit steps on the integers, shrinking steps on the rest, while
+            // anything improves.
+            let mut x = seed.clone();
+            let mut here = price(measure(probe, &x));
+            let mut step: Vec<f64> = (0..n).map(|j| if int[j] { 1.0 } else { (hi[j] - lo[j]) / 8.0 }).collect();
+            loop {
+                let mut moved = false;
+                for j in 0..n {
+                    for dir in [-1.0, 1.0] {
+                        let mut y = x.clone();
+                        y[j] += dir * step[j];
+                        fit(&mut y);
+                        if y[j] == x[j] {
+                            continue;
+                        }
+                        let p = price(measure(probe, &y));
+                        if p < here - 1e-12 {
+                            x = y;
+                            here = p;
+                            moved = true;
+                        }
+                    }
+                }
+                if !moved {
+                    let mut shrunk = false;
+                    for j in 0..n {
+                        if !int[j] && step[j] > 1e-7 * (1.0 + hi[j] - lo[j]) {
+                            step[j] /= 2.0;
+                            shrunk = true;
+                        }
+                    }
+                    if !shrunk {
+                        break;
+                    }
+                }
+            }
+            x
+        } else {
+            match solve_nonlinear(probe, seed.clone()) {
+                Ok(mut x) => {
+                    fit(&mut x);
+                    x
+                }
+                Err(_) => seed,
+            }
+        };
+        let (f, broken) = measure(probe, &polished);
+        if broken <= 1e-6 && best.as_ref().is_none_or(|(b, _)| f < *b - 1e-12) {
+            best = Some((f, polished));
+        }
+    }
+    match best {
+        Some((_, x)) => Ok(x),
+        None => Err(Failure(Outcome::Infeasible, None)),
+    }
+}
+
 /// Branch and bound over the integer variables.
 fn branch(c: &[f64], rows: &[(Vec<f64>, Relation, f64)], lower: &[f64], upper: &[f64], int: &[bool], depth: usize) -> Result<Vec<f64>, Failure> {
     let x = simplex(c, rows, lower, upper)?;
@@ -931,6 +1098,7 @@ pub fn solve(workbook: &mut Workbook, sheet: usize) -> Outcome {
                 }
             }
             _ if all_different => solve_all_different(&mut probe, &start),
+            Engine::Evolutionary => solve_evolutionary(&mut probe, &start),
             Engine::SimplexLp => solve_lp(&mut probe),
             _ => {
                 let (int, _) = integrality(&model);
@@ -968,6 +1136,72 @@ pub fn solve(workbook: &mut Workbook, sheet: usize) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn model_book(cells: &[(u32, u32, CellValue, Option<&str>)]) -> Workbook {
+        let mut book = crate::parse_xlsx(include_bytes!("../../../tests/fixtures/basic_test.xlsx")).unwrap();
+        book.sheets.truncate(1);
+        book.sheets[0].name = "M".into();
+        book.sheets[0].rows.clear();
+        book.defined_names.clear();
+        for (r, c, value, formula) in cells {
+            set_number(&mut book, (0, *r, *c), if let CellValue::Number(v) = value { *v } else { 0.0 });
+            if let Some(f) = formula {
+                let row = book.sheets[0].rows.iter_mut().find(|row| row.index == r + 1).unwrap();
+                let cell = row.cells.iter_mut().find(|cell| cell.col == *c).unwrap();
+                cell.formula = Some(f.to_string());
+            }
+        }
+        book
+    }
+
+    #[test]
+    fn evolutionary_finds_the_global_minimum_of_a_bounded_model() {
+        // (x-2)^2 + (y+1)^2 + 3 SIN(3x)^2 on [-5, 5]^2: the minimum is near
+        // x = 2.08 (SIN(3x) = 0 at x = 2.0944), y = -1.
+        let mut book = model_book(&[
+            (0, 0, CellValue::Number(0.0), None),
+            (1, 0, CellValue::Number(0.0), None),
+            (2, 0, CellValue::Number(0.0), Some("(A1-2)^2+(A2+1)^2+3*SIN(3*A1)^2")),
+        ]);
+        for (name, body) in [
+            ("solver_opt", "M!$A$3"), ("solver_typ", "2"), ("solver_adj", "M!$A$1:$A$2"), ("solver_eng", "3"), ("solver_neg", "2"),
+            ("solver_num", "2"), ("solver_lhs1", "M!$A$1:$A$2"), ("solver_rel1", "1"), ("solver_rhs1", "5"),
+            ("solver_lhs2", "M!$A$1:$A$2"), ("solver_rel2", "3"), ("solver_rhs2", "-5"),
+        ] {
+            book.defined_names.push((format!("M!{name}"), body.into()));
+        }
+        crate::formula::evaluate_workbook_formulas(&mut book);
+        let outcome = solve(&mut book, 0);
+        let f = get_number(&book, (0, 2, 0));
+        assert_eq!(outcome, Outcome::Optimal);
+        // the best of the minima: f(2.0944, -1) = 0.00892
+        assert!(f < 0.01, "f = {f}");
+    }
+
+    #[test]
+    fn evolutionary_handles_bounded_integers() {
+        // ABS(7x - 5y - 3) + x + y, integers in [1, 10]: 7*4 - 5*5 - 3 = 0 at
+        // (4, 5) costs 9; 7*2-5*2-3 = 1 at (2, 2) costs 5; (1, 1) costs 3.
+        let mut book = model_book(&[
+            (0, 0, CellValue::Number(0.0), None),
+            (1, 0, CellValue::Number(0.0), None),
+            (2, 0, CellValue::Number(0.0), Some("ABS(7*A1-5*A2-3)+A1+A2")),
+        ]);
+        for (name, body) in [
+            ("solver_opt", "M!$A$3"), ("solver_typ", "2"), ("solver_adj", "M!$A$1:$A$2"), ("solver_eng", "3"), ("solver_neg", "1"),
+            ("solver_num", "3"), ("solver_lhs1", "M!$A$1:$A$2"), ("solver_rel1", "1"), ("solver_rhs1", "10"),
+            ("solver_lhs2", "M!$A$1:$A$2"), ("solver_rel2", "3"), ("solver_rhs2", "1"),
+            ("solver_lhs3", "M!$A$1:$A$2"), ("solver_rel3", "4"), ("solver_rhs3", "\"整数\""),
+        ] {
+            book.defined_names.push((format!("M!{name}"), body.into()));
+        }
+        crate::formula::evaluate_workbook_formulas(&mut book);
+        let outcome = solve(&mut book, 0);
+        assert_eq!(outcome, Outcome::Optimal);
+        // brute force over [1,10]^2: the least is 3 at (1, 1)
+        let best = (1..=10).flat_map(|x| (1..=10).map(move |y| ((7 * x - 5 * y - 3) as i64).abs() + x + y)).min().unwrap();
+        assert_eq!(get_number(&book, (0, 2, 0)), best as f64);
+    }
 
     #[test]
     fn simplex_finds_the_textbook_vertex() {
