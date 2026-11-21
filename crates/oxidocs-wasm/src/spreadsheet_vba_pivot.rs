@@ -26,6 +26,15 @@ pub(super) enum PivotAxis {
     Data,
 }
 
+/// Which of a field's items a collection holds: `PivotItems`,
+/// `VisibleItems` or `HiddenItems`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PivotItemSet {
+    All,
+    Visible,
+    Hidden,
+}
+
 /// A field of a table: one of the source's columns, or one of its value
 /// fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +65,9 @@ fn function_of(aggregate: Aggregate) -> i32 {
     }
 }
 
+/// A sheet block, zero-based (row, col, row, col).
+type Block = (u32, u32, u32, u32);
+
 fn r1c1_range(sheet: &str, (r0, c0, r1, c1): (u32, u32, u32, u32)) -> String {
     format!("{}!R{}C{}:R{}C{}", quoted_sheet(sheet), r0 + 1, c0 + 1, r1 + 1, c1 + 1)
 }
@@ -70,7 +82,9 @@ impl WorkbookHost<'_> {
                 | HostObject::PivotFields(..)
                 | HostObject::PivotField(..)
                 | HostObject::PivotCaches
-                | HostObject::NewPivotCache(_)),
+                | HostObject::NewPivotCache(_)
+                | HostObject::PivotItems(..)
+                | HostObject::PivotItem(..)),
             ) => Some(*held),
             _ => None,
         }
@@ -128,7 +142,7 @@ impl WorkbookHost<'_> {
         let spec = self.workbook.pivots[index].clone();
         let target = self.sheet_index_named(&spec.sheet).ok_or_else(|| host_error(1004, "the pivot table's sheet is gone"))?;
         let grid = {
-            let get = pivot::source_reader(&*self.workbook, &spec.source_sheet);
+            let get = pivot::source_reader(&self.workbook, &spec.source_sheet);
             pivot::compute(&spec, &get, pivot::Ui::Japanese)
         };
         let (r0, c0, r1, c1) = Self::pivot_extent(&spec, true);
@@ -279,6 +293,7 @@ impl WorkbookHost<'_> {
                         Value::Empty
                     }
                     "pivotcache" => self.object(HostObject::PivotCache(index)),
+                    "getpivotdata" => self.get_pivot_data(index, args)?,
                     // AddDataField(Field[, Caption][, Function]): a value field
                     // over a source column; its caption Excel's own
                     // ("合計 / Sales") unless one is given.
@@ -377,7 +392,7 @@ impl WorkbookHost<'_> {
                         data: Vec::new(),
                     };
                     let mut spec = {
-                        let get = pivot::source_reader(&*self.workbook, &source_sheet);
+                        let get = pivot::source_reader(&self.workbook, &source_sheet);
                         pivot::spec_for_new(&new, &get, pivot::Ui::Japanese)
                     };
                     spec.created = true;
@@ -413,6 +428,19 @@ impl WorkbookHost<'_> {
                 _ => Ok(None),
             },
             HostObject::PivotField(index, field) => {
+                let set = match lower.as_str() {
+                    "pivotitems" => Some(PivotItemSet::All),
+                    "visibleitems" => Some(PivotItemSet::Visible),
+                    "hiddenitems" => Some(PivotItemSet::Hidden),
+                    _ => None,
+                };
+                if let Some(set) = set {
+                    return match args {
+                        [] | [Value::Missing] => Ok(Some(self.object(HostObject::PivotItems(index, field, set)))),
+                        [wanted] => self.pivot_items_item(index, field, set, wanted).map(Some),
+                        _ => Err(host_error(450, "Wrong number of arguments")),
+                    };
+                }
                 let spec = self.workbook.pivots[index].clone();
                 let (orientation, position) = Self::pivot_orientation(&spec, field);
                 Ok(Some(match lower.as_str() {
@@ -439,6 +467,15 @@ impl WorkbookHost<'_> {
                     _ => return Ok(None),
                 }))
             }
+            HostObject::PivotItems(index, field, set) => match (lower.as_str(), args) {
+                ("count", []) => Ok(Some(Value::Integer(self.pivot_item_list(index, field, set).len() as i64))),
+                ("item", [wanted]) | ("_default", [wanted]) => self.pivot_items_item(index, field, set, wanted).map(Some),
+                ("parent", []) => Ok(Some(self.object(HostObject::PivotField(index, field)))),
+                _ => Ok(None),
+            },
+            HostObject::PivotItem(index, f, at) => self.pivot_item_member(index, f, at, &lower).map(Some).or_else(|e| {
+                if e.is_empty() { Ok(None) } else { Err(e) }
+            }),
             _ => Ok(None),
         }
     }
@@ -448,6 +485,9 @@ impl WorkbookHost<'_> {
     /// Moving a field or picking a page item lays the table out again at once,
     /// as Excel does with manual update off.
     pub(super) fn set_pivot_member(&mut self, held: HostObject, name: &str, value: &Value) -> Result<bool, String> {
+        if let HostObject::PivotItem(index, f, at) = held {
+            return self.set_pivot_item(index, f, at, name, value);
+        }
         let HostObject::PivotField(index, PivotFieldRef::Source(f)) = held else { return Ok(false) };
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
@@ -466,7 +506,7 @@ impl WorkbookHost<'_> {
                         (spec.source_sheet.clone(), spec.source)
                     };
                     let items = {
-                        let get = pivot::source_reader(&*self.workbook, &source_sheet);
+                        let get = pivot::source_reader(&self.workbook, &source_sheet);
                         pivot::ascending_items(source, f, &get)
                     };
                     self.workbook.pivots[index].item_order[f] = items;
@@ -500,7 +540,7 @@ impl WorkbookHost<'_> {
 
     /// Where a macro points a cache or a table: a Range, or text naming one
     /// ("D!R1C1:R5C5", "D!A1:E5", "P!R4C1"). Zero-based (row, col, row, col).
-    fn pivot_source_of(&mut self, held: &Value) -> Result<(String, (u32, u32, u32, u32)), String> {
+    fn pivot_source_of(&mut self, held: &Value) -> Result<(String, Block), String> {
         if let Value::Object(object) = held {
             if let Some(range) = self.range(object) {
                 let sheet = self.workbook.sheets[range.sheet].name.clone();
@@ -535,6 +575,344 @@ impl WorkbookHost<'_> {
         }
     }
 
+    /// A field's items in the table's order, hidden ones included.
+    fn pivot_field_items(&self, index: usize, f: usize) -> Vec<CellValue> {
+        let spec = &self.workbook.pivots[index];
+        let get = pivot::source_reader(&self.workbook, &spec.source_sheet);
+        pivot::field_items(spec, f, &get)
+    }
+
+    fn pivot_item_hidden(spec: &PivotSpec, f: usize, item: &CellValue) -> bool {
+        spec.hidden.get(f).is_some_and(|hidden| hidden.iter().any(|h| pivot::same_item(h, item)))
+    }
+
+    /// Whether an item shows. Measured: a page field showing "(All)" or
+    /// "(複数のアイテム)" calls every item not visible, one showing an item
+    /// only that one; a field on no axis calls them all visible.
+    fn pivot_item_visible(spec: &PivotSpec, f: usize, item: &CellValue) -> bool {
+        match spec.pages.iter().find(|(g, _)| *g == f) {
+            Some((_, Some(pick))) => pivot::same_item(pick, item),
+            Some((_, None)) => false,
+            None => !Self::pivot_item_hidden(spec, f, item),
+        }
+    }
+
+    /// The items a collection holds, as places in the field's item list.
+    fn pivot_item_list(&self, index: usize, field: PivotFieldRef, set: PivotItemSet) -> Vec<usize> {
+        // A value field has no items (measured: DataFields(1).PivotItems.Count 0).
+        let PivotFieldRef::Source(f) = field else { return Vec::new() };
+        let spec = &self.workbook.pivots[index];
+        let items = self.pivot_field_items(index, f);
+        (0..items.len())
+            .filter(|at| match set {
+                PivotItemSet::All => true,
+                PivotItemSet::Visible => Self::pivot_item_visible(spec, f, &items[*at]),
+                PivotItemSet::Hidden => !Self::pivot_item_visible(spec, f, &items[*at]),
+            })
+            .collect()
+    }
+
+    /// `PivotItems(n)` or `PivotItems("west")`: by place or by name without
+    /// regard to case; anything else raises 1004 (measured).
+    fn pivot_items_item(&mut self, index: usize, field: PivotFieldRef, set: PivotItemSet, wanted: &Value) -> Result<Value, String> {
+        let list = self.pivot_item_list(index, field, set);
+        let failed = || host_error(1004, "Unable to get the PivotItems property of the PivotField class");
+        let PivotFieldRef::Source(f) = field else { return Err(failed()) };
+        let items = self.pivot_field_items(index, f);
+        let found = match wanted {
+            Value::String(name) => list
+                .iter()
+                .copied()
+                .find(|at| pivot::item_name(&items[*at], pivot::Ui::Japanese).eq_ignore_ascii_case(name.trim())),
+            other => {
+                let n = any_number(other).ok_or_else(|| host_error(13, "Type mismatch"))?;
+                (n >= 1.0).then(|| list.get(n as usize - 1).copied()).flatten()
+            }
+        };
+        found.map(|at| self.object(HostObject::PivotItem(index, f, at))).ok_or_else(failed)
+    }
+
+    /// The cells of a table's grid, as blocks of the sheet: every run of
+    /// rows by every run of columns, both zero-based within the grid.
+    fn pivot_blocks(&mut self, index: usize, origin: (u32, u32), rows: &[usize], cols: &[usize], what: &str) -> Result<Value, String> {
+        let spec = &self.workbook.pivots[index];
+        let sheet = self.sheet_index_named(&spec.sheet).ok_or_else(|| host_error(1004, "the pivot table's sheet is gone"))?;
+        let runs = |mut list: Vec<usize>| -> Vec<(usize, usize)> {
+            list.sort_unstable();
+            list.dedup();
+            let mut out: Vec<(usize, usize)> = Vec::new();
+            for n in list {
+                match out.last_mut() {
+                    Some(run) if run.1 + 1 == n => run.1 = n,
+                    _ => out.push((n, n)),
+                }
+            }
+            out
+        };
+        let mut blocks = Vec::new();
+        for (r0, r1) in runs(rows.to_vec()) {
+            for (c0, c1) in runs(cols.to_vec()) {
+                blocks.push(CellRange {
+                    sheet,
+                    start_row: origin.0 + r0 as u32 + 1,
+                    start_column: origin.1 + c0 as u32,
+                    end_row: origin.0 + r1 as u32 + 1,
+                    end_column: origin.1 + c1 as u32,
+                });
+            }
+        }
+        match blocks.len() {
+            0 => Err(host_error(1004, format!("Unable to get the {what} property of the PivotItem class"))),
+            1 => Ok(self.object(HostObject::Range(blocks[0]))),
+            _ => self.blocks_object(blocks),
+        }
+    }
+
+    /// A member of a PivotItem; `Err("")` for a name it lacks.
+    ///
+    /// Measured on Region/Product rows, Month columns, Kind page: Name, Value
+    /// and Caption the item as shown; Position its place among the field's
+    /// visible items, #N/A (2042) when hidden or off the row and column
+    /// axes; RecordCount its source records, hidden or not; LabelRange the
+    /// cells that show it (an inner row item under two outer ones: two
+    /// areas); DataRange the value cells of its own rows (an outer compact
+    /// item: its own row only) or columns, grand totals left out, a page
+    /// item's the whole body.
+    fn pivot_item_member(&mut self, index: usize, f: usize, at: usize, lower: &str) -> Result<Value, String> {
+        let items = self.pivot_field_items(index, f);
+        let Some(item) = items.get(at).cloned() else {
+            return Err(host_error(1004, "the pivot item is gone"));
+        };
+        let spec = self.workbook.pivots[index].clone();
+        let name = pivot::item_name(&item, pivot::Ui::Japanese);
+        let (orientation, _) = Self::pivot_orientation(&spec, PivotFieldRef::Source(f));
+        Ok(match lower {
+            "name" | "value" | "caption" | "sourcename" | "_default" => Value::String(name),
+            "visible" => Value::Boolean(Self::pivot_item_visible(&spec, f, &item)),
+            "position" => {
+                if matches!(orientation, XL_ROW_FIELD | XL_COLUMN_FIELD) && Self::pivot_item_visible(&spec, f, &item) {
+                    let before = items[..at].iter().filter(|v| Self::pivot_item_visible(&spec, f, v)).count();
+                    Value::Integer(before as i64 + 1)
+                } else {
+                    Value::Error(2042)
+                }
+            }
+            "recordcount" => {
+                let get = pivot::source_reader(&self.workbook, &spec.source_sheet);
+                let (r0, c0, r1, _) = spec.source;
+                let n = (r0 + 1..=r1).filter(|r| pivot::same_item(&get(*r, c0 + f as u32), &item)).count();
+                Value::Integer(n as i64)
+            }
+            "parent" => self.object(HostObject::PivotField(index, PivotFieldRef::Source(f))),
+            "labelrange" | "datarange" => {
+                let grid = {
+                    let get = pivot::source_reader(&self.workbook, &spec.source_sheet);
+                    pivot::compute(&spec, &get, pivot::Ui::Japanese)
+                };
+                let wanted = name.to_lowercase();
+                let lc = grid.label_columns;
+                let row_real: Vec<usize> = spec.rows.iter().flatten().copied().collect();
+                let col_real: Vec<usize> = spec.cols.iter().flatten().copied().collect();
+                let body_rows: Vec<usize> = grid
+                    .row_paths
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.as_ref().is_some_and(|(p, _)| !p.is_empty() || row_real.is_empty()))
+                    .map(|(r, _)| r)
+                    .collect();
+                let body_cols: Vec<usize> = grid
+                    .col_paths
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (p, _))| !p.is_empty() || col_real.is_empty())
+                    .map(|(j, _)| lc + j)
+                    .collect();
+                let what = if lower == "labelrange" { "LabelRange" } else { "DataRange" };
+                let (rows, cols): (Vec<usize>, Vec<usize>) = match orientation {
+                    XL_ROW_FIELD => {
+                        let level = row_real.iter().position(|g| *g == f).unwrap_or(0);
+                        let mine = |r: usize, exact: bool| {
+                            grid.row_paths[r].as_ref().is_some_and(|(p, _)| {
+                                p.get(level) == Some(&wanted) && (!exact || p.len() == level + 1)
+                            })
+                        };
+                        if lower == "labelrange" {
+                            let compact = spec.row_layout == pivot::RowLayout::Compact;
+                            let column = if compact { 0 } else { level };
+                            let rows: Vec<usize> = (0..grid.cells.len())
+                                .filter(|r| match grid.kinds[*r] {
+                                    pivot::RowKind::Item { level: l, .. } => {
+                                        (!compact || l == level)
+                                            && mine(*r, false)
+                                            && grid.cells[*r].get(column).is_some_and(|v| !matches!(v, CellValue::Empty))
+                                    }
+                                    _ => false,
+                                })
+                                .collect();
+                            (rows, vec![column])
+                        } else {
+                            let rows: Vec<usize> = (0..grid.cells.len()).filter(|r| mine(*r, true)).collect();
+                            (rows, body_cols)
+                        }
+                    }
+                    XL_COLUMN_FIELD => {
+                        let level = spec.cols.iter().position(|g| *g == Some(f)).unwrap_or(0);
+                        let real_level = col_real.iter().position(|g| *g == f).unwrap_or(0);
+                        let mine = |j: usize, exact: bool| {
+                            let p = &grid.col_paths[j].0;
+                            p.get(real_level) == Some(&wanted) && (!exact || p.len() == real_level + 1)
+                        };
+                        let pages = if spec.pages.is_empty() { 0 } else { spec.pages.len() + 1 };
+                        if lower == "labelrange" {
+                            let header = pages + 1 + level;
+                            let cols: Vec<usize> = (0..grid.col_paths.len())
+                                .filter(|j| {
+                                    mine(*j, false)
+                                        && grid.cells.get(header).and_then(|row| row.get(lc + j)).is_some_and(|v| !matches!(v, CellValue::Empty))
+                                })
+                                .map(|j| lc + j)
+                                .collect();
+                            (vec![header], cols)
+                        } else {
+                            let cols: Vec<usize> = (0..grid.col_paths.len()).filter(|j| mine(*j, true)).map(|j| lc + j).collect();
+                            (body_rows, cols)
+                        }
+                    }
+                    XL_PAGE_FIELD if lower == "datarange" => (body_rows, body_cols),
+                    _ => (Vec::new(), Vec::new()),
+                };
+                self.pivot_blocks(index, grid.origin, &rows, &cols, what)?
+            }
+            _ => return Err(String::new()),
+        })
+    }
+
+    /// `PivotItem.Visible` and `.Position`. Measured: hiding the last visible
+    /// item of a row field raises 1004; Position takes 1 to the visible count
+    /// (5 of 2 raises 1004) and moves the item there among the visible ones.
+    fn set_pivot_item(&mut self, index: usize, f: usize, at: usize, name: &str, value: &Value) -> Result<bool, String> {
+        let items = self.pivot_field_items(index, f);
+        let Some(item) = items.get(at).cloned() else {
+            return Err(host_error(1004, "the pivot item is gone"));
+        };
+        let lower = name.to_ascii_lowercase();
+        match lower.as_str() {
+            "visible" => {
+                let show = match value {
+                    Value::Boolean(b) => *b,
+                    other => any_number(other).ok_or_else(|| host_error(13, "Type mismatch"))? != 0.0,
+                };
+                let spec = &mut self.workbook.pivots[index];
+                if show {
+                    spec.hidden[f].retain(|h| !pivot::same_item(h, &item));
+                } else if !Self::pivot_item_hidden(spec, f, &item) {
+                    let shown = items.iter().filter(|v| !Self::pivot_item_hidden(spec, f, v)).count();
+                    if shown <= 1 {
+                        return Err(host_error(1004, "Unable to set the Visible property of the PivotItem class"));
+                    }
+                    spec.hidden[f].push(item);
+                }
+            }
+            "position" => {
+                let spec = &self.workbook.pivots[index];
+                let (orientation, _) = Self::pivot_orientation(spec, PivotFieldRef::Source(f));
+                let visible: Vec<CellValue> = items.iter().filter(|v| Self::pivot_item_visible(spec, f, v)).cloned().collect();
+                let n = any_number(value).ok_or_else(|| host_error(13, "Type mismatch"))?;
+                if !matches!(orientation, XL_ROW_FIELD | XL_COLUMN_FIELD)
+                    || !Self::pivot_item_visible(spec, f, &item)
+                    || n < 1.0
+                    || n as usize > visible.len()
+                {
+                    return Err(host_error(1004, "Unable to set the Position property of the PivotItem class"));
+                }
+                let mut order: Vec<CellValue> = items.into_iter().filter(|v| !pivot::same_item(v, &item)).collect();
+                let others: Vec<&CellValue> = visible.iter().filter(|v| !pivot::same_item(v, &item)).collect();
+                let at = match others.get(n as usize - 1) {
+                    Some(next) => order.iter().position(|v| pivot::same_item(v, next)).unwrap_or(order.len()),
+                    None => others
+                        .last()
+                        .and_then(|last| order.iter().position(|v| pivot::same_item(v, last)))
+                        .map_or(order.len(), |p| p + 1),
+                };
+                order.insert(at, item);
+                self.workbook.pivots[index].item_order[f] = order;
+            }
+            _ => return Ok(false),
+        }
+        self.refresh_pivot(index)?;
+        self.recalculate();
+        Ok(true)
+    }
+
+    /// `PivotTable.GetPivotData([DataField], Field1, Item1, ...)`: the cell
+    /// that shows the value. Measured: the value field by its caption or its
+    /// source column's name, any case; row (column) fields must be the
+    /// outermost ones of their axis; a page field passes only while it shows
+    /// that item; no pairs is the grand total; a hidden item, an unknown name
+    /// or an inner field alone raises 1004; a shown empty cell is returned.
+    fn get_pivot_data(&mut self, index: usize, args: &[Value]) -> Result<Value, String> {
+        let failed = || host_error(1004, "Unable to get the GetPivotData property of the PivotTable class");
+        let spec = self.workbook.pivots[index].clone();
+        let text = |v: &Value| -> Option<String> {
+            match v {
+                Value::String(s) => Some(s.trim().to_lowercase()),
+                Value::Missing | Value::Empty => None,
+                other => any_number(other).map(|n| pivot::item_name(&CellValue::Number(n), pivot::Ui::Japanese).to_lowercase()),
+            }
+        };
+        let data = match args.first().and_then(text) {
+            None => 0,
+            Some(wanted) => spec
+                .data
+                .iter()
+                .position(|d| {
+                    d.name.to_lowercase() == wanted
+                        || spec.field_names.get(d.field).is_some_and(|n| n.to_lowercase() == wanted)
+                })
+                .ok_or_else(failed)?,
+        };
+        let row_real: Vec<usize> = spec.rows.iter().flatten().copied().collect();
+        let col_real: Vec<usize> = spec.cols.iter().flatten().copied().collect();
+        let mut row_pairs: Vec<(usize, String)> = Vec::new();
+        let mut col_pairs: Vec<(usize, String)> = Vec::new();
+        for pair in args.get(1..).unwrap_or(&[]).chunks(2) {
+            let [field, item] = pair else { return Err(failed()) };
+            let (Some(field), Some(item)) = (text(field), text(item)) else { return Err(failed()) };
+            let f = spec.field_names.iter().position(|n| n.to_lowercase() == field).ok_or_else(failed)?;
+            if let Some(p) = row_real.iter().position(|g| *g == f) {
+                row_pairs.push((p, item));
+            } else if let Some(p) = col_real.iter().position(|g| *g == f) {
+                col_pairs.push((p, item));
+            } else {
+                match spec.pages.iter().find(|(g, _)| *g == f) {
+                    Some((_, Some(pick))) if pivot::item_name(pick, pivot::Ui::Japanese).to_lowercase() == item => {}
+                    _ => return Err(failed()),
+                }
+            }
+        }
+        let path = |mut pairs: Vec<(usize, String)>| -> Option<Vec<String>> {
+            pairs.sort();
+            pairs.iter().enumerate().all(|(i, (p, _))| *p == i).then(|| pairs.into_iter().map(|(_, s)| s).collect())
+        };
+        let (Some(row_path), Some(col_path)) = (path(row_pairs), path(col_pairs)) else { return Err(failed()) };
+        let grid = {
+            let get = pivot::source_reader(&self.workbook, &spec.source_sheet);
+            pivot::compute(&spec, &get, pivot::Ui::Japanese)
+        };
+        for (r, held) in grid.row_paths.iter().enumerate() {
+            let Some((p, row_data)) = held else { continue };
+            if *p != row_path {
+                continue;
+            }
+            for (j, (q, col_data)) in grid.col_paths.iter().enumerate() {
+                if *q == col_path && row_data.or(*col_data).unwrap_or(0) == data {
+                    return self.pivot_blocks(index, grid.origin, &[r], &[grid.label_columns + j], "GetPivotData");
+                }
+            }
+        }
+        Err(failed())
+    }
+
     pub(super) fn pivot_enumerate(&mut self, held: HostObject) -> Option<Vec<Value>> {
         match held {
             HostObject::PivotTables(sheet) => {
@@ -544,6 +922,11 @@ impl WorkbookHost<'_> {
             HostObject::PivotFields(index, axis) => {
                 let fields = Self::pivot_fields_of(&self.workbook.pivots[index], axis);
                 Some(fields.into_iter().map(|field| self.object(HostObject::PivotField(index, field))).collect())
+            }
+            HostObject::PivotItems(index, field, set) => {
+                let items = self.pivot_item_list(index, field, set);
+                let PivotFieldRef::Source(f) = field else { return Some(Vec::new()) };
+                Some(items.into_iter().map(|at| self.object(HostObject::PivotItem(index, f, at))).collect())
             }
             _ => None,
         }
@@ -634,6 +1017,159 @@ mod tests {
     /// A table made from nothing by a macro, the way the probe makes it in
     /// Excel: PivotCaches.Create, CreatePivotTable, fields placed one by one.
     /// Saved, it opens as a pivot table of the same name and grid.
+    /// `_xlsx_vba_pivot_items_probe.py`'s table and questions: each field's
+    /// items, GetPivotData's cell, hiding, moving and page picks, against
+    /// what Excel 16.0 answered.
+    #[test]
+    fn pivot_items_and_get_pivot_data_answer_as_excel_does() {
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut book = oxicells_core::parse_xlsx(original).unwrap();
+        let module = parse_module(r##"Private Function Grid(p As Object) As String
+            Dim r As Long, c As Long, s As String
+            For r = 2 To 11
+                For c = 1 To 4
+                    s = s & p.Cells(r, c).Value & ","
+                Next
+                s = s & "/"
+            Next
+            Grid = s
+        End Function
+
+        Private Function GP(pt As Object, n As Long, Optional d, Optional f1, Optional i1, Optional f2, Optional i2, Optional f3, Optional i3) As String
+            On Error GoTo bad
+            If n = 0 Then
+                GP = pt.GetPivotData().Address
+            ElseIf n = 1 Then
+                GP = pt.GetPivotData(d).Address
+            ElseIf n = 3 Then
+                GP = pt.GetPivotData(d, f1, i1).Address
+            ElseIf n = 5 Then
+                GP = pt.GetPivotData(d, f1, i1, f2, i2).Address
+            Else
+                GP = pt.GetPivotData(d, f1, i1, f2, i2, f3, i3).Address
+            End If
+            Exit Function
+        bad:
+            GP = "ERR" & Err.Number
+        End Function
+
+        Private Function Items(pf As Object) As String
+            Dim it As Object, s As String
+            For Each it In pf.PivotItems
+                s = s & it.Name & ":" & it.Visible & ":"
+                If IsError(it.Position) Then s = s & "NA" Else s = s & it.Position
+                s = s & ":" & it.RecordCount & ":"
+                On Error Resume Next
+                s = s & it.LabelRange.Address
+                If Err.Number <> 0 Then s = s & "ERR"
+                Err.Clear
+                s = s & ":" & it.DataRange.Address
+                If Err.Number <> 0 Then s = s & "ERR"
+                Err.Clear
+                On Error GoTo 0
+                s = s & ";"
+            Next
+            Items = pf.PivotItems.Count & "=" & s
+        End Function
+
+        Private Function Try(o As Object, name As String, v) As String
+            On Error GoTo bad
+            If name = "Visible" Then
+                o.Visible = v
+            Else
+                o.Position = v
+            End If
+            Try = "ok"
+            Exit Function
+        bad:
+            Try = "ERR" & Err.Number
+        End Function
+
+        Public Function Probe() As String
+            Dim d As Object, p As Object, pc As Object, pt As Object, s As String, f As Variant
+            Set d = Worksheets(1)
+            d.Cells.Clear
+            d.Name = "D"
+            d.Range("A1:E1").Value = Array("Region", "Product", "Month", "Kind", "Sales")
+            d.Range("A2:E2").Value = Array("West", "Apple", "Feb", "A", 5)
+            d.Range("A3:E3").Value = Array("East", "Apple", "Jan", "B", 2)
+            d.Range("A4:E4").Value = Array("East", "Pear", "Feb", "A", 3)
+            d.Range("A5:E5").Value = Array("West", "Apple", "Jan", "A", 1)
+            Set p = Worksheets.Add(After:=d)
+            p.Name = "P"
+            Set pc = ThisWorkbook.PivotCaches.Create(1, "D!R1C1:R5C5")
+            Set pt = pc.CreatePivotTable("P!R4C1", "PT")
+            pt.PivotFields("Region").Orientation = 1
+            pt.PivotFields("Product").Orientation = 1
+            pt.PivotFields("Month").Orientation = 2
+            pt.PivotFields("Kind").Orientation = 3
+            pt.AddDataField pt.PivotFields("Sales")
+            For Each f In Array("Region", "Product", "Month", "Kind", "Sales")
+                s = s & f & "#" & Items(pt.PivotFields(f)) & vbLf
+            Next
+            s = s & pt.PivotFields("Region").PivotItems("west").Name & "|" & pt.DataFields(1).PivotItems.Count & vbLf
+            s = s & GP(pt, 1, "Sales") & "," & GP(pt, 3, "Sales", "Region", "West") & "," & GP(pt, 5, "Sales", "Region", "West", "Product", "Apple") & ","
+            s = s & GP(pt, 3, "Sales", "Month", "Jan") & "," & GP(pt, 5, "Sales", "Region", "East", "Month", "Feb") & ","
+            s = s & GP(pt, 7, "Sales", "Region", "East", "Product", "Pear", "Month", "Feb") & "," & GP(pt, 7, "Sales", "Region", "East", "Product", "Pear", "Month", "Jan") & ","
+            s = s & GP(pt, 3, "Sales", "Product", "Apple") & "," & GP(pt, 3, "Sales", "Region", "Nope") & "," & GP(pt, 3, "合計 / Sales", "Region", "West") & ","
+            s = s & GP(pt, 3, "sales", "region", "west") & "," & GP(pt, 3, "Sales", "Kind", "A") & "," & GP(pt, 0) & vbLf
+            s = s & Try(pt.PivotFields("Region").PivotItems("East"), "Visible", False) & "|" & Grid(p) & vbLf
+            s = s & pt.PivotFields("Region").PivotItems("East").Visible & "|" & IsError(pt.PivotFields("Region").PivotItems("East").Position) & "|"
+            s = s & pt.PivotFields("Region").PivotItems("West").Position & "|" & pt.PivotFields("Region").VisibleItems.Count & "|" & pt.PivotFields("Region").HiddenItems(1).Name & "|"
+            s = s & pt.PivotFields("Region").PivotItems.Count & "|" & GP(pt, 3, "Sales", "Region", "East") & "|"
+            s = s & Try(pt.PivotFields("Region").PivotItems("West"), "Visible", False) & "|" & Try(pt.PivotFields("Region").PivotItems("East"), "Visible", True) & "|" & Grid(p) & vbLf
+            s = s & Try(pt.PivotFields("Product").PivotItems("Pear"), "Position", 1) & "|" & Grid(p) & "|"
+            s = s & pt.PivotFields("Product").PivotItems(1).Name & "|" & Try(pt.PivotFields("Product").PivotItems("Pear"), "Position", 5) & "|"
+            s = s & Try(pt.PivotFields("Product").PivotItems("Pear"), "Position", 2) & "|" & Grid(p) & vbLf
+            pt.PivotFields("Kind").CurrentPage = "A"
+            s = s & pt.PivotFields("Kind").PivotItems("A").Visible & "|" & pt.PivotFields("Kind").PivotItems("B").Visible & "|"
+            s = s & pt.PivotFields("Kind").PivotItems("A").DataRange.Address & "|" & GP(pt, 3, "Sales", "Kind", "A") & "|"
+            pt.PivotFields("Kind").CurrentPage = "(All)"
+            s = s & pt.PivotFields("Kind").PivotItems("A").Visible & "|" & Try(pt.PivotFields("Kind").PivotItems("B"), "Visible", False) & "|" & Grid(p)
+            Probe = s
+        End Function"##).unwrap();
+        let answer = execute_with_host(&module, "Probe", vec![], &mut WorkbookHost::new(&mut book, 0).unwrap()).unwrap();
+        let Value::String(answer) = answer else { panic!("{answer:?}") };
+        let full = "Kind,(すべて),,,/,,,,/合計 / Sales,列ラベル,,,/行ラベル,Jan,Feb,総計,/\
+                    East,2,3,5,/Apple,2,,2,/Pear,,3,3,/West,1,5,6,/Apple,1,5,6,/総計,3,8,11,/";
+        let expected = [
+            "Region#2=East:True:1:2:$A$6:$B$6:$C$6;West:True:2:2:$A$9:$B$9:$C$9;".to_string(),
+            "Product#2=Apple:True:1:3:$A$7,$A$10:$B$7:$C$7,$B$10:$C$10;Pear:True:2:1:$A$8:$B$8:$C$8;".into(),
+            "Month#2=Jan:True:1:2:$B$5:$B$6:$B$10;Feb:True:2:2:$C$5:$C$6:$C$10;".into(),
+            "Kind#2=A:False:NA:3:ERR:$B$6:$C$10;B:False:NA:1:ERR:$B$6:$C$10;".into(),
+            "Sales#4=1:True:NA:1:ERRERR;2:True:NA:1:ERRERR;3:True:NA:1:ERRERR;5:True:NA:1:ERRERR;".into(),
+            "West|0".into(),
+            "$D$11,$D$9,$D$10,$B$11,$C$6,$C$8,$B$8,ERR1004,ERR1004,$D$9,$D$9,ERR1004,$D$11".into(),
+            "ok|Kind,(すべて),,,/,,,,/合計 / Sales,列ラベル,,,/行ラベル,Jan,Feb,総計,/\
+             West,1,5,6,/Apple,1,5,6,/総計,1,5,6,/,,,,/,,,,/,,,,/"
+                .into(),
+            format!("False|True|1|1|East|2|ERR1004|ERR1004|ok|{full}"),
+            "ok|Kind,(すべて),,,/,,,,/合計 / Sales,列ラベル,,,/行ラベル,Jan,Feb,総計,/\
+             East,2,3,5,/Pear,,3,3,/Apple,2,,2,/West,1,5,6,/Apple,1,5,6,/総計,3,8,11,/|Pear|ERR1004|ok|"
+                .to_string()
+                + full,
+            "True|False|$B$6:$C$9|$D$10|False|ok|Kind,(複数のアイテム),,,/,,,,/合計 / Sales,列ラベル,,,/行ラベル,Jan,Feb,総計,/\
+             East,,3,3,/Pear,,3,3,/West,1,5,6,/Apple,1,5,6,/総計,1,8,9,/,,,,/"
+                .into(),
+        ];
+        let got: Vec<&str> = answer.split('\n').collect();
+        assert_eq!(got.len(), expected.len(), "{answer}");
+        for (got, want) in got.iter().zip(&expected) {
+            assert_eq!(got, want);
+        }
+        // The hidden page item is saved and read back.
+        let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();
+        editor.apply_workbook(&book).unwrap();
+        let saved = editor.save().unwrap();
+        if let Ok(path) = std::env::var("OXI_VBA_PIVOT_ITEMS_OUT") {
+            std::fs::write(path, &saved).unwrap();
+        }
+        let reopened = oxicells_core::parse_xlsx(&saved).unwrap();
+        let spec = &reopened.pivots[0];
+        assert_eq!(spec.hidden[3], vec![CellValue::String("B".into())]);
+        assert_eq!(spec.pages, vec![(3, None)]);
+    }
+
     #[test]
     fn a_macro_creates_a_pivot_table_that_saves() {
         let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");

@@ -31,7 +31,7 @@ mod shapes;
 mod shapes_members;
 #[path = "spreadsheet_vba_pivot.rs"]
 mod pivot_tables;
-use pivot_tables::{PivotAxis, PivotFieldRef};
+use pivot_tables::{PivotAxis, PivotFieldRef, PivotItemSet};
 #[path = "spreadsheet_vba_regexp.rs"]
 mod regexp;
 #[path = "spreadsheet_vba_file_io.rs"]
@@ -497,6 +497,10 @@ enum HostObject {
     PivotCache(usize),
     PivotFields(usize, PivotAxis),
     PivotField(usize, PivotFieldRef),
+    /// A field's items: table, field, which of them.
+    PivotItems(usize, PivotFieldRef, PivotItemSet),
+    /// An item: table, source field, its place in the field's item list.
+    PivotItem(usize, usize, usize),
     /// The workbook's pivot caches.
     PivotCaches,
     /// A cache a macro made, by its place in the host's list, not yet feeding
@@ -4763,6 +4767,8 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::PivotCache(_) => "PivotCache",
                 HostObject::PivotFields(..) => "PivotFields",
                 HostObject::PivotField(..) => "PivotField",
+                HostObject::PivotItems(..) => "PivotItems",
+                HostObject::PivotItem(..) => "PivotItem",
                 HostObject::PivotCaches => "PivotCaches",
                 HostObject::NewPivotCache(_) => "PivotCache",
                 HostObject::ListObject(_) => "ListObject",
@@ -15859,6 +15865,8 @@ impl<'a> WorkbookHost<'a> {
                 | HostObject::PivotField(..)
                 | HostObject::PivotCaches
                 | HostObject::NewPivotCache(_)
+                | HostObject::PivotItems(..)
+                | HostObject::PivotItem(..)
                 | HostObject::Gone => continue,
             };
             *object = followed.unwrap_or(HostObject::Gone);

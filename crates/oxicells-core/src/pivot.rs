@@ -163,6 +163,14 @@ impl Ui {
             Ui::English => "(blank)",
         }
     }
+    /// A page field showing several items, some hidden: measured, Excel 16.0
+    /// in Japanese shows "(複数のアイテム)".
+    fn multiple(self) -> &'static str {
+        match self {
+            Ui::Japanese => "(複数のアイテム)",
+            Ui::English => "(Multiple Items)",
+        }
+    }
     fn subtotal(self, item: &str) -> String {
         match self {
             Ui::Japanese => format!("{item} 集計"),
@@ -187,6 +195,14 @@ pub struct PivotGrid {
     pub kinds: Vec<RowKind>,
     /// How many label columns stand at the left of every row.
     pub label_columns: usize,
+    /// Each row of `cells`: the row items it carries values for, outermost
+    /// first, as [`item_name`] spells them in lower case, and the value field
+    /// it carries when values sit on rows. `None` for rows with no values
+    /// (headings, page fields, an item whose value lines follow it).
+    pub row_paths: Vec<Option<(Vec<String>, Option<usize>)>>,
+    /// Each value column, after the label columns: its column items the same
+    /// way, and its value field when values sit on columns.
+    pub col_paths: Vec<(Vec<String>, Option<usize>)>,
 }
 
 /// A row of a pivot grid, as the pivot style sees it.
@@ -750,6 +766,9 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
         order.into_iter().filter(|v| !hidden.contains(&key(v))).collect()
     };
 
+    // A path's items as `item_name` spells them, in lower case.
+    let path_names = |path: &[Key]| -> Vec<String> { path.iter().map(|k| key_name(k, ui)).collect() };
+
     let data_count = spec.data.len().max(1);
     // An axis laid out: depth-first items, subtotals, value lines, grand totals.
     let lay_axis = |fields: &[Option<usize>], subtotal_after: bool| -> Vec<Slot> {
@@ -976,7 +995,9 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
             .map(|c| cell(row_path, &col_path_of(c), row_data.unwrap_or_else(|| column_data(c))))
             .collect()
     };
+    let col_paths: Vec<(Vec<String>, Option<usize>)> = columns.iter().map(|c| (path_names(&c.path), c.data)).collect();
     let mut kinds: Vec<RowKind> = vec![RowKind::Header; grid.len()];
+    let mut row_paths: Vec<Option<(Vec<String>, Option<usize>)>> = vec![None; grid.len()];
     let leaf_level = row_fields.len().saturating_sub(1);
     if has_rows || values_on_rows {
         let laid = lay_axis(row_fields, false);
@@ -994,6 +1015,7 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                     }
                     grid.push(row);
                     kinds.push(RowKind::Item { level: *level, leaf: *level >= leaf_level });
+                    row_paths.push((!values_below).then(|| (path_names(&slot.path), None)));
                 }
                 SlotKind::Data { .. } => {
                     let d = slot.data.unwrap_or(0);
@@ -1001,6 +1023,7 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                     row.extend(value_row(&slot.path, Some(d)));
                     grid.push(row);
                     kinds.push(RowKind::Data);
+                    row_paths.push(Some((path_names(&slot.path), Some(d))));
                 }
                 _ => {}
             }
@@ -1012,12 +1035,14 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                     row.extend(value_row(&[], Some(d)));
                     grid.push(row);
                     kinds.push(RowKind::Grand);
+                    row_paths.push(Some((Vec::new(), Some(d))));
                 }
             } else {
                 let mut row = vec![text(&grand)];
                 row.extend(value_row(&[], None));
                 grid.push(row);
                 kinds.push(RowKind::Grand);
+                row_paths.push(Some((Vec::new(), None)));
             }
         }
     } else {
@@ -1037,6 +1062,7 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
             grid.push(row);
         }
         kinds.resize(grid.len(), RowKind::Grand);
+        row_paths.resize(grid.len(), None);
     }
     let mut label_columns = 1;
 
@@ -1046,6 +1072,7 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
         let lc = row_real.len();
         label_columns = lc;
         let mut reshaped_kinds: Vec<RowKind> = Vec::new();
+        let mut reshaped_paths: Vec<Option<(Vec<String>, Option<usize>)>> = Vec::new();
         let body_lines = lay_axis(row_fields, false).len() + usize::from(spec.row_grand_totals);
         let header_rows = grid.len() - body_lines;
         let mut reshaped: Vec<Vec<CellValue>> = Vec::new();
@@ -1070,6 +1097,7 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
             }
             reshaped.push(out);
             reshaped_kinds.push(RowKind::Header);
+            reshaped_paths.push(None);
         }
         let laid: Vec<Slot> = lay_axis(row_fields, false)
             .into_iter()
@@ -1086,13 +1114,15 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                         line.extend(value_row(&slot.path, None));
                         reshaped.push(line);
                         reshaped_kinds.push(RowKind::Item { level: *level, leaf: *level >= leaf });
+                        reshaped_paths.push(Some((path_names(&slot.path), None)));
                     }
                 }
             }
             _ => {
                 // Open groups: (level, label, path, label still to show).
                 type Group = (usize, CellValue, Vec<Key>, bool);
-                let close = |open: &mut Vec<Group>, down_to: usize, out: &mut Vec<Vec<CellValue>>, kinds: &mut Vec<RowKind>| {
+                type Paths = Vec<Option<(Vec<String>, Option<usize>)>>;
+                let close = |open: &mut Vec<Group>, down_to: usize, out: &mut Vec<Vec<CellValue>>, kinds: &mut Vec<RowKind>, paths: &mut Paths| {
                     while open.last().is_some_and(|g| g.0 >= down_to) {
                         let (level, label, path, _) = open.pop().unwrap();
                         let mut line = blank();
@@ -1100,12 +1130,13 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                         line.extend(value_row(&path, None));
                         out.push(line);
                         kinds.push(RowKind::Subtotal { level });
+                        paths.push(Some((path_names(&path), None)));
                     }
                 };
                 let mut open: Vec<Group> = Vec::new();
                 for slot in &laid {
                     if let SlotKind::Item { level, label } = &slot.kind {
-                        close(&mut open, *level, &mut reshaped, &mut reshaped_kinds);
+                        close(&mut open, *level, &mut reshaped, &mut reshaped_kinds, &mut reshaped_paths);
                         if *level < leaf {
                             open.push((*level, label.clone(), slot.path.clone(), true));
                         } else {
@@ -1120,10 +1151,11 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                             line.extend(value_row(&slot.path, None));
                             reshaped.push(line);
                             reshaped_kinds.push(RowKind::Item { level: leaf, leaf: true });
+                            reshaped_paths.push(Some((path_names(&slot.path), None)));
                         }
                     }
                 }
-                close(&mut open, 0, &mut reshaped, &mut reshaped_kinds);
+                close(&mut open, 0, &mut reshaped, &mut reshaped_kinds, &mut reshaped_paths);
             }
         }
         if spec.row_grand_totals {
@@ -1132,9 +1164,11 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
             line.extend(value_row(&[], None));
             reshaped.push(line);
             reshaped_kinds.push(RowKind::Grand);
+            reshaped_paths.push(Some((Vec::new(), None)));
         }
         grid = reshaped;
         kinds = reshaped_kinds;
+        row_paths = reshaped_paths;
     }
 
     // Page fields stand above the table: one row each, then a blank row.
@@ -1148,6 +1182,7 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                     text(&spec.field_names[*f]),
                     match pick {
                         Some(v) => shown(v),
+                        None if !spec.hidden[*f].is_empty() => text(ui.multiple()),
                         None => text(ui.all()),
                     },
                 ]
@@ -1159,10 +1194,68 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
         above_kinds.push(RowKind::Blank);
         above_kinds.extend(kinds);
         kinds = above_kinds;
+        let mut above_paths = vec![None; spec.pages.len() + 1];
+        above_paths.extend(row_paths);
+        row_paths = above_paths;
         above.extend(grid);
         grid = above;
     }
-    PivotGrid { origin, cells: grid, kinds, label_columns }
+    PivotGrid { origin, cells: grid, kinds, label_columns, row_paths, col_paths }
+}
+
+/// How a pivot shows an item: a whole number without decimals, a blank as
+/// the UI's "(空白)". What `PivotItem.Name` answers.
+pub fn item_name(value: &CellValue, ui: Ui) -> String {
+    match value {
+        CellValue::Empty => ui.blank().to_string(),
+        CellValue::String(s) => s.clone(),
+        CellValue::Number(n) => {
+            if n.fract() == 0.0 && n.abs() < 1e15 {
+                format!("{}", *n as i64)
+            } else {
+                format!("{n}")
+            }
+        }
+        CellValue::Boolean(b) => if *b { "TRUE".into() } else { "FALSE".into() },
+        CellValue::Error(e) => e.clone(),
+        CellValue::Utf16(u) => String::from_utf16_lossy(u),
+    }
+}
+
+fn key_name(k: &Key, ui: Ui) -> String {
+    match k {
+        Key::Blank => ui.blank().to_lowercase(),
+        Key::Number(bits) => item_name(&CellValue::Number(f64::from_bits(*bits)), ui),
+        Key::Text(s) => s.clone(),
+        Key::Bool(b) => if *b { "true".into() } else { "false".into() },
+        Key::Error(e) => e.to_lowercase(),
+    }
+}
+
+/// A field's items in the order the table lists them, hidden ones included:
+/// the saved order, then the source's other values ascending. What
+/// `PivotField.PivotItems` enumerates (measured: a created table's Region
+/// lists East, West; an unplaced Sales 1, 2, 3, 5).
+pub fn field_items(spec: &PivotSpec, field: usize, get: &dyn Fn(u32, u32) -> CellValue) -> Vec<CellValue> {
+    let mut seen = std::collections::HashSet::new();
+    let mut order: Vec<CellValue> = Vec::new();
+    for v in spec.item_order.get(field).into_iter().flatten() {
+        if seen.insert(key(v)) {
+            order.push(v.clone());
+        }
+    }
+    let mut fresh: Vec<CellValue> = ascending_items(spec.source, field, get)
+        .into_iter()
+        .filter(|v| seen.insert(key(v)))
+        .collect();
+    fresh.sort_by(ascending);
+    order.extend(fresh);
+    order
+}
+
+/// Whether two items are the same item of a field.
+pub fn same_item(a: &CellValue, b: &CellValue) -> bool {
+    key(a) == key(b)
 }
 
 /// The source value at (row, col) of a parsed workbook's named sheet.
@@ -1371,7 +1464,7 @@ impl Aggregate {
 
 /// The definition a new pivot amounts to, ready for `compute`.
 pub fn spec_for_new(new: &NewPivot, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) -> PivotSpec {
-    let (r0, c0, r1, c1) = new.source;
+    let (r0, c0, _, c1) = new.source;
     let width = (c1 - c0 + 1) as usize;
     let names: Vec<String> = (0..width)
         .map(|j| match get(r0, c0 + j as u32) {
@@ -1535,8 +1628,10 @@ fn table_xml(spec: &PivotSpec, cache_id: u32, grid: &PivotGrid, header_rows: usi
         if axis.is_some() {
             let n = spec.item_order[f].len();
             x.push_str(&format!("<pivotField{attrs} showAll=\"0\"><items count=\"{}\">", n + 1));
-            for i in 0..n {
-                x.push_str(&format!("<item x=\"{i}\"/>"));
+            for (i, v) in spec.item_order[f].iter().enumerate() {
+                // A hidden item keeps its place, flagged h="1".
+                let hidden = spec.hidden[f].iter().any(|h| key(h) == key(v));
+                x.push_str(&format!("<item{} x=\"{i}\"/>", if hidden { " h=\"1\"" } else { "" }));
             }
             x.push_str("<item t=\"default\"/></items></pivotField>");
         } else {
@@ -1559,8 +1654,14 @@ fn table_xml(spec: &PivotSpec, cache_id: u32, grid: &PivotGrid, header_rows: usi
     x.push_str(&fields(&spec.cols, "colFields"));
     if pages > 0 {
         x.push_str(&format!("<pageFields count=\"{pages}\">"));
-        for (f, _) in &spec.pages {
-            x.push_str(&format!("<pageField fld=\"{f}\" hier=\"-1\"/>"));
+        for (f, pick) in &spec.pages {
+            // The item a page field shows, by its place among the field's items.
+            let item = pick
+                .as_ref()
+                .and_then(|v| spec.item_order[*f].iter().position(|w| key(w) == key(v)))
+                .map(|i| format!(" item=\"{i}\""))
+                .unwrap_or_default();
+            x.push_str(&format!("<pageField fld=\"{f}\"{item} hier=\"-1\"/>"));
         }
         x.push_str("</pageFields>");
     }
