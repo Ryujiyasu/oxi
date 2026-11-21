@@ -248,6 +248,24 @@ mod host {
                 }
                 session.call(&object, &name, &args)
             });
+            // A cell written through the object model is a change too: Excel
+            // tells the sinks of an add-in's own writes as of a user's.
+            let wrote_cells = flags.0 & DISPATCH_PROPERTYPUT.0 != 0
+                && ["value", "value2", "formula", "formular1c1", "formula2"].contains(&name.to_ascii_lowercase().as_str())
+                && matches!(answer, Ok(None));
+            if wrote_cells {
+                let sheet = SESSION.with(|s| {
+                    let mut s = s.borrow_mut();
+                    let session = s.as_mut()?;
+                    match session.get(&self.object, "Worksheet") {
+                        Ok(Some(Value::Object(sheet))) => Some(sheet),
+                        _ => None,
+                    }
+                });
+                if let Some(sheet) = sheet {
+                    sheet_change(&sheet, &self.object);
+                }
+            }
             match answer {
                 Ok(Some(Value::Missing)) => Err(DISP_E_MEMBERNOTFOUND.into()),
                 Ok(value) => {

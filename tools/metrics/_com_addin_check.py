@@ -65,7 +65,7 @@ def unregister():
 
 
 def read(sh):
-    return [sh.Range(a).Value for a in ("A1", "B1", "C1", "D1", "E1", "F1", "G1")] + [sh.Range("B1").Formula]
+    return [sh.Range(a).Value for a in ("A1", "B1", "C1", "D1", "E1", "F1", "G1", "H1")] + [sh.Range("B1").Formula]
 
 
 def main():
@@ -96,7 +96,7 @@ def main():
         xl.Quit()
         unregister()
     labels = ["A1 text", "B1 value", "C1 from B1", "D1 Application.Name", "E1 connect mode",
-              "F1 SheetChange address", "G1 SheetChange value", "B1 formula"]
+              "F1 SheetChange address", "G1 SheetChange value", "H1 changes told (own writes too)", "B1 formula"]
     ok = 0
     for label, a, b in zip(labels, excel, oxi):
         same = a == b

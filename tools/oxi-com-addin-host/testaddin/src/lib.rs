@@ -92,6 +92,9 @@ unsafe trait IAppEvents: IDispatch {}
 
 const DISPID_SHEET_CHANGE: i32 = 0x61C;
 
+/// SheetChange events seen so far: the add-in's own writes are changes too.
+static SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[implement(IAppEvents, IDispatch)]
 struct Sink;
 
@@ -116,6 +119,7 @@ impl IDispatch_Impl for Sink_Impl {
         if id != DISPID_SHEET_CHANGE {
             return Ok(());
         }
+        SEEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         unsafe {
             let p = &*params;
             if p.cArgs < 2 {
@@ -140,6 +144,9 @@ impl IDispatch_Impl for Sink_Impl {
             trace(format!("F1 write {:?}", wrote.as_ref().map(|_| ())));
             wrote?;
             invoke(&range("G1")?, "Value", DISPATCH_PROPERTYPUT, &[VARIANT::from(value * 2.0)])?;
+            // How many changes were told by now: A2's, F1's and G1's.
+            let seen = f64::from(SEEN.load(std::sync::atomic::Ordering::SeqCst));
+            invoke(&range("H1")?, "Value", DISPATCH_PROPERTYPUT, &[VARIANT::from(seen)])?;
         }
         Ok(())
     }
