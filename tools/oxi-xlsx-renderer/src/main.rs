@@ -124,6 +124,93 @@ fn dressed(style: &CellStyle, normal: Option<&(String, f32)>) -> bool {
         || style.border_right.is_some()
 }
 
+/// The sheet with every empty cell that a row or column format paints
+/// written out as a cell of its own.
+///
+/// A `<col style="N">` or a `<row s="N" customFormat="1">` dresses every cell
+/// of its band that holds no record of its own: a fill or a rule set on a
+/// whole column shows in each empty cell of it, which is how `37900` (blind)
+/// lays black over every column but the few cells it filled blue. The row's
+/// format wins over the column's, and a cell's own record over both.
+/// Only formats that put something on the empty cell (a fill, a rule) are
+/// written out; a font or a number format shows nothing there.
+fn with_band_cells(sheet: &Sheet) -> Sheet {
+    let mut out = sheet.clone();
+    let bands = &sheet.band_styles;
+    if bands.is_empty() {
+        return out;
+    }
+    let shows = |style: &CellStyle| {
+        style.bg_color.is_some()
+            || style.pattern_fill.is_some()
+            || style.border_top.is_some()
+            || style.border_bottom.is_some()
+            || style.border_left.is_some()
+            || style.border_right.is_some()
+    };
+    let (first_row, first_column, last_row, last_column) = used_extent(sheet);
+    if first_row > last_row || first_column > last_column {
+        return out;
+    }
+    for row_index in first_row..=last_row {
+        let row_style = bands.rows.get(&row_index);
+        let at = match out.rows.binary_search_by_key(&row_index, |row| row.index) {
+            Ok(at) => at,
+            Err(at) => {
+                let wanted = (first_column..=last_column).any(|column| {
+                    row_style
+                        .or_else(|| bands.columns.get(&column))
+                        .or(bands.sheet.as_ref())
+                        .is_some_and(|style| shows(style))
+                });
+                if !wanted {
+                    continue;
+                }
+                out.rows.insert(
+                    at,
+                    oxicells_core::ir::Row {
+                        index: row_index,
+                        cells: Vec::new(),
+                        height: None,
+                        custom_height: false,
+                        format_recorded: None,
+                        style_font: None,
+                        thick_top: false,
+                        thick_bottom: false,
+                        hidden: false,
+                    },
+                );
+                at
+            }
+        };
+        let row = &mut out.rows[at];
+        for column in first_column..=last_column {
+            if row.cells.iter().any(|cell| cell.col == column) {
+                continue;
+            }
+            let Some(style) = row_style
+                .or_else(|| bands.columns.get(&column))
+                .or(bands.sheet.as_ref())
+                .filter(|style| shows(style))
+            else {
+                continue;
+            };
+            row.cells.push(oxicells_core::ir::Cell {
+                col: column,
+                value: CellValue::Empty,
+                style: style.clone(),
+                formula: None,
+                formula_utf16: None,
+                runs: Vec::new(),
+                array_block: None,
+                spill: Default::default(),
+            });
+        }
+        row.cells.sort_by_key(|cell| cell.col);
+    }
+    out
+}
+
 fn used_extent(sheet: &Sheet) -> (u32, u32, u32, u32) {
     if let Some(stated) = stated_extent() {
         return stated;
@@ -296,6 +383,12 @@ fn row_pixels(
         if let Some(ht) = row.height {
             return (((ht + 0.05) / 0.75).floor()).min(CEILING_PX);
         }
+        // Pinned with no number: the row is the sheet's default height,
+        // whatever it holds. `_xlsx_custom_no_ht.py` -- a 20pt "Ag" in such a
+        // row draws 23px under a pinned 17.25pt default, 40px under 30pt and
+        // 20px under an unpinned Calibri default, where its unpinned twin
+        // grows to 35px; blind `57445` pins all five of its rows this way.
+        return default_px;
     }
     // What the row's blank asks for. A row with a format of its own
     // (customFormat) wears that font from end to end, whatever its columns
@@ -2694,6 +2787,8 @@ fn main() {
         eprintln!("the workbook holds no sheets");
         std::process::exit(1);
     };
+    let banded = with_band_cells(sheet);
+    let sheet = &banded;
 
     // A column is measured in digits of the workbook's standard font, so the
     // sheet cannot be laid out until that digit has been measured.
@@ -2779,18 +2874,78 @@ fn draw(
     image::RgbImage::from_pixel(width, height, image::Rgb([255, 255, 255]))
 }
 
+/// A rule that states only its colour and width -- what a chart draws when the
+/// file gives a series or an axis no `<a:ln>` of its own.
+fn plain_line(color: &str, width: i64) -> oxicells_core::ir::ShapeLine {
+    oxicells_core::ir::ShapeLine {
+        head_end: None,
+        tail_end: None,
+        head_end_length: None,
+        head_end_width: None,
+        tail_end_length: None,
+        tail_end_width: None,
+        color: color.into(),
+        color_theme: None,
+        legacy_color_index: None,
+        color_brightness: None,
+        color_shade: None,
+        pattern: None,
+        back_color: None,
+        back_color_theme: None,
+        back_legacy_color_index: None,
+        back_color_brightness: None,
+        back_color_shade: None,
+        width,
+        dash: None,
+        cap: None,
+    }
+}
+
 /// The text a cell shows, under whatever number format it wears.
 pub(crate) fn cell_text(value: &CellValue, style: &CellStyle) -> String {
     match value {
         CellValue::Empty => String::new(),
         CellValue::String(text) => text.clone(),
+        CellValue::Utf16(units) => String::from_utf16_lossy(units),
         CellValue::Boolean(true) => "TRUE".to_string(),
         CellValue::Boolean(false) => "FALSE".to_string(),
-        CellValue::Error(text) => text.clone(),
+        CellValue::Error(text) => shown_error(text),
         CellValue::Number(number) => oxicells_core::format_number(
             *number,
-            style.number_format.as_deref().unwrap_or("General"),
+            &host_number_format(style.number_format.as_deref().unwrap_or("General")),
         ),
+    }
+}
+
+/// An error as Excel's window prints it. Of the error values only `#SPILL!`
+/// has a translated name in the Japanese UI: asked through `Range.Text`, a
+/// Japanese Excel answers `#スピル!` for a blocked SEQUENCE and the English
+/// spelling for #CALC! #DIV/0! #N/A #NAME? #NUM! #VALUE! #NULL! #REF!
+/// (blind `55049`). `OXI_XLSX_UI_LANG=en` keeps the English name.
+fn shown_error(text: &str) -> String {
+    let english_ui = std::env::var("OXI_XLSX_UI_LANG").is_ok_and(|v| v.starts_with("en"));
+    if !english_ui && text == "#SPILL!" {
+        "#スピル!".to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// Built-in formats 14 and 22 are the system's short date, not the
+/// `mm-dd-yy` ECMA-376 spells them as: a workbook that stores `numFmtId="14"`
+/// shows `1/1/2024` under an en-US regional setting (blind `37900`, and the
+/// derivation corpus's own truth: `doi-list` prints `5/31/2024` -- both
+/// machines that shot truth run en-US regional formats) and `2024/1/1` under
+/// ja-JP. A code typed out as `mm-dd-yy` is NOT the system's date -- Excel
+/// prints `03-15-23` for it -- but the parser hands both over as the same
+/// string, and a workbook spelling the ECMA code out is the rare one.
+/// `OXI_XLSX_SHORT_DATE` is the regional pattern (default `m/d/yyyy`).
+fn host_number_format(code: &str) -> std::borrow::Cow<'_, str> {
+    let short = || std::env::var("OXI_XLSX_SHORT_DATE").unwrap_or_else(|_| "m/d/yyyy".into());
+    match code {
+        "mm-dd-yy" => short().into(),
+        "m/d/yy h:mm" => format!("{} h:mm", short()).into(),
+        _ => code.into(),
     }
 }
 
@@ -4370,14 +4525,7 @@ mod windows_draw {
 
         // Every series, in the order the chart states them.
         for series in &chart.series {
-            let line = series.line.clone().unwrap_or(oxicells_core::ir::ShapeLine {
-                color: "000000".into(),
-                width: 9525,
-                dash: None,
-                cap: None,
-                head_end: None,
-                tail_end: None,
-            });
+            let line = series.line.clone().unwrap_or(crate::plain_line("000000", 9525));
             let width = ((line.width as f32 / super::EMU) * scale).round().max(1.0) as i32;
             let pen = ruling_pen(
                 colour(Some(&line.color), 0x0000_0000),
@@ -4449,14 +4597,7 @@ mod windows_draw {
         // fill its pixel. `_xlsx_chart_axis.py`. Six axes of the corpus state
         // no line, all in the five `zuhyo` workbooks.
         let axis_pen = |line: &Option<oxicells_core::ir::ShapeLine>| {
-            let stated = line.clone().unwrap_or(oxicells_core::ir::ShapeLine {
-                color: "898989".into(),
-                width: 3175,
-                dash: None,
-                cap: None,
-                head_end: None,
-                tail_end: None,
-            });
+            let stated = line.clone().unwrap_or(crate::plain_line("898989", 3175));
             let width = ((stated.width as f32 / super::EMU) * scale).round().max(1.0) as i32;
             (
                 ruling_pen(colour(Some(&stated.color), 0x0000_0000), width, None),
@@ -7509,7 +7650,7 @@ mod windows_draw {
                 };
                 if telling {
                     let what = match &drawn.kind {
-                        DrawingKind::Picture { bytes } => format!("picture {} bytes", bytes.len()),
+                        DrawingKind::Picture { bytes, .. } => format!("picture {} bytes", bytes.len()),
                         DrawingKind::Shape(shape) => format!(
                             "{} fill {:?} line {:?} says {:?}",
                             shape.geometry,
@@ -7533,7 +7674,7 @@ mod windows_draw {
                     );
                 }
                 match &drawn.kind {
-                    DrawingKind::Picture { bytes } => picture(dc, bytes, box_),
+                    DrawingKind::Picture { bytes, .. } => picture(dc, bytes, box_),
                     DrawingKind::Shape(held) => {
                         shape(
                             dc,

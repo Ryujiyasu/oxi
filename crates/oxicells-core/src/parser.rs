@@ -6495,6 +6495,35 @@ pub fn parse_xlsx(data: &[u8]) -> Result<Workbook, XlsxError> {
 // The default-theme version can select Excel's built-in font scheme even
 // when a stale theme part still contains different faces. Version202300 and
 // explicit custom version0 are compared against saved Native workbooks.
+/// Which of the theme's faces a `scheme="minor"` / `"major"` font wears is
+/// decided by the language Excel runs in, not by the workbook. A Japanese
+/// Excel takes the scheme's `script="Jpan"` entry; an Excel whose install /
+/// editing language is English takes `<a:latin>`. Same workbook
+/// (`01d38e7899fe_h2daa202503_kikai_kmp`, Normal 游ゴシック minor, theme latin
+/// Calibri): the Japanese-mode truth draws an 8.0-wide column at 69px (a digit
+/// of 游ゴシック, 8px), an English-mode Excel (16.0.20625, LanguageID
+/// install/exe 1033) at 61px (Calibri, 7px), and COM reports Normal = Calibri.
+/// 21 blind books across every Normal face (等线 / 宋体 / Calibri, charsets
+/// 134 / 162 / 178 / 222 / 238 / none) agree with the Latin answer there.
+///
+/// `OXI_XLSX_THEME_SCRIPT=Latn` selects the English answer; Japanese stays
+/// the default because the derivation corpus was shot in that mode.
+pub fn theme_script_is_latin() -> bool {
+    std::env::var("OXI_XLSX_THEME_SCRIPT").is_ok_and(|v| v.eq_ignore_ascii_case("latn"))
+}
+
+fn apply_theme_script_mode(theme: &mut Theme) {
+    if !theme_script_is_latin() {
+        return;
+    }
+    if theme.major_latin_face.is_some() {
+        theme.major_face = theme.major_latin_face.clone();
+    }
+    if theme.minor_latin_face.is_some() {
+        theme.minor_face = theme.minor_latin_face.clone();
+    }
+}
+
 fn apply_workbook_default_font_scheme(theme: &mut Theme, workbook_xml: &str) {
     let mut reader = Reader::from_str(workbook_xml);
     loop {
@@ -6537,6 +6566,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
         None => Theme::default(),
     };
     apply_workbook_default_font_scheme(&mut theme, &workbook_xml);
+    apply_theme_script_mode(&mut theme);
     let stylesheet = match archive.try_read_part("xl/styles.xml")? {
         Some(xml) => {
             // A hundred of the corpus's workbooks state a palette of their

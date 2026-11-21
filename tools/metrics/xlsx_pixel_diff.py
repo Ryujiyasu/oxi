@@ -271,6 +271,9 @@ def main() -> int:
         drawing = dict(os.environ)
         if stem in ranges:
             drawing["OXI_XLSX_RANGE"] = ranges[stem]
+        # A picture left from an earlier run must not stand in for one this
+        # renderer failed to draw.
+        ours_png.unlink(missing_ok=True)
         drawn = subprocess.run(
             [str(RENDERER), str(source), str(ours_png), str(args.dpi)],
             capture_output=True,
@@ -286,7 +289,7 @@ def main() -> int:
                 Image.open(ours_png),
                 args.out / f"{stem}.compare.png",
             )
-        except MemoryError:
+        except (MemoryError, Image.DecompressionBombError):
             # SSIM wants several float64 copies of the picture, and a very
             # large sheet can ask for more than is free. Say so rather than
             # dropping the workbook silently.
