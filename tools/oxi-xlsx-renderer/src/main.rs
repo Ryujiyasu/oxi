@@ -217,6 +217,90 @@ fn with_band_cells(sheet: &Sheet) -> Sheet {
     out
 }
 
+/// The sheet with what its conditional rules catch laid over each cell.
+///
+/// The rules live on the sheet, not on the cells, so nothing in a cell says
+/// how it will look until the rule is run against its value --
+/// `oxicells_core::conditional::caught` does that, and this only lays the
+/// answer on. A differential format states only what it changes; whatever it
+/// leaves unset the cell keeps. 24 of the 400 SpreadsheetBench books carry
+/// rules on their first sheet.
+fn with_conditional(sheet: &Sheet, workbook: &Workbook) -> Sheet {
+    let mut out = sheet.clone();
+    if std::env::var("OXI_XLSX_NO_CONDITIONAL").is_ok() {
+        return out;
+    }
+    for caught in oxicells_core::conditional::caught(workbook, 0) {
+        let row_index = caught.row + 1;
+        let at = match out.rows.binary_search_by_key(&row_index, |row| row.index) {
+            Ok(at) => at,
+            Err(at) => {
+                if caught.style.bg_color.is_none() {
+                    continue;
+                }
+                out.rows.insert(
+                    at,
+                    Row {
+                        index: row_index,
+                        cells: Vec::new(),
+                        height: None,
+                        custom_height: false,
+                        format_recorded: None,
+                        style_font: None,
+                        thick_top: false,
+                        thick_bottom: false,
+                        hidden: false,
+                    },
+                );
+                at
+            }
+        };
+        let row = &mut out.rows[at];
+        let cell = match row.cells.iter().position(|cell| cell.col == caught.col) {
+            Some(i) => &mut row.cells[i],
+            None => {
+                if caught.style.bg_color.is_none() {
+                    continue;
+                }
+                row.cells.push(Cell {
+                    col: caught.col,
+                    value: CellValue::Empty,
+                    style: CellStyle::default(),
+                    formula: None,
+                    formula_utf16: None,
+                    runs: Vec::new(),
+                    array_block: None,
+                    spill: Default::default(),
+                });
+                row.cells.sort_by_key(|cell| cell.col);
+                let i = row.cells.iter().position(|cell| cell.col == caught.col).unwrap();
+                &mut row.cells[i]
+            }
+        };
+        let look = &caught.style;
+        if let Some(c) = &look.font_color {
+            cell.style.font_color = Some(c.clone());
+        }
+        if let Some(c) = &look.bg_color {
+            cell.style.bg_color = Some(c.clone());
+            cell.style.pattern_fill = None;
+        }
+        if let Some(b) = look.bold {
+            cell.style.bold = b;
+        }
+        if let Some(i) = look.italic {
+            cell.style.italic = i;
+        }
+        if let Some(u) = look.underline {
+            cell.style.underline = u;
+        }
+        if let Some(code) = &look.number_format {
+            cell.style.number_format = Some(code.clone());
+        }
+    }
+    out
+}
+
 fn used_extent(sheet: &Sheet) -> (u32, u32, u32, u32) {
     if let Some(stated) = stated_extent() {
         return stated;
@@ -2832,6 +2916,7 @@ fn main() {
     };
     let banded = with_band_cells(sheet);
     let styled = table_style::with_table_styles(&banded, &workbook.theme_colors);
+    let styled = with_conditional(&styled, &workbook);
     let sheet = &styled;
 
     // A column is measured in digits of the workbook's standard font, so the
