@@ -112,6 +112,12 @@ pub struct PivotSpec {
     pub row_grand_totals: bool,
     pub col_grand_totals: bool,
     pub row_layout: RowLayout,
+    /// `pivotTableStyleInfo`: the style's name and which parts it shows.
+    pub style: Option<String>,
+    pub show_row_headers: bool,
+    pub show_col_headers: bool,
+    pub show_row_stripes: bool,
+    pub show_col_stripes: bool,
 }
 
 /// The words a pivot shows that its file does not spell out, by UI language.
@@ -172,6 +178,29 @@ impl Ui {
 pub struct PivotGrid {
     pub origin: (u32, u32),
     pub cells: Vec<Vec<CellValue>>,
+    /// What each row of `cells` is, for the pivot style to dress it.
+    pub kinds: Vec<RowKind>,
+    /// How many label columns stand at the left of every row.
+    pub label_columns: usize,
+}
+
+/// A row of a pivot grid, as the pivot style sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowKind {
+    /// A page field: its name and the item it shows.
+    Page,
+    /// The empty row between the page fields and the table.
+    Blank,
+    /// Column headings.
+    Header,
+    /// An item at `level` of the row axis; `leaf` when nothing nests under it.
+    Item { level: usize, leaf: bool },
+    /// A value field's own line under an item (values on rows).
+    Data,
+    /// An outer item's total, on a row of its own (tabular form).
+    Subtotal { level: usize },
+    /// The grand total.
+    Grand,
 }
 
 fn attr(e: &BytesStart<'_>, name: &str) -> Option<String> {
@@ -315,6 +344,11 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
         row_grand_totals: true,
         col_grand_totals: true,
         row_layout: RowLayout::Compact,
+        style: None,
+        show_row_headers: true,
+        show_col_headers: true,
+        show_row_stripes: false,
+        show_col_stripes: false,
     };
     let mut field = None::<usize>;
     let mut next_field = 0usize;
@@ -355,6 +389,13 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
                             }
                         }
                     }
+                }
+                "pivotTableStyleInfo" => {
+                    spec.style = attr(&e, "name");
+                    spec.show_row_headers = is_true(attr(&e, "showRowHeaders"), true);
+                    spec.show_col_headers = is_true(attr(&e, "showColHeaders"), true);
+                    spec.show_row_stripes = is_true(attr(&e, "showRowStripes"), false);
+                    spec.show_col_stripes = is_true(attr(&e, "showColStripes"), false);
                 }
                 "rowFields" => area = "rows",
                 "colFields" => area = "cols",
@@ -925,6 +966,8 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
             .map(|c| cell(row_path, &col_path_of(c), row_data.unwrap_or_else(|| column_data(c))))
             .collect()
     };
+    let mut kinds: Vec<RowKind> = vec![RowKind::Header; grid.len()];
+    let leaf_level = row_fields.len().saturating_sub(1);
     if has_rows || values_on_rows {
         let laid = lay_axis(row_fields, false);
         for slot in &laid {
@@ -940,12 +983,14 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                         row.extend(value_row(&slot.path, None));
                     }
                     grid.push(row);
+                    kinds.push(RowKind::Item { level: *level, leaf: *level >= leaf_level });
                 }
                 SlotKind::Data { .. } => {
                     let d = slot.data.unwrap_or(0);
                     let mut row = vec![text(&spec.data[d].name)];
                     row.extend(value_row(&slot.path, Some(d)));
                     grid.push(row);
+                    kinds.push(RowKind::Data);
                 }
                 _ => {}
             }
@@ -956,11 +1001,13 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                     let mut row = vec![text(&ui.data_total(&data.name))];
                     row.extend(value_row(&[], Some(d)));
                     grid.push(row);
+                    kinds.push(RowKind::Grand);
                 }
             } else {
                 let mut row = vec![text(&grand)];
                 row.extend(value_row(&[], None));
                 grid.push(row);
+                kinds.push(RowKind::Grand);
             }
         }
     } else {
@@ -979,12 +1026,16 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
             row.extend(value_row(&[], None));
             grid.push(row);
         }
+        kinds.resize(grid.len(), RowKind::Grand);
     }
+    let mut label_columns = 1;
 
     // Outline and tabular layouts: a label column per row field, field names
     // for headings. The compact headings are reshaped; the body is rebuilt.
     if spec.row_layout != RowLayout::Compact && has_rows && !values_on_rows {
         let lc = row_real.len();
+        label_columns = lc;
+        let mut reshaped_kinds: Vec<RowKind> = Vec::new();
         let body_lines = lay_axis(row_fields, false).len() + usize::from(spec.row_grand_totals);
         let header_rows = grid.len() - body_lines;
         let mut reshaped: Vec<Vec<CellValue>> = Vec::new();
@@ -1008,6 +1059,7 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                 out.push(v);
             }
             reshaped.push(out);
+            reshaped_kinds.push(RowKind::Header);
         }
         let laid: Vec<Slot> = lay_axis(row_fields, false)
             .into_iter()
@@ -1023,25 +1075,27 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                         line[*level] = shown(label);
                         line.extend(value_row(&slot.path, None));
                         reshaped.push(line);
+                        reshaped_kinds.push(RowKind::Item { level: *level, leaf: *level >= leaf });
                     }
                 }
             }
             _ => {
                 // Open groups: (level, label, path, label still to show).
                 type Group = (usize, CellValue, Vec<Key>, bool);
-                let close = |open: &mut Vec<Group>, down_to: usize, out: &mut Vec<Vec<CellValue>>| {
+                let close = |open: &mut Vec<Group>, down_to: usize, out: &mut Vec<Vec<CellValue>>, kinds: &mut Vec<RowKind>| {
                     while open.last().is_some_and(|g| g.0 >= down_to) {
                         let (level, label, path, _) = open.pop().unwrap();
                         let mut line = blank();
                         line[level] = text(&ui.subtotal(&label_text(&label)));
                         line.extend(value_row(&path, None));
                         out.push(line);
+                        kinds.push(RowKind::Subtotal { level });
                     }
                 };
                 let mut open: Vec<Group> = Vec::new();
                 for slot in &laid {
                     if let SlotKind::Item { level, label } = &slot.kind {
-                        close(&mut open, *level, &mut reshaped);
+                        close(&mut open, *level, &mut reshaped, &mut reshaped_kinds);
                         if *level < leaf {
                             open.push((*level, label.clone(), slot.path.clone(), true));
                         } else {
@@ -1055,10 +1109,11 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                             line[leaf] = shown(label);
                             line.extend(value_row(&slot.path, None));
                             reshaped.push(line);
+                            reshaped_kinds.push(RowKind::Item { level: leaf, leaf: true });
                         }
                     }
                 }
-                close(&mut open, 0, &mut reshaped);
+                close(&mut open, 0, &mut reshaped, &mut reshaped_kinds);
             }
         }
         if spec.row_grand_totals {
@@ -1066,8 +1121,10 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
             line[0] = text(&grand);
             line.extend(value_row(&[], None));
             reshaped.push(line);
+            reshaped_kinds.push(RowKind::Grand);
         }
         grid = reshaped;
+        kinds = reshaped_kinds;
     }
 
     // Page fields stand above the table: one row each, then a blank row.
@@ -1088,10 +1145,14 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
             .collect();
         above.push(Vec::new());
         origin.0 = origin.0.saturating_sub(above.len() as u32);
+        let mut above_kinds = vec![RowKind::Page; spec.pages.len()];
+        above_kinds.push(RowKind::Blank);
+        above_kinds.extend(kinds);
+        kinds = above_kinds;
         above.extend(grid);
         grid = above;
     }
-    PivotGrid { origin, cells: grid }
+    PivotGrid { origin, cells: grid, kinds, label_columns }
 }
 
 /// The source value at (row, col) of a parsed workbook's named sheet.
@@ -1103,6 +1164,128 @@ pub fn source_reader<'a>(workbook: &'a Workbook, sheet: &str) -> impl Fn(u32, u3
             .map(|c| c.value.clone())
             .unwrap_or(CellValue::Empty)
     }
+}
+
+/// What GETPIVOTDATA can read off a pivot table: every value it shows, by
+/// value field and the items that meet there.
+///
+/// A row field stands in a pair only with every row field outside it, the
+/// same for columns: Region and Product on rows answer for (Region),
+/// (Region, Product) and, with grand totals, (), never for (Product) alone.
+/// An intersection with no records shows an empty cell and answers 0.
+pub fn lookup(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue) -> oxicells_calc::PivotLookup {
+    use oxicells_calc::{pivot_item_key, Value};
+    let grid = compute(spec, get, Ui::Japanese);
+    let width = grid.cells.iter().map(Vec::len).max().unwrap_or(1).max(1) as u32;
+    let height = grid.cells.len().max(1) as u32;
+    let range = (grid.origin.0, grid.origin.1, grid.origin.0 + height - 1, grid.origin.1 + width - 1);
+
+    let (r0, c0, r1, c1) = spec.source;
+    let columns = (c1 - c0 + 1) as usize;
+    let all: Vec<Vec<CellValue>> =
+        (r0 + 1..=r1).map(|r| (0..columns).map(|j| get(r, c0 + j as u32)).collect()).collect();
+    let field_of = |rec: &Vec<CellValue>, f: usize| key(rec.get(f).unwrap_or(&CellValue::Empty));
+    let axis: Vec<usize> = spec.rows.iter().chain(spec.cols.iter()).flatten().copied().collect();
+    let records: Vec<&Vec<CellValue>> = all
+        .iter()
+        .filter(|rec| {
+            axis.iter().chain(spec.pages.iter().map(|(f, _)| f)).all(|f| {
+                let k = field_of(rec, *f);
+                !spec.hidden[*f].iter().any(|h| key(h) == k)
+            }) && spec.pages.iter().all(|(f, pick)| match pick {
+                Some(v) => field_of(rec, *f) == key(v),
+                None => true,
+            })
+        })
+        .collect();
+
+    let as_calc = |v: &CellValue| match v {
+        // A blank item answers to the label the UI shows it under: measured,
+        // "(空白)" finds q07's blank Region in a Japanese Excel, "(blank)" is #REF!.
+        CellValue::Empty => Value::Text(Ui::Japanese.blank().into()),
+        CellValue::String(s) => Value::Text(s.clone()),
+        CellValue::Utf16(u) => Value::Utf16(u.clone()),
+        CellValue::Number(n) => Value::Number(*n),
+        CellValue::Boolean(b) => Value::Logical(*b),
+        CellValue::Error(e) => Value::Text(e.clone()),
+    };
+    let field_key = |f: usize| pivot_item_key(&Value::Text(spec.field_names.get(f).cloned().unwrap_or_default()));
+
+    // Each axis's item paths: the empty one when the axis has no field or
+    // shows its grand total, then every prefix the records hold.
+    let paths = |fields: &[usize], grand: bool| -> Vec<Vec<usize>> {
+        // A path is the indices of records' values, kept as one record that
+        // holds them (the first met), so the value and its key come together.
+        let mut out: Vec<Vec<usize>> = Vec::new();
+        if fields.is_empty() || grand {
+            out.push(Vec::new());
+        }
+        for depth in 1..=fields.len() {
+            let mut seen = std::collections::HashSet::new();
+            for (i, rec) in records.iter().enumerate() {
+                let k: Vec<Key> = fields[..depth].iter().map(|f| field_of(rec, *f)).collect();
+                if seen.insert(k) {
+                    out.push(vec![i; depth]);
+                }
+            }
+        }
+        out
+    };
+    let row_real: Vec<usize> = spec.rows.iter().flatten().copied().collect();
+    let col_real: Vec<usize> = spec.cols.iter().flatten().copied().collect();
+    let row_paths = paths(&row_real, spec.row_grand_totals);
+    let col_paths = paths(&col_real, spec.col_grand_totals);
+
+    let mut values = std::collections::HashMap::new();
+    for row_path in &row_paths {
+        let row_fields = &row_real[..row_path.len()];
+        let row_keys: Vec<Key> = row_fields.iter().zip(row_path).map(|(f, i)| field_of(records[*i], *f)).collect();
+        for col_path in &col_paths {
+            let col_fields = &col_real[..col_path.len()];
+            let col_keys: Vec<Key> = col_fields.iter().zip(col_path).map(|(f, i)| field_of(records[*i], *f)).collect();
+            let hits: Vec<&&Vec<CellValue>> = records
+                .iter()
+                .filter(|rec| {
+                    row_fields.iter().zip(&row_keys).all(|(f, k)| field_of(rec, *f) == *k)
+                        && col_fields.iter().zip(&col_keys).all(|(f, k)| field_of(rec, *f) == *k)
+                })
+                .collect();
+            // A shown intersection with no records is an empty cell, and
+            // GETPIVOTDATA reads it as 0 (measured: Pear with Jan, a blank
+            // cell of the table, is 0).
+            let mut pairs: Vec<(String, String)> = row_fields
+                .iter()
+                .zip(row_path)
+                .chain(col_fields.iter().zip(col_path))
+                .map(|(f, i)| (field_key(*f), pivot_item_key(&as_calc(records[*i].get(*f).unwrap_or(&CellValue::Empty)))))
+                .collect();
+            pairs.sort();
+            for (d, data) in spec.data.iter().enumerate() {
+                let mut acc = Acc::default();
+                for rec in &hits {
+                    acc.add(rec.get(data.field).unwrap_or(&CellValue::Empty));
+                }
+                let shown = match acc.value(data.aggregate) {
+                    _ if hits.is_empty() => Value::Number(0.0),
+                    CellValue::Number(n) => Value::Number(n),
+                    CellValue::Error(_) => Value::Error(oxicells_calc::ExcelError::DivZero),
+                    _ => Value::Blank,
+                };
+                values.insert((d, pairs.clone()), shown);
+            }
+        }
+    }
+    let data_names = spec
+        .data
+        .iter()
+        .map(|data| {
+            vec![
+                pivot_item_key(&Value::Text(data.name.clone())),
+                field_key(data.field),
+            ]
+        })
+        .collect();
+    oxicells_calc::PivotLookup { sheet: spec.sheet.clone(), range, data_names, values }
 }
 
 /// A pivot table to be created: which source columns go where. Field indices
@@ -1214,6 +1397,11 @@ pub fn spec_for_new(new: &NewPivot, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui)
         row_grand_totals: true,
         col_grand_totals: true,
         row_layout: RowLayout::Compact,
+        style: Some("PivotStyleLight16".into()),
+        show_row_headers: true,
+        show_col_headers: true,
+        show_row_stripes: false,
+        show_col_stripes: false,
     }
 }
 
@@ -1569,8 +1757,17 @@ mod tests {
             row_grand_totals: true,
             col_grand_totals: true,
             row_layout: RowLayout::Compact,
+            style: None,
+            show_row_headers: true,
+            show_col_headers: true,
+            show_row_stripes: false,
+            show_col_stripes: false,
         };
         let grid = compute(&spec, &get, Ui::English);
+        assert_eq!(grid.kinds.len(), grid.cells.len());
+        assert_eq!(grid.kinds[2], RowKind::Item { level: 0, leaf: false });
+        assert_eq!(grid.kinds[3], RowKind::Item { level: 1, leaf: true });
+        assert_eq!(*grid.kinds.last().unwrap(), RowKind::Grand);
         let n = CellValue::Number;
         let e = CellValue::Empty;
         assert_eq!(grid.origin, (2, 0));
@@ -1588,5 +1785,27 @@ mod tests {
                 vec![s("Grand Total"), n(3.0), n(8.0), n(11.0)],
             ]
         );
+
+        // GETPIVOTDATA over the same table: by caption or source name, an
+        // outer item, an inner pair, a pair one cell answers, and refusals.
+        let mut book = oxicells_calc::Workbook::new();
+        book.add_sheet("P");
+        book.add_pivot(lookup(&spec, &get));
+        let asks = [
+            (r#"=GETPIVOTDATA("Sum of Sales",P!A3)"#, oxicells_calc::Value::Number(11.0)),
+            (r#"=GETPIVOTDATA("sales",P!B5,"Region","west")"#, oxicells_calc::Value::Number(6.0)),
+            (r#"=GETPIVOTDATA("Sales",P!A3,"Region","East","Month","Feb")"#, oxicells_calc::Value::Number(3.0)),
+            (r#"=GETPIVOTDATA("Sales",P!A3,"Product","Pear")"#, oxicells_calc::Value::Number(3.0)),
+            (r#"=GETPIVOTDATA("Sales",P!A3,"Product","Apple")"#, oxicells_calc::Value::Error(oxicells_calc::ExcelError::Ref)),
+            (r#"=GETPIVOTDATA("Sales",P!Z99)"#, oxicells_calc::Value::Error(oxicells_calc::ExcelError::Ref)),
+            (r#"=GETPIVOTDATA("Sales",P!A3,"Product","Pear","Month","Jan")"#, oxicells_calc::Value::Number(0.0)),
+        ];
+        for (i, (formula, _)) in asks.iter().enumerate() {
+            book.set_formula("P", &format!("H{}", i + 1), formula).unwrap();
+        }
+        book.recalculate();
+        for (i, (formula, want)) in asks.iter().enumerate() {
+            assert_eq!(book.value("P", &format!("H{}", i + 1)), *want, "{formula}");
+        }
     }
 }

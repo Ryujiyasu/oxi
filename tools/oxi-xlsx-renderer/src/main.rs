@@ -3055,6 +3055,7 @@ fn main() {
     let banded = with_band_cells(sheet);
     let styled = table_style::with_table_styles(&banded, &workbook.theme_colors);
     let styled = with_conditional(&styled, &workbook);
+    let styled = table_style::with_pivot_styles(&styled, &workbook, &std::fs::read(&args[1]).unwrap_or_default(), &workbook.theme_colors);
     let sheet = &styled;
 
     // A column is measured in digits of the workbook's standard font, so the
@@ -6690,17 +6691,22 @@ mod windows_draw {
                     }
 
                     // A carriage return would otherwise be drawn as a glyph.
-                    let filtered = super::has_filter_button(sheet, row.index, cell.col);
+                    let filtered = super::has_filter_button(sheet, row.index, cell.col) || cell.style.pivot_button;
                     if filtered {
                         // The button hangs from the foot of the heading, a
                         // pixel in from its right edge.
-                        let left = box_.right - super::FILTER_BUTTON - 1;
+                        // A pivot field's button sits a pixel further right and
+                        // lower than a filter's: its right edge on the cell's
+                        // last pixel, its foot one up (the same on all 28
+                        // pivot books, `xlsx_pivot_render`).
+                        let nudge = i32::from(cell.style.pivot_button && !super::has_filter_button(sheet, row.index, cell.col));
+                        let left = box_.right - super::FILTER_BUTTON - 1 + nudge;
                         let top = box_.bottom - super::FILTER_BUTTON_FOOT
-                            - super::FILTER_BUTTON;
+                            - super::FILTER_BUTTON + nudge;
                         let face = RECT {
                             left,
                             top,
-                            right: box_.right - 1,
+                            right: box_.right - 1 + nudge,
                             bottom: top + super::FILTER_BUTTON,
                         };
                         let outline = CreateSolidBrush(colour(Some("A6ACB3"), 0xA6ACB3));

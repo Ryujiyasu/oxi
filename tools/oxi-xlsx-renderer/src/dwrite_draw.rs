@@ -267,7 +267,7 @@ pub fn draw(
                     }
                 }
 
-                let filtered = has_filter_button(sheet, row.index, cell.col);
+                let filtered = has_filter_button(sheet, row.index, cell.col) || cell.style.pivot_button;
                 if filtered {
                     let left = cell_box.right - (FILTER_BUTTON + 1) as f32;
                     // The button hangs from the foot of the heading.

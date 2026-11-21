@@ -785,6 +785,8 @@ struct XfRecord {
     reading_order: crate::ir::CellReadingOrder,
     /// `quotePrefix="1"`: the entry was typed behind an apostrophe.
     quote_prefix: bool,
+    /// `pivotButton="1"`: a pivot field button.
+    pivot_button: bool,
     /// Whether the cell may still be edited once its sheet is protected.
     /// Excel locks every cell by default and unlocks the few a form wants
     /// typed into, so the negative is the one worth holding: it keeps this
@@ -1743,6 +1745,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             shrink_to_fit: false,
                             reading_order: crate::ir::CellReadingOrder::Contextual,
                             quote_prefix: is_true(get_attr(&e, "quotePrefix").as_deref()),
+                            pivot_button: is_true(get_attr(&e, "pivotButton").as_deref()),
                             format_reference: xf_format_reference(&e),
                             unlocked: false,
                             formula_hidden: false,
@@ -2088,6 +2091,7 @@ fn parse_styles_xml(xml: &str, theme: &Theme) -> Result<StyleSheet, XlsxError> {
                             shrink_to_fit: false,
                             reading_order: crate::ir::CellReadingOrder::Contextual,
                             quote_prefix: is_true(get_attr(&e, "quotePrefix").as_deref()),
+                            pivot_button: is_true(get_attr(&e, "pivotButton").as_deref()),
                             format_reference: xf_format_reference(&e),
                             unlocked: false,
                             formula_hidden: false,
@@ -2311,6 +2315,7 @@ fn resolve_xf_style(xf: &XfRecord, stylesheet: &StyleSheet) -> CellStyle {
         shrink_to_fit: xf.shrink_to_fit,
         reading_order: xf.reading_order,
         quote_prefix: xf.quote_prefix,
+        pivot_button: xf.pivot_button,
         unlocked: xf.unlocked,
         formula_hidden: xf.formula_hidden,
         border_top: border.top.clone(),
@@ -6937,6 +6942,7 @@ pub fn parse_xlsx_preserving_values(data: &[u8]) -> Result<Workbook, XlsxError> 
     let (defined_names, defined_name_attributes) = parse_defined_names(&workbook_xml);
     Ok(Workbook {
         sheets,
+        pivots: crate::pivot::read_pivots(data),
         copied_sheet_origins: Default::default(),
         copied_sheet_code_names: Default::default(),
         theme_colors: theme.colours.clone(),

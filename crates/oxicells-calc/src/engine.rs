@@ -745,8 +745,40 @@ enum CircularPass { Repair, Confirm }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MetadataRead { Value, Reference }
 
+/// A pivot table as GETPIVOTDATA reads it.
+#[derive(Debug, Clone, Default)]
+pub struct PivotLookup {
+    pub sheet: String,
+    /// The cells it covers, zero-based inclusive (row, col, row, col), page
+    /// fields included.
+    pub range: (u32, u32, u32, u32),
+    /// Each value field's names as [`pivot_item_key`] spells them: its own
+    /// ("Sum of Sales") and its source column's ("Sales").
+    pub data_names: Vec<Vec<String>>,
+    /// What the table shows for a value field where items meet, the items
+    /// as sorted (field, item) keys; the grand total meets none.
+    pub values: std::collections::HashMap<(usize, Vec<(String, String)>), Value>,
+}
+
+/// How a field, an item or a value field's name is matched: text without
+/// regard to case, a number as its shortest spelling -- so "2024" finds the
+/// item 2024 as the number does.
+pub fn pivot_item_key(value: &Value) -> String {
+    match value {
+        Value::Number(n) => format!("{n}"),
+        Value::Text(text) => text.trim().to_lowercase(),
+        Value::Utf16(units) => String::from_utf16_lossy(units).trim().to_lowercase(),
+        Value::Logical(held) => if *held { "true".into() } else { "false".into() },
+        Value::Blank => String::new(),
+        Value::Error(why) => format!("!{why:?}"),
+        Value::Lambda(_) => "λ".into(),
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Workbook {
+    /// The pivot tables GETPIVOTDATA reads, with every value they show.
+    pivots: Vec<PivotLookup>,
     calculation_order: BTreeMap<(String, (u32, u32)), usize>,
     chain_probes: bool,
     read_history: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<UserReadHistory>>>>,
@@ -880,6 +912,11 @@ impl Workbook {
 
     pub fn new() -> Workbook {
         Workbook::default()
+    }
+
+    /// Hand over a pivot table for GETPIVOTDATA to read.
+    pub fn add_pivot(&mut self, pivot: PivotLookup) {
+        self.pivots.push(pivot);
     }
 
     pub fn add_sheet(&mut self, name: &str) {
@@ -3357,6 +3394,64 @@ impl Workbook {
 
             // CELL(info, [reference]): what Excel says of the first cell.
             // Measured: `CELL("address",B2)` is $B$2 and `CELL("col",C5)` 3.
+            // GETPIVOTDATA(value field, any cell of the table, field, item, ...):
+            // the value the table shows where those items meet. A field or item
+            // the table does not show, or a pair the table has no cell for
+            // (an inner field without its outer one), is #REF!.
+            Expr::Function { name, args } if name == "GETPIVOTDATA" && args.len() >= 2 => {
+                if args.len() % 2 != 0 {
+                    return Arg::Value(Value::Error(ExcelError::Ref));
+                }
+                let data = match self.eval_arg(&args[0], sheet, depth + 1, at).scalar() {
+                    Value::Error(why) => return Arg::Value(Value::Error(why)),
+                    other => pivot_item_key(&other),
+                };
+                let Some((target, range)) = self.reference_of(&args[1], sheet, depth + 1, at) else {
+                    return Arg::Value(Value::Error(ExcelError::Ref));
+                };
+                let mut pairs = Vec::new();
+                for pair in args[2..].chunks(2) {
+                    let field = match self.eval_arg(&pair[0], sheet, depth + 1, at).scalar() {
+                        Value::Error(why) => return Arg::Value(Value::Error(why)),
+                        other => pivot_item_key(&other),
+                    };
+                    let item = match self.eval_arg(&pair[1], sheet, depth + 1, at).scalar() {
+                        Value::Error(why) => return Arg::Value(Value::Error(why)),
+                        other => pivot_item_key(&other),
+                    };
+                    pairs.push((field, item));
+                }
+                pairs.sort();
+                let (col, row) = (range.start.col, range.start.row);
+                let found = self.pivots.iter().find(|pivot| {
+                    pivot.sheet.eq_ignore_ascii_case(&target)
+                        && (pivot.range.0..=pivot.range.2).contains(&row)
+                        && (pivot.range.1..=pivot.range.3).contains(&col)
+                });
+                let Some(pivot) = found else { return Arg::Value(Value::Error(ExcelError::Ref)) };
+                let Some(d) = pivot.data_names.iter().position(|names| names.iter().any(|name| *name == data)) else {
+                    return Arg::Value(Value::Error(ExcelError::Ref));
+                };
+                if let Some(shown) = pivot.values.get(&(d, pairs.clone())) {
+                    return Arg::Value(shown.clone());
+                }
+                // Short of a cell for exactly those fields, the most summed-up
+                // cell holding them, when there is one: measured on t08
+                // (Region > Month > Product), North with Apple is 48 -- North
+                // sells Apple in March alone -- while East with Apple, over three
+                // months, is #REF!; over Region > Product by Month, Product Pear
+                // is East's Pear total 3 and Product Apple, sold in both
+                // regions, #REF!.
+                let fits: Vec<_> = pivot.values.iter().filter(|((which, held), _)| {
+                    *which == d && pairs.iter().all(|pair| held.contains(pair))
+                }).collect();
+                let fewest = fits.iter().map(|((_, held), _)| held.len()).min();
+                let mut least = fits.iter().filter(|((_, held), _)| Some(held.len()) == fewest);
+                match (least.next(), least.next()) {
+                    (Some((_, shown)), None) => Arg::Value((*shown).clone()),
+                    _ => Arg::Value(Value::Error(ExcelError::Ref)),
+                }
+            }
             Expr::Function { name, args } if name == "CELL" && (1..=2).contains(&args.len()) => {
                 let info = match self.eval_arg(&args[0], sheet, depth + 1, at).scalar() {
                     Value::Text(text) => text.to_ascii_lowercase(),

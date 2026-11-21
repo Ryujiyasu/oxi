@@ -85,6 +85,10 @@ pub struct NamedCellStyle {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
+    /// The pivot tables the package defines, for GETPIVOTDATA. Read from the
+    /// parts, not carried through serialisation.
+    #[serde(skip)]
+    pub pivots: Vec<crate::pivot::PivotSpec>,
     /// Copy instance identity -> source-template identity. A copy owns its
     /// edits while its template retains package features not represented here.
     /// This provenance is consumed when materializing a new source package.
@@ -2421,6 +2425,10 @@ pub struct CellStyle {
     /// `Range.PrefixCharacter` answers as `'`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quote_prefix: bool,
+    /// `pivotButton="1"`: a pivot table's field button sits in this cell,
+    /// drawn as the filter button is.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pivot_button: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_top: Option<BorderLine>,
     #[serde(skip_serializing_if = "Option::is_none")]

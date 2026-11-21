@@ -14483,6 +14483,7 @@ fn xf_xml(
         }
     }
     if style.quote_prefix {xf.push_str(" quotePrefix=\"1\"");}
+    if style.pivot_button {xf.push_str(" pivotButton=\"1\"");}
     // Everything an `<alignment>` can say goes in one element, so it is built
     // up rather than written from the first part that happens to be set. Wrap,
     // indent and the vertical part were read all along and never written: a

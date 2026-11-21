@@ -77,7 +77,7 @@ pub fn unparsed_formulas(workbook: &Workbook) -> usize {
 
 pub fn evaluate_sheet_formulas(sheet: &mut Sheet) {
     // One sheet on its own carries no workbook, so it has no names either.
-    recalculate(std::slice::from_mut(sheet), &[], &[], Overwrite::All, None, 1, true, &[], &Default::default(), &Default::default());
+    recalculate(std::slice::from_mut(sheet), &[], &[], Overwrite::All, None, 1, true, &[], &Default::default(), &Default::default(), &[]);
 }
 
 /// Recalculate every formula in the workbook, overwriting cached values.
@@ -86,7 +86,7 @@ pub fn evaluate_sheet_formulas(sheet: &mut Sheet) {
 pub fn evaluate_workbook_formulas(workbook: &mut Workbook) {
     let names = workbook.defined_names.clone();
     let external = workbook.external_books.clone();
-    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::All, None, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles);
+    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::All, None, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles, &workbook.pivots);
     crate::recalculation::remember_completed_calculation(workbook, &report);
     if !report.deferred {
         workbook.recalculation.changed.clear();
@@ -106,7 +106,7 @@ pub fn evaluate_workbook_formulas(workbook: &mut Workbook) {
 pub fn evaluate_workbook_formulas_at(workbook: &mut Workbook, now: f64) {
     let names = workbook.defined_names.clone();
     let external = workbook.external_books.clone();
-    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::All, Some(now), workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles);
+    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::All, Some(now), workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles, &workbook.pivots);
     crate::recalculation::remember_completed_calculation(workbook, &report);
     if !report.deferred {
         workbook.recalculation.changed.clear();
@@ -120,7 +120,7 @@ pub fn evaluate_workbook_formulas_at(workbook: &mut Workbook, now: f64) {
 pub fn evaluate_workbook_formulas_in_order(workbook: &mut Workbook, order: &[(String, (u32, u32))], now: Option<f64>) {
     let names = workbook.defined_names.clone();
     let external = workbook.external_books.clone();
-    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::All, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles);
+    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::All, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles, &workbook.pivots);
     crate::recalculation::remember_completed_calculation(workbook, &report);
     if !report.deferred {
         workbook.recalculation.changed.clear();
@@ -133,7 +133,7 @@ pub fn evaluate_workbook_formulas_in_order(workbook: &mut Workbook, order: &[(St
 pub fn evaluate_workbook_formulas_report(workbook: &mut Workbook, now: Option<f64>) -> Vec<(String, (u32, u32))> {
     let names = workbook.defined_names.clone();
     let external = workbook.external_books.clone();
-    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::All, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles);
+    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::All, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles, &workbook.pivots);
     crate::recalculation::remember_completed_calculation(workbook, &report);
     report.calculated
 }
@@ -143,7 +143,7 @@ pub fn evaluate_workbook_formulas_report(workbook: &mut Workbook, now: Option<f6
 pub fn evaluate_workbook_formula_subset(workbook: &mut Workbook, cells: &[(String, (u32, u32))], changed: bool, now: Option<f64>) -> Vec<(String, (u32, u32))> {
     let previous = crate::recalculation::spill_layout(workbook);
     let names = workbook.defined_names.clone(); let external = workbook.external_books.clone();
-    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::Selected { cells, changed }, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles);
+    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::Selected { cells, changed }, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles, &workbook.pivots);
     crate::recalculation::remember_completed_calculation(workbook, &report);
     crate::recalculation::complete(workbook, &report.calculated, &previous, false);
     report.calculated
@@ -153,7 +153,7 @@ pub fn evaluate_workbook_formula_subset(workbook: &mut Workbook, cells: &[(Strin
 pub fn evaluate_workbook_formula_array_entry(workbook: &mut Workbook, cells: &[(String, (u32, u32))], now: Option<f64>) -> Vec<(String, (u32, u32))> {
     let previous = crate::recalculation::spill_layout(workbook);
     let names = workbook.defined_names.clone(); let external = workbook.external_books.clone();
-    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::ArrayEntry { cells }, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles);
+    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::ArrayEntry { cells }, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles, &workbook.pivots);
     crate::recalculation::remember_completed_calculation(workbook, &report);
     crate::recalculation::complete(workbook, &report.calculated, &previous, false);
     report.calculated
@@ -165,7 +165,7 @@ pub fn evaluate_workbook_formula_array_entry(workbook: &mut Workbook, cells: &[(
 pub fn evaluate_workbook_formula_dirty(workbook: &mut Workbook, cells: &[(String, (u32, u32))], now: Option<f64>, sheet_scope: Option<&str>, defer_dynamic_references: bool) -> Vec<(String, (u32, u32))> {
     let previous = crate::recalculation::spill_layout(workbook);
     let names = workbook.defined_names.clone(); let external = workbook.external_books.clone();
-    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::Dirty { cells, sheet_scope, defer_dynamic_references }, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles);
+    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::Dirty { cells, sheet_scope, defer_dynamic_references }, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles, &workbook.pivots);
     crate::recalculation::remember_completed_calculation(workbook, &report);
     crate::recalculation::complete(workbook, &report.calculated, &previous, false);
     if report.deferred { report.calculated } else { report.traversal_order }
@@ -174,14 +174,14 @@ pub fn evaluate_workbook_formula_dirty(workbook: &mut Workbook, cells: &[(String
 /// Calculate freshly entered formulas without normal-chain provisional attempts.
 pub fn evaluate_workbook_formula_entry(workbook: &mut Workbook, cells: &[(String, (u32,u32))], now: Option<f64>) -> Vec<(String,(u32,u32))> {
     let names = workbook.defined_names.clone(); let external = workbook.external_books.clone();
-    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::Entry { cells }, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles);
+    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::Entry { cells }, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles, &workbook.pivots);
     crate::recalculation::remember_completed_calculation(workbook, &report); report.calculated
 }
 
 /// Automatic formula entry retains the initial cache while resolving cycles.
 pub fn evaluate_workbook_formula_automatic_entry(workbook: &mut Workbook, cells: &[(String, (u32,u32))], now: Option<f64>) -> Vec<(String,(u32,u32))> {
     let names = workbook.defined_names.clone(); let external = workbook.external_books.clone();
-    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::AutomaticEntry { cells }, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles);
+    let report = recalculate(&mut workbook.sheets, &names, &external, Overwrite::AutomaticEntry { cells }, now, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles, &workbook.pivots);
     crate::recalculation::remember_completed_calculation(workbook, &report); report.calculated
 }
 
@@ -288,7 +288,7 @@ pub fn evaluate_expression_reference(
 pub fn fill_missing_formula_values(workbook: &mut Workbook) {
     let names = workbook.defined_names.clone();
     let external = workbook.external_books.clone();
-    recalculate(&mut workbook.sheets, &names, &external, Overwrite::OnlyMissing, None, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles);
+    recalculate(&mut workbook.sheets, &names, &external, Overwrite::OnlyMissing, None, workbook.calculation.compatibility_version, workbook.calculation.dbcs_language.unwrap_or(true), &workbook.recalculation.order, &workbook.recalculation.metadata_cycles, &workbook.recalculation.metadata_reference_cycles, &workbook.pivots);
 }
 
 /// Put the workbook to the engine: its names, its sheets, its tables and
@@ -538,6 +538,7 @@ fn recalculate(
     calculation_order: &[(String, (u32, u32))],
     metadata_cycles: &std::collections::BTreeSet<(crate::ir::FormulaLocation, String)>,
     metadata_reference_cycles: &std::collections::BTreeSet<(crate::ir::FormulaLocation, String)>,
+    pivots: &[crate::pivot::PivotSpec],
 ) -> oxicells_calc::RecalcReport {
     // Which formula cells the file left without an answer. A workbook Excel
     // wrote has none, and then there is nothing to do at all — which is worth
@@ -564,6 +565,27 @@ fn recalculate(
     };
 
     let mut book = assemble_with_links(sheets, names, external, now);
+    // GETPIVOTDATA reads the tables; worked out only for a book that asks.
+    let asks_pivots = !pivots.is_empty()
+        && sheets.iter().any(|sheet| {
+            sheet.rows.iter().any(|row| {
+                row.cells.iter().any(|cell| {
+                    cell.formula.as_deref().is_some_and(|f| f.to_ascii_uppercase().contains("GETPIVOTDATA"))
+                })
+            })
+        });
+    if asks_pivots {
+        for spec in pivots {
+            let held = sheets.iter().find(|s| s.name.eq_ignore_ascii_case(&spec.source_sheet));
+            let get = |row: u32, col: u32| {
+                held.and_then(|s| s.rows.iter().find(|r| r.index == row + 1))
+                    .and_then(|r| r.cells.iter().find(|c| c.col == col))
+                    .map(|c| c.value.clone())
+                    .unwrap_or(CellValue::Empty)
+            };
+            book.add_pivot(crate::pivot::lookup(spec, &get));
+        }
+    }
     book.set_compatibility_version(compatibility_version);
     book.set_dbcs_language(dbcs_language);
     book.set_calculation_order(calculation_order);
