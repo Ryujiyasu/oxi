@@ -2943,6 +2943,57 @@ fn main() {
         }
         return;
     }
+    // `--add-pivot <out.xlsx> <spec.json>`: create a pivot table with the
+    // editor and save (`_xlsx_pivot_create_check.py`). The spec names fields
+    // by their index in the source range.
+    if args.get(2).map(String::as_str) == Some("--add-pivot") {
+        let bytes = std::fs::read(&args[1]).unwrap_or_default();
+        let spec: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&args[4]).unwrap_or_default()).unwrap_or_default();
+        let Ok(mut editor) = oxicells_core::XlsxEditor::new(&bytes) else {
+            eprintln!("cannot open {}", args[1]);
+            std::process::exit(1);
+        };
+        let list = |key: &str| -> Vec<usize> {
+            spec[key].as_array().map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect()).unwrap_or_default()
+        };
+        let cell = |key: &str| -> (u32, u32) {
+            let v = &spec[key];
+            (v[0].as_u64().unwrap_or(0) as u32, v[1].as_u64().unwrap_or(0) as u32)
+        };
+        let (r0, c0) = cell("source_from");
+        let (r1, c1) = cell("source_to");
+        let how = |name: &str| match name {
+            "count" => oxicells_core::pivot::Aggregate::Count,
+            "average" => oxicells_core::pivot::Aggregate::Average,
+            "max" => oxicells_core::pivot::Aggregate::Max,
+            "min" => oxicells_core::pivot::Aggregate::Min,
+            _ => oxicells_core::pivot::Aggregate::Sum,
+        };
+        let new = oxicells_core::pivot::NewPivot {
+            name: spec["name"].as_str().unwrap_or("PivotTable1").to_string(),
+            source_sheet: spec["source_sheet"].as_str().unwrap_or("Data").to_string(),
+            source: (r0, c0, r1, c1),
+            target_sheet: spec["target_sheet"].as_str().unwrap_or("Pivot").to_string(),
+            at: cell("at"),
+            rows: list("rows"),
+            cols: list("cols"),
+            pages: list("pages"),
+            data: spec["data"].as_array().map(|a| a.iter().map(|d| (d[0].as_u64().unwrap_or(0) as usize, how(d[1].as_str().unwrap_or("sum")))).collect()).unwrap_or_default(),
+        };
+        let placed = editor.add_pivot(&new, oxicells_core::pivot::Ui::Japanese);
+        match editor.save() {
+            Ok(out) => {
+                let _ = std::fs::write(&args[3], out);
+                println!("added {placed:?}");
+            }
+            Err(e) => {
+                eprintln!("save failed: {e:?}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if args.get(2).map(String::as_str) == Some("--pivot") {
         let ui = if std::env::var("OXI_XLSX_UI_LANG").is_ok_and(|v| v.starts_with("en")) {
             oxicells_core::pivot::Ui::English

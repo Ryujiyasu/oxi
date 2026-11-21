@@ -991,6 +991,427 @@ pub fn source_reader<'a>(workbook: &'a Workbook, sheet: &str) -> impl Fn(u32, u3
     }
 }
 
+/// A pivot table to be created: which source columns go where. Field indices
+/// count the source range's columns from zero.
+#[derive(Debug, Clone)]
+pub struct NewPivot {
+    pub name: String,
+    pub source_sheet: String,
+    /// Source range, zero-based inclusive (r0, c0, r1, c1), header row first.
+    pub source: (u32, u32, u32, u32),
+    pub target_sheet: String,
+    /// Top-left of the table proper, zero-based; page rows stand above it.
+    pub at: (u32, u32),
+    pub rows: Vec<usize>,
+    pub cols: Vec<usize>,
+    pub pages: Vec<usize>,
+    pub data: Vec<(usize, Aggregate)>,
+}
+
+impl Aggregate {
+    fn attr(self) -> Option<&'static str> {
+        match self {
+            Aggregate::Sum => None,
+            Aggregate::Count => Some("count"),
+            Aggregate::Average => Some("average"),
+            Aggregate::Max => Some("max"),
+            Aggregate::Min => Some("min"),
+            Aggregate::Product => Some("product"),
+            Aggregate::CountNums => Some("countNums"),
+            Aggregate::StdDev => Some("stdDev"),
+            Aggregate::StdDevP => Some("stdDevp"),
+            Aggregate::Var => Some("var"),
+            Aggregate::VarP => Some("varp"),
+        }
+    }
+    /// The caption Excel gives a new value field: `合計 / Sales`, `Sum of Sales`.
+    pub fn caption(self, ui: Ui, field: &str) -> String {
+        let (ja, en) = match self {
+            Aggregate::Sum => ("合計", "Sum of"),
+            Aggregate::Count => ("データの個数", "Count of"),
+            Aggregate::Average => ("平均", "Average of"),
+            Aggregate::Max => ("最大", "Max of"),
+            Aggregate::Min => ("最小", "Min of"),
+            Aggregate::Product => ("積", "Product of"),
+            Aggregate::CountNums => ("数値の個数", "Count of"),
+            Aggregate::StdDev => ("標本標準偏差", "StdDev of"),
+            Aggregate::StdDevP => ("標準偏差", "StdDevp of"),
+            Aggregate::Var => ("標本分散", "Var of"),
+            Aggregate::VarP => ("分散", "Varp of"),
+        };
+        match ui {
+            Ui::Japanese => format!("{ja} / {field}"),
+            Ui::English => format!("{en} {field}"),
+        }
+    }
+}
+
+/// The definition a new pivot amounts to, ready for `compute`.
+pub fn spec_for_new(new: &NewPivot, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) -> PivotSpec {
+    let (r0, c0, r1, c1) = new.source;
+    let width = (c1 - c0 + 1) as usize;
+    let names: Vec<String> = (0..width)
+        .map(|j| match get(r0, c0 + j as u32) {
+            CellValue::String(s) => s,
+            CellValue::Number(n) => format!("{n}"),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    // A new table lists every field's items in ascending order.
+    let mut item_order = vec![Vec::new(); width];
+    for f in new.rows.iter().chain(&new.cols).chain(&new.pages) {
+        let mut seen = std::collections::HashSet::new();
+        let mut items: Vec<CellValue> = Vec::new();
+        for r in r0 + 1..=r1 {
+            let v = get(r, c0 + *f as u32);
+            if seen.insert(key(&v)) {
+                items.push(v);
+            }
+        }
+        items.sort_by(ascending);
+        item_order[*f] = items;
+    }
+    let mut cols: Vec<Option<usize>> = new.cols.iter().map(|c| Some(*c)).collect();
+    if new.data.len() > 1 {
+        cols.push(None);
+    }
+    PivotSpec {
+        name: new.name.clone(),
+        sheet: new.target_sheet.clone(),
+        origin: new.at,
+        extent: new.at,
+        source_sheet: new.source_sheet.clone(),
+        source: new.source,
+        field_names: names.clone(),
+        item_order,
+        hidden: vec![Vec::new(); width],
+        rows: new.rows.iter().map(|r| Some(*r)).collect(),
+        cols,
+        pages: new.pages.iter().map(|p| (*p, None)).collect(),
+        data: new
+            .data
+            .iter()
+            .map(|(f, how)| DataField { name: how.caption(ui, &names[*f]), field: *f, aggregate: *how })
+            .collect(),
+        row_header_caption: None,
+        col_header_caption: None,
+        grand_total_caption: None,
+        data_caption: None,
+        row_grand_totals: true,
+        col_grand_totals: true,
+    }
+}
+
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+fn column_name(mut col: u32) -> String {
+    let mut out = Vec::new();
+    col += 1;
+    while col > 0 {
+        let rem = (col - 1) % 26;
+        out.push((b'A' + rem as u8) as char);
+        col = (col - 1) / 26;
+    }
+    out.iter().rev().collect()
+}
+
+fn a1(row: u32, col: u32) -> String {
+    format!("{}{}", column_name(col), row + 1)
+}
+
+fn shared_item(v: &CellValue) -> String {
+    match v {
+        CellValue::Empty => "<m/>".into(),
+        CellValue::Number(n) => format!("<n v=\"{n}\"/>"),
+        CellValue::Boolean(b) => format!("<b v=\"{}\"/>", u8::from(*b)),
+        CellValue::Error(e) => format!("<e v=\"{}\"/>", esc(e)),
+        CellValue::String(s) => format!("<s v=\"{}\"/>", esc(s)),
+        CellValue::Utf16(u) => format!("<s v=\"{}\"/>", esc(&String::from_utf16_lossy(u))),
+    }
+}
+
+const MAIN_NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const REL_TYPE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+fn cache_xml(spec: &PivotSpec) -> String {
+    let (r0, c0, r1, c1) = spec.source;
+    let mut x = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<pivotCacheDefinition xmlns=\"{MAIN_NS}\" xmlns:r=\"{REL_NS}\" saveData=\"0\" refreshOnLoad=\"1\" createdVersion=\"8\" refreshedVersion=\"8\" minRefreshableVersion=\"3\" recordCount=\"{}\"><cacheSource type=\"worksheet\"><worksheetSource ref=\"{}:{}\" sheet=\"{}\"/></cacheSource><cacheFields count=\"{}\">",
+        r1 - r0,
+        a1(r0, c0),
+        a1(r1, c1),
+        esc(&spec.source_sheet),
+        spec.field_names.len()
+    );
+    for (f, name) in spec.field_names.iter().enumerate() {
+        x.push_str(&format!("<cacheField name=\"{}\" numFmtId=\"0\">", esc(name)));
+        let items = &spec.item_order[f];
+        if items.is_empty() {
+            x.push_str("<sharedItems/>");
+        } else {
+            let blank = items.iter().any(|v| matches!(v, CellValue::Empty));
+            let all_numbers = items.iter().all(|v| matches!(v, CellValue::Number(_) | CellValue::Empty));
+            let mut attrs = String::new();
+            if blank {
+                attrs.push_str(" containsBlank=\"1\"");
+            }
+            if all_numbers {
+                let nums: Vec<f64> = items.iter().filter_map(|v| if let CellValue::Number(n) = v { Some(*n) } else { None }).collect();
+                let (lo, hi) = nums.iter().fold((f64::MAX, f64::MIN), |(a, b), n| (a.min(*n), b.max(*n)));
+                attrs.push_str(&format!(
+                    " containsSemiMixedTypes=\"0\" containsString=\"0\" containsNumber=\"1\"{} minValue=\"{lo}\" maxValue=\"{hi}\"",
+                    if nums.iter().all(|n| n.fract() == 0.0) { " containsInteger=\"1\"" } else { "" }
+                ));
+            }
+            x.push_str(&format!("<sharedItems{attrs} count=\"{}\">", items.len()));
+            for v in items {
+                x.push_str(&shared_item(v));
+            }
+            x.push_str("</sharedItems>");
+        }
+        x.push_str("</cacheField>");
+    }
+    x.push_str("</cacheFields></pivotCacheDefinition>");
+    x
+}
+
+fn table_xml(spec: &PivotSpec, cache_id: u32, grid: &PivotGrid, header_rows: usize) -> String {
+    let pages = spec.pages.len();
+    let top = grid.origin.0 + if pages > 0 { pages as u32 + 1 } else { 0 };
+    let height = grid.cells.len() as u32 - if pages > 0 { pages as u32 + 1 } else { 0 };
+    let width = grid.cells.iter().skip(if pages > 0 { pages + 1 } else { 0 }).map(Vec::len).max().unwrap_or(1) as u32;
+    let first_header = if spec.cols.iter().all(Option::is_none) && !spec.cols.is_empty() { 0 } else { 1 };
+    let mut x = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<pivotTableDefinition xmlns=\"{MAIN_NS}\" name=\"{}\" cacheId=\"{cache_id}\" applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" applyPatternFormats=\"0\" applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"1\" dataCaption=\"{}\" updatedVersion=\"8\" minRefreshableVersion=\"3\" useAutoFormatting=\"1\" itemPrintTitles=\"1\" createdVersion=\"8\" indent=\"0\" outline=\"1\" outlineData=\"1\" multipleFieldFilters=\"0\"><location ref=\"{}:{}\" firstHeaderRow=\"{first_header}\" firstDataRow=\"{header_rows}\" firstDataCol=\"1\"{}/>",
+        esc(&spec.name),
+        esc(spec.data_caption.as_deref().unwrap_or("値")),
+        a1(top, spec.origin.1),
+        a1(top + height.max(1) - 1, spec.origin.1 + width.max(1) - 1),
+        if pages > 0 { format!(" rowPageCount=\"{pages}\" colPageCount=\"1\"") } else { String::new() }
+    );
+    x.push_str(&format!("<pivotFields count=\"{}\">", spec.field_names.len()));
+    for f in 0..spec.field_names.len() {
+        let axis = if spec.rows.contains(&Some(f)) {
+            Some("axisRow")
+        } else if spec.cols.contains(&Some(f)) {
+            Some("axisCol")
+        } else if spec.pages.iter().any(|(p, _)| *p == f) {
+            Some("axisPage")
+        } else {
+            None
+        };
+        let data = spec.data.iter().any(|d| d.field == f);
+        let mut attrs = String::new();
+        if let Some(a) = axis {
+            attrs.push_str(&format!(" axis=\"{a}\""));
+        }
+        if data {
+            attrs.push_str(" dataField=\"1\"");
+        }
+        if axis.is_some() {
+            let n = spec.item_order[f].len();
+            x.push_str(&format!("<pivotField{attrs} showAll=\"0\"><items count=\"{}\">", n + 1));
+            for i in 0..n {
+                x.push_str(&format!("<item x=\"{i}\"/>"));
+            }
+            x.push_str("<item t=\"default\"/></items></pivotField>");
+        } else {
+            x.push_str(&format!("<pivotField{attrs} showAll=\"0\"/>"));
+        }
+    }
+    x.push_str("</pivotFields>");
+    let fields = |list: &[Option<usize>], tag: &str| -> String {
+        if list.is_empty() {
+            return String::new();
+        }
+        let mut s = format!("<{tag} count=\"{}\">", list.len());
+        for f in list {
+            s.push_str(&format!("<field x=\"{}\"/>", f.map(|v| v as i64).unwrap_or(-2)));
+        }
+        s.push_str(&format!("</{tag}>"));
+        s
+    };
+    x.push_str(&fields(&spec.rows, "rowFields"));
+    x.push_str(&fields(&spec.cols, "colFields"));
+    if pages > 0 {
+        x.push_str(&format!("<pageFields count=\"{pages}\">"));
+        for (f, _) in &spec.pages {
+            x.push_str(&format!("<pageField fld=\"{f}\" hier=\"-1\"/>"));
+        }
+        x.push_str("</pageFields>");
+    }
+    x.push_str(&format!("<dataFields count=\"{}\">", spec.data.len()));
+    for d in &spec.data {
+        x.push_str(&format!(
+            "<dataField name=\"{}\" fld=\"{}\"{} baseField=\"0\" baseItem=\"0\"/>",
+            esc(&d.name),
+            d.field,
+            d.aggregate.attr().map(|a| format!(" subtotal=\"{a}\"")).unwrap_or_default()
+        ));
+    }
+    x.push_str("</dataFields><pivotTableStyleInfo name=\"PivotStyleLight16\" showRowHeaders=\"1\" showColHeaders=\"1\" showRowStripes=\"0\" showColStripes=\"0\" showLastColumn=\"1\"/><extLst><ext uri=\"{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:pivotTableDefinition hideValuesRow=\"1\" xmlns:xm=\"http://schemas.microsoft.com/office/excel/2006/main\"/></ext></extLst></pivotTableDefinition>");
+    x
+}
+
+/// How many heading rows a computed grid starts with (page rows aside): the
+/// rows before the first body row, which is `firstDataRow`.
+pub fn header_rows(spec: &PivotSpec) -> usize {
+    let real_cols = spec.cols.iter().flatten().count();
+    let values_on_cols = spec.cols.contains(&None) || (spec.data.len() > 1 && !spec.rows.contains(&None));
+    if real_cols == 0 {
+        usize::from(!spec.rows.is_empty() || values_on_cols)
+    } else {
+        spec.cols.len() + usize::from(values_on_cols && !spec.cols.contains(&None)) + 1
+    }
+}
+
+fn read_all(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        out.push((f.name().to_string(), buf));
+    }
+    Ok(out)
+}
+
+/// Writes the parts of new pivot tables into a saved package: a cache
+/// definition (no records, refreshed on load) and a table definition each,
+/// wired into the workbook, the target sheet and the content types.
+pub fn add_pivot_parts(data: &[u8], added: &[(PivotSpec, PivotGrid)]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    if added.is_empty() {
+        return Ok(data.to_vec());
+    }
+    let mut parts = read_all(data)?;
+    let get = |parts: &Vec<(String, Vec<u8>)>, name: &str| parts.iter().find(|(n, _)| n == name).map(|(_, b)| String::from_utf8_lossy(b).into_owned());
+    let set = |parts: &mut Vec<(String, Vec<u8>)>, name: &str, body: String| {
+        if let Some(slot) = parts.iter_mut().find(|(n, _)| n == name) {
+            slot.1 = body.into_bytes();
+        } else {
+            parts.push((name.to_string(), body.into_bytes()));
+        }
+    };
+    let mut workbook = get(&parts, "xl/workbook.xml").ok_or("no workbook part")?;
+    let mut wb_rels = get(&parts, "xl/_rels/workbook.xml.rels").ok_or("no workbook rels")?;
+    let mut types = get(&parts, "[Content_Types].xml").ok_or("no content types")?;
+    let mut next_cache_id = 1u32;
+    for m in workbook.match_indices("cacheId=\"") {
+        let rest = &workbook[m.0 + 9..];
+        if let Some(id) = rest.split('"').next().and_then(|v| v.parse::<u32>().ok()) {
+            next_cache_id = next_cache_id.max(id + 1);
+        }
+    }
+    let free = |parts: &Vec<(String, Vec<u8>)>, stem: &str| -> u32 {
+        (1..).find(|n| !parts.iter().any(|(name, _)| name == &format!("{stem}{n}.xml"))).unwrap_or(1)
+    };
+    let next_rid = |rels: &str| -> String {
+        let mut n = 1;
+        while rels.contains(&format!("Id=\"rId{n}\"")) {
+            n += 1;
+        }
+        format!("rId{n}")
+    };
+    let sheet_parts: Vec<(String, String)> = {
+        let rel_map = rels(&wb_rels);
+        let mut reader = Reader::from_str(&workbook);
+        let mut out = Vec::new();
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) if local(e.name().as_ref()) == "sheet" => {
+                    if let (Some(name), Some(rid)) = (attr(&e, "name"), attr(&e, "id")) {
+                        if let Some((target, _)) = rel_map.get(&rid) {
+                            out.push((name, resolve("xl", target)));
+                        }
+                    }
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+        }
+        out
+    };
+    let mut caches_xml = String::new();
+    for (spec, grid) in added {
+        let sheet_part = sheet_parts
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(&spec.sheet))
+            .map(|(_, p)| p.clone())
+            .ok_or("pivot target sheet not found")?;
+        let cache_n = free(&parts, "xl/pivotCache/pivotCacheDefinition");
+        let cache_part = format!("xl/pivotCache/pivotCacheDefinition{cache_n}.xml");
+        set(&mut parts, &cache_part, cache_xml(spec));
+        let table_n = free(&parts, "xl/pivotTables/pivotTable");
+        let table_part = format!("xl/pivotTables/pivotTable{table_n}.xml");
+        let cache_id = next_cache_id;
+        next_cache_id += 1;
+        set(&mut parts, &table_part, table_xml(spec, cache_id, grid, header_rows(spec)));
+        set(
+            &mut parts,
+            &format!("xl/pivotTables/_rels/pivotTable{table_n}.xml.rels"),
+            format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"{REL_TYPE}/pivotCacheDefinition\" Target=\"../pivotCache/pivotCacheDefinition{cache_n}.xml\"/></Relationships>"),
+        );
+        // workbook -> cache
+        let rid = next_rid(&wb_rels);
+        wb_rels = wb_rels.replace(
+            "</Relationships>",
+            &format!("<Relationship Id=\"{rid}\" Type=\"{REL_TYPE}/pivotCacheDefinition\" Target=\"pivotCache/pivotCacheDefinition{cache_n}.xml\"/></Relationships>"),
+        );
+        caches_xml.push_str(&format!("<pivotCache cacheId=\"{cache_id}\" r:id=\"{rid}\"/>"));
+        // sheet -> table
+        let (dir, file) = sheet_part.rsplit_once('/').unwrap_or(("xl/worksheets", &sheet_part));
+        let sheet_rels_name = format!("{dir}/_rels/{file}.rels");
+        let mut sheet_rels = get(&parts, &sheet_rels_name).unwrap_or_else(|| {
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"></Relationships>".to_string()
+        });
+        let srid = next_rid(&sheet_rels);
+        sheet_rels = sheet_rels.replace(
+            "</Relationships>",
+            &format!("<Relationship Id=\"{srid}\" Type=\"{REL_TYPE}/pivotTable\" Target=\"../pivotTables/pivotTable{table_n}.xml\"/></Relationships>"),
+        );
+        set(&mut parts, &sheet_rels_name, sheet_rels);
+        types = types.replace(
+            "</Types>",
+            &format!("<Override PartName=\"/{cache_part}\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml\"/><Override PartName=\"/{table_part}\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml\"/></Types>"),
+        );
+    }
+    // The workbook lists its caches after its calculation settings.
+    if !workbook.contains(&format!("xmlns:r=\"{REL_NS}\"")) {
+        workbook = workbook.replacen("<workbook ", &format!("<workbook xmlns:r=\"{REL_NS}\" "), 1);
+    }
+    if let Some(at) = workbook.find("</pivotCaches>") {
+        workbook.insert_str(at, &caches_xml);
+    } else {
+        let block = format!("<pivotCaches>{caches_xml}</pivotCaches>");
+        let anchor = ["<smartTagPr", "<smartTagTypes", "<webPublishing", "<fileRecoveryPr", "<webPublishObjects", "<extLst", "</workbook>"]
+            .iter()
+            .filter_map(|tag| workbook.find(tag))
+            .min()
+            .ok_or("workbook has no end")?;
+        workbook.insert_str(anchor, &block);
+    }
+    set(&mut parts, "xl/workbook.xml", workbook);
+    set(&mut parts, "xl/_rels/workbook.xml.rels", wb_rels);
+    set(&mut parts, "[Content_Types].xml", types);
+
+    let mut out = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut out);
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, body) in &parts {
+            writer.start_file(name.as_str(), options).map_err(|e| e.to_string())?;
+            writer.write_all(body).map_err(|e| e.to_string())?;
+        }
+        writer.finish().map_err(|e| e.to_string())?;
+    }
+    Ok(out.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

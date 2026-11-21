@@ -181,6 +181,8 @@ pub struct XlsxEditor {
     legacy_drawing_orders: HashMap<usize, Vec<u32>>,
     /// Final sheet-order table definitions, when VBA changed a table.
     table_plan: Option<Vec<Option<Vec<crate::ir::Table>>>>,
+    /// Pivot tables created in this session, written into the package on save.
+    pivot_additions: Vec<(crate::pivot::PivotSpec, crate::pivot::PivotGrid)>,
     /// Final sheet-order dynamic-array owners, including one-cell and blocked
     /// arrays. Their extents are independent of adjacent spill members.
     dynamic_plan: Option<Vec<Vec<crate::ir::CachedSpill>>>,
@@ -281,7 +283,63 @@ impl XlsxEditor {
             legacy_comment_id_blocks: HashMap::new(),
             legacy_drawing_orders: HashMap::new(),
             table_plan: None,
+            pivot_additions: Vec::new(),
         })
+    }
+
+    /// Creates a pivot table: its grid is computed now from the source as it
+    /// stands (pending edits included) and written as cell edits, and its
+    /// parts are added to the package on save, refreshed by Excel on load.
+    /// Returns the cells the table covers, page rows included, as
+    /// (sheet index, first row, first column, rows, columns), zero-based.
+    pub fn add_pivot(&mut self, new: &crate::pivot::NewPivot, ui: crate::pivot::Ui) -> Option<(usize, u32, u32, usize, usize)> {
+        let sheet_index = |name: &str| self.workbook.sheets.iter().position(|s| s.name.eq_ignore_ascii_case(name));
+        let source = sheet_index(&new.source_sheet)?;
+        let target = sheet_index(&new.target_sheet)?;
+        let (spec, grid) = {
+            let edits = &self.edits;
+            let sheet = &self.workbook.sheets[source];
+            let get = |row: u32, col: u32| -> crate::ir::CellValue {
+                if let Some(edit) = edits.get(&(source, row + 1, col)) {
+                    match edit {
+                        CellEditValue::String(s) => return crate::ir::CellValue::String(s.clone()),
+                        CellEditValue::Number(n) => return crate::ir::CellValue::Number(*n),
+                        CellEditValue::Boolean(b) => return crate::ir::CellValue::Boolean(*b),
+                        CellEditValue::Empty => return crate::ir::CellValue::Empty,
+                        _ => {}
+                    }
+                }
+                sheet.rows.iter().find(|r| r.index == row + 1)
+                    .and_then(|r| r.cells.iter().find(|c| c.col == col))
+                    .map(|c| c.value.clone()).unwrap_or(crate::ir::CellValue::Empty)
+            };
+            let mut spec = crate::pivot::spec_for_new(new, &get, ui);
+            let pages = spec.pages.len() as u32;
+            if pages > 0 {
+                spec.origin.0 += 0;
+            }
+            let grid = crate::pivot::compute(&spec, &get, ui);
+            (spec, grid)
+        };
+        for (i, line) in grid.cells.iter().enumerate() {
+            for (j, value) in line.iter().enumerate() {
+                let at = (target, grid.origin.0 + i as u32 + 1, grid.origin.1 + j as u32);
+                let edit = match value {
+                    crate::ir::CellValue::Empty => continue,
+                    crate::ir::CellValue::String(s) => CellEditValue::String(s.clone()),
+                    crate::ir::CellValue::Utf16(u) => CellEditValue::Utf16(u.clone()),
+                    crate::ir::CellValue::Number(n) => CellEditValue::Number(*n),
+                    crate::ir::CellValue::Boolean(b) => CellEditValue::Boolean(*b),
+                    crate::ir::CellValue::Error(e) => CellEditValue::Error(e.clone()),
+                };
+                self.edits.insert(at, edit);
+            }
+        }
+        let rows = grid.cells.len();
+        let cols = grid.cells.iter().map(Vec::len).max().unwrap_or(0);
+        let origin = grid.origin;
+        self.pivot_additions.push((spec, grid));
+        Some((target, origin.0, origin.1, rows, cols))
     }
 
     /// Refreshes every pivot table from its source, as Excel's Refresh All
@@ -2778,6 +2836,7 @@ impl XlsxEditor {
         }
         let output = patch_dynamic_array_package(&output, &arrays)?;
         let output = finish_drawing_deletions(&output, &drawing_package)?;
+        let output = crate::pivot::add_pivot_parts(&output, &self.pivot_additions).map_err(XlsxError::InvalidData)?;
         let contains_rich_error = |sheet: &crate::ir::Sheet| sheet.rows.iter().flat_map(|row| &row.cells)
             .any(|cell| matches!(&cell.value, crate::ir::CellValue::Error(error) if crate::parser::rich_error_type(error).is_some()));
         if !self.edits.values().any(|value| value.error_text().and_then(crate::parser::rich_error_type).is_some())
