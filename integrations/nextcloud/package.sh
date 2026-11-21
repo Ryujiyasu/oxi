@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 version="$(sed -n 's:.*<version>\(.*\)</version>.*:\1:p' appinfo/info.xml)"
 stage=build/oxidocs_preview
 rm -rf build && mkdir -p "$stage/bin"
-cp -r appinfo lib README.md LICENSE-MIT LICENSE-APACHE "$stage/"
+cp -r appinfo img lib README.md LICENSE-MIT LICENSE-APACHE "$stage/"
 for arch in x86_64 aarch64; do
   install -m 0755 "bin/oxidocs-linux-$arch" "$stage/bin/"
 done
