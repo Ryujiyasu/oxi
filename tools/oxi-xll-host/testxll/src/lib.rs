@@ -22,6 +22,7 @@ const XLTYPE_NUM: u32 = 0x0001;
 const XLTYPE_STR: u32 = 0x0002;
 const XLTYPE_ERR: u32 = 0x0010;
 const XLTYPE_INT: u32 = 0x0800;
+const XLTYPE_MULTI: u32 = 0x0040;
 const XLBIT_DLL_FREE: u32 = 0x4000;
 const XLF_REGISTER: i32 = 149;
 const XLF_GET_NAME: i32 = 0x4009;
@@ -67,6 +68,11 @@ pub unsafe extern "system" fn xlAutoOpen() -> i32 {
         ("OxiHypot4", "BBBBB", "OxiHypot4"),
         ("OxiSum6", "BBBBBBB", "OxiSum6"),
         ("OxiHalf", "QQ", "OxiHalf"),
+        ("OxiRangeSum", "BQ", "OxiRangeSum"),
+        ("OxiShape", "QQ", "OxiShape"),
+        ("OxiFpSum", "BK%", "OxiFpSum"),
+        ("OxiTranspose", "QQ", "OxiTranspose"),
+        ("OxiFpTwice", "K%K%", "OxiFpTwice"),
     ];
     for (procedure, types, function) in registrations {
         let (_a, p) = text(procedure);
@@ -133,9 +139,98 @@ pub unsafe extern "system" fn OxiHalf(arg: *const Xloper12) -> *mut Xloper12 {
     }
 }
 
+/// The elements of a value argument: an array's, or the value alone.
+unsafe fn elements(arg: &Xloper12) -> (usize, usize, Vec<Xloper12>) {
+    if arg.xltype & 0xFFF == XLTYPE_MULTI {
+        let (rows, cols) = (arg.val[1] as u32 as usize, (arg.val[1] >> 32) as u32 as usize);
+        let p = arg.val[0] as *const Xloper12;
+        (rows, cols, (0..rows * cols).map(|i| *p.add(i)).collect())
+    } else {
+        (1, 1, vec![*arg])
+    }
+}
+
+/// The sum of the numbers in a range or array (text and blanks skipped).
+#[no_mangle]
+pub unsafe extern "system" fn OxiRangeSum(arg: *const Xloper12) -> f64 {
+    let (_, _, all) = elements(&*arg);
+    all.iter()
+        .map(|x| match x.xltype & 0xFFF {
+            XLTYPE_NUM => f64::from_bits(x.val[0]),
+            XLTYPE_INT => f64::from(x.val[0] as i32),
+            _ => 0.0,
+        })
+        .sum()
+}
+
+/// "rows x columns" of what arrived.
+#[no_mangle]
+pub unsafe extern "system" fn OxiShape(arg: *const Xloper12) -> *mut Xloper12 {
+    let (rows, cols, _) = elements(&*arg);
+    let s = format!("{rows}x{cols}");
+    let units: Vec<u16> = std::iter::once(s.encode_utf16().count() as u16).chain(s.encode_utf16()).collect();
+    let leaked = Box::leak(units.into_boxed_slice());
+    boxed(Xloper12 { val: [leaked.as_ptr() as u64, 0, 0], xltype: XLTYPE_STR })
+}
+
+/// FP12: { rows, columns, doubles row by row }.
+#[repr(C)]
+pub struct Fp12 {
+    pub rows: i32,
+    pub columns: i32,
+    pub array: [f64; 1],
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn OxiFpSum(fp: *const Fp12) -> f64 {
+    let n = ((*fp).rows * (*fp).columns).max(0) as usize;
+    std::slice::from_raw_parts((*fp).array.as_ptr(), n).iter().sum()
+}
+
+/// The array turned on its side; numbers only (anything else becomes 0).
+#[no_mangle]
+pub unsafe extern "system" fn OxiTranspose(arg: *const Xloper12) -> *mut Xloper12 {
+    let (rows, cols, all) = elements(&*arg);
+    let mut out: Vec<Xloper12> = Vec::with_capacity(rows * cols);
+    for c in 0..cols {
+        for r in 0..rows {
+            let x = all[r * cols + c];
+            let v = match x.xltype & 0xFFF {
+                XLTYPE_NUM => f64::from_bits(x.val[0]),
+                XLTYPE_INT => f64::from(x.val[0] as i32),
+                _ => 0.0,
+            };
+            out.push(Xloper12 { val: [v.to_bits(), 0, 0], xltype: XLTYPE_NUM });
+        }
+    }
+    let p = Box::leak(out.into_boxed_slice()).as_mut_ptr();
+    boxed(Xloper12 { val: [p as u64, (rows as u64) << 32 | cols as u64, 0], xltype: XLTYPE_MULTI })
+}
+
+/// Each number doubled, in a buffer the add-in keeps (as XLL samples do).
+#[no_mangle]
+pub unsafe extern "system" fn OxiFpTwice(fp: *const Fp12) -> *mut Fp12 {
+    static mut BUFFER: [f64; 4098] = [0.0; 4098];
+    let (rows, cols) = ((*fp).rows, (*fp).columns);
+    let n = (rows * cols).clamp(0, 4096) as usize;
+    let out = std::ptr::addr_of_mut!(BUFFER) as *mut Fp12;
+    (*out).rows = rows;
+    (*out).columns = cols;
+    let src = std::slice::from_raw_parts((*fp).array.as_ptr(), n);
+    let dst = std::slice::from_raw_parts_mut((*out).array.as_mut_ptr(), n);
+    for (d, s) in dst.iter_mut().zip(src) {
+        *d = s * 2.0;
+    }
+    out
+}
+
 #[no_mangle]
 pub unsafe extern "system" fn xlAutoFree12(x: *mut Xloper12) {
     if !x.is_null() {
+        if (*x).xltype & 0xFFF == XLTYPE_MULTI {
+            let n = ((*x).val[1] as u32 as usize) * (((*x).val[1] >> 32) as u32 as usize);
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut((*x).val[0] as *mut Xloper12, n)));
+        }
         drop(Box::from_raw(x));
     }
 }

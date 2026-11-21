@@ -162,8 +162,59 @@ unsafe fn call_win64(f: usize, args: &[u64]) -> (u64, f64) {
 /// stay alive while the call runs.
 enum Held {
     None,
-    Oper(Box<Xloper12>, Option<Box<[u16]>>),
+    Oper(Box<Xloper12>, Vec<Box<[u16]>>, Option<Box<[Xloper12]>>),
     Wide(Vec<u16>),
+    Fp(Vec<u64>),
+}
+
+/// A JSON value as a value XLOPER12: a 2-D array (rows of values) or a 1-D
+/// one (one row) is an xltypeMulti, as Excel passes a range to a `Q`
+/// argument; what has to stay alive with it comes back too.
+fn json_to_value_oper(v: &serde_json::Value) -> (Xloper12, Vec<Box<[u16]>>, Option<Box<[Xloper12]>>) {
+    let serde_json::Value::Array(outer) = v else {
+        let (x, keep) = json_to_oper(v);
+        return (x, keep.into_iter().collect(), None);
+    };
+    let rows: Vec<Vec<serde_json::Value>> = if outer.iter().all(serde_json::Value::is_array) {
+        outer.iter().map(|r| r.as_array().cloned().unwrap_or_default()).collect()
+    } else {
+        vec![outer.clone()]
+    };
+    let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let mut keep = Vec::new();
+    let mut cells = Vec::with_capacity(rows.len() * cols);
+    for row in &rows {
+        for c in 0..cols {
+            let (x, k) = json_to_oper(row.get(c).unwrap_or(&serde_json::Value::Null));
+            // A blank cell of a range is nil, not missing.
+            let x = if x.xltype == XLTYPE_MISSING { Xloper12 { val: [0; 3], xltype: XLTYPE_NIL } } else { x };
+            cells.push(x);
+            keep.extend(k);
+        }
+    }
+    let cells = cells.into_boxed_slice();
+    let x = Xloper12 { val: [cells.as_ptr() as u64, (cols as u64) << 32 | rows.len() as u64, 0], xltype: XLTYPE_MULTI };
+    (x, keep, Some(cells))
+}
+
+/// An FP12 (`K%`) from numbers: { rows, columns, doubles row by row }, or
+/// `None` when something is not a number (Excel answers #VALUE!).
+fn json_to_fp12(v: &serde_json::Value) -> Option<Vec<u64>> {
+    let rows: Vec<Vec<serde_json::Value>> = match v {
+        serde_json::Value::Array(outer) if outer.iter().all(serde_json::Value::is_array) => {
+            outer.iter().map(|r| r.as_array().cloned().unwrap_or_default()).collect()
+        }
+        serde_json::Value::Array(outer) => vec![outer.clone()],
+        other => vec![vec![other.clone()]],
+    };
+    let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let mut out = vec![(rows.len() as u64) | (cols as u64) << 32];
+    for row in &rows {
+        for c in 0..cols {
+            out.push(row.get(c)?.as_f64()?.to_bits());
+        }
+    }
+    Some(out)
 }
 
 fn json_to_oper(v: &serde_json::Value) -> (Xloper12, Option<Box<[u16]>>) {
@@ -286,10 +337,18 @@ fn main() {
                     "J" => bits.push(v.as_f64().unwrap_or(0.0) as i32 as i64 as u64),
                     "A" => bits.push(u64::from(v.as_bool().unwrap_or(false))),
                     "Q" | "U" | "P" | "R" => {
-                        let (x, keep) = json_to_oper(&v);
+                        let (x, keep, cells) = json_to_value_oper(&v);
                         let boxed = Box::new(x);
                         bits.push(&*boxed as *const Xloper12 as u64);
-                        held.push(Held::Oper(boxed, keep));
+                        held.push(Held::Oper(boxed, keep, cells));
+                    }
+                    "K%" | "K" => {
+                        let Some(fp) = json_to_fp12(&v) else {
+                            println!("{}", serde_json::json!({"value": "#VALUE!"}));
+                            return;
+                        };
+                        bits.push(fp.as_ptr() as u64);
+                        held.push(Held::Fp(fp));
                     }
                     "C%" | "D%" => {
                         let s = v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
@@ -308,8 +367,25 @@ fn main() {
                 }
             }
             let (rax, xmm) = unsafe { call_win64(f, &bits) };
-            drop(held);
+            // The arguments stay alive until the answer has been read: an
+            // add-in may hand back what points into them.
             let value = match ret.as_str() {
+                "K%" | "K" => {
+                    let p = rax as *const i32;
+                    if p.is_null() {
+                        serde_json::Value::Null
+                    } else {
+                        unsafe {
+                            let (rows, cols) = (*p as usize, *p.add(1) as usize);
+                            let data = p.add(2) as *const f64;
+                            serde_json::Value::Array(
+                                (0..rows)
+                                    .map(|r| serde_json::Value::Array((0..cols).map(|c| serde_json::json!(*data.add(r * cols + c))).collect()))
+                                    .collect(),
+                            )
+                        }
+                    }
+                }
                 "B" => serde_json::json!(xmm),
                 "J" => serde_json::json!(rax as i32),
                 "A" => serde_json::json!(rax as u16 != 0),
@@ -348,6 +424,7 @@ fn main() {
                 }
                 _ => serde_json::Value::Null,
             };
+            drop(held);
             println!("{}", serde_json::json!({"value": value}));
         }
         other => {
