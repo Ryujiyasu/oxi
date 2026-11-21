@@ -6,6 +6,7 @@ pub mod chart;
 mod chart_edit;
 pub mod conditional;
 pub mod pivot;
+pub mod solver;
 pub mod editor;
 pub mod fill;
 pub mod formula;

@@ -1102,6 +1102,33 @@ pub fn add_xlsx_pivot(data: &[u8], spec: JsValue, ui: Option<String>) -> Result<
     editor.save().map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Run the Solver model a sheet keeps in its `solver_*` names and return
+/// `{ code, workbook }`: Excel's SolverSolve return code (0 found, 1
+/// converged, 4 unbounded, 5 infeasible, 13 no model) and the saved file with
+/// the answer in the variable cells.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn solve_xlsx(data: &[u8], sheet_index: usize) -> Result<JsValue, JsError> {
+    let mut editor = oxicells_core::XlsxEditor::new(data).map_err(|e| JsError::new(&e.to_string()))?;
+    let mut book = editor.workbook().clone();
+    let code = oxicells_core::solver::solve(&mut book, sheet_index) as i32;
+    if let Some(model) = oxicells_core::solver::read_model(&book, sheet_index) {
+        for (s, r, c) in model.variables {
+            let value = book.sheets[s].rows.iter().find(|row| row.index == r + 1)
+                .and_then(|row| row.cells.iter().find(|cell| cell.col == c))
+                .map(|cell| cell.value.clone());
+            if let Some(oxicells_core::ir::CellValue::Number(n)) = value {
+                editor.set_cell_value(s, r + 1, c, oxicells_core::editor::CellEditValue::Number(n));
+            }
+        }
+    }
+    let bytes = editor.save().map_err(|e| JsError::new(&e.to_string()))?;
+    let out = js_sys::Object::new();
+    js_sys::Reflect::set(&out, &"code".into(), &JsValue::from(code)).map_err(|_| JsError::new("result"))?;
+    js_sys::Reflect::set(&out, &"workbook".into(), &js_sys::Uint8Array::from(bytes.as_slice()).into()).map_err(|_| JsError::new("result"))?;
+    Ok(out.into())
+}
+
 /// Save a workbook a VBA run has changed back into the .xlsx it came from.
 ///
 /// `run_spreadsheet_vba` hands back the whole workbook rather than a list of

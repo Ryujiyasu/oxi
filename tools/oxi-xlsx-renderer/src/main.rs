@@ -2994,6 +2994,27 @@ fn main() {
         }
         return;
     }
+    // `--solve`: run the first sheet's Solver model and print the outcome,
+    // the variable cells and the objective as JSON (`_xlsx_solver_check.py`).
+    if args.get(2).map(String::as_str) == Some("--solve") {
+        let mut book = workbook.clone();
+        let outcome = oxicells_core::solver::solve(&mut book, 0);
+        let model = oxicells_core::solver::read_model(&book, 0);
+        let read = |(s, r, c): oxicells_core::solver::At| -> serde_json::Value {
+            book.sheets[s].rows.iter().find(|row| row.index == r + 1)
+                .and_then(|row| row.cells.iter().find(|cell| cell.col == c))
+                .map(|cell| match &cell.value { CellValue::Number(n) => serde_json::json!(n), _ => serde_json::Value::Null })
+                .unwrap_or(serde_json::Value::Null)
+        };
+        let out = match model {
+            Some(m) => serde_json::json!({"code": outcome as i32,
+                "variables": m.variables.iter().map(|v| read(*v)).collect::<Vec<_>>(),
+                "objective": read(m.objective)}),
+            None => serde_json::json!({"code": outcome as i32}),
+        };
+        println!("{out}");
+        return;
+    }
     if args.get(2).map(String::as_str) == Some("--pivot") {
         let ui = if std::env::var("OXI_XLSX_UI_LANG").is_ok_and(|v| v.starts_with("en")) {
             oxicells_core::pivot::Ui::English
