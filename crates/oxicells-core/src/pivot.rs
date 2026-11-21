@@ -61,7 +61,7 @@ impl Aggregate {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DataField {
     pub name: String,
     pub field: usize,
@@ -123,6 +123,24 @@ pub struct PivotSpec {
     /// package: saving writes its parts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub created: bool,
+    /// The package part the table was read from ("xl/pivotTables/pivotTable1.xml");
+    /// empty for one a macro made.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub part: String,
+}
+
+impl PivotSpec {
+    /// Whether two specs lay the same table out: the same fields on the same
+    /// axes, the same value fields, items and hidden items. What a save
+    /// compares to tell a table a macro rearranged from one it only read.
+    pub fn same_layout(&self, other: &PivotSpec) -> bool {
+        self.rows == other.rows
+            && self.cols == other.cols
+            && self.pages == other.pages
+            && self.data == other.data
+            && self.hidden == other.hidden
+            && self.item_order == other.item_order
+    }
 }
 
 /// The words a pivot shows that its file does not spell out, by UI language.
@@ -161,6 +179,13 @@ impl Ui {
         match self {
             Ui::Japanese => "(空白)",
             Ui::English => "(blank)",
+        }
+    }
+    /// The values field's own caption (`dataCaption`): "値".
+    fn values(self) -> &'static str {
+        match self {
+            Ui::Japanese => "値",
+            Ui::English => "Values",
         }
     }
     /// A page field showing several items, some hidden: measured, Excel 16.0
@@ -371,6 +396,7 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
         show_row_stripes: false,
         show_col_stripes: false,
         created: false,
+        part: String::new(),
     };
     let mut field = None::<usize>;
     let mut next_field = 0usize;
@@ -514,11 +540,15 @@ pub fn read_pivots(data: &[u8]) -> Vec<PivotSpec> {
         let Some(sheet_rels) = read_part(&mut zip, &format!("{dir}/_rels/{file}.rels")).map(|x| rels(&x)) else {
             continue;
         };
-        for (target, kind) in sheet_rels.values() {
-            if !kind.ends_with("/pivotTable") {
-                continue;
-            }
-            let table_path = resolve(dir, target);
+        // In part order, not the map's: a sheet with two tables lists them
+        // the same way every time.
+        let mut tables: Vec<String> = sheet_rels
+            .values()
+            .filter(|(_, kind)| kind.ends_with("/pivotTable"))
+            .map(|(target, _)| resolve(dir, target))
+            .collect();
+        tables.sort_by(|a, b| natural_part_order(a, b));
+        for table_path in tables {
             let Some(table_xml) = read_part(&mut zip, &table_path) else { continue };
             let cache_id = {
                 let mut reader = Reader::from_str(&table_xml);
@@ -537,7 +567,8 @@ pub fn read_pivots(data: &[u8]) -> Vec<PivotSpec> {
             };
             let Some(cache_part) = cache_id.and_then(|id| caches.get(&id).cloned()) else { continue };
             let Some(cache) = read_part(&mut zip, &cache_part).and_then(|x| parse_cache(&x)) else { continue };
-            if let Some(spec) = parse_table(&table_xml, &name, &cache) {
+            if let Some(mut spec) = parse_table(&table_xml, &name, &cache) {
+                spec.part = table_path.clone();
                 out.push(spec);
             }
         }
@@ -781,6 +812,7 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
             real: &[usize],
             level: usize,
             path: Vec<Key>,
+            data: Option<usize>,
             records: &[&Vec<CellValue>],
             items_of: &dyn Fn(usize) -> Vec<CellValue>,
             data_count: usize,
@@ -794,7 +826,7 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                 None => {
                     for d in 0..data_count {
                         out.push(Slot { path: path.clone(), data: Some(d), kind: SlotKind::Data { level } });
-                        walk(fields, real, level + 1, path.clone(), records, items_of, data_count, subtotal_after, out);
+                        walk(fields, real, level + 1, path.clone(), Some(d), records, items_of, data_count, subtotal_after, out);
                     }
                 }
                 Some(f) => {
@@ -812,24 +844,34 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                             continue;
                         }
                         let below_real = fields[level + 1..].iter().any(Option::is_some);
+                        // Items under the values field belong to one value
+                        // field: measured, a field moved inside two value
+                        // fields shows each one's own numbers.
                         out.push(Slot {
                             path: next.clone(),
-                            data: None,
+                            data,
                             kind: SlotKind::Item { level, label: item.clone() },
                         });
-                        walk(fields, real, level + 1, next.clone(), records, items_of, data_count, subtotal_after, out);
+                        walk(fields, real, level + 1, next.clone(), data, records, items_of, data_count, subtotal_after, out);
                         if subtotal_after && below_real {
-                            out.push(Slot {
-                                path: next.clone(),
-                                data: None,
-                                kind: SlotKind::Subtotal { level, label: item.clone() },
-                            });
+                            // With the values field below the item, a total
+                            // per value field ("Jan 合計 / Sales"), else one.
+                            let values_below = fields[level + 1..].contains(&None);
+                            let per: Vec<Option<usize>> =
+                                if values_below && data.is_none() { (0..data_count).map(Some).collect() } else { vec![data] };
+                            for d in per {
+                                out.push(Slot {
+                                    path: next.clone(),
+                                    data: d,
+                                    kind: SlotKind::Subtotal { level, label: item.clone() },
+                                });
+                            }
                         }
                     }
                 }
             }
         }
-        walk(fields, &real, 0, Vec::new(), &records, &items_of, data_count, subtotal_after, &mut out);
+        walk(fields, &real, 0, Vec::new(), None, &records, &items_of, data_count, subtotal_after, &mut out);
         let _ = values_level;
         out
     };
@@ -937,8 +979,12 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
         grid.push(first);
         let levels = col_fields.len();
         for level in 0..levels {
-            let mut row = vec![if level == levels - 1 && (has_rows || values_on_rows) {
+            // Measured: with only the values field on rows, its caption
+            // ("値") heads them, not "行ラベル".
+            let mut row = vec![if level == levels - 1 && has_rows {
                 text(&row_header)
+            } else if level == levels - 1 && values_on_rows {
+                text(spec.data_caption.as_deref().unwrap_or(ui.values()))
             } else {
                 CellValue::Empty
             }];
@@ -951,7 +997,13 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                             text(&grand)
                         }
                     }
-                    SlotKind::Subtotal { level: l, label } if *l == level => text(&ui.subtotal(&label_text(label))),
+                    SlotKind::Subtotal { level: l, label } if *l == level => {
+                        if col_fields[l + 1..].contains(&None) && c.data.is_some() {
+                            text(&format!("{} {}", label_text(label), spec.data[column_data(c)].name))
+                        } else {
+                            text(&ui.subtotal(&label_text(label)))
+                        }
+                    }
                     SlotKind::Item { .. } | SlotKind::Data { .. } => {
                         // A heading for `level` stands on the first column of
                         // its group: where the items (and value field) down to
@@ -961,9 +1013,22 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                         let prefix = |c: &Slot| {
                             (c.path.get(..reals).map(<[Key]>::to_vec), if with_values { c.data } else { None })
                         };
-                        let opens = i == 0
-                            || !matches!(columns[i - 1].kind, SlotKind::Item { .. } | SlotKind::Data { .. })
-                            || prefix(&columns[i - 1]) != prefix(c);
+                        // A total of a deeper item stands inside the group;
+                        // anything else before it ends the group.
+                        let opens = {
+                            let mut j = i;
+                            loop {
+                                if j == 0 {
+                                    break true;
+                                }
+                                j -= 1;
+                                match &columns[j].kind {
+                                    SlotKind::Subtotal { level: l, .. } if *l > level => continue,
+                                    SlotKind::Item { .. } | SlotKind::Data { .. } => break prefix(&columns[j]) != prefix(c),
+                                    _ => break true,
+                                }
+                            }
+                        };
                         if !opens {
                             CellValue::Empty
                         } else {
@@ -1011,11 +1076,11 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                     if values_below {
                         row.extend(std::iter::repeat_n(CellValue::Empty, columns.len()));
                     } else {
-                        row.extend(value_row(&slot.path, None));
+                        row.extend(value_row(&slot.path, slot.data));
                     }
                     grid.push(row);
                     kinds.push(RowKind::Item { level: *level, leaf: *level >= leaf_level });
-                    row_paths.push((!values_below).then(|| (path_names(&slot.path), None)));
+                    row_paths.push((!values_below).then(|| (path_names(&slot.path), slot.data)));
                 }
                 SlotKind::Data { .. } => {
                     let d = slot.data.unwrap_or(0);
@@ -1028,7 +1093,9 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
                 _ => {}
             }
         }
-        if spec.row_grand_totals {
+        // No row field, no grand total rows (measured: the values field alone
+        // on rows shows one line per value field and nothing under them).
+        if spec.row_grand_totals && has_rows {
             if values_on_rows {
                 for (d, data) in spec.data.iter().enumerate() {
                     let mut row = vec![text(&ui.data_total(&data.name))];
@@ -1065,6 +1132,16 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
         row_paths.resize(grid.len(), None);
     }
     let mut label_columns = 1;
+    // No rows at all and several value fields across the top: measured, the
+    // table starts at its first value column, no label column before it.
+    if !has_rows && !values_on_rows && values_on_cols && !col_real.is_empty() {
+        for line in grid.iter_mut() {
+            if !line.is_empty() {
+                line.remove(0);
+            }
+        }
+        label_columns = 0;
+    }
 
     // Outline and tabular layouts: a label column per row field, field names
     // for headings. The compact headings are reshaped; the body is rebuilt.
@@ -1513,6 +1590,7 @@ pub fn spec_for_new(new: &NewPivot, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui)
         show_row_stripes: false,
         show_col_stripes: false,
         created: false,
+        part: String::new(),
     }
 }
 
@@ -1598,9 +1676,17 @@ fn table_xml(spec: &PivotSpec, cache_id: u32, grid: &PivotGrid, header_rows: usi
     let height = grid.cells.len() as u32 - if pages > 0 { pages as u32 + 1 } else { 0 };
     let width = grid.cells.iter().skip(if pages > 0 { pages + 1 } else { 0 }).map(Vec::len).max().unwrap_or(1) as u32;
     let first_header = if spec.cols.iter().all(Option::is_none) && !spec.cols.is_empty() { 0 } else { 1 };
+    // Several value fields put the values field on an axis: the columns
+    // unless the table has it on its rows (dataOnRows).
+    let data_on_rows = spec.rows.contains(&None);
+    let mut cols = spec.cols.clone();
+    if spec.data.len() > 1 && !data_on_rows && !cols.contains(&None) {
+        cols.push(None);
+    }
     let mut x = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<pivotTableDefinition xmlns=\"{MAIN_NS}\" name=\"{}\" cacheId=\"{cache_id}\" applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" applyPatternFormats=\"0\" applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"1\" dataCaption=\"{}\" updatedVersion=\"8\" minRefreshableVersion=\"3\" useAutoFormatting=\"1\" itemPrintTitles=\"1\" createdVersion=\"8\" indent=\"0\" outline=\"1\" outlineData=\"1\" multipleFieldFilters=\"0\"><location ref=\"{}:{}\" firstHeaderRow=\"{first_header}\" firstDataRow=\"{header_rows}\" firstDataCol=\"1\"{}/>",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<pivotTableDefinition xmlns=\"{MAIN_NS}\" name=\"{}\" cacheId=\"{cache_id}\"{} applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" applyPatternFormats=\"0\" applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"1\" dataCaption=\"{}\" updatedVersion=\"8\" minRefreshableVersion=\"3\" useAutoFormatting=\"1\" itemPrintTitles=\"1\" createdVersion=\"8\" indent=\"0\" outline=\"1\" outlineData=\"1\" multipleFieldFilters=\"0\"><location ref=\"{}:{}\" firstHeaderRow=\"{first_header}\" firstDataRow=\"{header_rows}\" firstDataCol=\"1\"{}/>",
         esc(&spec.name),
+        if data_on_rows { " dataOnRows=\"1\"" } else { "" },
         esc(spec.data_caption.as_deref().unwrap_or("値")),
         a1(top, spec.origin.1),
         a1(top + height.max(1) - 1, spec.origin.1 + width.max(1) - 1),
@@ -1651,7 +1737,7 @@ fn table_xml(spec: &PivotSpec, cache_id: u32, grid: &PivotGrid, header_rows: usi
         s
     };
     x.push_str(&fields(&spec.rows, "rowFields"));
-    x.push_str(&fields(&spec.cols, "colFields"));
+    x.push_str(&fields(&cols, "colFields"));
     if pages > 0 {
         x.push_str(&format!("<pageFields count=\"{pages}\">"));
         for (f, pick) in &spec.pages {
@@ -1674,7 +1760,16 @@ fn table_xml(spec: &PivotSpec, cache_id: u32, grid: &PivotGrid, header_rows: usi
             d.aggregate.attr().map(|a| format!(" subtotal=\"{a}\"")).unwrap_or_default()
         ));
     }
-    x.push_str("</dataFields><pivotTableStyleInfo name=\"PivotStyleLight16\" showRowHeaders=\"1\" showColHeaders=\"1\" showRowStripes=\"0\" showColStripes=\"0\" showLastColumn=\"1\"/><extLst><ext uri=\"{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:pivotTableDefinition hideValuesRow=\"1\" xmlns:xm=\"http://schemas.microsoft.com/office/excel/2006/main\"/></ext></extLst></pivotTableDefinition>");
+    let flag = |on: bool| if on { "1" } else { "0" };
+    x.push_str(&format!(
+        "</dataFields><pivotTableStyleInfo name=\"{}\" showRowHeaders=\"{}\" showColHeaders=\"{}\" showRowStripes=\"{}\" showColStripes=\"{}\" showLastColumn=\"1\"/>",
+        esc(spec.style.as_deref().unwrap_or("PivotStyleLight16")),
+        flag(spec.show_row_headers),
+        flag(spec.show_col_headers),
+        flag(spec.show_row_stripes),
+        flag(spec.show_col_stripes)
+    ));
+    x.push_str("<extLst><ext uri=\"{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:pivotTableDefinition hideValuesRow=\"1\" xmlns:xm=\"http://schemas.microsoft.com/office/excel/2006/main\"/></ext></extLst></pivotTableDefinition>");
     x
 }
 
@@ -1705,6 +1800,149 @@ fn read_all(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
 /// Writes the parts of new pivot tables into a saved package: a cache
 /// definition (no records, refreshed on load) and a table definition each,
 /// wired into the workbook, the target sheet and the content types.
+/// "pivotTable2.xml" before "pivotTable10.xml".
+fn natural_part_order(a: &str, b: &str) -> std::cmp::Ordering {
+    let split = |s: &str| {
+        let stem = s.trim_end_matches(".xml");
+        let digits = stem.len() - stem.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+        let (head, tail) = stem.split_at(stem.len() - digits);
+        (head.to_string(), tail.parse::<u64>().unwrap_or(0))
+    };
+    split(a).cmp(&split(b))
+}
+
+/// Takes pivot tables out of a package: each named table part with its
+/// relationships, the sheet relationships that point to it, and its cache
+/// (definition, records, the workbook's entry) once no other table uses it.
+/// For a table a macro rearranged, which is then written anew.
+pub fn remove_pivot_parts(data: &[u8], tables: &[String]) -> Result<Vec<u8>, String> {
+    if tables.is_empty() {
+        return Ok(data.to_vec());
+    }
+    let mut parts = read_all(data)?;
+    let text = |parts: &Vec<(String, Vec<u8>)>, name: &str| {
+        parts.iter().find(|(n, _)| n == name).map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+    };
+    let rels_of = |part: &str| {
+        let (dir, file) = part.rsplit_once('/').unwrap_or(("", part));
+        (dir.to_string(), format!("{dir}/_rels/{file}.rels"))
+    };
+    let mut removed: Vec<String> = Vec::new();
+    let mut caches: Vec<String> = Vec::new();
+    for table in tables {
+        let (dir, rels_name) = rels_of(table);
+        if let Some(body) = text(&parts, &rels_name) {
+            for (target, kind) in rels(&body).values() {
+                if kind.ends_with("/pivotCacheDefinition") {
+                    caches.push(resolve(&dir, target));
+                }
+            }
+        }
+        removed.push(table.clone());
+        removed.push(rels_name);
+    }
+    // Relationships from sheets to the removed tables.
+    for i in 0..parts.len() {
+        let name = parts[i].0.clone();
+        let Some(base) = name.strip_suffix(".rels").and_then(|n| n.split_once("/_rels/")).map(|(dir, _)| dir.to_string()) else {
+            continue;
+        };
+        if !base.starts_with("xl/worksheets") {
+            continue;
+        }
+        let body = String::from_utf8_lossy(&parts[i].1).into_owned();
+        let kept = drop_relationships(&body, |target| tables.contains(&resolve(&base, target)));
+        if kept != body {
+            parts[i].1 = kept.into_bytes();
+        }
+    }
+    parts.retain(|(n, _)| !removed.contains(n));
+    // A cache no table points to any more goes too.
+    let mut workbook = text(&parts, "xl/workbook.xml").ok_or("no workbook part")?;
+    let mut wb_rels = text(&parts, "xl/_rels/workbook.xml.rels").ok_or("no workbook rels")?;
+    caches.sort();
+    caches.dedup();
+    for cache in caches {
+        let used = parts.iter().any(|(name, body)| {
+            name.starts_with("xl/pivotTables/_rels/")
+                && rels(&String::from_utf8_lossy(body)).values().any(|(target, _)| resolve("xl/pivotTables", target) == cache)
+        });
+        if used {
+            continue;
+        }
+        let (dir, rels_name) = rels_of(&cache);
+        if let Some(body) = text(&parts, &rels_name) {
+            for (target, _) in rels(&body).values() {
+                removed.push(resolve(&dir, target));
+            }
+        }
+        removed.push(cache.clone());
+        removed.push(rels_name);
+        let rid = rels(&wb_rels).into_iter().find(|(_, (target, _))| resolve("xl", target) == cache).map(|(id, _)| id);
+        if let Some(rid) = rid {
+            wb_rels = drop_relationships(&wb_rels, |target| resolve("xl", target) == cache);
+            // <pivotCache cacheId="n" r:id="rIdk"/>
+            let needle = format!("r:id=\"{rid}\"");
+            if let Some(at) = workbook.find(&needle) {
+                if let (Some(start), Some(end)) = (workbook[..at].rfind("<pivotCache "), workbook[at..].find("/>")) {
+                    workbook.replace_range(start..at + end + 2, "");
+                }
+            }
+        }
+    }
+    workbook = workbook.replace("<pivotCaches></pivotCaches>", "").replace("<pivotCaches/>", "");
+    parts.retain(|(n, _)| !removed.contains(n));
+    let mut types = text(&parts, "[Content_Types].xml").ok_or("no content types")?;
+    for part in &removed {
+        let needle = format!("PartName=\"/{part}\"");
+        if let Some(at) = types.find(&needle) {
+            if let (Some(start), Some(end)) = (types[..at].rfind("<Override "), types[at..].find("/>")) {
+                types.replace_range(start..at + end + 2, "");
+            }
+        }
+    }
+    for (name, body) in [("xl/workbook.xml", workbook), ("xl/_rels/workbook.xml.rels", wb_rels), ("[Content_Types].xml", types)] {
+        if let Some(slot) = parts.iter_mut().find(|(n, _)| n == name) {
+            slot.1 = body.into_bytes();
+        }
+    }
+    write_all(&parts)
+}
+
+/// A relationships part without the relationships whose target `drop` names.
+fn drop_relationships(body: &str, drop: impl Fn(&str) -> bool) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(at) = rest.find("<Relationship ") {
+        let Some(len) = rest[at..].find("/>").map(|e| e + 2) else { break };
+        let element = &rest[at..at + len];
+        out.push_str(&rest[..at]);
+        let target = element.split("Target=\"").nth(1).and_then(|t| t.split('"').next()).unwrap_or("");
+        let external = element.contains("TargetMode=\"External\"");
+        if external || !drop(target) {
+            out.push_str(element);
+        }
+        rest = &rest[at + len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn write_all(parts: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut out = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut out);
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, body) in parts {
+            writer.start_file(name.as_str(), options).map_err(|e| e.to_string())?;
+            writer.write_all(body).map_err(|e| e.to_string())?;
+        }
+        writer.finish().map_err(|e| e.to_string())?;
+    }
+    Ok(out.into_inner())
+}
+
 pub fn add_pivot_parts(data: &[u8], added: &[(PivotSpec, PivotGrid)]) -> Result<Vec<u8>, String> {
     use std::io::Write;
     if added.is_empty() {
@@ -1882,6 +2120,7 @@ mod tests {
             show_row_stripes: false,
             show_col_stripes: false,
             created: false,
+            part: String::new(),
         };
         let grid = compute(&spec, &get, Ui::English);
         assert_eq!(grid.kinds.len(), grid.cells.len());

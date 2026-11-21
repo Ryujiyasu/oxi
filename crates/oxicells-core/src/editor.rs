@@ -183,6 +183,9 @@ pub struct XlsxEditor {
     table_plan: Option<Vec<Option<Vec<crate::ir::Table>>>>,
     /// Pivot tables created in this session, written into the package on save.
     pivot_additions: Vec<(crate::pivot::PivotSpec, crate::pivot::PivotGrid)>,
+    /// Table parts a macro rearranged: taken out on save, then written anew
+    /// from `pivot_additions`.
+    pivot_removals: Vec<String>,
     /// Final sheet-order dynamic-array owners, including one-cell and blocked
     /// arrays. Their extents are independent of adjacent spill members.
     dynamic_plan: Option<Vec<Vec<crate::ir::CachedSpill>>>,
@@ -284,6 +287,7 @@ impl XlsxEditor {
             legacy_drawing_orders: HashMap::new(),
             table_plan: None,
             pivot_additions: Vec::new(),
+            pivot_removals: Vec::new(),
         })
     }
 
@@ -1241,6 +1245,27 @@ impl XlsxEditor {
             let grid = crate::pivot::compute(spec, &get, crate::pivot::Ui::Japanese);
             let mut spec = spec.clone();
             spec.created = false;
+            self.pivot_additions.push((spec, grid));
+        }
+        // A table the package had that a macro rearranged (moved a field,
+        // hid an item, picked a page item) is written anew the same way, its
+        // old parts taken out. Not where slicers or timelines hang on the
+        // caches: those keep the table as it was.
+        let read = crate::pivot::read_pivots(&self.original_data);
+        let hung = {
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&self.original_data[..])).ok();
+            zip.as_mut().is_some_and(|zip| zip.file_names().any(|n| n.contains("slicerCache") || n.contains("timelineCache")))
+        };
+        for spec in edited.pivots.iter().filter(|spec| !spec.created && !spec.part.is_empty()) {
+            let Some(was) = read.iter().find(|was| was.part == spec.part) else { continue };
+            if hung || spec.same_layout(was) || self.pivot_removals.contains(&spec.part) {
+                continue;
+            }
+            let get = crate::pivot::source_reader(edited, &spec.source_sheet);
+            let grid = crate::pivot::compute(spec, &get, crate::pivot::Ui::Japanese);
+            self.pivot_removals.push(spec.part.clone());
+            let mut spec = spec.clone();
+            spec.part.clear();
             self.pivot_additions.push((spec, grid));
         }
         Ok(())
@@ -2847,6 +2872,7 @@ impl XlsxEditor {
         }
         let output = patch_dynamic_array_package(&output, &arrays)?;
         let output = finish_drawing_deletions(&output, &drawing_package)?;
+        let output = crate::pivot::remove_pivot_parts(&output, &self.pivot_removals).map_err(XlsxError::InvalidData)?;
         let output = crate::pivot::add_pivot_parts(&output, &self.pivot_additions).map_err(XlsxError::InvalidData)?;
         let contains_rich_error = |sheet: &crate::ir::Sheet| sheet.rows.iter().flat_map(|row| &row.cells)
             .any(|cell| matches!(&cell.value, crate::ir::CellValue::Error(error) if crate::parser::rich_error_type(error).is_some()));

@@ -1170,6 +1170,114 @@ mod tests {
         assert_eq!(spec.pages, vec![(3, None)]);
     }
 
+    /// Excel-made pivot books rearranged by a macro and saved, for
+    /// `tools/metrics/_xlsx_vba_pivot_rearrange_check.py` to open in Excel:
+    /// OXI_PIVOT_REARRANGE_IN holds the books, OXI_PIVOT_REARRANGE_OUT gets
+    /// `<book>.<how>.xlsx` for each way (hide an item, move a field across,
+    /// add a page field) that applies.
+    #[test]
+    #[ignore]
+    fn rearranged_pivot_books_for_excel() {
+        let (Ok(input), Ok(output)) = (std::env::var("OXI_PIVOT_REARRANGE_IN"), std::env::var("OXI_PIVOT_REARRANGE_OUT")) else {
+            return;
+        };
+        let module = parse_module(r#"Private Function Table() As Object
+            Dim ws As Object
+            For Each ws In Worksheets
+                If ws.PivotTables.Count > 0 Then
+                    Set Table = ws.PivotTables(1)
+                    Exit Function
+                End If
+            Next
+        End Function
+
+        Public Function Hide() As String
+            Dim pt As Object, f As Object
+            Set pt = Table()
+            If pt.RowFields.Count = 0 Then Exit Function
+            Set f = pt.RowFields(1)
+            If f.VisibleItems.Count < 2 Then Exit Function
+            f.VisibleItems(1).Visible = False
+            Hide = "ok"
+        End Function
+
+        Public Function Move() As String
+            Dim pt As Object
+            Set pt = Table()
+            If pt.RowFields.Count > 0 Then
+                pt.RowFields(1).Orientation = 2
+            ElseIf pt.ColumnFields.Count > 0 Then
+                pt.ColumnFields(1).Orientation = 1
+            Else
+                Exit Function
+            End If
+            Move = "ok"
+        End Function
+
+        Public Function Page() As String
+            Dim pt As Object, f As Object, d As Object, used As Boolean
+            Set pt = Table()
+            For Each f In pt.PivotFields
+                If f.Orientation = 0 Then
+                    used = False
+                    For Each d In pt.DataFields
+                        If d.SourceName = f.Name Then used = True
+                    Next
+                    If Not used Then
+                        f.Orientation = 3
+                        Page = "ok"
+                        Exit Function
+                    End If
+                End If
+            Next
+        End Function"#).unwrap();
+        let mut books: Vec<_> = std::fs::read_dir(&input)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "xlsx"))
+            .collect();
+        books.sort();
+        for path in books {
+            let original = std::fs::read(&path).unwrap();
+            let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+            for how in ["Hide", "Move", "Page"] {
+                let mut book = oxicells_core::parse_xlsx(&original).unwrap();
+                let did = execute_with_host(&module, how, vec![], &mut WorkbookHost::new(&mut book, 0).unwrap());
+                match did {
+                    Ok(Value::String(s)) if s == "ok" => {}
+                    Ok(_) => continue,
+                    Err(e) => {
+                        println!("{stem}.{how}: macro failed: {e:?}");
+                        continue;
+                    }
+                }
+                let mut editor = oxicells_core::XlsxEditor::new(&original).unwrap();
+                editor.apply_workbook(&book).unwrap();
+                let saved = editor.save().unwrap();
+                let out = format!("{output}/{stem}.{}", how.to_lowercase());
+                std::fs::write(format!("{out}.xlsx"), saved).unwrap();
+                // The cells the table's sheet holds, A1:T60, as the macro left them.
+                let spec = &book.pivots[0];
+                let sheet = book.sheets.iter().find(|s| s.name.eq_ignore_ascii_case(&spec.sheet)).unwrap();
+                let cell = |r: u32, c: u32| -> serde_json::Value {
+                    match sheet.rows.iter().find(|row| row.index == r).and_then(|row| row.cells.iter().find(|x| x.col == c)).map(|x| &x.value) {
+                        Some(CellValue::String(s)) => serde_json::Value::from(s.as_str()),
+                        Some(CellValue::Utf16(u)) => serde_json::Value::from(String::from_utf16_lossy(u)),
+                        Some(CellValue::Number(n)) => serde_json::Value::from(*n),
+                        Some(CellValue::Boolean(b)) => serde_json::Value::from(*b),
+                        Some(CellValue::Error(e)) => serde_json::Value::from(e.as_str()),
+                        _ => serde_json::Value::Null,
+                    }
+                };
+                let grid: Vec<Vec<serde_json::Value>> = (1..=60).map(|r| (0..20).map(|c| cell(r, c)).collect()).collect();
+                let dump = serde_json::json!({ "sheet": sheet.name, "cells": grid });
+                std::fs::write(format!("{out}.json"), dump.to_string()).unwrap();
+                println!("{stem}.{how}: written");
+            }
+        }
+    }
+
     #[test]
     fn a_macro_creates_a_pivot_table_that_saves() {
         let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
