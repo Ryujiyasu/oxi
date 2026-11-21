@@ -2125,26 +2125,36 @@ pub(crate) fn indent_level(sheet: &oxicells_core::ir::Sheet) -> f32 {
 /// - every label moves right by `b0 + size - 1 + L * (step - indent)` from
 ///   where it stands with the buttons off, buttoned or not.
 ///
-/// Hypothesis, fitted not closed: `b0 = space + 2` (17 of 40 arms exact,
-/// none off by more than two) and `M = U + ceil(size / 2)` (21 exact, none
-/// off by more than one), space = U / 3; what moves the rest is the face,
-/// not the size, and no width of the face tried (digit, space) closes it.
+/// Fitted, not closed (`_xlsx_pivot_drill_boxes.py` arms, searched over the
+/// face's GDI metrics, the row and the box): `M = U + floor(row / 4)` (33 of
+/// 40 exact, the rest one pixel off, all on rows of 21px or less) and
+/// `b0 = floor((digit + bold x) / 3) + 1` of the first font (24 of 40, none
+/// off by more than two).
 pub(crate) struct DrillPlace {
     pub left: f32,
     pub size: f32,
     pub shift: f32,
 }
 
-pub(crate) fn drill_place(level_px: f32, row_px: f32, level: u8, indent: u8) -> DrillPlace {
+pub(crate) fn drill_place(sheet: &oxicells_core::ir::Sheet, level_px: f32, row_px: f32, level: u8, indent: u8) -> DrillPlace {
     let space = (level_px / 3.0).round();
     let row = row_px.round();
+    // The first font's digit and its bold x, in whole pixels.
+    let widths = sheet.first_font.as_ref().and_then(|(face, points)| {
+        let digit = *advances(face, *points, false, false, "0")?.first()?;
+        let x = *advances(face, *points, true, false, "x")?.first()?;
+        Some((digit as f32, x as f32))
+    });
     let size = if row < 16.0 {
         2.0 * ((row - 2.0) / 4.0).floor() + 1.0
     } else {
         (2.0 * ((row - 2.0) / 4.0).floor() + 1.0).max(9.0)
     };
-    let b0 = space + 2.0;
-    let floor = 3.0 * space + ((size + 1.0) / 2.0).floor();
+    let b0 = match widths {
+        Some((digit, x)) => ((digit + x) / 3.0).floor() + 1.0,
+        None => space + 2.0,
+    };
+    let floor = 3.0 * space + (row / 4.0).floor();
     let indent_px = f32::from(indent) * 3.0 * space;
     let step = if indent == 0 { 0.0 } else { indent_px.max(floor) };
     let level = f32::from(level);
@@ -6917,7 +6927,7 @@ mod windows_draw {
                     // standing clear of it.
                     if let Some((level, button, indent)) = cell.style.pivot_drill {
                         let row_px = (box_.bottom - box_.top) as f32 / scale;
-                        let place = super::drill_place(super::indent_level(sheet), row_px, level, indent);
+                        let place = super::drill_place(sheet, super::indent_level(sheet), row_px, level, indent);
                         area.left += (place.shift * scale).round() as i32;
                         if button {
                             let size = (place.size * scale).round() as i32;
