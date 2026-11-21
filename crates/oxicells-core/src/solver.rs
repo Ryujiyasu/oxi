@@ -86,6 +86,10 @@ pub enum Outcome {
     Unbounded = 4,
     /// 5: could not find a feasible solution.
     Infeasible = 5,
+    /// 7: the Simplex LP engine was given a model that is not linear
+    /// (measured: an AllDifferent model with ABS() in its objective answers
+    /// 7 under Simplex LP and leaves the cells as they were).
+    NotLinear = 7,
     /// 13: the model has an error Solver will not run on.
     ModelError = 13,
 }
@@ -503,6 +507,25 @@ fn solve_lp(probe: &mut Probe<'_>) -> Result<Vec<f64>, Failure> {
         rows.push((c.clone(), Relation::Eq, model.target - f0));
     }
     let cost = if matches!(model.goal, Goal::Value(_)) { vec![0.0; n] } else { cost };
+    // Simplex LP asked for by name checks that the model is linear before it
+    // runs: twice a unit step must move everything twice as far, and all
+    // steps at once the sum of each.
+    if model.engine == Engine::SimplexLp {
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * (1.0 + a.abs().max(b.abs()));
+        for j in 0..n {
+            let mut x = zero.clone();
+            x[j] = 2.0;
+            let (f2, rows2) = probe.eval(&x);
+            if !close(f2 - f0, 2.0 * c[j]) || rows2.iter().zip(&rows0).enumerate().any(|(i, (r2, r0))| !close(r2.0 - r0.0, 2.0 * a[i][j])) {
+                return Err(Failure(Outcome::NotLinear, None));
+            }
+        }
+        let ones = vec![1.0; n];
+        let (f1, rows1) = probe.eval(&ones);
+        if !close(f1 - f0, c.iter().sum()) || rows1.iter().zip(&rows0).enumerate().any(|(i, (r1, r0))| !close(r1.0 - r0.0, a[i].iter().sum())) {
+            return Err(Failure(Outcome::NotLinear, None));
+        }
+    }
     let (int, bin) = integrality(model);
     let lower = vec![if model.non_negative { 0.0 } else { -1e9 }; n];
     let upper: Vec<f64> = bin.iter().map(|b| if *b { 1.0 } else { f64::INFINITY }).collect();
@@ -529,6 +552,162 @@ fn solve_lp(probe: &mut Probe<'_>) -> Result<Vec<f64>, Failure> {
         };
     }
     branch(&cost, &rows, &lower, &upper, &int, 0)
+}
+
+/// Simplex LP's linearity check alone, for a model it will not solve as a
+/// program (AllDifferent).
+fn solve_lp_linearity(probe: &mut Probe<'_>) -> Result<(), Failure> {
+    let n = probe.model.variables.len();
+    let zero = vec![0.0; n];
+    let (f0, rows0) = probe.eval(&zero);
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * (1.0 + a.abs().max(b.abs()));
+    let mut c = vec![0.0; n];
+    let mut a = vec![vec![0.0; n]; rows0.len()];
+    for j in 0..n {
+        let mut x = zero.clone();
+        x[j] = 1.0;
+        let (f1, rows1) = probe.eval(&x);
+        c[j] = f1 - f0;
+        for (i, (r1, r0)) in rows1.iter().zip(&rows0).enumerate() {
+            a[i][j] = r1.0 - r0.0;
+        }
+        x[j] = 2.0;
+        let (f2, rows2) = probe.eval(&x);
+        if !close(f2 - f0, 2.0 * c[j]) || rows2.iter().zip(&rows0).enumerate().any(|(i, (r2, r0))| !close(r2.0 - r0.0, 2.0 * a[i][j])) {
+            return Err(Failure(Outcome::NotLinear, None));
+        }
+    }
+    let (f1, rows1) = probe.eval(&vec![1.0; n]);
+    if !close(f1 - f0, c.iter().sum()) || rows1.iter().zip(&rows0).enumerate().any(|(i, (r1, r0))| !close(r1.0 - r0.0, a[i].iter().sum())) {
+        return Err(Failure(Outcome::NotLinear, None));
+    }
+    Ok(())
+}
+
+/// AllDifferent: the N cells of each such constraint hold 1..N, each once
+/// (Solver's own definition). Small groups are searched exhaustively -- up to
+/// 40320 arrangements in all -- larger ones by pairwise swaps from the best
+/// start until no swap helps. Variables outside the groups keep their values;
+/// the other constraints must hold. Measured: an assignment of four jobs
+/// whose cost has an ABS() term, under GRG Nonlinear, ends on the optimum
+/// (3, 1, 4, 2) with return code 0.
+fn solve_all_different(probe: &mut Probe<'_>, start: &[f64]) -> Result<Vec<f64>, Failure> {
+    let model = probe.model;
+    let index_of = |at: &At| model.variables.iter().position(|v| v == at);
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for c in model.constraints.iter().filter(|c| c.relation == Relation::AllDifferent) {
+        let Some(members) = c.lhs.iter().map(index_of).collect::<Option<Vec<usize>>>() else {
+            return Err(Failure(Outcome::ModelError, None));
+        };
+        groups.push(members);
+    }
+    let sign = match model.goal {
+        Goal::Max => -1.0,
+        _ => 1.0,
+    };
+    let score = |probe: &mut Probe<'_>, x: &[f64]| -> Option<f64> {
+        let (f, rows) = probe.eval(x);
+        let tol = |r: f64| 1e-6 * (1.0 + r.abs());
+        let feasible = rows.iter().all(|(lhs, rel, rhs)| match rel {
+            Relation::Eq => (lhs - rhs).abs() <= tol(*rhs),
+            Relation::Le => *lhs <= rhs + tol(*rhs),
+            _ => *lhs >= rhs - tol(*rhs),
+        });
+        feasible.then(|| match model.goal {
+            Goal::Value(_) => (f - model.target).abs(),
+            _ => sign * f,
+        })
+    };
+    let place = |perms: &[Vec<usize>]| -> Vec<f64> {
+        let mut x = start.to_vec();
+        for (group, perm) in groups.iter().zip(perms) {
+            for (slot, value) in group.iter().zip(perm) {
+                x[*slot] = (*value + 1) as f64;
+            }
+        }
+        x
+    };
+    let total: f64 = groups.iter().map(|g| (1..=g.len()).map(|k| k as f64).product::<f64>()).product();
+    let mut best: Option<(f64, Vec<Vec<usize>>)> = None;
+    if total <= 40320.0 {
+        fn permutations(n: usize) -> Vec<Vec<usize>> {
+            let mut out = Vec::new();
+            let mut p: Vec<usize> = (0..n).collect();
+            let mut c = vec![0usize; n];
+            out.push(p.clone());
+            let mut i = 0;
+            while i < n {
+                if c[i] < i {
+                    if i % 2 == 0 { p.swap(0, i) } else { p.swap(c[i], i) }
+                    out.push(p.clone());
+                    c[i] += 1;
+                    i = 0;
+                } else {
+                    c[i] = 0;
+                    i += 1;
+                }
+            }
+            out
+        }
+        let each: Vec<Vec<Vec<usize>>> = groups.iter().map(|g| permutations(g.len())).collect();
+        let mut pick = vec![0usize; groups.len()];
+        loop {
+            let perms: Vec<Vec<usize>> = pick.iter().zip(&each).map(|(k, all)| all[*k].clone()).collect();
+            let x = place(&perms);
+            if let Some(s) = score(probe, &x) {
+                if best.as_ref().is_none_or(|(b, _)| s < *b - 1e-12) {
+                    best = Some((s, perms));
+                }
+            }
+            // next combination
+            let mut g = 0;
+            loop {
+                if g == pick.len() {
+                    break;
+                }
+                pick[g] += 1;
+                if pick[g] < each[g].len() {
+                    break;
+                }
+                pick[g] = 0;
+                g += 1;
+            }
+            if g == pick.len() {
+                break;
+            }
+        }
+    } else {
+        // Swaps from the identity until none improves.
+        let mut perms: Vec<Vec<usize>> = groups.iter().map(|g| (0..g.len()).collect()).collect();
+        let mut current = score(probe, &place(&perms)).unwrap_or(f64::INFINITY);
+        loop {
+            let mut improved = false;
+            for g in 0..perms.len() {
+                for i in 0..perms[g].len() {
+                    for j in i + 1..perms[g].len() {
+                        perms[g].swap(i, j);
+                        match score(probe, &place(&perms)) {
+                            Some(s) if s < current - 1e-12 => {
+                                current = s;
+                                improved = true;
+                            }
+                            _ => perms[g].swap(i, j),
+                        }
+                    }
+                }
+            }
+            if !improved {
+                break;
+            }
+        }
+        if current.is_finite() {
+            best = Some((current, perms));
+        }
+    }
+    match best {
+        Some((_, perms)) => Ok(place(&perms)),
+        None => Err(Failure(Outcome::Infeasible, None)),
+    }
 }
 
 /// Branch and bound over the integer variables.
@@ -740,9 +919,18 @@ pub fn solve(workbook: &mut Workbook, sheet: usize) -> Outcome {
         return Outcome::ModelError;
     };
     let start: Vec<f64> = model.variables.iter().map(|v| get_number(workbook, *v)).collect();
+    let all_different = model.constraints.iter().any(|c| c.relation == Relation::AllDifferent);
     let result = {
         let mut probe = Probe { workbook, model: &model, evaluations: 0 };
         match model.engine {
+            Engine::SimplexLp if all_different => {
+                // Simplex takes AllDifferent only of a linear model.
+                match solve_lp_linearity(&mut probe) {
+                    Ok(()) => solve_all_different(&mut probe, &start),
+                    Err(failure) => Err(failure),
+                }
+            }
+            _ if all_different => solve_all_different(&mut probe, &start),
             Engine::SimplexLp => solve_lp(&mut probe),
             _ => {
                 let (int, _) = integrality(&model);
