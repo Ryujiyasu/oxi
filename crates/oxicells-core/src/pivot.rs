@@ -67,6 +67,18 @@ pub struct DataField {
     pub aggregate: Aggregate,
 }
 
+/// How the row fields are laid out: Excel's three report layouts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowLayout {
+    /// All row fields in one column, subtotals on the parent's row.
+    Compact,
+    /// A column per field, subtotals on the parent's row.
+    Outline,
+    /// A column per field, the parent beside its first child and its
+    /// subtotal on a row of its own under the group.
+    Tabular,
+}
+
 /// One pivot table, as its parts define it.
 #[derive(Debug, Clone)]
 pub struct PivotSpec {
@@ -99,6 +111,7 @@ pub struct PivotSpec {
     pub data_caption: Option<String>,
     pub row_grand_totals: bool,
     pub col_grand_totals: bool,
+    pub row_layout: RowLayout,
 }
 
 /// The words a pivot shows that its file does not spell out, by UI language.
@@ -301,9 +314,12 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
         data_caption: None,
         row_grand_totals: true,
         col_grand_totals: true,
+        row_layout: RowLayout::Compact,
     };
     let mut field = None::<usize>;
     let mut next_field = 0usize;
+    let mut table_compact = true;
+    let mut field_layout: Vec<(bool, bool)> = Vec::new();
     let mut area = "";
     loop {
         match reader.read_event() {
@@ -315,6 +331,7 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
                     spec.grand_total_caption = attr(&e, "grandTotalCaption");
                     spec.data_caption = attr(&e, "dataCaption");
                     spec.row_grand_totals = is_true(attr(&e, "rowGrandTotals"), true);
+                    table_compact = is_true(attr(&e, "compact"), true);
                     spec.col_grand_totals = is_true(attr(&e, "colGrandTotals"), true);
                 }
                 "location" => {
@@ -325,6 +342,7 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
                 "pivotField" => {
                     field = Some(next_field);
                     next_field += 1;
+                    field_layout.push((is_true(attr(&e, "compact"), table_compact), is_true(attr(&e, "outline"), true)));
                 }
                 "item" => {
                     if let Some(f) = field {
@@ -376,6 +394,13 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
             Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
+    }
+    if let Some((compact, outline)) = spec.rows.iter().flatten().next().and_then(|f| field_layout.get(*f)) {
+        spec.row_layout = match (compact, outline) {
+            (true, _) => RowLayout::Compact,
+            (false, true) => RowLayout::Outline,
+            (false, false) => RowLayout::Tabular,
+        };
     }
     Some(spec)
 }
@@ -956,6 +981,95 @@ pub fn compute(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui) ->
         }
     }
 
+    // Outline and tabular layouts: a label column per row field, field names
+    // for headings. The compact headings are reshaped; the body is rebuilt.
+    if spec.row_layout != RowLayout::Compact && has_rows && !values_on_rows {
+        let lc = row_real.len();
+        let body_lines = lay_axis(row_fields, false).len() + usize::from(spec.row_grand_totals);
+        let header_rows = grid.len() - body_lines;
+        let mut reshaped: Vec<Vec<CellValue>> = Vec::new();
+        let names: Vec<CellValue> = row_real.iter().map(|f| text(&spec.field_names[*f])).collect();
+        let col_name = col_real.first().map(|f| text(&spec.field_names[*f]));
+        for (i, line) in grid.iter().take(header_rows).enumerate() {
+            let mut out: Vec<CellValue> = Vec::new();
+            let last = i + 1 == header_rows;
+            if last {
+                out.extend(names.iter().cloned());
+            } else {
+                out.push(line.first().cloned().unwrap_or(CellValue::Empty));
+                out.extend(std::iter::repeat_n(CellValue::Empty, lc - 1));
+            }
+            for (j, v) in line.iter().enumerate().skip(1) {
+                let v = if i == 0 && j == 1 && !col_real.is_empty() && !last {
+                    col_name.clone().unwrap_or_else(|| v.clone())
+                } else {
+                    v.clone()
+                };
+                out.push(v);
+            }
+            reshaped.push(out);
+        }
+        let laid: Vec<Slot> = lay_axis(row_fields, false)
+            .into_iter()
+            .filter(|s| matches!(s.kind, SlotKind::Item { .. }))
+            .collect();
+        let leaf = lc - 1;
+        let blank = || vec![CellValue::Empty; lc];
+        match spec.row_layout {
+            RowLayout::Outline => {
+                for slot in &laid {
+                    if let SlotKind::Item { level, label } = &slot.kind {
+                        let mut line = blank();
+                        line[*level] = shown(label);
+                        line.extend(value_row(&slot.path, None));
+                        reshaped.push(line);
+                    }
+                }
+            }
+            _ => {
+                // Open groups: (level, label, path, label still to show).
+                type Group = (usize, CellValue, Vec<Key>, bool);
+                let close = |open: &mut Vec<Group>, down_to: usize, out: &mut Vec<Vec<CellValue>>| {
+                    while open.last().is_some_and(|g| g.0 >= down_to) {
+                        let (level, label, path, _) = open.pop().unwrap();
+                        let mut line = blank();
+                        line[level] = text(&ui.subtotal(&label_text(&label)));
+                        line.extend(value_row(&path, None));
+                        out.push(line);
+                    }
+                };
+                let mut open: Vec<Group> = Vec::new();
+                for slot in &laid {
+                    if let SlotKind::Item { level, label } = &slot.kind {
+                        close(&mut open, *level, &mut reshaped);
+                        if *level < leaf {
+                            open.push((*level, label.clone(), slot.path.clone(), true));
+                        } else {
+                            let mut line = blank();
+                            for g in open.iter_mut() {
+                                if g.3 {
+                                    line[g.0] = shown(&g.1);
+                                    g.3 = false;
+                                }
+                            }
+                            line[leaf] = shown(label);
+                            line.extend(value_row(&slot.path, None));
+                            reshaped.push(line);
+                        }
+                    }
+                }
+                close(&mut open, 0, &mut reshaped);
+            }
+        }
+        if spec.row_grand_totals {
+            let mut line = blank();
+            line[0] = text(&grand);
+            line.extend(value_row(&[], None));
+            reshaped.push(line);
+        }
+        grid = reshaped;
+    }
+
     // Page fields stand above the table: one row each, then a blank row.
     let mut origin = spec.origin;
     if !spec.pages.is_empty() {
@@ -1099,6 +1213,7 @@ pub fn spec_for_new(new: &NewPivot, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui)
         data_caption: None,
         row_grand_totals: true,
         col_grand_totals: true,
+        row_layout: RowLayout::Compact,
     }
 }
 
@@ -1450,6 +1565,7 @@ mod tests {
             data_caption: None,
             row_grand_totals: true,
             col_grand_totals: true,
+            row_layout: RowLayout::Compact,
         };
         let grid = compute(&spec, &get, Ui::English);
         let n = CellValue::Number;

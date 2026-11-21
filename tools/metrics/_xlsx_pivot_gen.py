@@ -14,7 +14,7 @@ from pathlib import Path
 import win32com.client
 
 REPO = Path(__file__).resolve().parents[2]
-OUT = REPO / "pipeline_data" / ("xlsx_pivot_r" if "--random" in __import__("sys").argv else "xlsx_pivot")
+OUT = REPO / "pipeline_data" / ("xlsx_pivot_r" if "--random" in __import__("sys").argv else "xlsx_pivot_t" if "--third" in __import__("sys").argv else "xlsx_pivot")
 XL_SUM, XL_COUNT, XL_AVG, XL_MAX, XL_MIN = -4157, -4112, -4106, -4136, -4139
 ROW, COL, PAGE, DATA = 1, 2, 3, 4
 
@@ -29,6 +29,16 @@ ARMS = {
     "p08_page_filter": dict(rows=["Product"], pages=["Region"], data=[("Sales", XL_SUM)]),
     "p09_two_rows_cols": dict(rows=["Region", "Product"], cols=["Month"], data=[("Qty", XL_SUM)]),
     "p10_cols_only": dict(cols=["Product"], data=[("Sales", XL_SUM)]),
+}
+ARMS3 = {
+    "t01_tabular_two_rows": dict(rows=["Region", "Product"], data=[("Sales", XL_SUM)], layout=1),
+    "t02_outline_two_rows": dict(rows=["Region", "Product"], data=[("Sales", XL_SUM)], layout=2),
+    "t03_tabular_with_col": dict(rows=["Region", "Product"], cols=["Month"], data=[("Qty", XL_SUM)], layout=1),
+    "t04_outline_three": dict(rows=["Region", "Product", "Month"], data=[("Sales", XL_SUM)], layout=2),
+    "t05_tabular_one_row": dict(rows=["Product"], data=[("Sales", XL_SUM), ("Qty", XL_AVG)], layout=1),
+    "t06_tabular_page": dict(rows=["Month", "Product"], pages=["Region"], data=[("Sales", XL_COUNT)], layout=1),
+    "t07_outline_with_col": dict(rows=["Product", "Month"], cols=["Region"], data=[("Sales", XL_MAX)], layout=2),
+    "t08_tabular_three": dict(rows=["Region", "Month", "Product"], data=[("Qty", XL_SUM)], layout=1),
 }
 ARMS2 = {
     "q01_three_rows": dict(rows=["Region", "Product", "Month"], data=[("Sales", XL_SUM)]),
@@ -62,7 +72,7 @@ def main():
     xl = win32com.client.DispatchEx("Excel.Application"); xl.Visible = False; xl.DisplayAlerts = False
     try:
         import sys
-        arms = ARMS2 if "--second" in sys.argv else ARMS
+        arms = ARMS2 if "--second" in sys.argv else ARMS3 if "--third" in sys.argv else ARMS
         if "--random" in sys.argv:
             rnd = random.Random(int(sys.argv[sys.argv.index("--random") + 1]))
             arms = {}
@@ -106,6 +116,9 @@ def main():
                 pt.PivotFields(f).Orientation = COL
             for f, fn in arm.get("data", []):
                 pt.AddDataField(pt.PivotFields(f), None, fn)
+            if arm.get("layout"):
+                pt.RowAxisLayout(arm["layout"])
+                pt.RefreshTable()
             if arm.get("data_on_rows"):
                 pt.DataPivotField.Orientation = ROW
             if arm.get("hide"):
