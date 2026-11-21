@@ -252,6 +252,7 @@ fn result_arrays_retain_element_type_bounds_and_resize_contract() {
                 column_width_font: None,
                 default_col_width: 0.0,
                 default_col_width_explicit: false,
+                base_col_width: None,
                 default_row_height: 15.0,
                 default_row_custom: false,
                 col_fonts: vec![],

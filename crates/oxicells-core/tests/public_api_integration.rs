@@ -205,6 +205,7 @@ fn make_sheet_with_formula(formula: &str, input_values: &[(u32, u32, CellValue)]
         column_width_font: None,
         default_col_width: 8.43,
         default_col_width_explicit: false,
+        base_col_width: None,
         default_row_height: 15.0,
         default_row_custom: false,
         col_fonts: vec![],

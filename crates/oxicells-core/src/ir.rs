@@ -446,6 +446,11 @@ pub struct Sheet {
     pub default_col_width: f32,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub default_col_width_explicit: bool,
+    /// `<sheetFormatPr baseColWidth>`: the default column in digits, before
+    /// Excel adds the padding and rounds up to a multiple of 8 pixels. Read
+    /// only when the sheet states no `defaultColWidth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_col_width: Option<f32>,
     pub default_row_height: f32,
     /// True when the sheet pins its default row height (customHeight="1").
     /// Without the pin Excel throws the stated number away and derives the

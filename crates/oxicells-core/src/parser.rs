@@ -5338,6 +5338,7 @@ fn parse_worksheet(
     // way a <col> width is; Excel's own default, for a sheet that states none,
     // is a plain count of characters instead, so the two cannot share a value.
     let mut default_col_width: f32 = 0.0;
+    let mut base_col_width: Option<f32> = None;
     let mut default_col_width_explicit = false;
     let mut default_row_height: f32 = 15.0;
     let mut frozen_rows: u32 = 0;
@@ -5794,6 +5795,9 @@ fn parse_worksheet(
                                 default_col_width_explicit = true;
                             }
                         }
+                        base_col_width = get_attr(&e, "baseColWidth")
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .filter(|w| *w >= 0.0);
                     }
 
                     // <col min="1" max="3" width="12.5" ... />
@@ -6097,6 +6101,7 @@ fn parse_worksheet(
         column_width_font,
         default_col_width,
         default_col_width_explicit,
+        base_col_width,
         default_row_height,
         default_row_custom,
         col_fonts,

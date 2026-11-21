@@ -2671,7 +2671,15 @@ fn geometry(sheet: &Sheet, scale: f32, digit_width: f32) -> Geometry {
             None if sheet.default_col_width > 0.0 => {
                 column_pixels(sheet.default_col_width, digit_width) * scale
             }
-            None => (DEFAULT_DIGITS * digit_width + DEFAULT_PADDING).trunc() * scale,
+            // ECMA-376 18.3.1.81: the base width in digits plus five pixels
+            // of padding, rounded UP to a multiple of eight. For Excel's own
+            // base of 8 that is exactly the measured 8 digits + 8 pixels at
+            // digits of 6 to 12; blind-B `31628` states `baseColWidth="10"`
+            // and Excel draws its columns 80 pixels where 8 digits gave 64.
+            None => match sheet.base_col_width {
+                Some(base) => ((base * digit_width + 5.0) / 8.0).ceil() * 8.0 * scale,
+                None => (DEFAULT_DIGITS * digit_width + DEFAULT_PADDING).trunc() * scale,
+            },
         }
     };
 
@@ -2851,10 +2859,31 @@ fn main() {
     println!("{} {}x{} @{}dpi", args[2], width, height, dpi);
 }
 
+/// The digit Excel measures for an Office cloud face GDI cannot see (it hands
+/// back Arial in its place, a pixel wider at 11pt), by size from 6pt to 72pt
+/// in half points. `_xlsx_cloud_digit.py`: Normal set to the face in Excel,
+/// a 100-digit column read back. Blind-B `31011` (theme latin Aptos Narrow)
+/// drew every column 10 pixels wide of Excel's with GDI's digit.
+static CLOUD_DIGIT_PX: &[(&str, [u8; 133])] = &[
+    ("Aptos Narrow", [5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11, 12, 12, 12, 13, 13, 13, 14, 14, 14, 15, 15, 15, 16, 16, 16, 17, 17, 17, 18, 18, 18, 19, 19, 19, 20, 20, 20, 21, 21, 21, 22, 22, 22, 23, 23, 23, 24, 24, 24, 25, 25, 25, 26, 26, 26, 27, 27, 27, 28, 28, 28, 29, 29, 29, 30, 30, 30, 31, 31, 31, 32, 32, 32, 33, 33, 33, 34, 34, 34, 35, 35, 35, 36, 36, 37, 37, 37, 38, 38, 38, 39, 39, 39, 40, 40, 40, 41, 41, 41, 42, 42, 42, 43, 43, 43, 44, 44, 44, 45, 45, 45, 46, 46, 46, 47, 47, 47, 48, 48, 48, 49]),
+    ("Aptos", [5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 8, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11, 12, 12, 12, 13, 13, 13, 14, 14, 14, 15, 15, 15, 16, 17, 17, 17, 18, 18, 18, 19, 19, 19, 20, 20, 20, 21, 21, 21, 22, 22, 22, 23, 23, 24, 24, 24, 25, 25, 25, 26, 26, 26, 27, 27, 27, 28, 28, 28, 29, 29, 29, 30, 30, 30, 31, 32, 32, 32, 33, 33, 33, 34, 34, 34, 35, 35, 35, 36, 36, 36, 37, 37, 37, 38, 38, 38, 39, 39, 40, 40, 40, 41, 41, 41, 42, 42, 42, 43, 43, 43, 44, 44, 44, 45, 45, 45, 46, 46, 46, 47, 48, 48, 48, 49, 49, 49, 50, 50, 50, 51, 51, 51]),
+    ("Aptos Display", [5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 10, 10, 10, 11, 11, 12, 12, 12, 13, 13, 13, 14, 14, 14, 15, 15, 15, 16, 16, 16, 17, 17, 17, 18, 18, 18, 19, 19, 19, 20, 20, 20, 21, 21, 21, 22, 22, 22, 23, 24, 24, 24, 25, 25, 25, 26, 26, 26, 27, 27, 27, 28, 28, 28, 29, 29, 29, 30, 30, 30, 31, 31, 31, 32, 32, 32, 33, 33, 33, 34, 34, 35, 35, 35, 36, 36, 36, 37, 37, 37, 38, 38, 38, 39, 39, 39, 40, 40, 40, 41, 41, 41, 42, 42, 42, 43, 43, 43, 44, 44, 44, 45, 45, 45, 46, 47, 47, 47, 48, 48, 48, 49, 49, 49, 50, 50, 50]),
+];
+
+fn cloud_digit(face: &str, points: f32) -> Option<f32> {
+    let at = ((points * 2.0).round() as i32 - 12) as usize;
+    CLOUD_DIGIT_PX
+        .iter()
+        .find(|(held, _)| held.eq_ignore_ascii_case(face))
+        .and_then(|(_, by)| by.get(at))
+        .map(|digit| f32::from(*digit))
+}
+
 /// How wide a digit is in the font a workbook treats as standard.
 #[cfg(windows)]
 fn digit_width(style: &CellStyle) -> Option<f32> {
-    windows_draw::digit_width(style)
+    let face = style.font_name.as_deref().unwrap_or("Calibri");
+    cloud_digit(face, style.font_size.unwrap_or(11.0)).or_else(|| windows_draw::digit_width(style))
 }
 
 #[cfg(not(windows))]
