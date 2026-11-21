@@ -60,10 +60,10 @@ fn main() {
             docx_to_pdf(input, output, strict);
         }
         Some("docx-to-png") => {
-            let usage = "Usage: oxi docx-to-png [--strict] [--page N] [--width PX] [--height PX] <input.docx> <output.png>";
+            let usage = "Usage: oxi docx-to-png [--strict] [--page N] [--width PX] [--height PX] [--trim] <input.docx> <output.png>";
             let mut strict = false;
             let mut page = 1usize;
-            let mut size = raster::Size { width: None, height: None };
+            let mut size = raster::Size { width: None, height: None, trim: false };
             let mut paths = Vec::new();
             let mut rest = args[2..].iter();
             while let Some(arg) = rest.next() {
@@ -73,6 +73,7 @@ fn main() {
                     "--page" => page = number() as usize,
                     "--width" => size.width = Some(number()),
                     "--height" => size.height = Some(number()),
+                    "--trim" => size.trim = true,
                     _ => paths.push(arg.as_str()),
                 }
             }
@@ -96,13 +97,13 @@ fn main() {
         }
         Some("pptx-to-png") | Some("xlsx-to-png") => {
             let usage = if args[1] == "xlsx-to-png" {
-                "Usage: oxi xlsx-to-png [--strict] [--page N] [--width PX] [--height PX] <input.xlsx> <output.png>"
+                "Usage: oxi xlsx-to-png [--strict] [--page N] [--width PX] [--height PX] [--trim] <input.xlsx> <output.png>"
             } else {
-                "Usage: oxi pptx-to-png [--strict] [--page N] [--width PX] [--height PX] <input.pptx> <output.png>"
+                "Usage: oxi pptx-to-png [--strict] [--page N] [--width PX] [--height PX] [--trim] <input.pptx> <output.png>"
             };
             let mut strict = false;
             let mut page = 1usize;
-            let mut size = raster::Size { width: None, height: None };
+            let mut size = raster::Size { width: None, height: None, trim: false };
             let mut paths = Vec::new();
             let mut rest = args[2..].iter();
             while let Some(arg) = rest.next() {
@@ -112,6 +113,7 @@ fn main() {
                     "--page" => page = number() as usize,
                     "--width" => size.width = Some(number()),
                     "--height" => size.height = Some(number()),
+                    "--trim" => size.trim = true,
                     _ => paths.push(arg.as_str()),
                 }
             }
@@ -250,11 +252,11 @@ fn main() {
             eprintln!();
             eprintln!("Usage:");
             eprintln!("  oxi docx-to-pdf [--strict] [--quiet] <input.docx> <output.pdf>");
-            eprintln!("  oxi docx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.docx> <output.png>");
+            eprintln!("  oxi docx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] [--trim] <input.docx> <output.png>");
             eprintln!("  oxi pptx-to-pdf [--strict] [--quiet] <input.pptx> <output.pdf>");
             eprintln!("  oxi xlsx-to-pdf [--strict] [--quiet] <input.xlsx> <output.pdf>");
-            eprintln!("  oxi pptx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.pptx> <output.png>");
-            eprintln!("  oxi xlsx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] <input.xlsx> <output.png>");
+            eprintln!("  oxi pptx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] [--trim] <input.pptx> <output.png>");
+            eprintln!("  oxi xlsx-to-png [--strict] [--quiet] [--page N] [--width PX] [--height PX] [--trim] <input.xlsx> <output.png>");
             eprintln!("      page N (default 1), fitted inside the given width and/or height (default 96 dpi)");
             eprintln!("  oxi docx-to-docling [--quiet] <input.docx> [output.json]");
             eprintln!("      the document as a DoclingDocument (JSON) whose items carry the page");
@@ -772,7 +774,7 @@ fn serve_one(line: &str) -> serde_json::Value {
     let png = output.to_ascii_lowercase().ends_with(".png");
     let number = |key: &str| req[key].as_u64().filter(|n| *n > 0 && *n <= u32::MAX as u64).map(|n| n as u32);
     let page = number("page").unwrap_or(1) as usize;
-    let size = raster::Size { width: number("width"), height: number("height") };
+    let size = raster::Size { width: number("width"), height: number("height"), trim: req["trim"].as_bool().unwrap_or(false) };
     let start = std::time::Instant::now();
     let result = std::panic::catch_unwind(|| {
         if png {
@@ -5673,7 +5675,7 @@ mod serve_tests {
         let dir = std::env::temp_dir().join(format!("oxi-xlsx-png-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let output = dir.join("sheet.png");
-        let size = raster::Size { width: Some(300), height: None };
+        let size = raster::Size { width: Some(300), height: None, trim: false };
         let Ok(done) = convert_png(input, output.to_str().unwrap(), false, 1, size) else { panic!("xlsx-to-png failed") };
         assert!(done.pages >= 1);
         let png = image::open(&output).unwrap();
