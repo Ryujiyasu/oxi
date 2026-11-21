@@ -1203,6 +1203,7 @@ function hitTestText(e, pageIndex) {
 
 function onCanvasClick(e, pageIndex) {
   if (!layoutResult) return;
+  caretGoalX = null;
   const hit = hitTestText(e, pageIndex);
   if (!hit) return;
   // As in Word: a double click selects the word, a triple click the
@@ -1349,22 +1350,22 @@ function getCharOffset(elem, clickX) {
   return text.length;
 }
 
-function getCursorXY() {
-  if (!cursorPos || !layoutResult) return null;
-  const page = layoutResult.pages[cursorPos.pageIndex];
+function getCursorXY(pos = cursorPos) {
+  if (!pos || !layoutResult) return null;
+  const page = layoutResult.pages[pos.pageIndex];
   if (!page) return null;
-  const el = page.elements[cursorPos.elemIndex];
+  const el = page.elements[pos.elemIndex];
   if (!el) return null;
 
   const offscreen = document.createElement('canvas').getContext('2d');
   const fs = el.font_size || 11;
   const fam = el.font_family || 'Calibri, sans-serif';
   offscreen.font = `${el.italic?'italic ':''}${el.bold?'bold ':''}${fs}px ${fam}`;
-  const textBefore = (el.text || '').substring(0, cursorPos.charOffset);
+  const textBefore = (el.text || '').substring(0, pos.charOffset);
   const cx = el.x + offscreen.measureText(textBefore).width;
   const cy = el.y;
   const ch = el.height || fs;
-  return { x: cx, y: cy, h: ch, pageIndex: cursorPos.pageIndex };
+  return { x: cx, y: cy, h: ch, pageIndex: pos.pageIndex };
 }
 
 // ---- Selection (v1: mouse drag within a single page) ----
@@ -1822,6 +1823,9 @@ function restoreCursor(paraIndex, runIndex, globalCharOff) {
 
 hiddenInput.addEventListener('keydown', e => {
   if (!(cursorPos || modelCursorOnly) || !currentDocx) return;
+  // Up and down keep the column the caret started from, as in Word, so a
+  // short line on the way does not pull the caret left for good.
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'Shift') caretGoalX = null;
   if (e.ctrlKey || e.metaKey) {
     const k = e.key.toLowerCase();
     if (!e.altKey && (k === 'b' || k === 'i' || k === 'u')) {
@@ -1869,6 +1873,29 @@ hiddenInput.addEventListener('keydown', e => {
     } else {
       moveCursor(dir);
     }
+  } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (!cursorPos) return;
+    const dir = e.key === 'ArrowUp' ? -1 : 1;
+    if (e.shiftKey) {
+      // Shift+up/down grows or shrinks the selection a line at a time.
+      const anchor = selAnchor && selFocus ? selAnchor : { ...cursorPos };
+      const to = lineStep(cursorPos, dir, true);
+      if (to) setSelection(anchor, to);
+      return;
+    }
+    // Without shift, a selection collapses and the caret goes on from its
+    // end on that side.
+    const rng = selectionRange();
+    const from = rng ? (dir < 0 ? rng.a : rng.b) : cursorPos;
+    const to = lineStep(from, dir, false) || (rng ? { ...from } : null);
+    if (!to) return;
+    clearSelection();
+    cursorPos = to;
+    modelCursorOnly = null;
+    drawCursor();
+    startCursorBlink();
+    syncRibbonFromCursor();
   } else if (e.key === 'Enter') {
     e.preventDefault();
     splitParagraphAtCursor();
@@ -1944,6 +1971,70 @@ async function doCut() {
     return;
   }
   if (await doCopy()) deleteSelection();
+}
+
+// ---- Up and down: the line above or below ----
+let caretGoalX = null;
+// The table cell (or none) and story an element lies in, so up and down
+// stay in a cell while it has lines that way, as Word's do.
+function lineBox(el) {
+  const cell = el.cell_row_index == null ? null
+    : [...(el.cell_ancestor_path || []), [el.cell_row_index, el.cell_col_index]];
+  return `${el.source_container_index || 0}/${JSON.stringify(cell)}`;
+}
+// The caret position one line above (dir -1) or below (dir 1) `from`, at
+// the column the caret is keeping, or null when there is no such line.
+// A selection is held to one page, so `samePage` stops at the page's edge;
+// a plain move goes on to the next or previous page.
+function lineStep(from, dir, samePage) {
+  if (!layoutResult) return null;
+  const page = layoutResult.pages[from.pageIndex];
+  const el = page && page.elements[from.elemIndex];
+  if (!el) return null;
+  if (caretGoalX == null) {
+    const xy = getCursorXY(from);
+    caretGoalX = xy ? xy.x : el.x;
+  }
+  const h = e => e.height || e.font_size || 11;
+  const mid = el.y + h(el) / 2;
+  const box = lineBox(el);
+  const pick = (pi, test) => {
+    const els = layoutResult.pages[pi].elements;
+    const text = [];
+    els.forEach((e, i) => { if (e.kind === 'text' && e.text && test(e)) text.push(i); });
+    if (!text.length) return null;
+    // The nearest line that way, in the caret's own cell or story first.
+    const own = text.filter(i => lineBox(els[i]) === box);
+    const pool = own.length ? own : text;
+    const centre = i => els[i].y + h(els[i]) / 2;
+    let near = pool[0];
+    for (const i of pool) if (dir < 0 ? centre(i) > centre(near) : centre(i) < centre(near)) near = i;
+    const line = els[near];
+    const onLine = pool.filter(i => centre(i) >= line.y && centre(i) <= line.y + h(line)
+      && lineBox(els[i]) === lineBox(line));
+    // On that line, the element nearest the kept column, and in it the
+    // character edge nearest that column.
+    let best = onLine[0], bestDx = Infinity;
+    for (const i of onLine) {
+      const e = els[i], right = e.x + (e.width || 0);
+      const dx = caretGoalX < e.x ? e.x - caretGoalX : caretGoalX > right ? caretGoalX - right : 0;
+      if (dx < bestDx) { bestDx = dx; best = i; }
+    }
+    return { pageIndex: pi, elemIndex: best, charOffset: getCharOffset(els[best], caretGoalX) };
+  };
+  // A line above ends about where this one begins, and a line below begins
+  // about where it ends; a quarter of the line's height is let overlap, for
+  // tight line spacing, which a raised or lowered run on this line stays within.
+  const slack = h(el) / 4;
+  const here = pick(from.pageIndex, e => dir < 0
+    ? e.y + h(e) / 2 < mid && e.y + h(e) <= el.y + slack
+    : e.y + h(e) / 2 > mid && e.y >= el.y + h(el) - slack);
+  if (here || samePage) return here;
+  for (let pi = from.pageIndex + dir; pi >= 0 && pi < layoutResult.pages.length; pi += dir) {
+    const there = pick(pi, () => true);
+    if (there) return there;
+  }
+  return null;
 }
 
 function moveCursor(dir) {
