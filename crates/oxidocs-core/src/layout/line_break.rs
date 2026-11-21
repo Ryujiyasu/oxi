@@ -6515,6 +6515,34 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         };
                         overflow_tw -= pt_to_tw(credit);
                     }
+                    // OXI_KINSOKU_OIKOMI_CAP (2026-11-21, default ON, opt-out _DISABLE): a
+                    // line-start-prohibited glyph that would open the next line is pulled in
+                    // while the line's marks can give it room at HALF A CELL EACH (capped near
+                    // 1.65 cells), past the S1490 capacity a plain glyph gets.
+                    // `_pb_kinsoku_oikomi_gen.py` (ＭＳ 明朝 10.5, compat 15, compressPunctuation,
+                    // jc both, balance; «…日々» vs «…日本», overflow swept in 0.5pt): plain glyph
+                    // k=1/2/3 marks -> 5-6 / 7-8 / 8-9 (the table); «々» -> 5-6 / 10.5 / 15.5 /
+                    // (k=4) 17.0 kept, 6 / 11 / 16 / 17.5 pushed. blind-A ja/creative__14af1ca6
+                    // «…います。24 時間…あり、日々»: Word squeezes 。 and 、 to 6.12 and keeps «々»;
+                    // Oxi pushed «日» (k=2, 9.4pt over).
+                    if overflow_tw > 0 && prev_s1490_regime && is_justified && !vertical
+                        && kinsoku::is_line_start_prohibited(ch)
+                        && !crate::env_flag!("OXI_KINSOKU_OIKOMI_CAP_DISABLE")
+                    {
+                        let line_chars: Vec<char> = current_line.fragments.iter()
+                            .flat_map(|f| f.text.chars()).chain(word.chars()).collect();
+                        let mut k = line_chars.iter().filter(|&&c| matches!(c, '、' | '。' | '，' | '．' | '・')
+                            || kinsoku::is_yakumono_opening(c) || kinsoku::is_yakumono_closing(c)).count();
+                        if line_chars.first().is_some_and(|&c| kinsoku::is_yakumono_opening(c)) {
+                            k = k.saturating_sub(1);
+                        }
+                        let cell = grid_char_pitch.filter(|p| *p > 0.0).unwrap_or(font_size);
+                        let cap_tw = pt_to_tw((k as f32 * 0.5).min(1.65) * cell);
+                        let natural_over = current_width_tw + s1317_cw_tw - available_tw;
+                        if k > 0 && natural_over <= cap_tw {
+                            overflow_tw = 0;
+                        }
+                    }
                     if overflow_tw > 0 && s476_body && is_justified
                         && !vertical && !lines_and_chars
                         && kinsoku::is_line_start_prohibited(ch)
