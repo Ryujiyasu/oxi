@@ -19,6 +19,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
+// OXI_CHECK_NATIVE=<path to an .xll>: also call that XLL (and, with
+// OXI_CHECK_COM=<ProgID>, a COM add-in) from the page through the extension
+// and the native-messaging hosts (install.ps1 must have registered them for
+// this extension's id).
+const nativeXll = process.env.OXI_CHECK_NATIVE ?? '';
+const nativeCom = process.env.OXI_CHECK_COM ?? '';
 const edge = process.argv[2] ?? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 
 // The stand-in editor: answers oxi-office.js's snapshot and sync requests
@@ -36,6 +42,31 @@ const opening = setInterval(() => {
 }, 50);
 const cells = new Map([['0,0', { value: 'hello', text: 'hello' }]]);
 window.received = [];
+// OxiXll / OxiCom as the editor asks them: a request posted to the page,
+// relayed by the content script.
+window.native = 'skipped';
+const asked = new Map();
+let seq = 0;
+window.addEventListener('message', event => {
+  const data = event.data;
+  if (event.source !== window || !data || data.oxiXll !== 'reply') return;
+  asked.get(data.id)?.(data);
+});
+const ask = request => new Promise(resolve => { const id = ++seq; asked.set(id, resolve); window.postMessage({ oxiXll: 'request', id, ...request }, '*'); });
+const xll = ${JSON.stringify(nativeXll)};
+const com = ${JSON.stringify(nativeCom)};
+if (xll) {
+  const waitFlag = setInterval(async () => {
+    if (document.documentElement.dataset.oxiOfficeExtension !== 'on') return;
+    clearInterval(waitFlag);
+    const out = {};
+    out.list = (await ask({ xll, op: 'list' })).functions?.length ?? 'none';
+    out.add = (await ask({ xll, op: 'call', function: 'OxiAdd', args: [2, 3] })).value;
+    out.range = (await ask({ xll, op: 'call', function: 'OxiRangeSum', args: [[[1, 2], [3, 4]]] })).value;
+    if (com) out.com = (await ask({ kind: 'com', progId: com, function: 'Add', args: [4, 5] })).value;
+    window.native = JSON.stringify(out);
+  }, 50);
+}
 const snapshot = () => ({ names: ['Sheet1'], active: 0, selection: { sheet: 0, row: 0, col: 0, rows: 1, cols: 1 },
   sheets: [{ cells: [...cells].map(([k, v]) => [...k.split(',').map(Number), v]), used: { row: 0, col: 0, rows: 2, cols: 1 } }],
   definedNames: [], tables: [] });
@@ -134,9 +165,20 @@ try {
   if (outcome) {
     const received = await evaluate(outcome.page.webSocketDebuggerUrl, 'JSON.stringify(window.received)');
     const flag = await evaluate(outcome.page.webSocketDebuggerUrl, 'document.documentElement.dataset.oxiOfficeExtension');
+    let native = 'skipped';
+    for (let i = 0; i < 40 && nativeXll; i++) {
+      native = await evaluate(outcome.page.webSocketDebuggerUrl, 'window.native');
+      if (native !== 'skipped') break;
+      await sleep(250);
+    }
+    console.log(`  native messaging: ${native}`);
+    const nativeGood = !nativeXll || (() => {
+      const n = JSON.parse(native);
+      return n.list > 0 && n.add === 5 && n.range === 10 && (!nativeCom || n.com === 9);
+    })();
     const parsed = outcome.result.startsWith('{') ? JSON.parse(outcome.result) : null;
     const good = parsed && parsed.oxi === 'object' && parsed.a1[0][0] === 'hello' && parsed.a2[0][0] === 42 && flag === 'on'
-      && JSON.parse(received).some(item => item.op === 'write');
+      && JSON.parse(received).some(item => item.op === 'write') && nativeGood;
     console.log(`  add-in saw: ${outcome.result}`);
     console.log(`  editor received: ${received}`);
     console.log(`  page flag: ${flag}`);
