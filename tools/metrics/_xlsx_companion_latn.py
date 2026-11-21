@@ -20,11 +20,15 @@ TEXTS = ["ab", "ab cd", "ab cd ef", "ab cd ef gh"]
 
 def build(normal):
     wb = openpyxl.Workbook(); ws = wb.active
-    ws.column_dimensions["A"].width = 3
+    ws.column_dimensions["A"].width = 3 if "--sizes" not in __import__("sys").argv else 2
     r = 1
     arms = []
-    for face, size in (("Arial", 10), ("Century", 9), ("Times New Roman", 12)):
-        for t in TEXTS:
+    import sys
+    faces = ([(f, z) for f in ("Arial", "Calibri", "Times New Roman") for z in (8, 9, 10, 11, 12, 14, 16, 20)]
+             if "--sizes" in sys.argv else (("Arial", 10), ("Century", 9), ("Times New Roman", 12)))
+    texts = ["ab cd"] if "--sizes" in sys.argv else TEXTS
+    for face, size in faces:
+        for t in texts:
             c = ws.cell(r, 1, t); c.font = Font(name=face, size=size); c.alignment = Alignment(wrap_text=True)
             arms.append((r, face, size, len(t.split()))); r += 1
     tmp = OUT / "tmp.xlsx"; wb.save(tmp)

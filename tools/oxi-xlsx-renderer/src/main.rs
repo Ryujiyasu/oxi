@@ -474,6 +474,18 @@ fn row_pixels(
         let font_px = match (sheet.normal_font.as_ref(), line_box_of(face, size, cell.style.bold)) {
             (Some((normal, normal_size)), Some((own, own_base))) if !speaks_japanese(face) => {
                 match line_box_of(normal, *normal_size, false) {
+                    // Only a cell sat on the foot reaches down to it: blind-B
+                    // `45300`'s centred Arial 12 keeps 20 + 20 for two lines
+                    // where a bottom-aligned one takes 21 + 20 -- the same
+                    // split the drawing found (SX149).
+                    Some((theirs, their_base))
+                        if latin_mode
+                            && !matches!(cell.style.vertical_align.as_deref(), None | Some("bottom")) =>
+                    {
+                        rest_px = Some(own);
+                        let _ = (theirs, their_base);
+                        own
+                    }
                     Some((theirs, their_base)) if latin_mode => {
                         rest_px = Some(own);
                         own_base + (own - own_base).max(theirs - their_base)
