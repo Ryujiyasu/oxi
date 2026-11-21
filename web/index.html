@@ -1014,7 +1014,8 @@ input[type="file"] { display: none; }
     width: 120px;
     zoom: var(--thumb-zoom, 1);
 }
-.slide-main .slide-wrapper { zoom: var(--slide-zoom, 1); }
+/* --slide-zoom is the fit to the main area times the status bar's zoom. */
+.slide-main .slide-wrapper { zoom: var(--slide-zoom, 1); flex-shrink: 0; }
 .slide-thumb.active .slide-thumb-preview {
     border-color: var(--oxi-slides);
     border-width: 2px;
@@ -1024,7 +1025,10 @@ input[type="file"] { display: none; }
     min-width: 0;
     display: flex;
     flex-direction: column;
-    align-items: center;
+    /* `safe`: a slide zoomed wider than the area starts at its left edge
+       and scrolls, instead of overhanging both sides out of reach. */
+    align-items: safe center;
+    overflow-x: auto;
     gap: 8px;
 }
 .slide-wrapper {
@@ -2341,10 +2345,20 @@ const zoomOut = document.getElementById('zoomOut');
 const zoomIn = document.getElementById('zoomIn');
 let currentZoom = 100;
 
+/** Set by the deck view: re-applies the fit and the zoom to the slide. */
+let applySlideZoom = null;
+
 function applyZoom() {
     const container = document.getElementById('pages-container');
-    container.style.transform = `scale(${currentZoom / 100})`;
-    container.style.transformOrigin = 'top center';
+    if (container.querySelector('.pptx-layout') && applySlideZoom) {
+        // A deck zooms its slide only. Scaling the whole view also scaled
+        // the slide list and swung it off the left edge, out of reach.
+        container.style.transform = '';
+        applySlideZoom();
+    } else {
+        container.style.transform = `scale(${currentZoom / 100})`;
+        container.style.transformOrigin = 'top center';
+    }
     zoomLabel.textContent = currentZoom + '%';
     zoomSlider.value = currentZoom;
 }
@@ -4837,11 +4851,16 @@ function renderEditablePptx(presentation) {
     // (which narrows with the window), the slide to the main area's.
     pptxResize?.disconnect();
     const slideWidth = presentation.slide_width * scale;
+    applySlideZoom = () => {
+        const fit = Math.min(1, mainArea.clientWidth / slideWidth);
+        mainArea.style.setProperty('--slide-zoom', String(fit * currentZoom / 100));
+    };
     pptxResize = new ResizeObserver(() => {
         const room = thumbPanel.clientWidth - 18 - 8 - 8; // number, gap, padding
         thumbPanel.style.setProperty('--thumb-zoom', String(Math.max(0.25, Math.min(1, room / 120))));
-        mainArea.style.setProperty('--slide-zoom', String(Math.min(1, mainArea.clientWidth / slideWidth)));
+        applySlideZoom();
     });
+    applyZoom();
     pptxResize.observe(thumbPanel);
     pptxResize.observe(mainArea);
 }
