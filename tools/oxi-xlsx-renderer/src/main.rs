@@ -2912,6 +2912,37 @@ fn main() {
     };
     // `--pivot`: print every pivot table's computed grid as JSON, for
     // `_xlsx_pivot_check.py` to hold against Excel's own refresh.
+    // `--refresh-pivots <out.xlsx> [sheet!R,C=number ...]`: apply the edits,
+    // refresh every pivot table and save -- for holding Oxi's refresh against
+    // Excel's own (`_xlsx_pivot_refresh_check.py`).
+    if args.get(2).map(String::as_str) == Some("--refresh-pivots") {
+        let bytes = std::fs::read(&args[1]).unwrap_or_default();
+        let Ok(mut editor) = oxicells_core::XlsxEditor::new(&bytes) else {
+            eprintln!("cannot open {}", args[1]);
+            std::process::exit(1);
+        };
+        for edit in args.iter().skip(4) {
+            let Some((place, value)) = edit.split_once('=') else { continue };
+            let Some((sheet, cell)) = place.split_once('!') else { continue };
+            let Some((r, c)) = cell.split_once(',') else { continue };
+            let index = editor.workbook().sheets.iter().position(|s| s.name == sheet).unwrap_or(0);
+            let value = value.parse::<f64>().map(oxicells_core::CellEditValue::Number)
+                .unwrap_or_else(|_| oxicells_core::CellEditValue::String(value.to_string()));
+            editor.set_cell_value(index, r.parse().unwrap_or(1), c.parse().unwrap_or(0), value);
+        }
+        let n = editor.refresh_pivots(oxicells_core::pivot::Ui::Japanese);
+        match editor.save() {
+            Ok(out) => {
+                let _ = std::fs::write(&args[3], out);
+                println!("refreshed {n}");
+            }
+            Err(e) => {
+                eprintln!("save failed: {e:?}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if args.get(2).map(String::as_str) == Some("--pivot") {
         let ui = if std::env::var("OXI_XLSX_UI_LANG").is_ok_and(|v| v.starts_with("en")) {
             oxicells_core::pivot::Ui::English

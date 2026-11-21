@@ -284,6 +284,75 @@ impl XlsxEditor {
         })
     }
 
+    /// Refreshes every pivot table from its source, as Excel's Refresh All
+    /// does, and records the new grid as cell edits: the old range is
+    /// cleared (with the page rows above it) and the computed one written.
+    /// Source cells are read as they stand now, pending edits included.
+    /// Returns how many pivot tables were refreshed.
+    ///
+    /// The cache records part is left as it was; Excel recomputes from the
+    /// source on its own next refresh, and shows the cells meanwhile.
+    pub fn refresh_pivots(&mut self, ui: crate::pivot::Ui) -> usize {
+        let specs = crate::pivot::read_pivots(&self.original_data);
+        let mut refreshed = 0;
+        for spec in &specs {
+            let sheet_index = |name: &str| self.workbook.sheets.iter().position(|s| s.name.eq_ignore_ascii_case(name));
+            let (Some(source), Some(target)) = (sheet_index(&spec.source_sheet), sheet_index(&spec.sheet)) else {
+                continue;
+            };
+            let grid = {
+                let edits = &self.edits;
+                let sheet = &self.workbook.sheets[source];
+                let get = |row: u32, col: u32| -> crate::ir::CellValue {
+                    if let Some(edit) = edits.get(&(source, row + 1, col)) {
+                        match edit {
+                            CellEditValue::String(s) => return crate::ir::CellValue::String(s.clone()),
+                            CellEditValue::Utf16(u) => return crate::ir::CellValue::Utf16(u.clone()),
+                            CellEditValue::Number(n) => return crate::ir::CellValue::Number(*n),
+                            CellEditValue::Boolean(b) => return crate::ir::CellValue::Boolean(*b),
+                            CellEditValue::Error(e) => return crate::ir::CellValue::Error(e.clone()),
+                            CellEditValue::Empty => return crate::ir::CellValue::Empty,
+                            CellEditValue::RichText { value, .. } => return value.clone(),
+                            CellEditValue::CachedFormula { value, .. } => return value.clone(),
+                            _ => {}
+                        }
+                    }
+                    sheet
+                        .rows
+                        .iter()
+                        .find(|r| r.index == row + 1)
+                        .and_then(|r| r.cells.iter().find(|c| c.col == col))
+                        .map(|c| c.value.clone())
+                        .unwrap_or(crate::ir::CellValue::Empty)
+                };
+                crate::pivot::compute(spec, &get, ui)
+            };
+            let pages = spec.pages.len() as u32;
+            let top = spec.origin.0.saturating_sub(if pages > 0 { pages + 1 } else { 0 });
+            for row in top..=spec.extent.0 {
+                for col in spec.origin.1..=spec.extent.1 {
+                    self.edits.insert((target, row + 1, col), CellEditValue::Empty);
+                }
+            }
+            for (i, line) in grid.cells.iter().enumerate() {
+                for (j, value) in line.iter().enumerate() {
+                    let at = (target, grid.origin.0 + i as u32 + 1, grid.origin.1 + j as u32);
+                    let edit = match value {
+                        crate::ir::CellValue::Empty => CellEditValue::Empty,
+                        crate::ir::CellValue::String(s) => CellEditValue::String(s.clone()),
+                        crate::ir::CellValue::Utf16(u) => CellEditValue::Utf16(u.clone()),
+                        crate::ir::CellValue::Number(n) => CellEditValue::Number(*n),
+                        crate::ir::CellValue::Boolean(b) => CellEditValue::Boolean(*b),
+                        crate::ir::CellValue::Error(e) => CellEditValue::Error(e.clone()),
+                    };
+                    self.edits.insert(at, edit);
+                }
+            }
+            refreshed += 1;
+        }
+        refreshed
+    }
+
     pub fn workbook(&self) -> &Workbook {
         &self.workbook
     }

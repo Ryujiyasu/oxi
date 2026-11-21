@@ -75,6 +75,9 @@ pub struct PivotSpec {
     pub sheet: String,
     /// Top-left of `location ref`, zero-based (row, column).
     pub origin: (u32, u32),
+    /// Bottom-right of `location ref` as last saved, zero-based: with the page
+    /// rows above `origin`, the range a refresh clears before writing.
+    pub extent: (u32, u32),
     pub source_sheet: String,
     /// Source range, zero-based inclusive (r0, c0, r1, c1), header row first.
     pub source: (u32, u32, u32, u32),
@@ -282,6 +285,7 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
         name: String::new(),
         sheet: sheet.to_string(),
         origin: (0, 0),
+        extent: (0, 0),
         source_sheet: cache.source_sheet.clone(),
         source: cache.source,
         field_names: cache.names.clone(),
@@ -314,8 +318,9 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
                     spec.col_grand_totals = is_true(attr(&e, "colGrandTotals"), true);
                 }
                 "location" => {
-                    let (r0, c0, _, _) = range(&attr(&e, "ref")?)?;
+                    let (r0, c0, r1, c1) = range(&attr(&e, "ref")?)?;
                     spec.origin = (r0, c0);
+                    spec.extent = (r1, c1);
                 }
                 "pivotField" => {
                     field = Some(next_field);
@@ -1008,6 +1013,7 @@ mod tests {
             name: "PT".into(),
             sheet: "P".into(),
             origin: (2, 0),
+            extent: (9, 3),
             source_sheet: "D".into(),
             source: (0, 0, 4, 3),
             field_names: vec!["Region".into(), "Product".into(), "Month".into(), "Sales".into()],
