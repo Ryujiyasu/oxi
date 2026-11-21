@@ -1,7 +1,7 @@
 {
   "name": "oxi-office-viewer",
   "displayName": "Oxi — .docx / .xlsx / .pptx editor",
-  "description": "Open, edit and save .docx, .xlsx and .pptx files inside VS Code, rendered by the Oxi engine — a Rust + WebAssembly Office engine measured page by page against Microsoft Office itself. Nothing is uploaded.",
+  "description": "Open, edit and save .docx, .xlsx and .pptx in VS Code, and watch Claude Code or any AI agent write them: the tab redraws each time the file changes on disk. Rendered by Oxi, a Rust + WebAssembly engine measured against Microsoft Office. Nothing is uploaded.",
   "version": "0.9.7",
   "publisher": "oxidocs",
   "license": "MIT OR Apache-2.0",
@@ -28,7 +28,10 @@
     "office",
     "editor",
     "viewer",
-    "japanese"
+    "japanese",
+    "ai",
+    "agent",
+    "claude"
   ],
   "repository": {
     "type": "git",

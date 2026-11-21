@@ -2,6 +2,13 @@
 
 ## 0.9.7
 
+The tab follows the file on disk. When another program writes it (Claude
+Code or another AI agent, a script, `git checkout`), the document is drawn
+again in place, on the same page, slide or sheet. If the tab has edits that
+are not saved, Oxi asks before it reloads. The README now starts with this
+way of working, including how an agent can render pages to check its own
+work.
+
 Word documents: a selection that runs from body text into a table, or from
 one cell to another, is deleted with Backspace or Delete. The text it covers
 goes and the table keeps its rows and cells (before, nothing was deleted).

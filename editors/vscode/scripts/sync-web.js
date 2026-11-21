@@ -126,6 +126,42 @@ if (__oxiVscode) {
         }, true);
     }
 
+    // Scroll positions, by element id or class, so they survive the page
+    // building its views anew.
+    function __oxiScrolls() {
+        const out = [];
+        for (const el of document.querySelectorAll('[id], [class]')) {
+            if (!el.scrollTop && !el.scrollLeft) continue;
+            const key = el.id ? '#' + CSS.escape(el.id) : '.' + [...el.classList].map(c => CSS.escape(c)).join('.');
+            out.push([key, el.scrollTop, el.scrollLeft]);
+        }
+        return out;
+    }
+    async function __oxiReturnTo(place) {
+        const until = async (test) => {
+            for (let i = 0; i < 50 && !test(); i++) await new Promise(r => setTimeout(r, 100));
+            return test();
+        };
+        if (currentFileType === 'pptx' && place.slide > 0) {
+            if (await until(() => document.querySelectorAll('.slide-thumb').length)) {
+                const thumbs = document.querySelectorAll('.slide-thumb');
+                thumbs[Math.min(place.slide, thumbs.length - 1)].click();
+            }
+        }
+        if (currentFileType === 'xlsx' && place.sheet > 0) {
+            const tabs = () => document.querySelector('.sheet-tabs');
+            if (await until(() => tabs() && tabs().children.length)) {
+                const t = tabs().children;
+                t[Math.min(place.sheet, t.length - 1)].click();
+            }
+        }
+        await new Promise(r => requestAnimationFrame(r));
+        for (const [key, top, left] of place.scroll) {
+            const el = document.querySelector(key);
+            if (el) { el.scrollTop = top; el.scrollLeft = left; }
+        }
+    }
+
     window.addEventListener('message', async (event) => {
         const msg = event.data;
         if (!msg) return;
@@ -138,7 +174,11 @@ if (__oxiVscode) {
             const binary = atob(msg.data);
             const bytes = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            // The same file, changed on disk: come back to the slide or
+            // sheet that was showing, and to where it was scrolled.
+            const place = msg.reload ? { slide: currentSlideIndex, sheet: currentXlsxSheetIndex, scroll: __oxiScrolls() } : null;
             await handleFile(new File([bytes], msg.name));
+            if (place) await __oxiReturnTo(place);
         } catch (err) {
             __oxiVscode.postMessage({ type: 'oxi:error', message: String((err && err.message) || err) });
         }
@@ -248,7 +288,19 @@ if (__oxiVscode) {
         }
         if (msg.type !== 'oxi:open') return;
         try {
+            // The same file, changed on disk: stay where the reader was.
+            const area = document.querySelector('.canvas-area');
+            const at = msg.reload && area ? [area.scrollTop, area.scrollLeft] : null;
             await openFile(new File([__oxiFromBase64(msg.data)], msg.name));
+            if (at) {
+                // Pages may still be coming in; wait until the page is tall
+                // enough to scroll back to.
+                for (let i = 0; i < 50 && area.scrollHeight - area.clientHeight < at[0]; i++) {
+                    await new Promise(r => setTimeout(r, 100));
+                }
+                area.scrollTop = at[0];
+                area.scrollLeft = at[1];
+            }
         } catch (err) {
             __oxiVscode.postMessage({ type: 'oxi:error', message: String((err && err.message) || err) });
         }
