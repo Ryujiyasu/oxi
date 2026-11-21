@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.5
 
 Word documents open in Oxi's Word editor, which edits through the document
 model: Enter splits a paragraph, Backspace at the start of one joins it to the
@@ -19,6 +19,12 @@ leaves the text where it stood, as Word does. Undo and redo work in Word
 documents: Ctrl+Z, Ctrl+Y, the Edit menu and the buttons in the title bar.
 Typing is undone a run at a time, and undoing back to what was saved shows
 the file as unmodified again.
+
+Selecting text works as in Word: a double click selects a word (Japanese is
+cut into words too), a triple click the paragraph, and shift-click or
+Shift+Left/Right extends the selection; Backspace or Delete removes it, and a
+paragraph selected whole goes with its mark. A click puts the caret at the
+nearer edge of the character instead of always after it.
 
 ## 0.9.4
 

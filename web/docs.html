@@ -1204,6 +1204,19 @@ function onCanvasClick(e, pageIndex) {
   if (!layoutResult) return;
   const hit = hitTestText(e, pageIndex);
   if (!hit) return;
+  // As in Word: a double click selects the word, a triple click the
+  // paragraph, a shift click extends the selection to the click.
+  if (e.detail === 2 || e.detail >= 3) {
+    e.preventDefault();
+    const range = e.detail === 2 ? wordRange(hit) : paragraphRange(hit);
+    if (range) { setSelection(range[0], range[1], e.detail >= 3); return; }
+  }
+  if (e.shiftKey && (selAnchor || cursorPos) && (selAnchor || cursorPos).pageIndex === pageIndex) {
+    e.preventDefault();
+    setSelection(selAnchor || { ...cursorPos }, hit);
+    dragSelecting = true;
+    return;
+  }
 
   cursorPos = hit;
   modelCursorOnly = null;
@@ -1231,6 +1244,91 @@ function onCanvasDrag(e, pageIndex) {
 }
 document.addEventListener('mouseup', () => { dragSelecting = false; });
 
+// ---- Word and paragraph selection ----
+function paragraphKey(el) {
+  return `${el.source_container_index || 0}/${el.paragraph_index}/${JSON.stringify(elCells(el))}`;
+}
+// The text elements of `hit`'s paragraph on its page, or only those on its
+// line, in reading order.
+function paragraphElements(hit, sameLine) {
+  const page = layoutResult.pages[hit.pageIndex];
+  const el = page && page.elements[hit.elemIndex];
+  if (!el || el.paragraph_index == null) return [];
+  const key = paragraphKey(el);
+  const out = [];
+  page.elements.forEach((e, i) => {
+    if (e.kind === 'text' && e.text && e.paragraph_index != null && paragraphKey(e) === key
+        && (!sameLine || Math.abs(e.y - el.y) < 1)) out.push(i);
+  });
+  return out;
+}
+function paragraphRange(hit) {
+  const idx = paragraphElements(hit, false);
+  if (!idx.length) return null;
+  const els = layoutResult.pages[hit.pageIndex].elements;
+  const last = idx[idx.length - 1];
+  return [{ pageIndex: hit.pageIndex, elemIndex: idx[0], charOffset: 0 },
+          { pageIndex: hit.pageIndex, elemIndex: last, charOffset: els[last].text.length }];
+}
+const wordSegmenter = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'word' }) : null;
+// The word at `hit` and the spaces after it, as Word's double click takes
+// it; on spaces, the spaces. Japanese is cut into words by the browser's
+// segmenter, so a double click there takes a word, not a whole line.
+function wordRange(hit) {
+  const idx = paragraphElements(hit, true);
+  if (!idx.length) return null;
+  const els = layoutResult.pages[hit.pageIndex].elements;
+  let text = '', at = -1;
+  const starts = [];
+  for (const i of idx) {
+    if (i === hit.elemIndex) at = text.length + hit.charOffset;
+    starts.push(text.length);
+    text += els[i].text;
+  }
+  if (at < 0) return null;
+  const point = Math.min(at, Math.max(0, text.length - 1));
+  let from = point, to = point + 1;
+  if (wordSegmenter) {
+    for (const seg of wordSegmenter.segment(text)) {
+      if (point >= seg.index && point < seg.index + seg.segment.length) {
+        from = seg.index;
+        to = seg.index + seg.segment.length;
+        break;
+      }
+    }
+  }
+  if (/\S/.test(text.slice(from, to))) {
+    while (to < text.length && /[ \t\u3000]/.test(text[to])) to++;
+  }
+  const place = g => {
+    for (let k = idx.length - 1; k >= 0; k--) {
+      if (g >= starts[k]) return { pageIndex: hit.pageIndex, elemIndex: idx[k], charOffset: Math.min(g - starts[k], els[idx[k]].text.length) };
+    }
+    return { pageIndex: hit.pageIndex, elemIndex: idx[0], charOffset: 0 };
+  };
+  // An end at an element's start is the previous element's end.
+  const end = place(to);
+  const k = idx.indexOf(end.elemIndex);
+  if (end.charOffset === 0 && k > 0) { end.elemIndex = idx[k - 1]; end.charOffset = els[idx[k - 1]].text.length; }
+  return [place(from), end];
+}
+// Set when a triple click selected a whole paragraph: deleting it then takes
+// the paragraph mark too, as in Word, instead of leaving an empty paragraph.
+let selWholeParagraph = false;
+function setSelection(anchor, focus, wholeParagraph = false) {
+  selWholeParagraph = wholeParagraph;
+  selAnchor = { ...anchor };
+  selFocus = { ...focus };
+  cursorPos = { ...focus };
+  modelCursorOnly = null;
+  dragSelecting = false;
+  drawSelectionOverlay();
+  drawCursor();
+  startCursorBlink();
+  hiddenInput.focus();
+  syncRibbonFromCursor();
+}
+
 function getCharOffset(elem, clickX) {
   const offscreen = document.createElement('canvas').getContext('2d');
   const fs = elem.font_size || 11;
@@ -1238,9 +1336,13 @@ function getCharOffset(elem, clickX) {
   offscreen.font = `${elem.italic?'italic ':''}${elem.bold?'bold ':''}${fs}px ${fam}`;
   const text = elem.text || '';
   const relX = clickX - elem.x;
-  for (let i = 0; i <= text.length; i++) {
+  // The caret goes to the nearer edge of the character clicked on: its left
+  // half puts it before the character, its right half after.
+  let prev = 0;
+  for (let i = 1; i <= text.length; i++) {
     const w = offscreen.measureText(text.substring(0, i)).width;
-    if (w >= relX) return Math.max(0, i);
+    if (w >= relX) return relX - prev < w - relX ? i - 1 : i;
+    prev = w;
   }
   return text.length;
 }
@@ -1270,7 +1372,7 @@ let dragSelecting = false;
 let selOverlay = null;
 
 function removeSelOverlay() { if (selOverlay) { selOverlay.remove(); selOverlay = null; } }
-function clearSelection() { selAnchor = null; selFocus = null; dragSelecting = false; removeSelOverlay(); }
+function clearSelection() { selAnchor = null; selFocus = null; dragSelecting = false; selWholeParagraph = false; removeSelOverlay(); }
 
 // Ordered selection range, or null when empty/invalid
 function selectionRange() {
@@ -1746,12 +1848,24 @@ hiddenInput.addEventListener('keydown', e => {
     e.preventDefault();
     if (selectionRange()) deleteSelection();
     else deleteChar(1);
-  } else if (e.key === 'ArrowLeft') {
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
     e.preventDefault();
-    moveCursor(-1);
-  } else if (e.key === 'ArrowRight') {
-    e.preventDefault();
-    moveCursor(1);
+    const dir = e.key === 'ArrowLeft' ? -1 : 1;
+    if (e.shiftKey && cursorPos) {
+      // Shift+arrow grows or shrinks the selection from where it began.
+      const anchor = selAnchor && selFocus ? selAnchor : { ...cursorPos };
+      moveCursor(dir);
+      setSelection(anchor, cursorPos);
+    } else if (selectionRange()) {
+      // An arrow without shift collapses the selection to that side.
+      const rng = selectionRange();
+      cursorPos = { ...(dir < 0 ? rng.a : rng.b) };
+      clearSelection();
+      drawCursor();
+      startCursorBlink();
+    } else {
+      moveCursor(dir);
+    }
   } else if (e.key === 'Enter') {
     e.preventDefault();
     splitParagraphAtCursor();
@@ -2078,6 +2192,13 @@ function modelInsert(text) {
 
 function modelDelete(dir) {
   const sel = selectionModelRange();
+  if (sel && selWholeParagraph && sel.from.offset === 0 && sel.to.para === sel.from.para) {
+    // A whole paragraph goes with its mark, unless it is the story's last.
+    const count = JSON.parse(modelDoc.paragraphs()).length;
+    if (sel.to.para + 1 < count) {
+      return applyModelEdits([{ op: 'delete', from: sel.from, to: { para: sel.to.para + 1, offset: 0 } }], sel.from);
+    }
+  }
   if (sel) return applyModelEdits([{ op: 'delete', from: sel.from, to: sel.to }], sel.from);
   const at = cursorModelPos();
   if (!at) return false;
