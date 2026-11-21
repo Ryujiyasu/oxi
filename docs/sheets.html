@@ -420,6 +420,7 @@ const I18N = {
       ?? `Solver stopped (code ${code}).`,
     noModel: 'This sheet has no Solver model.',
     addins: 'Add-ins', addinPrompt: 'The add-in page to open (its URL). It talks to this workbook through oxi-office.js, Oxi\'s office.js.',
+    addinNoExtension: '\n\nAn add-in that loads Microsoft\'s office.js needs the Oxi Office Add-ins extension (integrations/office-js-extension) to reach this workbook.',
     addinRefused: 'The add-in asked for something this editor cannot do yet: ',
   },
   ja: {
@@ -457,6 +458,7 @@ const I18N = {
       ?? `ソルバーが停止しました (コード ${code})。`,
     noModel: 'このシートにはソルバーのモデルがありません。',
     addins: 'アドイン', addinPrompt: '開くアドインのページ (URL)。アドインは oxi-office.js (Oxi 版の office.js) を通してこのブックとやりとりします。',
+    addinNoExtension: '\n\nMicrosoft の office.js を読むアドインは、拡張機能 Oxi Office Add-ins (integrations/office-js-extension) があるとこのブックにつながります。',
     addinRefused: 'アドインの要求のうち、このエディタがまだできないもの: ',
   },
 };
@@ -1914,7 +1916,8 @@ function tellAddin(type, sheet, area) {
   $('addinFrame').contentWindow?.postMessage({ oxiOffice: 'event', type, sheet, address }, '*');
 }
 $('btnAddin').onclick = () => {
-  const url = prompt(t('addinPrompt'), $('addinFrame').src || '');
+  const extension = document.documentElement.dataset.oxiOfficeExtension === 'on';
+  const url = prompt(t('addinPrompt') + (extension ? '' : t('addinNoExtension')), $('addinFrame').src || '');
   if (!url) return;
   $('addinTitle').textContent = url.replace(/^https?:\/\//, '').slice(0, 48);
   $('addinFrame').src = url;
