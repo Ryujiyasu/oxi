@@ -2125,9 +2125,10 @@ pub(crate) fn indent_level(sheet: &oxicells_core::ir::Sheet) -> f32 {
 /// - every label moves right by `b0 + size - 1 + L * (step - indent)` from
 ///   where it stands with the buttons off, buttoned or not.
 ///
-/// Fitted, not closed (`_xlsx_pivot_drill_boxes.py` arms, searched over the
-/// face's GDI metrics, the row and the box): `M = U + floor(row / 4)` (33 of
-/// 40 exact, the rest one pixel off, all on rows of 21px or less) and
+/// Fitted, not closed (`_xlsx_pivot_drill_boxes.py` arms over 14 faces and
+/// 9-22pt, searched over the face's GDI metrics, the row and the box):
+/// `M = U + max(floor(row / 4), floor(bold x / 4) + 3)` (92 of 98 exact, the
+/// rest one pixel off; `floor(row / 4)` alone held 80) and
 /// `b0 = floor((digit + bold x) / 3) + 1` of the first font (24 of 40, none
 /// off by more than two).
 pub(crate) struct DrillPlace {
@@ -2154,7 +2155,11 @@ pub(crate) fn drill_place(sheet: &oxicells_core::ir::Sheet, level_px: f32, row_p
         Some((digit, x)) => ((digit + x) / 3.0).floor() + 1.0,
         None => space + 2.0,
     };
-    let floor = 3.0 * space + (row / 4.0).floor();
+    // The step's floor beyond the indent: a quarter of the row, but never
+    // less than a quarter of the first font's bold x plus three (which is
+    // what holds the smallest boxes, rows of 21px and less, apart).
+    let x_quarter = widths.map_or(0.0, |(_, x)| (x / 4.0).floor() + 3.0);
+    let floor = 3.0 * space + (row / 4.0).floor().max(x_quarter);
     let indent_px = f32::from(indent) * 3.0 * space;
     let step = if indent == 0 { 0.0 } else { indent_px.max(floor) };
     let level = f32::from(level);

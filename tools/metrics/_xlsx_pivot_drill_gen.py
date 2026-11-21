@@ -17,6 +17,11 @@ import win32com.client
 
 FONTS = [("cal", "Calibri"), ("ari", "Arial"), ("msp", "ＭＳ Ｐゴシック"), ("yu", "游ゴシック"), ("mei", "メイリオ")]
 SIZES = [9, 10, 11, 12, 14, 16, 18, 20]
+# OXI_DRILL_FONTS="tag:Face,tag:Face" and OXI_DRILL_SIZES="8,13,15" widen the sweep.
+if os.environ.get("OXI_DRILL_FONTS"):
+    FONTS = [tuple(item.split(":", 1)) for item in os.environ["OXI_DRILL_FONTS"].split(",")]
+if os.environ.get("OXI_DRILL_SIZES"):
+    SIZES = [int(v) for v in os.environ["OXI_DRILL_SIZES"].split(",")]
 # CompactRowIndent per arm; OXI_DRILL_INDENTS="2,3" adds arms (drill on only)
 # named <font><size>_i<n>_d.
 INDENTS = [int(v) for v in os.environ.get("OXI_DRILL_INDENTS", "1").split(",")]
