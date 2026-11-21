@@ -2958,7 +2958,13 @@ fn plain_line(color: &str, width: i64) -> oxicells_core::ir::ShapeLine {
 pub(crate) fn cell_text(value: &CellValue, style: &CellStyle) -> String {
     match value {
         CellValue::Empty => String::new(),
-        CellValue::String(text) => text.clone(),
+        // Text wears the format's text section (its fourth, or a lone one
+        // holding `@`): blind-B `423-16`'s headings are `\ \ @`, two spaces
+        // ahead of every word, and drew 8 pixels left of Excel without it.
+        CellValue::String(text) => match style.number_format.as_deref() {
+            Some(code) => oxicells_calc::format_text(text, code),
+            None => text.clone(),
+        },
         CellValue::Utf16(units) => String::from_utf16_lossy(units),
         CellValue::Boolean(true) => "TRUE".to_string(),
         CellValue::Boolean(false) => "FALSE".to_string(),
