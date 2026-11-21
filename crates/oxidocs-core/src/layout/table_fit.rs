@@ -175,7 +175,14 @@ impl<'a> TableFitLayouter<'a> {
                 // anchor, 3400 twips, default margins): Word's cell text starts at
                 // 354.7, Oxi's at 359.3 on every row of both tables (+4.6); the
                 // lane beside the table was one character too wide in turn.
-                let right_pad = if !crate::env_flag!("OXI_FLOAT_RIGHT_PAD_DISABLE") {
+                // OXI_FLOAT_RIGHT_EDGE (2026-11-21): now opt-in (OXI_FLOAT_RIGHT_PAD=1). Word sets
+                // the right-aligned float's outer box flush with the reference edge: blind-A
+                // ja/creative__13152ea1 (compat 15, tblW auto, cellMar 99, grid 5394) rules
+                // 269.0 / 538.3 against the 538.6 margin, Oxi 263.9 / 533.6 with the pad;
+                // probexfloattbl (tblW 3400, Word PDF re-exported 2026-11-21) rules 354.0 /
+                // 524.0 for a 524.4 edge, cell text 354.7 -- within 0.4 either way, so it
+                // never told the pad apart.
+                let right_pad = if std::env::var("OXI_FLOAT_RIGHT_PAD").map_or(false, |v| v == "1") {
                     table.style.default_cell_margins.as_ref().and_then(|m| m.left).unwrap_or(5.4)
                 } else { 0.0 };
                 match h_align.as_str() {
