@@ -6708,6 +6708,81 @@ mod windows_draw {
                         }
                         None => (text, placed),
                     };
+                    // A number Excel cannot show whole in its cell is never cut:
+                    // under General it gives up decimal places until the number
+                    // fits (blind-B `47933`: 38708.81605 shows as 38708.82 in a
+                    // 61px column), then turns to the exponent; under any other
+                    // format, and when nothing fits, the cell fills with `#`
+                    // (blind-B `262-17`'s dates in narrow columns).
+                    let text = match cell.value {
+                        CellValue::Number(value)
+                            if !cell.style.wrap_text
+                                && !cell.style.shrink_to_fit
+                                && cell.runs.is_empty() =>
+                        {
+                            let measure = |line: &str| -> i32 {
+                                let held = wide(line);
+                                let mut measured = SIZE::default();
+                                if held.len() > 1
+                                    && GetTextExtentPoint32W(dc, &held[..held.len() - 1], &mut measured)
+                                        .as_bool()
+                                {
+                                    measured.cx
+                                } else {
+                                    0
+                                }
+                            };
+                            let room = area.right - area.left;
+                            if measure(&text) <= room {
+                                text
+                            } else {
+                                let general = cell
+                                    .style
+                                    .number_format
+                                    .as_deref()
+                                    .is_none_or(|code| code.eq_ignore_ascii_case("General"));
+                                let mut shown = None;
+                                if general {
+                                    let decimals = text
+                                        .split_once('.')
+                                        .map(|(_, tail)| tail.chars().take_while(char::is_ascii_digit).count())
+                                        .unwrap_or(0);
+                                    for k in (0..decimals).rev() {
+                                        let code = if k == 0 {
+                                            "0".to_string()
+                                        } else {
+                                            format!("0.{}", "#".repeat(k))
+                                        };
+                                        let held = oxicells_core::format_number(value, &code);
+                                        let held = held.trim_end_matches('.').to_string();
+                                        if measure(&held) <= room {
+                                            shown = Some(held);
+                                            break;
+                                        }
+                                    }
+                                    if shown.is_none() {
+                                        for k in (0..=5).rev() {
+                                            let code = if k == 0 {
+                                                "0E+00".to_string()
+                                            } else {
+                                                format!("0.{}E+00", "#".repeat(k))
+                                            };
+                                            let held = oxicells_core::format_number(value, &code);
+                                            if measure(&held) <= room {
+                                                shown = Some(held);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                shown.unwrap_or_else(|| {
+                                    let one = measure("#").max(1);
+                                    "#".repeat((room / one).max(1) as usize)
+                                })
+                            }
+                        }
+                        _ => text,
+                    };
                     // The lines to draw: the cell's own breaks, and where it
                     // wraps, the breaks the row's height was measured with.
                     let lines = super::wrapped_lines(
