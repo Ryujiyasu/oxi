@@ -250,8 +250,50 @@ fn table_paragraphs_are_numbered_and_a_trailing_table_gets_a_final_paragraph() {
     apply(&mut m, &Edit::InsertText { at: Pos::body(2, 2), text: "!".into() }).unwrap();
     apply(&mut m, &Edit::InsertText { at: Pos::body(3, 0), text: "after".into() }).unwrap();
     assert_eq!(texts(&m), vec!["before", "c1", "c2!", "after"]);
-    // Paragraphs in different containers do not join.
-    assert!(apply(&mut m, &Edit::Delete { from: Pos::body(0, 2), to: Pos::body(1, 1) }).is_err());
+    // Paragraphs in different containers do not join: a range from the
+    // body into a cell deletes in each and keeps the table.
+    apply(&mut m, &Edit::Delete { from: Pos::body(0, 2), to: Pos::body(1, 1) }).unwrap();
+    assert_eq!(texts(&m), vec!["be", "1", "c2!", "after"]);
+}
+
+fn cell_doc() -> DocxModel {
+    let cell = |ps: &[&str]| CellItem::Cell(Cell {
+        props: None,
+        content: ps.iter().map(|t| para(vec![run(t, &[])], None)).collect(),
+        attrs: vec![],
+    });
+    let row = |a: &[&str], b: &[&str]| RowItem::Row(Row { props_ex: None, props: None, cells: vec![cell(a), cell(b)], attrs: vec![], props_after_cells: false });
+    let table = Block::Table(Table { props: Props::new("w:tblPr"), grid: None, rows: vec![row(&["a1"], &["b1", "b1x"]), row(&["a2"], &["b2"])] });
+    doc(vec![
+        para(vec![run("one", &[])], None),
+        para(vec![run("two", &[])], None),
+        table,
+        para(vec![run("three", &[])], None),
+    ])
+}
+
+#[test]
+fn a_selection_from_the_body_into_a_table_clears_the_cells_it_covers_and_keeps_the_rows() {
+    let mut m = cell_doc();
+    assert_eq!(texts(&m), vec!["one", "two", "a1", "b1", "b1x", "a2", "b2", "three"]);
+    // From "o|ne" to "a|2": the body keeps "o", the first row's cells are
+    // emptied (one paragraph each), the last cell keeps its tail.
+    apply(&mut m, &Edit::Delete { from: Pos::body(0, 1), to: Pos::body(5, 1) }).unwrap();
+    assert_eq!(texts(&m), vec!["o", "", "", "2", "b2", "three"]);
+}
+
+#[test]
+fn a_selection_from_a_cell_out_of_the_table_keeps_the_text_after_it() {
+    let mut m = cell_doc();
+    apply(&mut m, &Edit::Delete { from: Pos::body(6, 1), to: Pos::body(7, 2) }).unwrap();
+    assert_eq!(texts(&m), vec!["one", "two", "a1", "b1", "b1x", "a2", "b", "ree"]);
+}
+
+#[test]
+fn typing_over_a_selection_across_cells_puts_the_text_in_the_first() {
+    let mut m = cell_doc();
+    apply(&mut m, &Edit::Replace { from: Pos::body(2, 1), to: Pos::body(4, 2), text: "Z".into() }).unwrap();
+    assert_eq!(texts(&m), vec!["one", "two", "aZ", "x", "a2", "b2", "three"]);
 }
 
 #[test]
