@@ -26374,7 +26374,8 @@ cells={} pitch={:.2} text={:?}",
         let language = language.or(self.default_east_asia_lang.as_deref());
         if self.compat_mode < 15 || !self.compat_mode_explicit || !self.compress_punctuation
             || !matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
-            || (para.style.snap_to_grid && grid_char_pitch.is_some())
+            || (para.style.snap_to_grid && grid_char_pitch.is_some()
+                && crate::env_flag!("OXI_CELL_GRID_CAPACITY_DISABLE"))
             || !language.map_or(unset_ja, |lang| lang.eq_ignore_ascii_case("ja") || lang.to_ascii_lowercase().starts_with("ja-"))
             || (!kinsoku::is_cjk(next) && next != '\u{2610}')
             || kinsoku::cell_yaku_type_a(next) || kinsoku::cell_yaku_type_b(next)
@@ -26392,7 +26393,18 @@ cells={} pitch={:.2} text={:?}",
                 && (kinsoku::cell_yaku_type_a(ch) || kinsoku::cell_yaku_type_b(ch)) { k += 1; }
         }
         if last == Some('\u{3000}') || last.is_some_and(kinsoku::cell_yaku_type_b) { return 0.0; }
-        let cell_tw = (font_size * 20.0).round() as i32;
+        // OXI_CELL_GRID_CAPACITY (2026-11-21, default ON, opt-out _DISABLE): a character-grid
+        // cell takes the same table, in GRID cells. `_pb_kinsoku_oikomi_gen.py gen_cell` with
+        // GRID=1 (one-cell table, ＭＳ 明朝 10.5, linesAndChars charSpace 6338 = 12.05 cells,
+        // compat 15, compressPunctuation, jc both): a plain glyph is kept at 6 / 8 / 9pt of
+        // overflow with 1 / 2 / 3 marks (0.502 / 0.728 / 0.802 x 12.05) and wrapped at 7 / 9 /
+        // 10; Oxi gave the grid nothing and wrapped past 5pt. blind-A ja/reports__136d1ce5 p1
+        // «…比べて 3.2％上昇したことは評価でき» (37 cells, one ，): Word keeps «き».
+        let cell_pt = match grid_char_pitch {
+            Some(p) if p > 0.0 && para.style.snap_to_grid && !crate::env_flag!("OXI_CELL_GRID_CAPACITY_DISABLE") => p,
+            _ => font_size,
+        };
+        let cell_tw = (cell_pt * 20.0).round() as i32;
         Self::modern_punctuation_capacity_tw(n, k, cell_tw, false, Some(cell_tw / 2)) as f32 / 20.0
     }
 
