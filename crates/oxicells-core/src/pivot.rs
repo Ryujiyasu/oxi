@@ -127,6 +127,23 @@ pub struct PivotSpec {
     /// empty for one a macro made.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub part: String,
+    /// `showDrill`: the compact form's expand/collapse buttons (on unless
+    /// the file says 0).
+    #[serde(default = "yes")]
+    pub show_drill: bool,
+    /// `CompactRowIndent`: indent levels per row field in the compact form.
+    /// The file's `indent` attribute is this less one (Excel writes
+    /// indent="0" for 1, nothing for 2, "2" for 3; measured).
+    #[serde(default = "two")]
+    pub compact_indent: u32,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn two() -> u32 {
+    2
 }
 
 impl PivotSpec {
@@ -397,6 +414,8 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
         show_col_stripes: false,
         created: false,
         part: String::new(),
+        show_drill: true,
+        compact_indent: 2,
     };
     let mut field = None::<usize>;
     let mut next_field = 0usize;
@@ -419,6 +438,8 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
                     spec.row_grand_totals = is_true(attr(&e, "rowGrandTotals"), true);
                     table_compact = is_true(attr(&e, "compact"), true);
                     spec.col_grand_totals = is_true(attr(&e, "colGrandTotals"), true);
+                    spec.show_drill = is_true(attr(&e, "showDrill"), true);
+                    spec.compact_indent = attr(&e, "indent").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1) + 1;
                 }
                 "location" => {
                     let (r0, c0, r1, c1) = range(&attr(&e, "ref")?)?;
@@ -1591,6 +1612,8 @@ pub fn spec_for_new(new: &NewPivot, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui)
         show_col_stripes: false,
         created: false,
         part: String::new(),
+        show_drill: true,
+        compact_indent: 1,
     }
 }
 
@@ -1684,10 +1707,15 @@ fn table_xml(spec: &PivotSpec, cache_id: u32, grid: &PivotGrid, header_rows: usi
         cols.push(None);
     }
     let mut x = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<pivotTableDefinition xmlns=\"{MAIN_NS}\" name=\"{}\" cacheId=\"{cache_id}\"{} applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" applyPatternFormats=\"0\" applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"1\" dataCaption=\"{}\" updatedVersion=\"8\" minRefreshableVersion=\"3\" useAutoFormatting=\"1\" itemPrintTitles=\"1\" createdVersion=\"8\" indent=\"0\" outline=\"1\" outlineData=\"1\" multipleFieldFilters=\"0\"><location ref=\"{}:{}\" firstHeaderRow=\"{first_header}\" firstDataRow=\"{header_rows}\" firstDataCol=\"1\"{}/>",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<pivotTableDefinition xmlns=\"{MAIN_NS}\" name=\"{}\" cacheId=\"{cache_id}\"{} applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" applyPatternFormats=\"0\" applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"1\" dataCaption=\"{}\" updatedVersion=\"8\" minRefreshableVersion=\"3\" useAutoFormatting=\"1\" itemPrintTitles=\"1\" createdVersion=\"8\" indent=\"{}\" outline=\"1\" outlineData=\"1\" multipleFieldFilters=\"0\"><location ref=\"{}:{}\" firstHeaderRow=\"{first_header}\" firstDataRow=\"{header_rows}\" firstDataCol=\"1\"{}/>",
         esc(&spec.name),
-        if data_on_rows { " dataOnRows=\"1\"" } else { "" },
+        format!(
+            "{}{}",
+            if data_on_rows { " dataOnRows=\"1\"" } else { "" },
+            if spec.show_drill { "" } else { " showDrill=\"0\"" }
+        ),
         esc(spec.data_caption.as_deref().unwrap_or("値")),
+        spec.compact_indent.saturating_sub(1),
         a1(top, spec.origin.1),
         a1(top + height.max(1) - 1, spec.origin.1 + width.max(1) - 1),
         if pages > 0 { format!(" rowPageCount=\"{pages}\" colPageCount=\"1\"") } else { String::new() }
@@ -2121,6 +2149,8 @@ mod tests {
             show_col_stripes: false,
             created: false,
             part: String::new(),
+            show_drill: true,
+            compact_indent: 2,
         };
         let grid = compute(&spec, &get, Ui::English);
         assert_eq!(grid.kinds.len(), grid.cells.len());

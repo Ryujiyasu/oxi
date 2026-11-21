@@ -2110,6 +2110,51 @@ pub(crate) fn indent_level(sheet: &oxicells_core::ir::Sheet) -> f32 {
         .unwrap_or(INDENT)
 }
 
+/// Where a compact pivot's expand/collapse button stands and how far it
+/// pushes a label, in 96-dpi pixels from the cell's left edge.
+///
+/// Measured on 40 fonts x sizes (`_xlsx_pivot_drill_gen.py`, Calibri, Arial,
+/// ＭＳ Ｐゴシック, 游ゴシック, メイリオ at 9-20pt, CompactRowIndent 1-3, read by
+/// `_xlsx_pivot_drill_boxes.py`):
+/// - the box is square, `2*floor((row-2)/4)+1` pixels for a row of `row`
+///   (15 -> 7, 18..21 -> 9, 22..25 -> 11 ... 44 -> 21); rows of 16 and 17
+///   still take 9;
+/// - level L's box stands `L * step` right of level 0's, where `step` is the
+///   indent (CompactRowIndent x U, U three spaces of the first font) or, if
+///   that is less, a floor M; CompactRowIndent 0 stacks them all at level 0;
+/// - every label moves right by `b0 + size - 1 + L * (step - indent)` from
+///   where it stands with the buttons off, buttoned or not.
+///
+/// Hypothesis, fitted not closed: `b0 = space + 2` (17 of 40 arms exact,
+/// none off by more than two) and `M = U + ceil(size / 2)` (21 exact, none
+/// off by more than one), space = U / 3; what moves the rest is the face,
+/// not the size, and no width of the face tried (digit, space) closes it.
+pub(crate) struct DrillPlace {
+    pub left: f32,
+    pub size: f32,
+    pub shift: f32,
+}
+
+pub(crate) fn drill_place(level_px: f32, row_px: f32, level: u8, indent: u8) -> DrillPlace {
+    let space = (level_px / 3.0).round();
+    let row = row_px.round();
+    let size = if row < 16.0 {
+        2.0 * ((row - 2.0) / 4.0).floor() + 1.0
+    } else {
+        (2.0 * ((row - 2.0) / 4.0).floor() + 1.0).max(9.0)
+    };
+    let b0 = space + 2.0;
+    let floor = 3.0 * space + ((size + 1.0) / 2.0).floor();
+    let indent_px = f32::from(indent) * 3.0 * space;
+    let step = if indent == 0 { 0.0 } else { indent_px.max(floor) };
+    let level = f32::from(level);
+    DrillPlace {
+        left: b0 + level * step,
+        size,
+        shift: b0 + size - 1.0 + level * (step - indent_px),
+    }
+}
+
 /// How far this cell's text is pushed in from the edge it sits against.
 pub(crate) fn indent_px(style: &CellStyle, level: f32) -> f32 {
     level * style.indent as f32
@@ -3705,6 +3750,40 @@ mod windows_draw {
         // A sheet writes RRGGBB; GDI wants BGR.
         let (r, g, b) = ((value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF);
         COLORREF(b << 16 | g << 8 | r)
+    }
+
+    /// A compact pivot's expanded-item button, as Excel draws it (read off
+    /// its pictures pixel by pixel): a square with its corners cut, top and
+    /// left edges #AAB5C9, right and bottom #8A9EBF, the inside shaded
+    /// corner to corner from #EBEDED to #D8D8D8, and a #3D4E7C minus across
+    /// the middle, two pixels in from either side.
+    unsafe fn drill_button(dc: HDC, left: i32, top: i32, size: i32) {
+        if size < 5 {
+            return;
+        }
+        let last = size - 1;
+        let light = colour(Some("AAB5C9"), 0xAAB5C9);
+        let dark = colour(Some("8A9EBF"), 0x8A9EBF);
+        for i in 1..last {
+            let _ = SetPixelV(dc, left + i, top, light);
+            let _ = SetPixelV(dc, left, top + i, light);
+            let _ = SetPixelV(dc, left + last, top + i, dark);
+            let _ = SetPixelV(dc, left + i, top + last, dark);
+        }
+        let span = (2 * (size - 3)).max(1) as f32;
+        let (from, to) = ([0xEBu8, 0xED, 0xED], [0xD8u8, 0xD8, 0xD8]);
+        for y in 1..last {
+            for x in 1..last {
+                let t = ((x - 1) + (y - 1)) as f32 / span;
+                let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round() as u32;
+                let (r, g, b) = (mix(from[0], to[0]), mix(from[1], to[1]), mix(from[2], to[2]));
+                let _ = SetPixelV(dc, left + x, top + y, COLORREF(b << 16 | g << 8 | r));
+            }
+        }
+        let minus = colour(Some("3D4E7C"), 0x3D4E7C);
+        for x in 2..=size - 3 {
+            let _ = SetPixelV(dc, left + x, top + last / 2, minus);
+        }
     }
 
     /// Measures a digit of the workbook's standard font, which is the unit a
@@ -6834,6 +6913,19 @@ mod windows_draw {
                         super::indent_room(&cell.style, super::indent_level(sheet));
                     area.left += (before * scale).round() as i32;
                     area.right -= (after * scale).round() as i32;
+                    // A compact pivot's expand/collapse button, and the label
+                    // standing clear of it.
+                    if let Some((level, button, indent)) = cell.style.pivot_drill {
+                        let row_px = (box_.bottom - box_.top) as f32 / scale;
+                        let place = super::drill_place(super::indent_level(sheet), row_px, level, indent);
+                        area.left += (place.shift * scale).round() as i32;
+                        if button {
+                            let size = (place.size * scale).round() as i32;
+                            let left = box_.left + (place.left * scale).round() as i32;
+                            let top = box_.top + ((box_.bottom - box_.top) - size) / 2;
+                            drill_button(dc, left, top, size);
+                        }
+                    }
 
                     // A cell told to shrink to fit is drawn smaller until its
                     // text fits, and the size it settles on is not a scaling

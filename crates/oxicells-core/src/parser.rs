@@ -2316,6 +2316,7 @@ fn resolve_xf_style(xf: &XfRecord, stylesheet: &StyleSheet) -> CellStyle {
         reading_order: xf.reading_order,
         quote_prefix: xf.quote_prefix,
         pivot_button: xf.pivot_button,
+        pivot_drill: None,
         unlocked: xf.unlocked,
         formula_hidden: xf.formula_hidden,
         border_top: border.top.clone(),

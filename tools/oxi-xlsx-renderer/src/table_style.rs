@@ -359,6 +359,12 @@ pub(crate) fn with_pivot_styles(
             .map(|i| i + 1)
             .unwrap_or(first_table_row);
         let grand_col = spec.cols.iter().any(Option::is_some) && spec.col_grand_totals;
+        // The compact form's buttons: an item with items under it has one,
+        // and once any has, every item label stands clear of them (measured,
+        // `_xlsx_pivot_drill_gen.py`).
+        let drills = spec.show_drill
+            && spec.row_layout == pivot::RowLayout::Compact
+            && grid.kinds.iter().any(|k| matches!(k, RowKind::Item { leaf: false, .. }));
         let last_row = rows as u32 - 1;
         let last_col = width as u32 - 1;
         for (i, kind) in grid.kinds.iter().enumerate() {
@@ -459,17 +465,25 @@ pub(crate) fn with_pivot_styles(
                 // A page field's button is written on its name and drawn on the
                 // item beside it (p08: `pivotButton` on A1, the arrow in B1).
                 let page_button = (*kind == RowKind::Page).then_some(j == 1);
+                let drill = match kind {
+                    RowKind::Item { level, leaf } if drills && j == 0 => {
+                        Some((*level as u8, !*leaf, spec.compact_indent.min(255) as u8))
+                    }
+                    _ => None,
+                };
                 match row.cells.iter_mut().find(|cell| cell.col == col) {
                     Some(cell) => {
                         apply(&mut cell.style, &layer);
                         if let Some(button) = page_button {
                             cell.style.pivot_button = button;
                         }
+                        cell.style.pivot_drill = drill;
                     }
                     None => {
                         let mut dressed = CellStyle::default();
                         apply(&mut dressed, &layer);
                         dressed.pivot_button = page_button.unwrap_or(false);
+                        dressed.pivot_drill = drill;
                         row.cells.push(oxicells_core::ir::Cell {
                             col,
                             value: CellValue::Empty,

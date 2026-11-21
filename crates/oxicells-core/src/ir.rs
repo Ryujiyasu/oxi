@@ -2430,6 +2430,12 @@ pub struct CellStyle {
     /// drawn as the filter button is.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pivot_button: bool,
+    /// A compact pivot item's label among the expand/collapse buttons:
+    /// (its level, whether it has a button of its own, the table's
+    /// CompactRowIndent). Laid on by the renderer from the pivot's own
+    /// definition, never read from or written to a file.
+    #[serde(skip)]
+    pub pivot_drill: Option<(u8, bool, u8)>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_top: Option<BorderLine>,
     #[serde(skip_serializing_if = "Option::is_none")]
