@@ -1004,6 +1004,104 @@ pub fn edit_xlsx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+#[cfg(feature = "suite")]
+fn pivot_ui(ui: Option<String>) -> oxicells_core::pivot::Ui {
+    if ui.as_deref().is_some_and(|v| v.starts_with("en")) {
+        oxicells_core::pivot::Ui::English
+    } else {
+        oxicells_core::pivot::Ui::Japanese
+    }
+}
+
+/// The pivot tables a workbook defines: name, sheet, where it stands, its
+/// source, and which source fields sit on rows, columns, pages and values.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn list_xlsx_pivots(data: &[u8]) -> Result<JsValue, JsError> {
+    let list: Vec<serde_json::Value> = oxicells_core::pivot::read_pivots(data)
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.name, "sheet": p.sheet,
+                "origin": [p.origin.0, p.origin.1], "extent": [p.extent.0, p.extent.1],
+                "source_sheet": p.source_sheet,
+                "source": [p.source.0, p.source.1, p.source.2, p.source.3],
+                "fields": p.field_names,
+                "rows": p.rows, "cols": p.cols,
+                "pages": p.pages.iter().map(|(f, _)| f).collect::<Vec<_>>(),
+                "data": p.data.iter().map(|d| serde_json::json!({"name": d.name, "field": d.field})).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    serde_wasm_bindgen::to_value(&list).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Refresh every pivot table from its source, as Excel's Refresh All does,
+/// and return the saved workbook. `ui` is the language the captions are in
+/// (`"ja"` by default, `"en"`).
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn refresh_xlsx_pivots(data: &[u8], ui: Option<String>) -> Result<Vec<u8>, JsError> {
+    let mut editor = oxicells_core::XlsxEditor::new(data).map_err(|e| JsError::new(&e.to_string()))?;
+    editor.refresh_pivots(pivot_ui(ui));
+    editor.save().map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// A pivot table to create, from JavaScript. Fields count the source range's
+/// columns from zero; rows and columns count from zero.
+#[cfg(feature = "suite")]
+#[derive(Deserialize)]
+struct JsNewPivot {
+    name: String,
+    source_sheet: String,
+    /// [first row, first column, last row, last column], header row first.
+    source: [u32; 4],
+    target_sheet: String,
+    /// [row, column] of the table's top-left; page rows stand above it.
+    at: [u32; 2],
+    #[serde(default)]
+    rows: Vec<usize>,
+    #[serde(default)]
+    cols: Vec<usize>,
+    #[serde(default)]
+    pages: Vec<usize>,
+    /// [[field, "sum" | "count" | "average" | "max" | "min"], ...]
+    data: Vec<(usize, String)>,
+}
+
+/// Create a pivot table and return the saved workbook. Its cells are written
+/// at once; Excel rebuilds it from its definition when it opens the file.
+#[cfg(feature = "suite")]
+#[wasm_bindgen]
+pub fn add_xlsx_pivot(data: &[u8], spec: JsValue, ui: Option<String>) -> Result<Vec<u8>, JsError> {
+    use oxicells_core::pivot::Aggregate;
+    let spec: JsNewPivot = serde_wasm_bindgen::from_value(spec).map_err(|e| JsError::new(&e.to_string()))?;
+    let how = |name: &str| match name {
+        "count" => Aggregate::Count,
+        "average" => Aggregate::Average,
+        "max" => Aggregate::Max,
+        "min" => Aggregate::Min,
+        "product" => Aggregate::Product,
+        _ => Aggregate::Sum,
+    };
+    let new = oxicells_core::pivot::NewPivot {
+        name: spec.name,
+        source_sheet: spec.source_sheet,
+        source: (spec.source[0], spec.source[1], spec.source[2], spec.source[3]),
+        target_sheet: spec.target_sheet,
+        at: (spec.at[0], spec.at[1]),
+        rows: spec.rows,
+        cols: spec.cols,
+        pages: spec.pages,
+        data: spec.data.iter().map(|(f, name)| (*f, how(name))).collect(),
+    };
+    let mut editor = oxicells_core::XlsxEditor::new(data).map_err(|e| JsError::new(&e.to_string()))?;
+    editor
+        .add_pivot(&new, pivot_ui(ui))
+        .ok_or_else(|| JsError::new("pivot source or target sheet not found"))?;
+    editor.save().map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Save a workbook a VBA run has changed back into the .xlsx it came from.
 ///
 /// `run_spreadsheet_vba` hands back the whole workbook rather than a list of
