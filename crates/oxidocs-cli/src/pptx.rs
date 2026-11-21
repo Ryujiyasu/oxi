@@ -323,6 +323,95 @@ impl Outline {
         }
     }
 
+    /// Cubics along the ellipse about (`cx`, `cy`) with radii `rx`, `ry`,
+    /// from parametric angle `from` through `sweep` radians, a quarter turn
+    /// at most per cubic. The pen is assumed to be at the start already.
+    fn arc(ops: &mut Vec<GeomCmd>, (cx, cy): (f32, f32), (rx, ry): (f32, f32), from: f32, sweep: f32) {
+        let steps = (sweep.abs() / std::f32::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+        let step = sweep / steps as f32;
+        // Handle length for a step of the unit circle.
+        let k = 4.0 / 3.0 * (step / 4.0).tan();
+        for i in 0..steps {
+            let (a, b) = (from + step * i as f32, from + step * (i + 1) as f32);
+            let (sa, ca, sb, cb) = (a.sin(), a.cos(), b.sin(), b.cos());
+            ops.push(GeomCmd::CubicTo(
+                cx + rx * (ca - k * sa),
+                cy + ry * (sa + k * ca),
+                cx + rx * (cb + k * sb),
+                cy + ry * (sb - k * cb),
+                cx + rx * cb,
+                cy + ry * sb,
+            ));
+        }
+    }
+
+    /// `wedgeEllipseCallout` (ECMA-376 presetShapeDefinitions): the ellipse,
+    /// opened 11 degrees either side of the direction of the point, with the
+    /// two ends joined to the point.
+    fn ellipse_callout(w: f32, h: f32, tip: (f32, f32)) -> Outline {
+        let (rx, ry) = (w / 2.0, h / 2.0);
+        let (dx, dy) = (tip.0 - rx, tip.1 - ry);
+        // The direction of the point in the ellipse's own parameter: the
+        // spec's `at2 (dxPos * h) (dyPos * w)`.
+        let toward = (dy * w).atan2(dx * h);
+        let gap = 11f32.to_radians();
+        let from = toward + gap;
+        let mut ops = vec![GeomCmd::MoveTo(rx + rx * from.cos(), ry + ry * from.sin())];
+        Outline::arc(&mut ops, (rx, ry), (rx, ry), from, std::f32::consts::TAU - 2.0 * gap);
+        ops.push(GeomCmd::LineTo(tip.0, tip.1));
+        ops.push(GeomCmd::Close);
+        Outline { ops, open: false }
+    }
+
+    /// `wedgeRectCallout` and `wedgeRoundRectCallout`: the box, with a wedge
+    /// to the point leaving the side the point is furthest past, between the
+    /// 2/12 and 5/12 marks of that side (7/12 and 10/12 when the point is on
+    /// the far half). `r` is the corner radius, 0 for the square one.
+    fn rect_callout(w: f32, h: f32, tip: (f32, f32), r: f32) -> Outline {
+        let (dx_pos, dy_pos) = (tip.0 - w / 2.0, tip.1 - h / 2.0);
+        // Which way the point leaves: across or up/down, with the box squared.
+        let across = (dx_pos * h / w).abs() > dy_pos.abs();
+        let (x1, x2) = if dx_pos > 0.0 { (w * 7.0 / 12.0, w * 10.0 / 12.0) } else { (w * 2.0 / 12.0, w * 5.0 / 12.0) };
+        let (y1, y2) = if dy_pos > 0.0 { (h * 7.0 / 12.0, h * 10.0 / 12.0) } else { (h * 2.0 / 12.0, h * 5.0 / 12.0) };
+        let r = r.clamp(0.0, w.min(h) / 2.0);
+        let wedge_top = !across && dy_pos <= 0.0;
+        let wedge_right = across && dx_pos > 0.0;
+        let wedge_bottom = !across && dy_pos > 0.0;
+        let wedge_left = across && dx_pos <= 0.0;
+        const K: f32 = 0.552_284_8;
+        let mut ops = vec![GeomCmd::MoveTo(r, 0.0)];
+        if wedge_top {
+            ops.extend([GeomCmd::LineTo(x1, 0.0), GeomCmd::LineTo(tip.0, tip.1), GeomCmd::LineTo(x2, 0.0)]);
+        }
+        ops.push(GeomCmd::LineTo(w - r, 0.0));
+        if r > 0.0 {
+            ops.push(GeomCmd::CubicTo(w - r + r * K, 0.0, w, r - r * K, w, r));
+        }
+        if wedge_right {
+            ops.extend([GeomCmd::LineTo(w, y1), GeomCmd::LineTo(tip.0, tip.1), GeomCmd::LineTo(w, y2)]);
+        }
+        ops.push(GeomCmd::LineTo(w, h - r));
+        if r > 0.0 {
+            ops.push(GeomCmd::CubicTo(w, h - r + r * K, w - r + r * K, h, w - r, h));
+        }
+        if wedge_bottom {
+            ops.extend([GeomCmd::LineTo(x2, h), GeomCmd::LineTo(tip.0, tip.1), GeomCmd::LineTo(x1, h)]);
+        }
+        ops.push(GeomCmd::LineTo(r, h));
+        if r > 0.0 {
+            ops.push(GeomCmd::CubicTo(r - r * K, h, 0.0, h - r + r * K, 0.0, h - r));
+        }
+        if wedge_left {
+            ops.extend([GeomCmd::LineTo(0.0, y2), GeomCmd::LineTo(tip.0, tip.1), GeomCmd::LineTo(0.0, y1)]);
+        }
+        ops.push(GeomCmd::LineTo(0.0, r));
+        if r > 0.0 {
+            ops.push(GeomCmd::CubicTo(0.0, r - r * K, r - r * K, 0.0, r, 0.0));
+        }
+        ops.push(GeomCmd::Close);
+        Outline { ops, open: false }
+    }
+
     /// The outline's on-curve points on the page, in drawing order.
     fn points(&self, at: &Placement) -> Vec<(f64, f64)> {
         self.ops
@@ -497,6 +586,19 @@ fn outlines(shape: &Shape) -> Option<Vec<(Outline, PartFill)>> {
                     PartFill::DarkenLess,
                 ),
             ])
+        }
+        // The point of a callout is placed by adj1 / adj2, as fractions of
+        // the width and height from the centre.
+        "wedgeEllipseCallout" | "wedgeRectCallout" | "wedgeRoundRectCallout" => {
+            let tip = (
+                w / 2.0 + w * adjust(shape, "adj1", -20_833.0),
+                h / 2.0 + h * adjust(shape, "adj2", 62_500.0),
+            );
+            match shape.shape_type.as_deref() {
+                Some("wedgeEllipseCallout") => one(Outline::ellipse_callout(w, h, tip)),
+                Some("wedgeRectCallout") => one(Outline::rect_callout(w, h, tip, 0.0)),
+                _ => one(Outline::rect_callout(w, h, tip, short * adjust(shape, "adj3", 16_667.0))),
+            }
         }
         "line" | "straightConnector1" => Some(vec![(
             Outline { ops: vec![GeomCmd::MoveTo(0.0, 0.0), GeomCmd::LineTo(w, h)], open: true },
@@ -1379,6 +1481,53 @@ mod tests {
         assert!(parts[0].0.open);
         let at = Placement { x: 0.0, y: 0.0, w: 100.0, h: 40.0, flip_h: false, flip_v: false, sin: 0.0, cos: 1.0 };
         assert_eq!(parts[0].0.points(&at), vec![(0.0, 0.0), (25.0, 0.0), (25.0, 40.0), (100.0, 40.0)]);
+    }
+
+    fn callout(kind: &str, adj1: f32, adj2: f32) -> Outline {
+        let mut shape = Shape { width: 200.0, height: 100.0, shape_type: Some(kind.to_string()), ..Default::default() };
+        shape.adjustments.insert("adj1".to_string(), adj1);
+        shape.adjustments.insert("adj2".to_string(), adj2);
+        outlines(&shape).unwrap().remove(0).0
+    }
+
+    fn has_point(outline: &Outline, (x, y): (f32, f32)) -> bool {
+        outline.ops.iter().any(|op| matches!(*op, GeomCmd::LineTo(px, py) if (px - x).abs() < 1e-3 && (py - y).abs() < 1e-3))
+    }
+
+    #[test]
+    fn a_callout_reaches_its_point() {
+        // adj1 / adj2 are fractions of the box from its centre.
+        for kind in ["wedgeEllipseCallout", "wedgeRectCallout", "wedgeRoundRectCallout"] {
+            let outline = callout(kind, -20_833.0, 62_500.0);
+            assert!(has_point(&outline, (100.0 - 41.666, 112.5)), "{kind}");
+            assert!(!outline.open);
+        }
+    }
+
+    #[test]
+    fn an_oval_callout_opens_toward_its_point() {
+        // Point straight below: the arc starts and ends 11 degrees either side
+        // of the bottom, so both ends sit low on the ellipse, either side of
+        // the centre line.
+        let outline = callout("wedgeEllipseCallout", 0.0, 80_000.0);
+        let GeomCmd::MoveTo(x0, y0) = outline.ops[0] else { panic!() };
+        let end = outline.ops.iter().rev().find_map(|op| match *op {
+            GeomCmd::CubicTo(.., x, y) => Some((x, y)),
+            _ => None,
+        });
+        let (x1, y1) = end.unwrap();
+        assert!(y0 > 95.0 && y1 > 95.0, "{y0} {y1}");
+        assert!((x0 - 100.0) * (x1 - 100.0) < 0.0, "{x0} {x1}");
+    }
+
+    #[test]
+    fn a_square_callout_takes_its_wedge_from_the_side_the_point_is_past() {
+        // Far to the right and only a little down: the wedge leaves the right
+        // side, between 7/12 and 10/12 of its height.
+        let outline = callout("wedgeRectCallout", 80_000.0, 10_000.0);
+        assert!(has_point(&outline, (200.0, 100.0 * 7.0 / 12.0)));
+        assert!(has_point(&outline, (200.0, 100.0 * 10.0 / 12.0)));
+        assert!(!has_point(&outline, (200.0 * 7.0 / 12.0, 100.0)));
     }
 
     #[test]

@@ -2280,6 +2280,14 @@ pub struct ShapeLayout {
 /// What it does NOT do yet is the part that needs a device: which face GDI
 /// hands back for a name, and the ink. Both are the caller's, through
 /// `metrics`.
+/// A width no line reaches: what `wrap="none"` breaks a paragraph at.
+const NO_WRAP_PT: f32 = 1.0e6;
+
+/// `OXI_NOWRAP_DISABLE` wraps a `wrap="none"` body at its box again.
+fn nowrap_on() -> bool {
+    std::env::var("OXI_NOWRAP_DISABLE").is_err()
+}
+
 pub fn layout_text_shape(
     metrics: &dyn FaceMetrics,
     shape: &crate::ir::Shape,
@@ -2376,8 +2384,12 @@ pub fn layout_text_shape(
         }
 
         let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
+        // `wrap="none"`: a line ends only at a paragraph end or an `a:br`,
+        // and runs out past the box instead. Alignment still takes the box's
+        // width, so a centred line overhangs both sides evenly.
+        let break_w = if shape.wrap_text || !nowrap_on() { geom.first_width } else { NO_WRAP_PT };
         let broken = break_paragraph(
-            metrics, &text, fs, &family, bold, italic, geom.first_width, &para.runs,
+            metrics, &text, fs, &family, bold, italic, break_w, &para.runs,
         );
         let broken = match broken {
             Some(b) => b,
@@ -2534,8 +2546,30 @@ mod shape_tests {
         s.t_ins = 0.0;
         s.b_ins = 0.0;
         s.anchor = anchor.map(|a| a.to_string());
+        // A derived default says false; the parser's default is true.
+        s.wrap_text = true;
         s.content = ShapeContent::TextBox { paragraphs: vec![] };
         s
+    }
+
+    /// `wrap="none"` keeps a paragraph on one line however narrow the box,
+    /// and a centred line overhangs both sides by the same amount.
+    #[test]
+    fn a_body_that_does_not_wrap_keeps_its_line_past_the_box() {
+        let p = [para("Hello wide world", 12.0)];
+        let wrapped = layout_text_shape(&TableMetrics, &shape(30.0, 100.0, None), &p, &[], &[], "Arial");
+        assert!(wrapped.lines.len() > 1);
+
+        let mut narrow = shape(30.0, 100.0, None);
+        narrow.wrap_text = false;
+        let got = layout_text_shape(&TableMetrics, &narrow, &p, &[], &[], "Arial");
+        assert_eq!(got.lines.len(), 1);
+        assert_eq!(got.lines[0].text, "Hello wide world");
+
+        let mut centred = para("Hello wide world", 12.0);
+        centred.alignment = Some(crate::ir::SlideAlignment::Center);
+        let got = layout_text_shape(&TableMetrics, &narrow, &[centred], &[], &[], "Arial");
+        assert!(got.lines[0].x < 0.0, "a centred line hangs out to the left too: {:?}", got.lines[0].x);
     }
 
     #[test]
@@ -3077,6 +3111,12 @@ pub fn geom_text_insets(
         // The corner radius, less what the arc gives back.
         Some("roundRect") => {
             let idx = ss * adj("adj", 16_667.0) / 100_000.0 * 0.29289;
+            (idx, idx, idx, idx)
+        }
+        // The same corner, under its third adjustment (the first two place
+        // the point). A square callout keeps the whole box.
+        Some("wedgeRoundRectCallout") => {
+            let idx = ss * adj("adj3", 16_667.0) / 100_000.0 * 0.29289;
             (idx, idx, idx, idx)
         }
         _ => (0.0, 0.0, 0.0, 0.0),

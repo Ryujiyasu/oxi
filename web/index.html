@@ -5116,7 +5116,12 @@ function buildSlideContent(container, slide, slideIdx, scale, editable) {
         }
         if (shape.border_color) {
             const bw = shape.border_width || 1;
-            div.style.border = (bw * scale) + 'px solid #' + shape.border_color;
+            const stroke = (bw * scale) + 'px solid #' + shape.border_color;
+            // A level or upright line is a box with no inside: one side of it
+            // is the line, where all four would draw it twice as thick.
+            if (shape.height === 0) div.style.borderTop = stroke;
+            else if (shape.width === 0) div.style.borderLeft = stroke;
+            else div.style.border = stroke;
             div.style.boxSizing = 'border-box';
         }
         // `a:xfrm/@rot` turns the shape about its own centre, and the flips

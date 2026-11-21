@@ -353,13 +353,15 @@ fn name_rank(platform: u16, language: u16) -> u8 {
 /// Two nameIDs carry a family: 1 is the legacy family, which on Apple's system
 /// fonts has the weight welded on (`Hiragino Sans W3`), and 16 is the
 /// typographic family (`Hiragino Sans`), which is what a document usually
-/// names. Both are returned so either spelling resolves.
+/// names. Both are returned so either spelling resolves, followed by the
+/// names the face gives itself in other languages.
 fn read_name_table(table: &[u8]) -> Option<(Vec<String>, String)> {
     let count = be16(table, 2)? as usize;
     let storage = be16(table, 4)? as usize;
     // (nameID) -> (rank, text)
     let mut best: std::collections::HashMap<u16, (u8, String)> =
         std::collections::HashMap::new();
+    let mut localized: Vec<String> = Vec::new();
     for i in 0..count.min(4096) {
         let rec = 6 + i * 12;
         let platform = be16(table, rec)?;
@@ -389,6 +391,14 @@ fn read_name_table(table: &[u8]) -> Option<(Vec<String>, String)> {
             continue;
         }
         let rank = name_rank(platform, language);
+        // A family's name in another language is what a document written in
+        // that language names it by: Japanese PowerPoint writes
+        // `BIZ UDPゴシック`, whose English record says `BIZ UDPGothic`.
+        // Only the Windows records are kept; the Macintosh ones are in legacy
+        // encodings this reader does not decode.
+        if platform == 3 && language != 1033 && matches!(name_id, 1 | 16) && !localized.contains(&text) {
+            localized.push(text.clone());
+        }
         match best.get(&name_id) {
             Some((seen, _)) if *seen >= rank => {}
             _ => {
@@ -407,6 +417,12 @@ fn read_name_table(table: &[u8]) -> Option<(Vec<String>, String)> {
     }
     if families.is_empty() {
         return None;
+    }
+    // After the preferred names, so `family` stays the English one.
+    for text in localized {
+        if !families.contains(&text) {
+            families.push(text);
+        }
     }
     // Subfamily: typographic (17) if the face declares one, else legacy (2).
     let subfamily = best
@@ -475,11 +491,28 @@ mod tests {
             families.contains(&"Hiragino Sans W3".to_string()),
             "the legacy family must stay reachable too, got {families:?}"
         );
-        assert!(
-            !families.iter().any(|f| f.contains('ヒ')),
-            "a localized name must not become the family, got {families:?}"
+        assert_eq!(
+            families.last().map(String::as_str),
+            Some("ヒラギノ角ゴシック W3"),
+            "a localized name is only an alias, after the English ones, got {families:?}"
         );
         assert_eq!(subfamily, "W3");
+    }
+
+    /// Japanese Office writes the family in Japanese (`BIZ UDPゴシック`), and
+    /// the face says so in its langID 1041 records. Indexing only the English
+    /// name left every such run on a stand-in face on a machine that has the
+    /// face itself.
+    #[test]
+    fn a_family_is_found_by_its_name_in_another_language() {
+        let table = name_table(&[
+            (3, 1033, 1, "BIZ UDPGothic"),
+            (3, 1041, 1, "BIZ UDPゴシック"),
+            (3, 1033, 2, "Regular"),
+            (3, 1041, 2, "Regular"),
+        ]);
+        let (families, _) = read_name_table(&table).expect("names");
+        assert_eq!(families, vec!["BIZ UDPGothic".to_string(), "BIZ UDPゴシック".to_string()]);
     }
 
     /// A plain Windows font carries one family on platform 3 and nothing else;
