@@ -4407,7 +4407,19 @@ impl<'a> LineBreaker<'a> {
                             } else {
                                 0.0
                             };
-                            0.5 * (cell + s1350_track) - char_width
+                            // OXI_S1337_OWN_WIDTH (2026-11-22, default ON, opt-out _DISABLE): the glyph
+                            // keeps ITS OWN advance plus half the grid increment -- half the cell only
+                            // when it is exactly half an em (the ＭＳ 明朝 digits S1337 measured).
+                            // `_pb_grid_autospace_gen.py` b1 arms (balance, Century digits 5.84):
+                            // «1 2 3» advance 6.71 / 6.59 at charSpace 6338 (5.84 + 0.77), 5.64 / 5.52 at
+                            // -2048; the half cell (6.02) put the run 1.77pt short and the gap after
+                            // it shrank by that much.
+                            if !crate::env_flag!("OXI_S1337_OWN_WIDTH_DISABLE") {
+                                let cell0 = if (s1347_scale - 1.0).abs() > 1e-6 { s1347_scale * font_size } else { font_size };
+                                0.5 * (cell - cell0 + s1350_track)
+                            } else {
+                                0.5 * (cell + s1350_track) - char_width
+                            }
                         } else {
                             char_space_pt
                         }
