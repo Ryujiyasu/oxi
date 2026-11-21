@@ -27,6 +27,11 @@ impl<'a> PageLayouter<'a> {
     /// in that number, and there is exactly one caller, so a scalar in/out is
     /// enough (S912's `page_numbers` recomputes the same walk as a post-pass).
     pub(super) fn layout_page(&self, page: &Page, logical: &mut u32, ir_index: usize, column_search: &mut GridColumnSearch, references: &mut style_pagination::StylePagination, source_anchors: &mut FloatSourceAnchors) -> Vec<LayoutPage> {
+        // OXI_GRID_AUTOSPACE: the section's charSpace widens the CJK/Latin auto-space.
+        super::AUTOSPACE_GRID_CS.with(|c| c.set(match (page.grid_char_pitch, page.grid_char_cw_ratio) {
+            (Some(p), Some(r)) if p > 0.0 && r > 0.0 => p - p / r,
+            _ => 0.0,
+        }));
         // S1294: the logical number of this IR page's FIRST layout page, and
         // the base such that logical(i) = logical_base + i. A restart moves the
         // base rather than every page's number.

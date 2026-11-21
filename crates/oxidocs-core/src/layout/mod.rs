@@ -4152,6 +4152,8 @@ thread_local! {
     /// OXI_VERT_TCY: set while an eaVert text box lays out its columns -- the
     /// measured scope (a tbRl body section is not probed).
     pub(crate) static IN_VERT_TEXT_BOX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// OXI_GRID_AUTOSPACE: the current section's linesAndChars charSpace in points (0 off-grid).
+    pub(crate) static AUTOSPACE_GRID_CS: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
     /// S816 (2026-07-13): true once the document's FIRST IR section has been
     /// laid out. The page-top space-before suppression keys on
     /// `!pages.is_empty() || !current_elements.is_empty()`, but those vecs are
@@ -6304,6 +6306,14 @@ impl LayoutEngine {
                 && !crate::env_flag!("OXI_AUTOSPACE_TEXT_SCALE_DISABLE") => basis * w / 100.0,
             _ => basis,
         };
+        // OXI_GRID_AUTOSPACE (2026-11-21, default ON, opt-out _DISABLE): on a linesAndChars grid
+        // the gap is a quarter of the GRID CELL, not of the em. `_pb_grid_autospace_gen.py`
+        // (ＭＳ 明朝 / Century 10.5, jc left, doNotCompress, balance on and off, «あいう[1|12|123|
+        // 3.2|abc|A]えお»): Word's ideograph->Latin gap 2.42 / 2.66 / 2.78 / 3.02-3.14 for charSpace
+        // -2048 / 0 / 2048 / 6338 = cell / 4 (10.08 / 10.56 / 11.04 / 12.00); Oxi 2.63 throughout.
+        let basis = if !crate::env_flag!("OXI_GRID_AUTOSPACE_DISABLE") {
+            basis + AUTOSPACE_GRID_CS.with(|c| c.get())
+        } else { basis };
         s1175_autospace(basis, cs, balance)
     }
 
