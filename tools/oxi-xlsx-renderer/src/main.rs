@@ -461,9 +461,23 @@ fn row_pixels(
         // own 24 because its baseline is the deeper one. The pixel off the
         // Japanese baseline is measured, not derived — a row set in that face
         // ALONE keeps it, and a row that mixes the two does not.
+        // An English-mode Excel (OXI_XLSX_THEME_SCRIPT=Latn) builds only the
+        // FIRST line with the companion, and from it takes only the descent:
+        // `_xlsx_companion_latn.py` wraps Arial 10 / Century 9 / Times 12 to
+        // 1-4 lines under a Calibri and a 游ゴシック Normal, and all 24 rows read
+        // `own_base + max(own descent, its descent)` for the first line and the
+        // face's own line for every one after (Arial under Calibri: 18 + 17n;
+        // under 游ゴシック: 21 + 17n; Times under 游ゴシック 24 + 21n). Blind
+        // `57262`'s four-line Arial heading is 69, not 4 x 19.
+        let latin_mode = oxicells_core::parser::theme_script_is_latin();
+        let mut rest_px = None;
         let font_px = match (sheet.normal_font.as_ref(), line_box_of(face, size, cell.style.bold)) {
             (Some((normal, normal_size)), Some((own, own_base))) if !speaks_japanese(face) => {
                 match line_box_of(normal, *normal_size, false) {
+                    Some((theirs, their_base)) if latin_mode => {
+                        rest_px = Some(own);
+                        own_base + (own - own_base).max(theirs - their_base)
+                    }
                     Some((theirs, their_base)) => {
                         let base = own_base.max(their_base.saturating_sub(1));
                         let under = (own - own_base).max(theirs - their_base);
@@ -595,7 +609,10 @@ fn row_pixels(
                 }
             }
         }
-        let contribution = (lines * font_px as u32) as f32;
+        let contribution = match rest_px {
+            Some(rest) if lines > 0 => (font_px as u32 + (lines - 1) * rest as u32) as f32,
+            _ => (lines * font_px as u32) as f32,
+        };
         raise = raise.max(contribution);
     }
     // Every column swallowed by a merge and nothing written in the row: the
