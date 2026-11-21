@@ -7208,6 +7208,30 @@ impl<'a> TableFitLayouter<'a> {
                                                 {
                                                     ((line_x + buf_w + cw) - effective_wrap) > pool
                                                 }
+                                            } else if !self.compress_punctuation
+                                                && would_overflow_natural
+                                                && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                                                && self.compat_mode >= 15
+                                                && !crate::env_flag!("OXI_CELL_DNC_JOINT_DISABLE")
+                                            {
+                                                // OXI_CELL_DNC_JOINT (2026-11-22, default ON, opt-out _DISABLE): a
+                                                // doNotCompress justified cell still gives up half of each CJK/Latin
+                                                // auto-space gap before it wraps (S1175's joint rule; the 約物 stay).
+                                                // Faithful slice of blind-A ja/reports__136d1ce5 ($N/g136: its styles,
+                                                // linesAndChars 360/6338, doNotCompress; one-cell table of the doc's
+                                                // first 考察 line, width swept 0.1pt): Word keeps «き» down to 1.49pt
+                                                // of overflow (one «て3» joint, gap 3.0) and wraps at 1.59; Oxi wrapped
+                                                // at any overflow.
+                                                let mut joints = 0.0f32;
+                                                let mut prev: Option<char> = None;
+                                                for c in current_line_chars.iter().chain(buf_chars.iter()).map(|c| c.ch).chain(std::iter::once(ch)) {
+                                                    if let Some(p) = prev {
+                                                        if self.doc_autospace() && is_cjk_latin_joint(p, c) { joints += 1.0; }
+                                                    }
+                                                    prev = Some(c);
+                                                }
+                                                let gap = self.natural_autospace_after('0', &run.style, &para.style, font_size, cs);
+                                                ((line_x + buf_w + cw) - effective_wrap) > joints * 0.5 * gap
                                             } else if legacy_cell_break
                                                 && !s1174_yakucomp
                                                 && would_overflow_natural
