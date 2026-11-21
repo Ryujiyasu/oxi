@@ -2788,7 +2788,8 @@ fn main() {
         std::process::exit(1);
     };
     let banded = with_band_cells(sheet);
-    let sheet = &banded;
+    let styled = table_style::with_table_styles(&banded, &workbook.theme_colors);
+    let sheet = &styled;
 
     // A column is measured in digits of the workbook's standard font, so the
     // sheet cannot be laid out until that digit has been measured.
@@ -3092,12 +3093,17 @@ pub(crate) const FILTER_BUTTON_FOOT: i32 = 2;
 /// row of a sheet's own `<autoFilter>` — the procurement lists filter that
 /// way, with no table in sight.
 pub(crate) fn has_filter_button(sheet: &Sheet, row: u32, column: u32) -> bool {
+    // A table shows buttons only while it keeps its `<autoFilter>`: blind
+    // `58723`, `54925` and `40757` are tables without one, and Excel draws
+    // their headings bare. A column can hide its own button as well.
     let in_a_table = sheet.tables.iter().any(|table| {
         table.header_rows > 0
+            && table.show_auto_filter
             && row >= table.start_row
             && row < table.start_row + table.header_rows
             && column >= table.start_col
             && column <= table.end_col
+            && !table.hidden_filter_buttons.contains(&(column - table.start_col))
     });
     let filtered = sheet.auto_filter.as_ref().is_some_and(|filter| {
         row == filter.start_row && column >= filter.start_col && column <= filter.end_col
@@ -3106,7 +3112,7 @@ pub(crate) fn has_filter_button(sheet: &Sheet, row: u32, column: u32) -> bool {
 }
 
 pub(crate) fn dressed_by_table(sheet: &Sheet, row: u32, column: u32) -> Option<Dressed> {
-    let table = sheet.tables.iter().find(|table| {
+    let table = sheet.tables.iter().filter(|table| !table_style::known(table)).find(|table| {
         row >= table.start_row
             && row <= table.end_row
             && column >= table.start_col
@@ -3342,6 +3348,7 @@ pub(crate) enum Align {
 
 #[cfg(windows)]
 mod dwrite_draw;
+mod table_style;
 
 #[cfg(windows)]
 mod windows_draw {
@@ -7707,7 +7714,7 @@ mod windows_draw {
 
             // A table is ruled along every one of its rows, over the fills
             // and under whatever hangs above the grid.
-            for table in &sheet.tables {
+            for table in sheet.tables.iter().filter(|table| !super::table_style::known(table)) {
                 let Some(shade) = table.rule.as_deref() else {
                     continue;
                 };
@@ -7959,8 +7966,13 @@ mod tests {
         let elbow = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)];
         let bent = |rotation: i32, flip_h: bool, flip_v: bool| {
             let shape = Shape {
+                transform_offset: None,
                 geometry: "bentConnector2".to_string(),
+                text_box: false,
                 fill: None,
+                fill_theme: None,
+                fill_legacy_color_index: None,
+                fill_brightness: None,
                 line: None,
                 adjusts: Vec::new(),
                 path: None,
