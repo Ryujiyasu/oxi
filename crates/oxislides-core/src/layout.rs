@@ -3113,6 +3113,14 @@ pub fn geom_text_insets(
             let idx = ss * adj("adj", 16_667.0) / 100_000.0 * 0.29289;
             (idx, idx, idx, idx)
         }
+        // The cloud's text rect is fixed in its 21600-unit square:
+        // l 2977, t 3262, r 17087, b 17337 (presetShapeDefinitions).
+        Some("cloud") | Some("cloudCallout") if std::env::var("OXI_CLOUDTEXT_DISABLE").is_err() => (
+            width * 2977.0 / 21600.0,
+            width * (21600.0 - 17087.0) / 21600.0,
+            height * 3262.0 / 21600.0,
+            height * (21600.0 - 17337.0) / 21600.0,
+        ),
         // The same corner, under its third adjustment (the first two place
         // the point). A square callout keeps the whole box.
         Some("wedgeRoundRectCallout") => {
