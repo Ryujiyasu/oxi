@@ -38,34 +38,38 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 
 chrome.tabs.onRemoved.addListener(tabId => { forget(tabId); });
 
-// XLL add-ins: the editor page asks (through the content script) for an
-// XLL's functions or a call; the local oxi-xll-host answers over native
-// messaging. One host process per extension, kept while requests come.
-const NATIVE_HOST = 'com.oxi.xll_host';
-let port = null;
+// XLL and COM add-ins: the editor page asks (through the content script)
+// for a call; the local oxi-xll-host (XLL) or oxi-com-host (COM Automation
+// add-ins) answers over native messaging. One host process of each kind,
+// kept while requests come.
+const NATIVE_HOSTS = { xll: 'com.oxi.xll_host', com: 'com.oxi.com_host' };
+const ports = {};
 const waiting = new Map();
 let nextId = 1;
-function nativePort() {
-  if (port) return port;
-  port = chrome.runtime.connectNative(NATIVE_HOST);
+function nativePort(kind) {
+  if (ports[kind]) return ports[kind];
+  const port = chrome.runtime.connectNative(NATIVE_HOSTS[kind]);
   port.onMessage.addListener(answer => {
     const reply = waiting.get(answer.id);
     if (reply) { waiting.delete(answer.id); reply(answer); }
   });
   port.onDisconnect.addListener(() => {
-    const why = chrome.runtime.lastError?.message ?? 'the XLL host went away';
-    for (const reply of waiting.values()) reply({ error: why });
-    waiting.clear();
-    port = null;
+    const why = chrome.runtime.lastError?.message ?? `the ${kind} host went away`;
+    for (const [id, reply] of waiting) if (reply.kind === kind) { waiting.delete(id); reply({ error: why }); }
+    delete ports[kind];
   });
+  ports[kind] = port;
   return port;
 }
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
-  if (message?.oxi !== 'xll') return false;
+  if (message?.oxi !== 'xll' && message?.oxi !== 'com') return false;
+  const kind = message.oxi;
   const id = nextId++;
-  waiting.set(id, answer => { const { id: _, ...rest } = answer; reply(rest); });
+  const done = answer => { const { id: _, ...rest } = answer; reply(rest); };
+  done.kind = kind;
+  waiting.set(id, done);
   try {
-    nativePort().postMessage({ ...message.request, id });
+    nativePort(kind).postMessage({ ...message.request, id });
   } catch (error) {
     waiting.delete(id);
     reply({ error: String(error) });

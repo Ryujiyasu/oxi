@@ -16,8 +16,8 @@ chrome.runtime.sendMessage({ oxi: 'editor-open' }, answer => {
 window.addEventListener('message', event => {
   const data = event.data;
   if (event.source !== window || !data || data.oxiXll !== 'request') return;
-  const { id, oxiXll: _, ...request } = data;
-  chrome.runtime.sendMessage({ oxi: 'xll', request }, answer => {
+  const { id, oxiXll: _, kind = 'xll', ...request } = data;
+  chrome.runtime.sendMessage({ oxi: kind === 'com' ? 'com' : 'xll', request }, answer => {
     window.postMessage({ oxiXll: 'reply', id, ...(answer ?? { error: chrome.runtime.lastError?.message ?? 'no answer' }) }, '*');
   });
 });

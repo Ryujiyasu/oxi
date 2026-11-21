@@ -45,3 +45,13 @@ a range argument is given as rows of values (`[[1, 2], [3, 4]]`) and reaches
 the add-in as Excel passes it (an `xltypeMulti`, or an FP12 for `K%`).
 `tools/metrics/_xll_native_messaging_check.py` exercises the host's side of the
 exchange; `tools/metrics/_xll_host_check.py` holds its answers against Excel.
+
+## COM Automation add-ins
+
+`OxiCom.call(progId, method, args)` calls a COM Automation add-in's method
+through [`oxi-com-host`](../../tools/oxi-com-host) (native-messaging host
+`com.oxi.com_host`, registered by the same `install.ps1`), the way Excel calls
+one from a formula: `IDispatch::Invoke` with `DISPATCH_METHOD`, a range as a
+two-dimensional SAFEARRAY of values. `tools/metrics/_com_host_check.py` holds
+the host against Excel with a test add-in it registers for the duration of
+the run and removes again.

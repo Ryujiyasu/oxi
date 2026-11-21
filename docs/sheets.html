@@ -1938,6 +1938,10 @@ window.OxiXll = (() => {
     waiting.set(id, answer => (answer.error ? reject(new Error(answer.error)) : resolve(answer)));
     window.postMessage({ oxiXll: 'request', id, ...request }, '*');
   });
+  window.OxiCom = {
+    // A COM Automation add-in's method by its ProgID: OxiCom.call('My.AddIn', 'Fn', [1, [[2, 3]]]).
+    call: async (progId, fn, args = []) => (await ask({ kind: 'com', progId, function: fn, args })).value,
+  };
   return {
     get available() { return document.documentElement.dataset.oxiOfficeExtension === 'on'; },
     list: async xll => (await ask({ xll, op: 'list' })).functions,
