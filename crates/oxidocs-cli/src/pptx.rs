@@ -345,6 +345,38 @@ impl Outline {
         }
     }
 
+    /// DrawingML `arcTo` from `pen`: the ellipse with radii `wr`, `hr` that
+    /// passes through the pen at angle `st` (degrees, as seen, clockwise from
+    /// +x), swept `sw` degrees. Returns where the pen ends.
+    fn arc_to(ops: &mut Vec<GeomCmd>, pen: (f32, f32), (wr, hr): (f32, f32), st: f32, sw: f32) -> (f32, f32) {
+        // A seen angle to the ellipse's parameter.
+        let param = |deg: f32| {
+            let a = deg.to_radians();
+            (wr * a.sin()).atan2(hr * a.cos())
+        };
+        let from = param(st);
+        let mut sweep = param(st + sw) - from;
+        if sw.abs() >= 360.0 {
+            sweep = std::f32::consts::TAU.copysign(sw);
+        } else if sw > 0.0 && sweep < 0.0 {
+            sweep += std::f32::consts::TAU;
+        } else if sw < 0.0 && sweep > 0.0 {
+            sweep -= std::f32::consts::TAU;
+        }
+        let centre = (pen.0 - wr * from.cos(), pen.1 - hr * from.sin());
+        Outline::arc(ops, centre, (wr, hr), from, sweep);
+        let to = from + sweep;
+        (centre.0 + wr * to.cos(), centre.1 + hr * to.sin())
+    }
+
+    /// A circle of radius `r` about `centre`.
+    fn ellipse_at(centre: (f32, f32), r: f32) -> Outline {
+        let mut ops = vec![GeomCmd::MoveTo(centre.0 + r, centre.1)];
+        Outline::arc(&mut ops, centre, (r, r), 0.0, std::f32::consts::TAU);
+        ops.push(GeomCmd::Close);
+        Outline { ops, open: false }
+    }
+
     /// `wedgeEllipseCallout` (ECMA-376 presetShapeDefinitions): the ellipse,
     /// opened 11 degrees either side of the direction of the point, with the
     /// two ends joined to the point.
@@ -461,6 +493,9 @@ enum PartFill {
     None,
     Shape,
     DarkenLess,
+    /// Filled like the shape, never outlined: the box of a `callout1` or an
+    /// `accentCallout1`, whose only lines are the leader and the accent bar.
+    ShapeUnstroked,
 }
 
 /// `darkenLess` scales each channel to 80%.
@@ -600,6 +635,44 @@ fn outlines(shape: &Shape) -> Option<Vec<(Outline, PartFill)>> {
                 _ => one(Outline::rect_callout(w, h, tip, short * adjust(shape, "adj3", 16_667.0))),
             }
         }
+        // The line callouts: a box, and a leader through two to four points
+        // given as (y, x) pairs of fractions of the height and width,
+        // counted from the top-left corner (presetShapeDefinitions). The
+        // `accent` ones add an upright bar at the first point's x; the
+        // `border` ones outline the box.
+        kind if line_callout(kind).is_some() => {
+            let (points, accent, border) = line_callout(kind)?;
+            let defaults: &[f32] = match points {
+                2 => &[18_750.0, -8_333.0, 112_500.0, -38_333.0],
+                3 => &[18_750.0, -8_333.0, 18_750.0, -16_667.0, 112_500.0, -46_667.0],
+                _ => &[18_750.0, -8_333.0, 18_750.0, -16_667.0, 100_000.0, -16_667.0, 112_963.0, -8_333.0],
+            };
+            let at = |i: usize| -> (f32, f32) {
+                let y = h * adjust(shape, &format!("adj{}", 2 * i + 1), defaults[2 * i]);
+                let x = w * adjust(shape, &format!("adj{}", 2 * i + 2), defaults[2 * i + 1]);
+                (x, y)
+            };
+            let leader: Vec<GeomCmd> = (0..points)
+                .map(|i| {
+                    let (x, y) = at(i);
+                    if i == 0 { GeomCmd::MoveTo(x, y) } else { GeomCmd::LineTo(x, y) }
+                })
+                .collect();
+            let mut parts = vec![
+                (Outline::rect(w, h), if border { PartFill::Shape } else { PartFill::ShapeUnstroked }),
+                // Before the bar, so line ends go on the leader.
+                (Outline { ops: leader, open: true }, PartFill::None),
+            ];
+            if accent {
+                let x = at(0).0;
+                parts.push((
+                    Outline { ops: vec![GeomCmd::MoveTo(x, 0.0), GeomCmd::LineTo(x, h)], open: true },
+                    PartFill::None,
+                ));
+            }
+            Some(parts)
+        }
+        "cloud" | "cloudCallout" => Some(cloud(shape, w, h)),
         "line" | "straightConnector1" => Some(vec![(
             Outline { ops: vec![GeomCmd::MoveTo(0.0, 0.0), GeomCmd::LineTo(w, h)], open: true },
             PartFill::None,
@@ -624,6 +697,215 @@ fn outlines(shape: &Shape) -> Option<Vec<(Outline, PartFill)>> {
         }
         _ => None,
     }
+}
+
+/// The on/off runs of an `a:prstDash` preset, in multiples of the line
+/// width. Read out of PowerPoint's own PDFs by the native renderer
+/// (tools/oxi-pptx-renderer `dash_pattern`): the `d` operator divided by the
+/// stroke width gives the same small integers at every width. The `sys*`
+/// presets are the ECMA-376 values.
+fn dash_pattern(preset: &str) -> Option<&'static [f64]> {
+    Some(match preset {
+        "dot" => &[1.0, 3.0],
+        "dash" => &[4.0, 3.0],
+        "lgDash" => &[8.0, 3.0],
+        "dashDot" => &[4.0, 3.0, 1.0, 3.0],
+        "lgDashDot" => &[8.0, 3.0, 1.0, 3.0],
+        "lgDashDotDot" => &[8.0, 3.0, 1.0, 3.0, 1.0, 3.0],
+        "sysDash" => &[3.0, 1.0],
+        "sysDot" => &[1.0, 1.0],
+        "sysDashDot" => &[3.0, 1.0, 1.0, 1.0],
+        "sysDashDotDot" => &[3.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        _ => return None,
+    })
+}
+
+/// The dashes of a stroked path: each subpath flattened (a curve into 16
+/// chords) and walked with the pattern, which starts afresh on each subpath.
+fn dash_ops(ops: &[PathOp], pattern: &[f64], width: f64) -> Vec<PathOp> {
+    let unit = width.max(0.25);
+    let period: f64 = pattern.iter().sum::<f64>() * unit;
+    if period <= 0.0 {
+        return ops.to_vec();
+    }
+    let mut runs: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut run: Vec<(f64, f64)> = Vec::new();
+    for op in ops {
+        match *op {
+            PathOp::MoveTo(x, y) => {
+                if run.len() > 1 {
+                    runs.push(std::mem::take(&mut run));
+                }
+                run = vec![(x, y)];
+            }
+            PathOp::LineTo(x, y) => run.push((x, y)),
+            PathOp::CurveTo(x1, y1, x2, y2, x, y) => {
+                let Some(&(x0, y0)) = run.last() else { continue };
+                for i in 1..=16 {
+                    let t = f64::from(i) / 16.0;
+                    let u = 1.0 - t;
+                    let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                    run.push((a * x0 + b * x1 + c * x2 + d * x, a * y0 + b * y1 + c * y2 + d * y));
+                }
+            }
+            PathOp::ClosePath => {
+                if let Some(&start) = run.first() {
+                    run.push(start);
+                    if run.len() > 1 {
+                        runs.push(std::mem::take(&mut run));
+                    }
+                    run = vec![start];
+                }
+            }
+        }
+    }
+    if run.len() > 1 {
+        runs.push(run);
+    }
+
+    let mut out = Vec::new();
+    for points in runs {
+        // Position in the pattern: which entry, and how far into it.
+        let (mut entry, mut into) = (0usize, 0.0f64);
+        let mut pen_down = false;
+        for pair in points.windows(2) {
+            let ((ax, ay), (bx, by)) = (pair[0], pair[1]);
+            let len = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+            if len <= 0.0 {
+                continue;
+            }
+            let mut along = 0.0;
+            while along < len {
+                let left = pattern[entry] * unit - into;
+                let step = left.min(len - along);
+                let on = entry % 2 == 0;
+                let (sx, sy) = (ax + (bx - ax) * along / len, ay + (by - ay) * along / len);
+                let (ex, ey) = (ax + (bx - ax) * (along + step) / len, ay + (by - ay) * (along + step) / len);
+                if on {
+                    if !pen_down {
+                        out.push(PathOp::MoveTo(sx, sy));
+                        pen_down = true;
+                    }
+                    out.push(PathOp::LineTo(ex, ey));
+                } else {
+                    pen_down = false;
+                }
+                along += step;
+                into += step;
+                if into >= pattern[entry] * unit - 1e-9 {
+                    entry = (entry + 1) % pattern.len();
+                    into = 0.0;
+                    pen_down = pen_down && entry % 2 == 0;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// For a line callout preset: how many leader points, whether it has the
+/// accent bar, and whether its box is outlined.
+fn line_callout(kind: &str) -> Option<(usize, bool, bool)> {
+    let (stem, n) = kind.split_at(kind.len().checked_sub(1)?);
+    let points = match n {
+        "1" => 2,
+        "2" => 3,
+        "3" => 4,
+        _ => return None,
+    };
+    match stem {
+        "callout" => Some((points, false, false)),
+        "accentCallout" => Some((points, true, false)),
+        "borderCallout" => Some((points, false, true)),
+        "accentBorderCallout" => Some((points, true, true)),
+        _ => None,
+    }
+}
+
+/// `cloud` and `cloudCallout` (presetShapeDefinitions): eleven puffs drawn
+/// as elliptical arcs in a 43200-unit square, the creases between them as
+/// unfilled arcs in the same space, and -- for the callout -- three bubbles
+/// shrinking toward the point at adj1 / adj2.
+fn cloud(shape: &Shape, w: f32, h: f32) -> Vec<(Outline, PartFill)> {
+    // (wR, hR, stAng, swAng), angles in 60000ths of a degree.
+    const PUFFS: [(f32, f32, f32, f32); 11] = [
+        (6753.0, 9190.0, -11_429_249.0, 7_426_832.0),
+        (5333.0, 7267.0, -8_646_143.0, 5_396_714.0),
+        (4365.0, 5945.0, -8_748_475.0, 5_983_381.0),
+        (4857.0, 6595.0, -7_859_164.0, 7_034_504.0),
+        (5333.0, 7273.0, -4_722_533.0, 6_541_615.0),
+        (6775.0, 9220.0, -2_776_035.0, 7_816_140.0),
+        (5785.0, 7867.0, 37_501.0, 6_842_000.0),
+        (6752.0, 9215.0, 1_347_096.0, 6_910_353.0),
+        (7720.0, 10543.0, 3_974_558.0, 4_542_661.0),
+        (4360.0, 5918.0, -16_496_525.0, 8_804_134.0),
+        (4345.0, 5945.0, -14_809_710.0, 9_151_131.0),
+    ];
+    // (start x, start y, wR, hR, stAng, swAng).
+    const CREASES: [(f32, f32, f32, f32, f32, f32); 11] = [
+        (4693.0, 26177.0, 4345.0, 5945.0, 5_204_520.0, 1_585_770.0),
+        (6928.0, 34899.0, 4360.0, 5918.0, 4_416_628.0, 686_848.0),
+        (16478.0, 39090.0, 6752.0, 9215.0, 8_257_449.0, 844_866.0),
+        (28827.0, 34751.0, 6752.0, 9215.0, 387_196.0, 959_901.0),
+        (34129.0, 22954.0, 5785.0, 7867.0, -4_217_541.0, 4_255_042.0),
+        (41798.0, 15354.0, 5333.0, 7273.0, 1_819_082.0, 1_665_090.0),
+        (38324.0, 5426.0, 4857.0, 6595.0, -824_660.0, 891_534.0),
+        (29078.0, 3952.0, 4857.0, 6595.0, -8_950_887.0, 1_091_722.0),
+        (22141.0, 4720.0, 4365.0, 5945.0, -9_809_656.0, 1_061_181.0),
+        (14000.0, 5192.0, 6753.0, 9190.0, -4_002_417.0, 739_161.0),
+        (4127.0, 15789.0, 6753.0, 9190.0, 9_459_261.0, 711_490.0),
+    ];
+    let (sx, sy) = (w / 43200.0, h / 43200.0);
+    let scaled = |ops: Vec<GeomCmd>| -> Vec<GeomCmd> {
+        ops.into_iter()
+            .map(|op| match op {
+                GeomCmd::MoveTo(x, y) => GeomCmd::MoveTo(x * sx, y * sy),
+                GeomCmd::LineTo(x, y) => GeomCmd::LineTo(x * sx, y * sy),
+                GeomCmd::CubicTo(a, b, c, d, x, y) => GeomCmd::CubicTo(a * sx, b * sy, c * sx, d * sy, x * sx, y * sy),
+                GeomCmd::Close => GeomCmd::Close,
+            })
+            .collect()
+    };
+
+    let mut ops = vec![GeomCmd::MoveTo(3900.0, 14370.0)];
+    let mut pen = (3900.0, 14370.0);
+    for &(wr, hr, st, sw) in &PUFFS {
+        pen = Outline::arc_to(&mut ops, pen, (wr, hr), st / 60_000.0, sw / 60_000.0);
+    }
+    ops.push(GeomCmd::Close);
+    let mut parts = vec![(Outline { ops: scaled(ops), open: false }, PartFill::Shape)];
+
+    if shape.shape_type.as_deref() == Some("cloudCallout") {
+        let dx = w * adjust(shape, "adj1", -20_833.0);
+        let dy = h * adjust(shape, "adj2", 62_500.0);
+        let tip = (w / 2.0 + dx, h / 2.0 + dy);
+        // Where the line from the point toward the centre meets the cloud's
+        // ellipse, then the three bubbles spaced along it.
+        let toward = dy.atan2(dx);
+        let (ex, ey) = ((h / 2.0) * toward.cos(), (w / 2.0) * toward.sin());
+        let edge = ey.atan2(ex);
+        let rim = (w / 2.0 + (w / 2.0) * edge.cos(), h / 2.0 + (h / 2.0) * edge.sin());
+        let (gx, gy) = (rim.0 - tip.0, rim.1 - tip.1);
+        let len = (gx * gx + gy * gy).sqrt().max(1e-3);
+        let ss = w.min(h);
+        let step = (len - ss * 6600.0 / 21600.0) / 3.0;
+        let along = |d: f32| (tip.0 + d * gx / len, tip.1 + d * gy / len);
+        for (centre, r) in [
+            (tip, ss * 600.0 / 21600.0),
+            (along(step + ss * 1800.0 / 21600.0), ss * 1200.0 / 21600.0),
+            (along(2.0 * step + ss * 4800.0 / 21600.0), ss * 1800.0 / 21600.0),
+        ] {
+            parts.push((Outline::ellipse_at(centre, r), PartFill::Shape));
+        }
+    }
+
+    let mut creases = Vec::new();
+    for &(x, y, wr, hr, st, sw) in &CREASES {
+        creases.push(GeomCmd::MoveTo(x, y));
+        Outline::arc_to(&mut creases, (x, y), (wr, hr), st / 60_000.0, sw / 60_000.0);
+    }
+    parts.push((Outline { ops: scaled(creases), open: true }, PartFill::None));
+    parts
 }
 
 /// The filled outline of a line end at `tip`, pointing away from `behind`,
@@ -928,7 +1210,33 @@ impl SlideDraw<'_> {
     /// A picture's own border, if it has one.
     fn outline_stroke(&mut self, shape: &Shape, at: &Placement) {
         if let Some(stroke) = Self::stroke_of(shape) {
-            self.path(Outline::rect(shape.width, shape.height).path_ops(at), None, Some(stroke));
+            let dash = self.dash_of(shape);
+            self.stroked(Outline::rect(shape.width, shape.height).path_ops(at), None, Some(stroke), dash);
+        }
+    }
+
+    /// The shape's `a:prstDash` as on/off runs, or None for a solid line. A
+    /// preset with no known pattern is drawn solid and reported.
+    fn dash_of(&mut self, shape: &Shape) -> Option<&'static [f64]> {
+        let preset = shape.border_dash.as_deref().filter(|dash| *dash != "solid")?;
+        let pattern = dash_pattern(preset).filter(|_| std::env::var_os("OXI_PPTXDASH_DISABLE").is_none());
+        if pattern.is_none() {
+            self.census.note(self.slide, "dashed-line");
+        }
+        pattern
+    }
+
+    /// Fill `operations`, then stroke them, broken into dashes when `dash`
+    /// says so. The page model has no dash pattern of its own, so a dashed
+    /// stroke is drawn as its dashes, as `docx-to-pdf` does for borders.
+    fn stroked(&mut self, operations: Vec<PathOp>, fill: Option<Color>, stroke: Option<StrokeStyle>, dash: Option<&[f64]>) {
+        match (stroke, dash) {
+            (Some(stroke), Some(pattern)) => {
+                let dashes = dash_ops(&operations, pattern, stroke.width);
+                self.path(operations, fill, None);
+                self.path(dashes, None, Some(stroke));
+            }
+            (stroke, _) => self.path(operations, fill, stroke),
         }
     }
 
@@ -942,10 +1250,7 @@ impl SlideDraw<'_> {
         if fill.is_none() && stroke.is_none() {
             return;
         }
-        if shape.border_dash.as_deref().is_some_and(|dash| dash != "solid") {
-            // The page model has no dash pattern; the line is drawn solid.
-            self.census.note(self.slide, "dashed-line");
-        }
+        let dash = self.dash_of(shape);
         let Some(parts) = outlines(shape) else {
             let kind = format!("preset:{}", shape.shape_type.as_deref().unwrap_or("?"));
             self.census.note(self.slide, &kind);
@@ -954,18 +1259,23 @@ impl SlideDraw<'_> {
         for (outline, part) in &parts {
             let fill = match (*part, fill, outline.open) {
                 (_, _, true) | (PartFill::None, ..) => None,
-                (PartFill::Shape, fill, _) => fill,
+                (PartFill::Shape | PartFill::ShapeUnstroked, fill, _) => fill,
                 (PartFill::DarkenLess, fill, _) => fill.map(|color| match color {
                     Color::Rgb(r, g, b) => Color::Rgb(r * DARKEN_LESS, g * DARKEN_LESS, b * DARKEN_LESS),
                     other => other,
                 }),
             };
-            self.path(outline.path_ops(at), fill, stroke.clone());
+            let stroke = if *part == PartFill::ShapeUnstroked { None } else { stroke.clone() };
+            self.stroked(outline.path_ops(at), fill, stroke, dash);
         }
 
         // Line ends sit on an open outline's first and last points, pointing
-        // along its first and last segments.
+        // along its first and last segments. A cloud's open outlines are its
+        // creases, which take none.
         let Some(stroke) = stroke else { return };
+        if matches!(shape.shape_type.as_deref(), Some("cloud" | "cloudCallout")) {
+            return;
+        }
         let Some(points) = parts.iter().find(|(outline, _)| outline.open).map(|(outline, _)| outline.points(at)) else {
             if shape.head_end.is_some() || shape.tail_end.is_some() {
                 self.census.note(self.slide, "line-end");
@@ -1528,6 +1838,76 @@ mod tests {
         assert!(has_point(&outline, (200.0, 100.0 * 7.0 / 12.0)));
         assert!(has_point(&outline, (200.0, 100.0 * 10.0 / 12.0)));
         assert!(!has_point(&outline, (200.0 * 7.0 / 12.0, 100.0)));
+    }
+
+    fn preset(kind: &str, adjustments: &[(&str, f32)]) -> Vec<(Outline, PartFill)> {
+        let mut shape = Shape { width: 200.0, height: 100.0, shape_type: Some(kind.to_string()), ..Default::default() };
+        for (name, value) in adjustments {
+            shape.adjustments.insert(name.to_string(), *value);
+        }
+        outlines(&shape).unwrap()
+    }
+
+    #[test]
+    fn a_line_callout_is_a_box_and_a_leader_through_its_points() {
+        let parts = preset("borderCallout1", &[]);
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].1 == PartFill::Shape && !parts[0].0.open);
+        // Defaults: (y 18750, x -8333) to (y 112500, x -38333), in 1/100000.
+        let leader = &parts[1].0;
+        assert!(leader.open);
+        let GeomCmd::MoveTo(x0, y0) = leader.ops[0] else { panic!() };
+        let GeomCmd::LineTo(x1, y1) = leader.ops[1] else { panic!() };
+        assert!((x0 + 16.666).abs() < 1e-2 && (y0 - 18.75).abs() < 1e-2);
+        assert!((x1 + 76.666).abs() < 1e-2 && (y1 - 112.5).abs() < 1e-2);
+    }
+
+    #[test]
+    fn a_plain_callout_box_is_not_outlined_and_an_accent_adds_its_bar() {
+        let parts = preset("accentCallout2", &[]);
+        assert!(parts[0].1 == PartFill::ShapeUnstroked);
+        assert_eq!(parts[1].0.ops.len(), 3, "a callout2 leader has three points");
+        let GeomCmd::MoveTo(x, 0.0) = parts[2].0.ops[0] else { panic!("the bar starts at the top") };
+        assert!((x + 16.666).abs() < 1e-2);
+        assert!(preset("callout3", &[])[1].0.ops.len() == 4);
+    }
+
+    #[test]
+    fn a_cloud_closes_on_itself_and_a_cloud_callout_adds_three_bubbles() {
+        let parts = preset("cloud", &[]);
+        assert_eq!(parts.len(), 2, "the puffs and the creases");
+        // Eleven puffs end where they started, at (3900, 14370) of 43200.
+        let last = parts[0].0.ops.iter().rev().find_map(|op| match *op {
+            GeomCmd::CubicTo(.., x, y) => Some((x, y)),
+            _ => None,
+        });
+        let (x, y) = last.unwrap();
+        assert!((x - 3900.0 * 200.0 / 43200.0).abs() < 0.5, "{x}");
+        assert!((y - 14370.0 * 100.0 / 43200.0).abs() < 0.5, "{y}");
+        assert!(parts[1].0.open && parts[1].1 == PartFill::None);
+
+        let parts = preset("cloudCallout", &[("adj1", 0.0), ("adj2", 100_000.0)]);
+        assert_eq!(parts.len(), 5);
+        // The smallest bubble is on the point, straight below the centre.
+        let GeomCmd::MoveTo(bx, by) = parts[1].0.ops[0] else { panic!() };
+        let r = 100.0 * 600.0 / 21600.0;
+        assert!((bx - (100.0 + r)).abs() < 1e-3 && (by - 150.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_dashed_line_is_drawn_as_its_dashes() {
+        // A 0.75pt "dash" is 3 on, 2.25 off: 21pt holds four dashes.
+        let ops = dash_ops(&[PathOp::MoveTo(0.0, 0.0), PathOp::LineTo(21.0, 0.0)], dash_pattern("dash").unwrap(), 0.75);
+        let starts: Vec<f64> = ops.iter().filter_map(|op| match *op { PathOp::MoveTo(x, _) => Some(x), _ => None }).collect();
+        assert_eq!(starts.len(), 4);
+        assert!((starts[1] - 5.25).abs() < 1e-9);
+        // A dash runs on round a corner instead of starting again there.
+        let corner = dash_ops(
+            &[PathOp::MoveTo(0.0, 0.0), PathOp::LineTo(2.0, 0.0), PathOp::LineTo(2.0, 10.0)],
+            dash_pattern("dash").unwrap(),
+            0.75,
+        );
+        assert!(matches!(corner[..3], [PathOp::MoveTo(..), PathOp::LineTo(..), PathOp::LineTo(..)]));
     }
 
     #[test]
