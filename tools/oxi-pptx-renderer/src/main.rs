@@ -16337,7 +16337,12 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
         }
         let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
         let value = unsafe {
-            let probe_em = advance_probe_em();
+            // S-FAUXUPM: a synthesised bold is set at the em-sized probe.
+            let probe_em = if weight >= 700 {
+                fauxbold_probe_em(family, italic).unwrap_or_else(advance_probe_em)
+            } else {
+                advance_probe_em()
+            };
             let font = CreateFontW(
                 -probe_em,
                 0,
@@ -17316,6 +17321,81 @@ fn needs_faux_bold(family: &str, italic: bool) -> bool {
     got
 }
 
+/// S-FAUXUPM: the probe size a SYNTHESISED bold is measured at -- the face's
+/// own units per em, i.e. PowerPoint sets faux bold at GDI's emboldened widths
+/// in design units.
+///
+/// GDI's synthetic bold is `regular + 1px` per glyph for most faces and
+/// `0.98 x regular + 1px` for a class it narrows (Calibri Light, Gabriola,
+/// Corbel Light, MV Boli, Leelawadee UI Semilight, Paytone One ...). The 1px
+/// makes the ratio depend on the probe size, and PowerPoint's PDF pens land
+/// on the size that equals the em (bold/regular pen sums, 36-150pt):
+///
+///     face                 upm   PowerPoint  GDI@upm  GDI@2048  GDI@16384
+///     DejaVu Math TeX      1000   0.9833     0.9830    0.9814    0.9801
+///     Noto Sans Georgian   1000   0.983      0.9828    0.9814    0.9802
+///     Paytone One (d31)    1000   0.9835     0.9826    0.9814    0.9802
+///     Corbel Light/MV Boli 2048   0.982      0.9815    0.9815    0.9802
+///     Dubai Light/Ink Free 1000   1.002      1.0023    1.0011    1.0001
+///
+/// The break test asked 16384 and kept d31 s16's "involves decorating" on one
+/// line that PowerPoint breaks.
+///
+/// PARKED opt-in (2026-11-21): dev +0.000014 (d31 +0.0024, d44 -0.0027), blind
+/// -0.000002 (deck 35 mixed). The letters land on GDI@upm; the SPACE does not
+/// (PowerPoint's bold space is 0.97-1.01 x GDI's, Bebas Neue 0.975), and d44's
+/// tight 137pt title turns on that. Unpark once the space is derived. `None` when the flag is off or the em is
+/// unreadable; the caller keeps its own probe size then.
+#[cfg(windows)]
+fn fauxbold_probe_em(family: &str, italic: bool) -> Option<i32> {
+    use windows::Win32::Graphics::Gdi::*;
+    if std::env::var("OXI_FAUXUPM_ENABLE").is_err() || !needs_faux_bold(family, italic) {
+        return None;
+    }
+    thread_local! {
+        static SEEN: std::cell::RefCell<std::collections::HashMap<(String, bool), Option<i32>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    let key = (family.to_string(), italic);
+    if let Some(hit) = SEEN.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let (face, weight, italic_r) = styled_face(family, false, italic);
+    let dc = probe_dc();
+    let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
+    let got = unsafe {
+        let font = CreateFontW(
+            -2048,
+            0,
+            0,
+            0,
+            weight,
+            u32::from(italic_r),
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            windows::core::PCWSTR(wide.as_ptr()),
+        );
+        if font.is_invalid() {
+            None
+        } else {
+            let old = SelectObject(dc, font);
+            let head = font_table(dc, b"head");
+            SelectObject(dc, old);
+            let _ = DeleteObject(font);
+            head.and_then(|h| be16(&h, 18))
+                .map(i32::from)
+                .filter(|u| (16..=16384).contains(u))
+        }
+    };
+    SEEN.with(|c| c.borrow_mut().insert(key, got));
+    got
+}
+
 /// A glyph's DESIGN advance in EM units, read out of the font GDI actually
 /// selected -- the answer to "which face is being served under this name?".
 ///
@@ -18046,12 +18126,12 @@ fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
     let key = (family.to_string(), weight, italic);
     let (face, weight, italic) = styled_face(family, bold, italic);
     // A weight GDI only pretends to serve: ask for the face that has it.
-    let (face, weight) = match (weight >= 700)
+    let (face, weight, aliased) = match (weight >= 700)
         .then(|| synthetic_bold_alias(&face, italic))
         .flatten()
     {
-        Some(alias) => (alias, 700),
-        None => (face, weight),
+        Some(alias) => (alias, 700, true),
+        None => (face, weight, false),
     };
     // S-BOLDADV, the break-test half: a bold run served by a non-bold face is
     // measured at that face's own advances, because PowerPoint sets it there.
@@ -18067,6 +18147,13 @@ fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
     } else {
         weight
     };
+    // S-FAUXUPM: a synthesised bold is set at the em-sized probe, see
+    // `fauxbold_probe_em`.
+    let probe_em = if weight >= 700 && !aliased {
+        fauxbold_probe_em(family, italic).unwrap_or(PRECISE_PROBE_EM)
+    } else {
+        PRECISE_PROBE_EM
+    };
     PRECISE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let per_font = cache.entry(key).or_default();
@@ -18076,7 +18163,7 @@ fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
         let wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
         let value = unsafe {
             let font = CreateFontW(
-                -PRECISE_PROBE_EM,
+                -probe_em,
                 0,
                 0,
                 0,
@@ -18103,7 +18190,7 @@ fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
                 if ok {
                     Some(
                         (abc.abcA + abc.abcB as i32 + abc.abcC) as f32
-                            / PRECISE_PROBE_EM as f32,
+                            / probe_em as f32,
                     )
                 } else {
                     None
