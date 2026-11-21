@@ -195,6 +195,9 @@ fs.copyFileSync(path.join(root, 'docs', 'icon-64.png'), path.join(editor, 'icon-
 for (const name of ['orca-plugin.json', 'README.md']) {
   fs.copyFileSync(path.join(here, 'plugin', name), path.join(out, name));
 }
+// Icon, cover and screenshots named in the manifest; the plugin directory
+// shows them. screenshots/ holds the scripts that made them.
+fs.cpSync(path.join(here, 'plugin', 'images'), path.join(out, 'images'), { recursive: true });
 fs.copyFileSync(path.join(root, 'LICENSE'), path.join(out, 'LICENSE'));
 
 let bytes = 0;
