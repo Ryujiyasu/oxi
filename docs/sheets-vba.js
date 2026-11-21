@@ -23,7 +23,8 @@ export function bindSheetVba({engine, capture: captureWorkbook, apply, closed, e
   dialog.innerHTML = `<form method="dialog" class="vba-header"><h2 id="vbaTitle">Run VBA</h2><button id="vbaClose">Close</button></form>
     <p id="vbaScope"></p>
     <label><span id="vbaWorkbookLabel">Workbook</span> <select id="vbaWorkbook"></select></label>
-    <div class="vba-actions"><button id="vbaLoad">Load workbook code</button><button id="vbaExample">Use example</button><button id="vbaExport">Download .bas</button></div>
+    <div class="vba-actions"><button id="vbaLoad">Load workbook code</button><button id="vbaExample">Use example</button><button id="vbaExport">Download .bas</button><button id="vbaAddin">Load add-in (.xlam)</button><button id="vbaAddinCalc" hidden>Recalculate with add-ins</button><input type="file" id="vbaAddinFile" accept=".xlam,.xlsm" hidden></div>
+    <p id="vbaAddins" class="vba-addins"></p>
     <label for="vbaSource" id="vbaSourceLabel">VBA source</label><textarea id="vbaSource" spellcheck="false" autocapitalize="off"></textarea>
     <div class="vba-actions"><label><span id="vbaProcedureLabel">Procedure</span> <input id="vbaProcedure" list="vbaProcedures" autocomplete="off" value="Demo"></label><datalist id="vbaProcedures"></datalist>
     <label><span id="vbaArgumentsLabel">Arguments (JSON array)</span> <input id="vbaArguments" value="[]" spellcheck="false"></label></div>
@@ -48,10 +49,30 @@ export function bindSheetVba({engine, capture: captureWorkbook, apply, closed, e
   let previousSource = EXAMPLE;
   editor.value = EXAMPLE;
   const report = message => { output.textContent = String(message); };
+  // Add-ins (.xlam): their standard modules join the project when code runs,
+  // so their functions and macros are callable, and never when the workbook
+  // is saved -- an add-in stays in its own file, as it does in Excel.
+  let addins = [];
+  const HOST_MODULE = 'Attribute VB_Name = "OxiAddinHost"\nPublic Sub OxiCalculateWithAddins()\n    Application.CalculateFull\nEnd Sub\n';
+  function standardModules(source) {
+    // Modules follow one another, each opening with its Attribute VB_Name line;
+    // document and class modules carry a VERSION header and are left behind
+    // (the open workbook has its own ThisWorkbook and sheets).
+    const parts = source.split(/(?=^(?:VERSION 1\.0 CLASS\r?\n)?Attribute VB_Name = )/m);
+    return parts.filter(part => /^Attribute VB_Name = /.test(part)).join('\n');
+  }
+  const withAddins = () => [editor.value, ...addins.map(addin => addin.source)].join('\n');
+  function showAddins() {
+    const ja = language() === 'ja';
+    el('vbaAddins').textContent = addins.length
+      ? (ja ? 'アドイン: ' : 'Add-ins: ') + addins.map(addin => addin.name).join(', ')
+      : '';
+    el('vbaAddinCalc').hidden = !addins.length;
+  }
   function procedures() {
     try {
       const state = capture();
-      const found = engine.list_spreadsheet_vba_project_procedures(editor.value, state.bytes || new Uint8Array());
+      const found = engine.list_spreadsheet_vba_project_procedures(withAddins(), state.bytes || new Uint8Array());
       el('vbaProcedures').replaceChildren(...found.map(proc => {
         const option = document.createElement('option');
         option.value = proc.name;
@@ -80,7 +101,7 @@ export function bindSheetVba({engine, capture: captureWorkbook, apply, closed, e
   function setBusy(value) {
     busy = value;
     editor.disabled = value;
-    for (const id of ['vbaRun', 'vbaLoad', 'vbaExample', 'vbaExport', 'vbaProcedure', 'vbaArguments']) el(id).disabled = value;
+    for (const id of ['vbaRun', 'vbaLoad', 'vbaExample', 'vbaExport', 'vbaProcedure', 'vbaArguments', 'vbaAddin', 'vbaAddinCalc']) el(id).disabled = value;
     el('vbaStop').disabled = !value;
     picker.refresh();
   }
@@ -118,7 +139,7 @@ export function bindSheetVba({engine, capture: captureWorkbook, apply, closed, e
       if (!el('vbaProcedure').value.trim()) throw new Error('Choose a procedure.');
       setBusy(true);
       report('Running…');
-      const execution = await runVbaInWorker(state.workbook, editor.value,
+      const execution = await runVbaInWorker(state.workbook, withAddins(),
         el('vbaProcedure').value.trim(), args, state.activeSheet, state.name,
         {errorLanguage: language() === 'ja' ? 'ja-JP' : 'en-US'}, state.bytes);
       accept(execution);
@@ -132,6 +153,38 @@ export function bindSheetVba({engine, capture: captureWorkbook, apply, closed, e
     } finally { setBusy(false); }
   };
   el('vbaStop').onclick = () => cancelActiveVbaExecution();
+  async function calculateWithAddins() {
+    const state = capture();
+    if (!state.workbook || busy) return;
+    setBusy(true);
+    report(language() === 'ja' ? 'アドインの関数で再計算中…' : 'Recalculating with add-in functions…');
+    try {
+      const execution = await runVbaInWorker(state.workbook, withAddins() + '\n' + HOST_MODULE,
+        'OxiCalculateWithAddins', [], state.activeSheet, state.name,
+        {errorLanguage: language() === 'ja' ? 'ja-JP' : 'en-US'}, state.bytes);
+      accept(execution);
+      report(language() === 'ja' ? 'アドインの関数で再計算しました。' : 'Recalculated with add-in functions.');
+    } catch (error) {
+      if (error.execution) { try { accept(error.execution); } catch { /* reported below */ } }
+      report(error.message);
+    } finally { setBusy(false); }
+  }
+  el('vbaAddin').onclick = () => el('vbaAddinFile').click();
+  el('vbaAddinFile').onchange = async () => {
+    const file = el('vbaAddinFile').files?.[0];
+    el('vbaAddinFile').value = '';
+    if (!file) return;
+    try {
+      const source = engine.spreadsheet_vba_source(new Uint8Array(await file.arrayBuffer()));
+      const modules = typeof source === 'string' ? standardModules(source) : '';
+      if (!modules) { report(language() === 'ja' ? 'このファイルには標準モジュールがありません。' : 'That file holds no standard modules.'); return; }
+      addins = addins.filter(addin => addin.name !== file.name).concat([{name: file.name, source: modules}]);
+      showAddins();
+      procedures();
+      await calculateWithAddins();
+    } catch (error) { report(error.message ?? String(error)); }
+  };
+  el('vbaAddinCalc').onclick = () => calculateWithAddins();
   dialog.addEventListener('close', () => {
     // A queued close event must not cancel a Save started after the editor closed.
     if (!dialog.open && busy && !saving) cancelActiveVbaExecution();
@@ -169,12 +222,14 @@ export function bindSheetVba({engine, capture: captureWorkbook, apply, closed, e
         vbaProcedureLabel: ['Procedure', 'プロシージャ'], vbaArgumentsLabel: ['Arguments (JSON array)', '引数（JSON配列）'],
         vbaLoad: ['Load workbook code', 'ブックのコードを読み込む'], vbaExample: ['Use example', 'サンプルコード'],
         vbaExport: ['Download .bas', '.basを保存'], vbaRun: ['Run', '実行'], vbaStop: ['Stop', '停止'],
+        vbaAddin: ['Load add-in (.xlam)', 'アドインを読み込む (.xlam)'], vbaAddinCalc: ['Recalculate with add-ins', 'アドインで再計算'],
       };
       for (const [id, text] of Object.entries(labels)) el(id).textContent = text[ja ? 1 : 0];
       el('vbaScope').textContent = language() === 'ja'
         ? 'Oxi独自のVBAインタープリターで実行します。OfficeやWindows COMは呼び出しません。互換性は検証中です。UserFormの表示、任意のActiveX、Windows DLLの実行には対応していません。実行中は停止できます。セルの変更は「コピーを保存」で保存できます。サンプルのコードは .bas として保存してください。'
         : 'Runs in Oxi’s VBA interpreter, without Office or Windows COM. Compatibility is in progress. UserForm display, arbitrary ActiveX and Windows DLL execution are unavailable here. Stop cancels execution. Save a copy keeps workbook edits; download scratch code separately as .bas.';
       previousSource = editor.value;
+      showAddins();
       procedures(); dialog.showModal();
     },
     async prepareSave() {

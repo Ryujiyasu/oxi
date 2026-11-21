@@ -114,6 +114,28 @@ def main():
         good = said.strip() == "Data!B5 = 245"
         print(f"  add-in: {said!r} {'OK' if good else 'DIFF'}")
         ok &= good
+        # --- .xlam add-in: its functions recalculate the sheet, its macro runs
+        addin_dir = REPO / "tests/fixtures/xlsx_addin"
+        page.set_input_files("#fileIn", str(addin_dir / "uses_addin.xlsx"))
+        page.wait_for_function("!document.getElementById('btnVba').disabled", timeout=60000)
+        page.click("#btnVba")
+        page.wait_for_selector("#vbaDialog[open]")
+        page.set_input_files("#vbaAddinFile", str(addin_dir / "TaxTools.xlam"))
+        page.wait_for_function("/再計算しました|Recalculated/.test(document.getElementById('vbaOutput').textContent)", timeout=120000)
+        page.fill("#vbaProcedure", "StampTotals")
+        page.click("#vbaRun")
+        page.wait_for_function("!/Running|実行中/.test(document.getElementById('vbaOutput').textContent) && document.getElementById('vbaOutput').textContent.length > 0", timeout=120000)
+        page.wait_for_timeout(1000)
+        page.click("#vbaClose")
+        with page.expect_download() as dl:
+            page.click("#btnSave")
+        stamped = work / "stamped.xlsx"; dl.value.save_as(stamped)
+        ws = openpyxl.load_workbook(stamped, data_only=True).worksheets[0]
+        got = {k: ws[k].value for k in ("D1", "D2", "C1", "C2")}
+        want = {"D1": 330, "D2": 216, "C1": "Stamped by add-in", "C2": 55}
+        good = all((got[k] == v) or (isinstance(v, (int, float)) and isinstance(got[k], (int, float)) and abs(got[k] - v) < 1e-9) for k, v in want.items())
+        print(f"  xlam: {got} {'OK' if good else 'DIFF'}")
+        ok &= good
         browser.close()
     print("UI data features:", "OK" if ok else "FAILED")
 
