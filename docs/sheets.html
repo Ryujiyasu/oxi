@@ -269,6 +269,12 @@ body.dragging, body.dragging * { user-select: none }
 #vbaScope { line-height: 1.6; font-size: 13px; }
 #vbaSource { box-sizing: border-box; width: 100%; height: 32vh; min-height: 160px; padding: 12px; font: 14px/1.5 Consolas, monospace; resize: vertical; tab-size: 4; }
 #vbaOutput { white-space: pre-wrap; overflow-wrap: anywhere; min-height: 55px; padding: 12px; background: #f1f5ee; }
+.pvdlg { border: 1px solid #c9d3c1; border-radius: 8px; padding: 16px 18px; min-width: 300px; }
+.pvdlg h3 { margin: 0 0 8px; font-size: 16px; }
+.pvdlg label { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin: 8px 0; }
+.pvdlg select { min-width: 140px; }
+.pvdlg menu { display: flex; gap: 8px; justify-content: flex-end; padding: 0; margin: 14px 0 0; }
+.pvnote { color: #5b6752; font-size: 13px; margin: 0 0 6px; }
 </style>
 </head>
 <body>
@@ -279,6 +285,9 @@ body.dragging, body.dragging * { user-select: none }
   <span class="sp"></span>
   <span class="grp">
     <button id="btnVba" disabled>VBA</button>
+    <button id="btnPivot" disabled data-i18n="pivot">Pivot table</button>
+    <button id="btnPivotRefresh" hidden data-i18n="pivotRefresh">Refresh pivots</button>
+    <button id="btnSolver" hidden data-i18n="solver">Solver</button>
     <button id="btnOpen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span data-i18n="open">Open</span></button>
     <button id="btnUndo" class="icon" hidden disabled data-i18n-title="undo" title="Undo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
     <button id="btnRedo" class="icon" hidden disabled data-i18n-title="redo" title="Redo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
@@ -291,6 +300,25 @@ body.dragging, body.dragging * { user-select: none }
     <button id="langEn" class="on">EN</button><button id="langJa">JA</button>
   </span>
 </div>
+
+<dialog id="pivotDlg" class="pvdlg">
+  <form method="dialog">
+    <h3 data-i18n="pivotTitle">Insert a pivot table</h3>
+    <p class="pvnote" id="pvSource"></p>
+    <label><span data-i18n="pivotRows">Rows</span><select id="pvRows"></select></label>
+    <label><span data-i18n="pivotRows2">Rows, inside</span><select id="pvRows2"></select></label>
+    <label><span data-i18n="pivotCols">Columns</span><select id="pvCols"></select></label>
+    <label><span data-i18n="pivotValues">Values</span><select id="pvVal"></select>
+      <select id="pvFn">
+        <option value="sum" data-i18n="sum">Sum</option>
+        <option value="count" data-i18n="count">Count</option>
+        <option value="average" data-i18n="avg">Average</option>
+        <option value="max" data-i18n="max">Max</option>
+        <option value="min" data-i18n="min">Min</option>
+      </select></label>
+    <menu><button value="cancel" data-i18n="cancel">Cancel</button><button value="ok" class="primary" data-i18n="insert">Insert</button></menu>
+  </form>
+</dialog>
 
 <div class="fx" id="fx" hidden>
   <input class="nbox" id="cellRef" value="A1" autocomplete="off" spellcheck="false" aria-label="Name box">
@@ -340,7 +368,7 @@ body.dragging, body.dragging * { user-select: none }
 <input type="file" id="fileIn" accept=".xlsx,.xlsm" hidden>
 
 <script type="module">
-import init, { parse_spreadsheet, edit_xlsx, recalculate_spreadsheet, format_cell_number } from './oxidocs_wasm.js';
+import init, { parse_spreadsheet, edit_xlsx, recalculate_spreadsheet, format_cell_number, list_xlsx_pivots, add_xlsx_pivot, refresh_xlsx_pivots, solve_xlsx } from './oxidocs_wasm.js';
 import { drawSheet } from './sheet-view.js';
 import { cellText } from './row-model.js';
 import * as vbaEngine from './oxidocs_wasm.js';
@@ -369,6 +397,18 @@ const I18N = {
     saved: 'Saved. The file was written in your browser.',
     leave: 'You have edits that are not saved.',
     empty: 'The workbook holds no sheets.',
+    pivot: 'Pivot table', pivotRefresh: 'Refresh pivots', solver: 'Solver',
+    pivotTitle: 'Insert a pivot table', pivotRows: 'Rows', pivotRows2: 'Rows, inside', pivotCols: 'Columns', pivotValues: 'Values',
+    max: 'Max', min: 'Min', cancel: 'Cancel', insert: 'Insert', none: '(none)',
+    pivotSelect: 'Select the data first: a header row and at least one row under it.',
+    pivotSource: (ref, n) => `Source ${ref}, ${n} rows. The table goes two columns to the right.`,
+    pivotDone: 'Pivot table inserted. Save a copy to keep it; Excel rebuilds it from its definition when it opens the file.',
+    pivotRefreshed: 'Pivot tables refreshed from their source.',
+    solverDone: code => ({ 0: 'Solver found a solution. All constraints and optimality conditions are satisfied.',
+      1: 'Solver has converged to the current solution. All constraints are satisfied.',
+      4: 'The objective cell values do not converge.', 5: 'Solver could not find a feasible solution.' })[code]
+      ?? `Solver stopped (code ${code}).`,
+    noModel: 'This sheet has no Solver model.',
   },
   ja: {
     noFile: 'ファイル未選択', open: '開く', save: '保存', undo: '元に戻す (Ctrl+Z)', redo: 'やり直し (Ctrl+Y)',
@@ -392,6 +432,18 @@ const I18N = {
     saved: '保存しました。ファイルはブラウザの中で作られています。',
     leave: '保存していない編集があります。',
     empty: 'このブックにはシートがありません。',
+    pivot: 'ピボットテーブル', pivotRefresh: 'ピボットを更新', solver: 'ソルバー',
+    pivotTitle: 'ピボットテーブルの挿入', pivotRows: '行', pivotRows2: '行 (内側)', pivotCols: '列', pivotValues: '値',
+    max: '最大', min: '最小', cancel: 'キャンセル', insert: '挿入', none: '(なし)',
+    pivotSelect: '先にデータを選んでください: 見出しの行と、その下に 1 行以上。',
+    pivotSource: (ref, n) => `元データ ${ref}（${n} 行）。表は 2 列右に作られます。`,
+    pivotDone: 'ピボットテーブルを挿入しました。保存すると残ります。Excel は開くときに定義から組み直します。',
+    pivotRefreshed: 'ピボットテーブルを元データから更新しました。',
+    solverDone: code => ({ 0: '解が見つかりました。すべての制約と最適化条件を満たしています。',
+      1: '現在の解に収束しました。すべての制約を満たしています。',
+      4: '目的セルの値が収束しません。', 5: '実行可能解が見つかりませんでした。' })[code]
+      ?? `ソルバーが停止しました (コード ${code})。`,
+    noModel: 'このシートにはソルバーのモデルがありません。',
   },
 };
 
@@ -613,6 +665,7 @@ function switchSheet(index) {
   select({ row: 1, col: 0 });
   tabs();
   render();
+  dataButtons();
   canvasBox.scrollLeft = canvasBox.scrollTop = 0;
 }
 
@@ -1569,6 +1622,81 @@ nameBox.addEventListener('keydown', e => {
   } else if (e.key === 'Escape') { nameBox.blur(); paint(false); ed.focus(); }
 });
 
+// ---- data: pivot tables and Solver -------------------------------------------------
+// Each runs on the bytes as they stand (pending edits applied) and the answer
+// becomes the new starting point, the way a macro run's does.
+function adoptBytes(bytes, message) {
+  const parsed = parse_spreadsheet(bytes);
+  source = current = bytes;
+  origBook = parse_spreadsheet(bytes);
+  book = parsed;
+  macroDirty = true;
+  changes.clear(); undoStack.length = 0; redoStack.length = 0;
+  markSaved(); tabs(); render(); dataButtons();
+  if (message) say(message);
+}
+function dataButtons() {
+  const ready = !!current && !!book;
+  $('btnPivot').disabled = !ready;
+  let pivots = [];
+  try { pivots = ready ? list_xlsx_pivots(current) : []; } catch { pivots = []; }
+  $('btnPivotRefresh').hidden = !pivots.length;
+  const here = ready ? (book.sheets[shown]?.name || '').toLowerCase() : '';
+  $('btnSolver').hidden = !ready || !(book.defined_names || []).some(([name]) => {
+    const [scope, leaf] = name.replace(/'/g, '').toLowerCase().split('!');
+    return leaf === 'solver_opt' && scope === here;
+  });
+}
+let pivotPlan = null;
+$('btnPivot').onclick = () => {
+  commitEdit();
+  if (range.r1 <= range.r0) { say(t('pivotSelect'), true); return; }
+  const fields = [];
+  for (let c = range.c0; c <= range.c1; c++) fields.push(shownOf(cellAt(range.r0, c)) || colName(c));
+  pivotPlan = { fields, r0: range.r0, c0: range.c0, r1: range.r1, c1: range.c1 };
+  const fill = (id, withNone) => {
+    const el = $(id);
+    el.innerHTML = '';
+    if (withNone) el.add(new Option(t('none'), ''));
+    fields.forEach((f, i) => el.add(new Option(f, String(i))));
+  };
+  fill('pvRows', true); fill('pvRows2', true); fill('pvCols', true); fill('pvVal', false);
+  if (fields.length > 0) $('pvRows').value = '0';
+  $('pvVal').value = String(fields.length - 1);
+  $('pvSource').textContent = I18N[lang].pivotSource(
+    `${colName(range.c0)}${range.r0}:${colName(range.c1)}${range.r1}`, range.r1 - range.r0);
+  $('pivotDlg').showModal();
+};
+$('pivotDlg').addEventListener('close', () => {
+  if ($('pivotDlg').returnValue !== 'ok' || !pivotPlan) return;
+  const pick = id => $(id).value === '' ? [] : [Number($(id).value)];
+  const rows = [...pick('pvRows'), ...pick('pvRows2')];
+  const sheet = book.sheets[shown].name;
+  const p = pivotPlan;
+  const spec = {
+    name: 'PivotTable' + (1 + (list_xlsx_pivots(current)?.length || 0)),
+    source_sheet: sheet, source: [p.r0 - 1, p.c0, p.r1 - 1, p.c1],
+    target_sheet: sheet, at: [p.r0 - 1, p.c1 + 2],
+    rows, cols: pick('pvCols'), pages: [],
+    data: [[Number($('pvVal').value), $('pvFn').value]],
+  };
+  try { adoptBytes(add_xlsx_pivot(current, spec, lang), t('pivotDone')); }
+  catch (error) { say(t('editFailed') + (error.message ?? error), true); }
+});
+$('btnPivotRefresh').onclick = () => {
+  commitEdit();
+  try { adoptBytes(refresh_xlsx_pivots(current, lang), t('pivotRefreshed')); }
+  catch (error) { say(t('editFailed') + (error.message ?? error), true); }
+};
+$('btnSolver').onclick = () => {
+  commitEdit();
+  try {
+    const result = solve_xlsx(current, shown);
+    if (result.code === 13) { say(t('noModel'), true); return; }
+    adoptBytes(result.workbook, I18N[lang].solverDone(result.code));
+  } catch (error) { say(t('editFailed') + (error.message ?? error), true); }
+};
+
 // ---- save ---------------------------------------------------------------------------
 function save() {
   if (!current || (changes.size === 0 && !macroDirty)) return;
@@ -1633,6 +1761,7 @@ function open(name, bytes) {
   markSaved();
   tabs();
   render();
+  dataButtons();
   say(I18N[lang].parsed(book.sheets.length, cells, took));
   setTimeout(() => { if (!msgEl.classList.contains('err')) msgEl.hidden = true; }, 4000);
 }
@@ -1691,7 +1820,7 @@ const vbaUi = bindSheetVba({
     shown = Math.max(0, Math.min(state.activeSheet || 0, book.sheets.length - 1));
     changes.clear(); undoStack.length = 0; redoStack.length = 0; clip = null;
     $('docName').textContent = fileName;
-    markSaved(); tabs(); render();
+    markSaved(); tabs(); render(); dataButtons();
   },
   closed() {
     book = origBook = source = current = null;
