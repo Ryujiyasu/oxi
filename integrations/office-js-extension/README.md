@@ -28,3 +28,20 @@ text, fill, font, alignment, wrapping, column width, row height), worksheets
 `onChanged` and `onSelectionChanged`, and the `load()` / `context.sync()`
 bookkeeping, including `PropertyNotLoaded` for reading before a sync. The
 editor applies values as undoable edits and the rest through its macro engine.
+
+## XLL add-ins (native messaging)
+
+The same extension lets the editor call XLL add-ins on this machine through
+[`oxi-xll-host`](../../tools/oxi-xll-host), registered as the native-messaging
+host `com.oxi.xll_host`:
+
+```
+cd tools/oxi-xll-host && cargo build --release
+powershell -File integrations/office-js-extension/native-host/install.ps1 -ExtensionId <the extension's id>
+```
+
+The page then has `OxiXll.list(path)` and `OxiXll.call(path, name, args)`;
+a range argument is given as rows of values (`[[1, 2], [3, 4]]`) and reaches
+the add-in as Excel passes it (an `xltypeMulti`, or an FP12 for `K%`).
+`tools/metrics/_xll_native_messaging_check.py` exercises the host's side of the
+exchange; `tools/metrics/_xll_host_check.py` holds its answers against Excel.

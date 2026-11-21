@@ -37,3 +37,38 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 });
 
 chrome.tabs.onRemoved.addListener(tabId => { forget(tabId); });
+
+// XLL add-ins: the editor page asks (through the content script) for an
+// XLL's functions or a call; the local oxi-xll-host answers over native
+// messaging. One host process per extension, kept while requests come.
+const NATIVE_HOST = 'com.oxi.xll_host';
+let port = null;
+const waiting = new Map();
+let nextId = 1;
+function nativePort() {
+  if (port) return port;
+  port = chrome.runtime.connectNative(NATIVE_HOST);
+  port.onMessage.addListener(answer => {
+    const reply = waiting.get(answer.id);
+    if (reply) { waiting.delete(answer.id); reply(answer); }
+  });
+  port.onDisconnect.addListener(() => {
+    const why = chrome.runtime.lastError?.message ?? 'the XLL host went away';
+    for (const reply of waiting.values()) reply({ error: why });
+    waiting.clear();
+    port = null;
+  });
+  return port;
+}
+chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (message?.oxi !== 'xll') return false;
+  const id = nextId++;
+  waiting.set(id, answer => { const { id: _, ...rest } = answer; reply(rest); });
+  try {
+    nativePort().postMessage({ ...message.request, id });
+  } catch (error) {
+    waiting.delete(id);
+    reply({ error: String(error) });
+  }
+  return true;
+});

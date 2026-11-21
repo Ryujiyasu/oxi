@@ -1915,6 +1915,36 @@ function tellAddin(type, sheet, area) {
     ? `${col(area.c0)}${area.r0}` : `${col(area.c0)}${area.r0}:${col(area.c1)}${area.r1}`;
   $('addinFrame').contentWindow?.postMessage({ oxiOffice: 'event', type, sheet, address }, '*');
 }
+// XLL add-ins: with the Oxi extension and the local oxi-xll-host installed
+// (integrations/office-js-extension/native-host), the page can list an XLL's
+// functions and call them: OxiXll.call('C:/addins/my.xll', 'MyFn', [1, [[2, 3]]]).
+// Ranges go as rows of values; answers come back as Excel would show them.
+window.OxiXll = (() => {
+  let seq = 0;
+  const waiting = new Map();
+  window.addEventListener('message', event => {
+    const data = event.data;
+    if (event.source !== window || !data || data.oxiXll !== 'reply' || !waiting.has(data.id)) return;
+    const done = waiting.get(data.id);
+    waiting.delete(data.id);
+    done(data);
+  });
+  const ask = request => new Promise((resolve, reject) => {
+    if (document.documentElement.dataset.oxiOfficeExtension !== 'on') {
+      reject(new Error('The Oxi Office Add-ins extension is not installed.'));
+      return;
+    }
+    const id = ++seq;
+    waiting.set(id, answer => (answer.error ? reject(new Error(answer.error)) : resolve(answer)));
+    window.postMessage({ oxiXll: 'request', id, ...request }, '*');
+  });
+  return {
+    get available() { return document.documentElement.dataset.oxiOfficeExtension === 'on'; },
+    list: async xll => (await ask({ xll, op: 'list' })).functions,
+    call: async (xll, fn, args = []) => (await ask({ xll, op: 'call', function: fn, args })).value,
+  };
+})();
+
 $('btnAddin').onclick = () => {
   const extension = document.documentElement.dataset.oxiOfficeExtension === 'on';
   const url = prompt(t('addinPrompt') + (extension ? '' : t('addinNoExtension')), $('addinFrame').src || '');

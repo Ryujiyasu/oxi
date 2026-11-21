@@ -9,3 +9,15 @@
 chrome.runtime.sendMessage({ oxi: 'editor-open' }, answer => {
   if (answer?.ok) document.documentElement.dataset.oxiOfficeExtension = 'on';
 });
+
+// XLL requests from the page (window.OxiXll in the editor) go to the
+// background, which talks to the local oxi-xll-host; answers come back the
+// same way. Only messages from this page itself are taken.
+window.addEventListener('message', event => {
+  const data = event.data;
+  if (event.source !== window || !data || data.oxiXll !== 'request') return;
+  const { id, oxiXll: _, ...request } = data;
+  chrome.runtime.sendMessage({ oxi: 'xll', request }, answer => {
+    window.postMessage({ oxiXll: 'reply', id, ...(answer ?? { error: chrome.runtime.lastError?.message ?? 'no answer' }) }, '*');
+  });
+});

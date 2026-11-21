@@ -160,6 +160,9 @@ unsafe fn call_win64(f: usize, args: &[u64]) -> (u64, f64) {
 
 /// One argument as the add-in's type character asks for it, and what has to
 /// stay alive while the call runs.
+// The fields are never read: they keep the argument's memory alive while the
+// add-in is called.
+#[allow(dead_code)]
 enum Held {
     None,
     Oper(Box<Xloper12>, Vec<Box<[u16]>>, Option<Box<[Xloper12]>>),
@@ -276,156 +279,247 @@ fn type_codes(types: &str) -> Vec<String> {
     out
 }
 
+/// An add-in loaded and opened: its module and what it registered.
 #[cfg(windows)]
-fn main() {
-    use windows::core::{HSTRING, PCSTR};
-    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 3 {
-        eprintln!("usage: oxi-xll-host <add-in.xll> list | call <Function> '<json args>'");
-        std::process::exit(2);
-    }
-    let path = std::path::absolute(&args[1]).unwrap_or_else(|_| args[1].clone().into());
-    MODULE.with(|m| *m.borrow_mut() = path.to_string_lossy().into_owned());
-    let module = match unsafe { LoadLibraryW(&HSTRING::from(path.as_os_str())) } {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("cannot load {}: {e}", path.display());
-            std::process::exit(1);
-        }
-    };
-    let proc = |name: &str| -> Option<usize> {
+struct Opened {
+    module: windows::Win32::Foundation::HMODULE,
+    registered: Vec<Registration>,
+}
+
+#[cfg(windows)]
+impl Opened {
+    fn proc(&self, name: &str) -> Option<usize> {
+        use windows::core::PCSTR;
+        use windows::Win32::System::LibraryLoader::GetProcAddress;
         let c = std::ffi::CString::new(name).ok()?;
-        unsafe { GetProcAddress(module, PCSTR(c.as_ptr() as *const u8)).map(|f| f as usize) }
-    };
-    let Some(open) = proc("xlAutoOpen") else {
-        eprintln!("{} has no xlAutoOpen: not an XLL", path.display());
-        std::process::exit(1);
+        unsafe { GetProcAddress(self.module, PCSTR(c.as_ptr() as *const u8)).map(|f| f as usize) }
+    }
+
+    fn list(&self) -> serde_json::Value {
+        serde_json::Value::Array(
+            self.registered
+                .iter()
+                .map(|r| serde_json::json!({"function": r.function, "procedure": r.procedure, "types": r.types}))
+                .collect(),
+        )
+    }
+
+    /// Call a registered function with arguments marshalled by its type
+    /// string; `{"value": ...}` or `{"error": "#NAME?"}`.
+    fn call(&self, name: &str, given: &[serde_json::Value]) -> serde_json::Value {
+        let Some(reg) = self.registered.iter().find(|r| r.function.eq_ignore_ascii_case(name)) else {
+            return serde_json::json!({"error": "#NAME?"});
+        };
+        let Some(f) = self.proc(&reg.procedure) else {
+            return serde_json::json!({"error": "#NAME?"});
+        };
+        let codes = type_codes(&reg.types);
+        let (ret, params) = codes.split_first().map(|(r, p)| (r.clone(), p.to_vec())).unwrap_or_default();
+        let mut held: Vec<Held> = Vec::new();
+        let mut bits: Vec<u64> = Vec::new();
+        for (i, code) in params.iter().enumerate() {
+            let v = given.get(i).cloned().unwrap_or(serde_json::Value::Null);
+            match code.as_str() {
+                "B" => bits.push(v.as_f64().unwrap_or(0.0).to_bits()),
+                "J" => bits.push(v.as_f64().unwrap_or(0.0) as i32 as i64 as u64),
+                "A" => bits.push(u64::from(v.as_bool().unwrap_or(false))),
+                "Q" | "U" | "P" | "R" => {
+                    let (x, keep, cells) = json_to_value_oper(&v);
+                    let boxed = Box::new(x);
+                    bits.push(&*boxed as *const Xloper12 as u64);
+                    held.push(Held::Oper(boxed, keep, cells));
+                }
+                "K%" | "K" => {
+                    let Some(fp) = json_to_fp12(&v) else {
+                        return serde_json::json!({"value": "#VALUE!"});
+                    };
+                    bits.push(fp.as_ptr() as u64);
+                    held.push(Held::Fp(fp));
+                }
+                "C%" | "D%" => {
+                    let s = v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
+                    let units: Vec<u16> = if code == "D%" {
+                        counted(&s).into_vec()
+                    } else {
+                        s.encode_utf16().chain(std::iter::once(0)).collect()
+                    };
+                    bits.push(units.as_ptr() as u64);
+                    held.push(Held::Wide(units));
+                }
+                _ => {
+                    held.push(Held::None);
+                    bits.push(0);
+                }
+            }
+        }
+        let (rax, xmm) = unsafe { call_win64(f, &bits) };
+        // The arguments stay alive until the answer has been read: an add-in
+        // may hand back what points into them.
+        let value = match ret.as_str() {
+            "K%" | "K" => {
+                let p = rax as *const i32;
+                if p.is_null() {
+                    serde_json::Value::Null
+                } else {
+                    unsafe {
+                        let (rows, cols) = (*p as usize, *p.add(1) as usize);
+                        let data = p.add(2) as *const f64;
+                        serde_json::Value::Array(
+                            (0..rows)
+                                .map(|r| serde_json::Value::Array((0..cols).map(|c| serde_json::json!(*data.add(r * cols + c))).collect()))
+                                .collect(),
+                        )
+                    }
+                }
+            }
+            "B" => serde_json::json!(xmm),
+            "J" => serde_json::json!(rax as i32),
+            "A" => serde_json::json!(rax as u16 != 0),
+            "Q" | "U" | "P" | "R" => {
+                let p = rax as *mut Xloper12;
+                if p.is_null() {
+                    serde_json::Value::Null
+                } else {
+                    let out = unsafe { oper_to_json(&*p) };
+                    if unsafe { (*p).xltype } & XLBIT_DLL_FREE != 0 {
+                        if let Some(free) = self.proc("xlAutoFree12") {
+                            unsafe {
+                                let free: unsafe extern "system" fn(*mut Xloper12) = std::mem::transmute(free);
+                                free(p);
+                            }
+                        }
+                    }
+                    out
+                }
+            }
+            "C%" | "D%" => {
+                let p = rax as *const u16;
+                if p.is_null() {
+                    serde_json::Value::Null
+                } else if ret == "D%" {
+                    unsafe { serde_json::json!(String::from_utf16_lossy(std::slice::from_raw_parts(p.add(1), *p as usize))) }
+                } else {
+                    let mut n = 0;
+                    unsafe {
+                        while *p.add(n) != 0 {
+                            n += 1;
+                        }
+                        serde_json::json!(String::from_utf16_lossy(std::slice::from_raw_parts(p, n)))
+                    }
+                }
+            }
+            _ => serde_json::Value::Null,
+        };
+        drop(held);
+        serde_json::json!({"value": value})
+    }
+}
+
+/// Load an XLL and run its `xlAutoOpen`, keeping what it registers.
+#[cfg(windows)]
+fn open_xll(path: &str) -> Result<Opened, String> {
+    use windows::core::HSTRING;
+    use windows::Win32::System::LibraryLoader::LoadLibraryW;
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.into());
+    MODULE.with(|m| *m.borrow_mut() = path.to_string_lossy().into_owned());
+    let module = unsafe { LoadLibraryW(&HSTRING::from(path.as_os_str())) }.map_err(|e| format!("cannot load {}: {e}", path.display()))?;
+    let before = REGISTERED.with(|r| r.borrow().len());
+    let mut opened = Opened { module, registered: Vec::new() };
+    let Some(open) = opened.proc("xlAutoOpen") else {
+        return Err(format!("{} has no xlAutoOpen: not an XLL", path.display()));
     };
     unsafe {
         let open: unsafe extern "system" fn() -> i32 = std::mem::transmute(open);
         open();
     }
-    let registered = REGISTERED.with(|r| r.borrow().clone());
-    match args[2].as_str() {
-        "list" => {
-            let list: Vec<serde_json::Value> = registered
-                .iter()
-                .map(|r| serde_json::json!({"function": r.function, "procedure": r.procedure, "types": r.types}))
-                .collect();
-            println!("{}", serde_json::Value::Array(list));
+    opened.registered = REGISTERED.with(|r| r.borrow()[before..].to_vec());
+    Ok(opened)
+}
+
+/// A native-messaging message: a little-endian u32 length, then that many
+/// bytes of UTF-8 JSON (Chrome's and Edge's framing, both ways).
+fn read_message(input: &mut impl std::io::Read) -> Option<serde_json::Value> {
+    let mut size = [0u8; 4];
+    input.read_exact(&mut size).ok()?;
+    let mut body = vec![0u8; u32::from_le_bytes(size) as usize];
+    input.read_exact(&mut body).ok()?;
+    serde_json::from_slice(&body).ok()
+}
+
+fn write_message(output: &mut impl std::io::Write, value: &serde_json::Value) -> std::io::Result<()> {
+    let body = serde_json::to_vec(value)?;
+    output.write_all(&(body.len() as u32).to_le_bytes())?;
+    output.write_all(&body)?;
+    output.flush()
+}
+
+/// The host as the browser extension starts it: requests
+/// `{"id", "xll", "op": "list" | "call", "function", "args"}` in, answers
+/// `{"id", ...}` out, each XLL opened once and kept.
+#[cfg(windows)]
+fn serve_native_messaging() {
+    let mut opened: std::collections::HashMap<String, Opened> = std::collections::HashMap::new();
+    let (stdin, stdout) = (std::io::stdin(), std::io::stdout());
+    let (mut input, mut output) = (stdin.lock(), stdout.lock());
+    while let Some(request) = read_message(&mut input) {
+        let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        let path = request.get("xll").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let mut answer = if !opened.contains_key(&path) {
+            match open_xll(&path) {
+                Ok(xll) => {
+                    opened.insert(path.clone(), xll);
+                    serde_json::json!({})
+                }
+                Err(error) => serde_json::json!({"error": error}),
+            }
+        } else {
+            serde_json::json!({})
+        };
+        if answer.get("error").is_none() {
+            let xll = &opened[&path];
+            answer = match request.get("op").and_then(|v| v.as_str()) {
+                Some("list") => serde_json::json!({"functions": xll.list()}),
+                Some("call") => {
+                    let name = request.get("function").and_then(|v| v.as_str()).unwrap_or_default();
+                    let args = request.get("args").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                    xll.call(name, &args)
+                }
+                _ => serde_json::json!({"error": "unknown op"}),
+            };
         }
+        answer["id"] = id;
+        if write_message(&mut output, &answer).is_err() {
+            break;
+        }
+    }
+}
+
+#[cfg(windows)]
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    // Chrome and Edge start a native-messaging host with the calling
+    // extension's origin as its first argument.
+    if args.get(1).is_some_and(|a| a.starts_with("chrome-extension://") || a == "--native-messaging") {
+        serve_native_messaging();
+        return;
+    }
+    if args.len() < 3 {
+        eprintln!("usage: oxi-xll-host <add-in.xll> list | call <Function> '<json args>'");
+        std::process::exit(2);
+    }
+    let xll = match open_xll(&args[1]) {
+        Ok(xll) => xll,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+    match args[2].as_str() {
+        "list" => println!("{}", xll.list()),
         "call" => {
             let name = args.get(3).cloned().unwrap_or_default();
             let given: Vec<serde_json::Value> = serde_json::from_str(args.get(4).map(String::as_str).unwrap_or("[]")).unwrap_or_default();
-            let Some(reg) = registered.iter().find(|r| r.function.eq_ignore_ascii_case(&name)) else {
-                println!("{}", serde_json::json!({"error": "#NAME?"}));
-                return;
-            };
-            let Some(f) = proc(&reg.procedure) else {
-                println!("{}", serde_json::json!({"error": "#NAME?"}));
-                return;
-            };
-            let codes = type_codes(&reg.types);
-            let (ret, params) = codes.split_first().map(|(r, p)| (r.clone(), p.to_vec())).unwrap_or_default();
-            let mut held: Vec<Held> = Vec::new();
-            let mut bits: Vec<u64> = Vec::new();
-            for (i, code) in params.iter().enumerate() {
-                let v = given.get(i).cloned().unwrap_or(serde_json::Value::Null);
-                match code.as_str() {
-                    "B" => bits.push(v.as_f64().unwrap_or(0.0).to_bits()),
-                    "J" => bits.push(v.as_f64().unwrap_or(0.0) as i32 as i64 as u64),
-                    "A" => bits.push(u64::from(v.as_bool().unwrap_or(false))),
-                    "Q" | "U" | "P" | "R" => {
-                        let (x, keep, cells) = json_to_value_oper(&v);
-                        let boxed = Box::new(x);
-                        bits.push(&*boxed as *const Xloper12 as u64);
-                        held.push(Held::Oper(boxed, keep, cells));
-                    }
-                    "K%" | "K" => {
-                        let Some(fp) = json_to_fp12(&v) else {
-                            println!("{}", serde_json::json!({"value": "#VALUE!"}));
-                            return;
-                        };
-                        bits.push(fp.as_ptr() as u64);
-                        held.push(Held::Fp(fp));
-                    }
-                    "C%" | "D%" => {
-                        let s = v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
-                        let units: Vec<u16> = if code == "D%" {
-                            counted(&s).into_vec()
-                        } else {
-                            s.encode_utf16().chain(std::iter::once(0)).collect()
-                        };
-                        bits.push(units.as_ptr() as u64);
-                        held.push(Held::Wide(units));
-                    }
-                    _ => {
-                        held.push(Held::None);
-                        bits.push(0);
-                    }
-                }
-            }
-            let (rax, xmm) = unsafe { call_win64(f, &bits) };
-            // The arguments stay alive until the answer has been read: an
-            // add-in may hand back what points into them.
-            let value = match ret.as_str() {
-                "K%" | "K" => {
-                    let p = rax as *const i32;
-                    if p.is_null() {
-                        serde_json::Value::Null
-                    } else {
-                        unsafe {
-                            let (rows, cols) = (*p as usize, *p.add(1) as usize);
-                            let data = p.add(2) as *const f64;
-                            serde_json::Value::Array(
-                                (0..rows)
-                                    .map(|r| serde_json::Value::Array((0..cols).map(|c| serde_json::json!(*data.add(r * cols + c))).collect()))
-                                    .collect(),
-                            )
-                        }
-                    }
-                }
-                "B" => serde_json::json!(xmm),
-                "J" => serde_json::json!(rax as i32),
-                "A" => serde_json::json!(rax as u16 != 0),
-                "Q" | "U" | "P" | "R" => {
-                    let p = rax as *mut Xloper12;
-                    if p.is_null() {
-                        serde_json::Value::Null
-                    } else {
-                        let out = unsafe { oper_to_json(&*p) };
-                        if unsafe { (*p).xltype } & XLBIT_DLL_FREE != 0 {
-                            if let Some(free) = proc("xlAutoFree12") {
-                                unsafe {
-                                    let free: unsafe extern "system" fn(*mut Xloper12) = std::mem::transmute(free);
-                                    free(p);
-                                }
-                            }
-                        }
-                        out
-                    }
-                }
-                "C%" | "D%" => {
-                    let p = rax as *const u16;
-                    if p.is_null() {
-                        serde_json::Value::Null
-                    } else if ret == "D%" {
-                        unsafe { serde_json::json!(String::from_utf16_lossy(std::slice::from_raw_parts(p.add(1), *p as usize))) }
-                    } else {
-                        let mut n = 0;
-                        unsafe {
-                            while *p.add(n) != 0 {
-                                n += 1;
-                            }
-                            serde_json::json!(String::from_utf16_lossy(std::slice::from_raw_parts(p, n)))
-                        }
-                    }
-                }
-                _ => serde_json::Value::Null,
-            };
-            drop(held);
-            println!("{}", serde_json::json!({"value": value}));
+            println!("{}", xll.call(&name, &given));
         }
         other => {
             eprintln!("unknown command {other}");
@@ -443,6 +537,16 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_messages_are_length_prefixed_json() {
+        let mut wire = Vec::new();
+        write_message(&mut wire, &serde_json::json!({"id": 7, "op": "list"})).unwrap();
+        assert_eq!(u32::from_le_bytes(wire[..4].try_into().unwrap()) as usize, wire.len() - 4);
+        let back = read_message(&mut std::io::Cursor::new(wire)).unwrap();
+        assert_eq!(back, serde_json::json!({"id": 7, "op": "list"}));
+        assert!(read_message(&mut std::io::Cursor::new(vec![1u8, 0])).is_none());
+    }
 
     #[test]
     fn type_strings_split_into_codes() {
