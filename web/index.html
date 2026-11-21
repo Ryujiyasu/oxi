@@ -5028,6 +5028,71 @@ function levelFor(shape, para) {
     return lv[Math.min(para.lvl || 0, lv.length - 1)] || null;
 }
 
+// A slide table (a:tbl) as the engine reads it: the grid's column widths
+// and row heights, each cell's fill, borders (left, right, top, bottom),
+// margins, anchor and paragraphs, merged cells by span. Drawn for viewing:
+// the saver does not edit table cells yet.
+function buildSlideTable(t, scale) {
+    const rgba = (c, a) => (a === undefined || a === null || a >= 1) ? '#' + c
+        : `rgba(${parseInt(c.slice(0,2),16)},${parseInt(c.slice(2,4),16)},${parseInt(c.slice(4,6),16)},${a})`;
+    const table = document.createElement('table');
+    table.className = 'slide-table';
+    table.style.borderCollapse = 'collapse';
+    table.style.tableLayout = 'fixed';
+    table.style.width = (t.col_widths.reduce((a, b) => a + b, 0) * scale) + 'px';
+    const cols = document.createElement('colgroup');
+    for (const w of t.col_widths) {
+        const col = document.createElement('col');
+        col.style.width = (w * scale) + 'px';
+        cols.appendChild(col);
+    }
+    table.appendChild(cols);
+    t.rows.forEach((row, r) => {
+        const tr = document.createElement('tr');
+        tr.style.height = ((t.row_heights[r] || 0) * scale) + 'px';
+        for (const cell of row) {
+            if (cell.h_merge || cell.v_merge) continue;
+            const td = document.createElement('td');
+            if (cell.grid_span > 1) td.colSpan = cell.grid_span;
+            if (cell.row_span > 1) td.rowSpan = cell.row_span;
+            td.style.padding = [cell.mar_t, cell.mar_r, cell.mar_b, cell.mar_l]
+                .map(m => ((m || 0) * scale) + 'px').join(' ');
+            td.style.verticalAlign = cell.anchor === 'ctr' ? 'middle' : cell.anchor === 'b' ? 'bottom' : 'top';
+            td.style.overflow = 'hidden';
+            if (cell.fill_color) td.style.backgroundColor = rgba(cell.fill_color, cell.fill_alpha);
+            ['Left', 'Right', 'Top', 'Bottom'].forEach((side, i) => {
+                const b = cell.borders && cell.borders[i];
+                td.style['border' + side] = b && b.alpha > 0
+                    ? `${Math.max(b.width * scale, 0.5)}px solid ${rgba(b.color, b.alpha)}` : 'none';
+            });
+            for (const para of cell.paragraphs || []) {
+                const p = document.createElement('p');
+                p.style.margin = '0';
+                if (para.alignment === 'Center') p.style.textAlign = 'center';
+                else if (para.alignment === 'Right') p.style.textAlign = 'right';
+                if (para.line_spacing) p.style.lineHeight = para.line_spacing * 1.2;
+                for (const run of para.runs || []) {
+                    const span = document.createElement('span');
+                    span.textContent = run.text;
+                    span.style.fontSize = ((run.font_size || para.end_para_size || 18) * scale) + 'px';
+                    if (run.bold) span.style.fontWeight = 'bold';
+                    if (run.italic) span.style.fontStyle = 'italic';
+                    if (run.underline) span.style.textDecoration = 'underline';
+                    if (run.color) span.style.color = '#' + run.color;
+                    if (run.font_family) span.style.fontFamily = run.font_family + ", 'Yu Gothic', 'Meiryo', 'Noto Sans JP', sans-serif";
+                    p.appendChild(span);
+                }
+                // An empty paragraph still takes its line.
+                if (!p.childNodes.length) p.innerHTML = '&nbsp;';
+                td.appendChild(p);
+            }
+            tr.appendChild(td);
+        }
+        table.appendChild(tr);
+    });
+    return table;
+}
+
 function buildSlideContent(container, slide, slideIdx, scale, editable) {
 
     slide.shapes.forEach((shape, shapeIdx) => {
@@ -5066,8 +5131,12 @@ function buildSlideContent(container, slide, slideIdx, scale, editable) {
         }
         // An ellipse or a rounded rectangle is a border-radius away, and a
         // pie / custGeom shape is at least not drawn as a slab of its fill.
-        if (shape.shape_type === 'ellipse') div.style.borderRadius = '50%';
-        else if (shape.shape_type === 'roundRect') {
+        // An oval callout is an oval until its pointer is drawn.
+        if (shape.shape_type === 'ellipse' || shape.shape_type === 'wedgeEllipseCallout'
+            || shape.shape_type === 'cloudCallout') div.style.borderRadius = '50%';
+        else if (shape.shape_type === 'wedgeRoundRectCallout') {
+            div.style.borderRadius = (Math.min(shape.width, shape.height) * 0.16667 * scale) + 'px';
+        } else if (shape.shape_type === 'roundRect') {
             const adj = (shape.adjustments && shape.adjustments.adj) || 16667;
             div.style.borderRadius =
                 (Math.min(shape.width, shape.height) * (adj / 100000) * scale) + 'px';
@@ -5155,6 +5224,13 @@ function buildSlideContent(container, slide, slideIdx, scale, editable) {
             img.style.height = '100%';
             img.style.objectFit = 'contain';
             div.appendChild(img);
+        } else if (content && content.Table && content.Table.table) {
+            // A table sizes itself from its grid, as PowerPoint draws it;
+            // the frame's own extent is not the table's.
+            const table = buildSlideTable(content.Table.table, scale);
+            div.style.width = table.style.width;
+            div.style.height = '';
+            div.appendChild(table);
         }
 
         container.appendChild(div);

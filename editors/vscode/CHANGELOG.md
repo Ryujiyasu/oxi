@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.9
+
+PowerPoint decks: tables are drawn in the editor (before, a slide's table
+was missing there while exports showed it), and oval and rounded callouts
+are drawn with their shape instead of as rectangles.
+
 ## 0.9.8
 
 The tab follows the file on disk. When another program writes it (Claude

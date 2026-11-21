@@ -2,7 +2,7 @@
   "name": "oxi-office-viewer",
   "displayName": "Oxi — .docx / .xlsx / .pptx editor",
   "description": "Open, edit and save .docx, .xlsx and .pptx in VS Code, and watch Claude Code or any AI agent write them: the tab redraws each time the file changes on disk. Rendered by Oxi, a Rust + WebAssembly engine measured against Microsoft Office. Nothing is uploaded.",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "publisher": "oxidocs",
   "license": "MIT OR Apache-2.0",
   "icon": "icon.png",
