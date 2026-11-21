@@ -1,0 +1,28 @@
+{
+  "manifestVersion": 2,
+  "id": "oxi-slides",
+  "publisher": "ryujiyasu",
+  "name": "Oxi Slides",
+  "version": "0.1.0",
+  "execution": "sandboxed-ui",
+  "description": "Read .pptx decks in Orca as slides, and play them full screen. Made for decks your agents write: the tab redraws when the file changes. Laid out by the Oxi engine (Rust + WebAssembly); nothing leaves the machine.",
+  "license": "MPL-2.0",
+  "repository": "https://github.com/Ryujiyasu/orca-oxi-slides",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "contributes": {
+    "customEditors": [
+      {
+        "id": "pptx",
+        "title": "Oxi Slides",
+        "extensions": [".pptx"],
+        "entry": "editor/index.html",
+        "priority": "default",
+        "contentKind": "bytes",
+        "frame": "isolated"
+      }
+    ]
+  },
+  "capabilities": []
+}
