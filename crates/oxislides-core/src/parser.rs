@@ -4988,7 +4988,7 @@ fn parse_inherited_shapes(
                             }
                             // Close the candidate.
                             // A line is 0pt tall (horizontal) or 0pt wide.
-                            let is_line = prst.as_deref() == Some("line");
+                            let is_line = matches!(prst.as_deref(), Some("line" | "straightConnector1"));
                             if ok
                                 && have_off
                                 && have_ext
@@ -5308,11 +5308,13 @@ fn parse_inherited_shapes(
             }
             "sp" | "pic" | "grpSp" | "cxnSp" | "graphicFrame" => {
                 if nest == 0 {
-                    // Only p:sp and p:pic can be faithful; a grpSp/cxnSp/
-                    // graphicFrame subtree is walked but never emitted.
+                    // Only p:sp, p:pic and a straight p:cxnSp can be
+                    // faithful; a grpSp/graphicFrame subtree is walked but
+                    // never emitted.
                     kind = match name.as_str() {
                         "sp" => Some("sp"),
                         "pic" => Some("pic"),
+                        "cxnSp" if lmcxn_on() => Some("cxnSp"),
                         _ => None,
                     };
                     ok = kind.is_some();
@@ -5403,6 +5405,21 @@ fn parse_inherited_shapes(
                     ln_depth += 1;
                 }
             }
+            // This walk carries no line ends and no dash, so a connector that
+            // asks for either would be drawn as a plain solid line. It is left
+            // out instead, as connectors were before.
+            "headEnd" | "tailEnd"
+                if kind == Some("cxnSp")
+                    && get_attr(e, "type").is_some_and(|t| t != "none") =>
+            {
+                ok = false;
+            }
+            "prstDash"
+                if kind == Some("cxnSp")
+                    && get_attr(e, "val").is_some_and(|v| v != "solid") =>
+            {
+                ok = false;
+            }
             "xfrm" => {
                 // A turned or mirrored shape used to be refused outright,
                 // because the paint was axis-aligned and would have drawn it
@@ -5466,6 +5483,11 @@ fn parse_inherited_shapes(
                 // line under every title and the one above the footer); the
                 // renderer strokes them like a connector.
                 Some(p) if lmline_on() && p == "line" => prst = Some(p),
+                // A layout's rule is as often a straight connector: Google
+                // Slides writes the line under every title as a `p:cxnSp`
+                // with `prst="straightConnector1"`. It strokes the same
+                // segment, corner to corner.
+                Some(p) if lmcxn_on() && p == "straightConnector1" => prst = Some(p),
                 _ => ok = false,
             },
             "custGeom" if s_inherit_geom => {
@@ -6238,6 +6260,12 @@ type PhInsets = HashMap<(Option<String>, Option<String>), [Option<f32>; 4]>;
 /// whose own bodyPr states no inset.
 fn lmline_on() -> bool {
     std::env::var("OXI_LMLINE_DISABLE").is_err()
+}
+
+/// A layout or master `p:cxnSp` that is a straight line is drawn like a
+/// `prst="line"` shape. `OXI_LMCXN_DISABLE` leaves connectors out again.
+fn lmcxn_on() -> bool {
+    std::env::var("OXI_LMCXN_DISABLE").is_err()
 }
 
 fn hlink_on() -> bool {
@@ -7523,6 +7551,55 @@ mod tests {
             &HashMap::new(),
         )
         .expect("slide must parse")
+    }
+
+    /// A layout's shapes, as `parse_inherited_shapes` reads them.
+    fn layout_shapes(tree: &str) -> Vec<Shape> {
+        let xml = format!(
+            r#"<p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree>{tree}</p:spTree></p:cSld></p:sldLayout>"#
+        );
+        let mut ar = archive_of("ppt/slideLayouts/slideLayout1.xml", &xml);
+        parse_inherited_shapes(&xml, "ppt/slideLayouts/_rels/slideLayout1.xml.rels", &mut ar, &HashMap::new())
+    }
+
+    fn connector(prst: &str, ln_extra: &str) -> String {
+        format!(
+            r#"<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="27" name="rule"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+   <p:spPr><a:xfrm><a:off x="952600" y="533400"/><a:ext cx="7716000" cy="0"/></a:xfrm>
+    <a:prstGeom prst="{prst}"><a:avLst/></a:prstGeom><a:noFill/>
+    <a:ln w="9525"><a:solidFill><a:srgbClr val="59C02C"/></a:solidFill>{ln_extra}</a:ln></p:spPr></p:cxnSp>"#
+        )
+    }
+
+    /// Google Slides draws the rule under a title as a straight connector on
+    /// the layout. It used to be dropped with every other `p:cxnSp`.
+    #[test]
+    fn a_layout_rule_drawn_as_a_straight_connector_is_kept() {
+        let shapes = layout_shapes(&connector(
+            "straightConnector1",
+            r#"<a:prstDash val="solid"/><a:headEnd type="none"/><a:tailEnd type="none"/>"#,
+        ));
+        assert_eq!(shapes.len(), 1);
+        let rule = &shapes[0];
+        assert_eq!(rule.shape_type.as_deref(), Some("straightConnector1"));
+        assert_eq!(rule.border_color.as_deref(), Some("59C02C"));
+        assert!((rule.border_width.unwrap() - 0.75).abs() < 1e-4);
+        assert!((rule.width - 7_716_000.0 / 12_700.0).abs() < 0.01 && rule.height == 0.0);
+        assert!((rule.y - 42.0).abs() < 0.01);
+    }
+
+    /// An inherited shape carries no line ends or dash, so a connector asking
+    /// for one, or bending, is still left out rather than drawn as a plain line.
+    #[test]
+    fn a_layout_connector_this_walk_cannot_draw_faithfully_is_left_out() {
+        for (prst, extra) in [
+            ("straightConnector1", r#"<a:tailEnd type="triangle"/>"#),
+            ("straightConnector1", r#"<a:prstDash val="dash"/>"#),
+            ("bentConnector3", ""),
+        ] {
+            assert!(layout_shapes(&connector(prst, extra)).is_empty(), "{prst} {extra}");
+        }
     }
 
     #[test]
