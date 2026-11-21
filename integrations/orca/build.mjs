@@ -9,7 +9,6 @@
 // `orca plugin check <dir>` and try it with `orca plugin dev load <dir>`.
 import fs from 'node:fs';
 import path from 'node:path';
-import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -25,7 +24,9 @@ const web = path.join(root, 'web');
 const editor = path.join(out, 'editor');
 
 // Orca's isolated frames read WebAssembly, scripts and JSON whole, at most
-// 16 MiB a file. The engine is larger, so it ships gzipped in parts.
+// 16 MiB a file. The engine is larger, so it ships in parts that the page
+// joins. They stay plain WebAssembly: the community catalog refuses archives
+// (a gzipped engine was rejected as one).
 const PART_BYTES = 15 * 1024 * 1024;
 // A plugin folder holds at most 50 MiB.
 const PLUGIN_MAX_BYTES = 50 * 1024 * 1024;
@@ -61,8 +62,7 @@ async function __oxiEngineBytes() {
         if (!r.ok) throw new Error(name + ': HTTP ' + r.status);
         return new Uint8Array(await r.arrayBuffer());
     }));
-    const gz = new Blob(parts);
-    return await new Response(gz.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    return await new Blob(parts).arrayBuffer();
 }
 `;
 
@@ -133,6 +133,8 @@ function buildPage(parts) {
   let html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
   // No network in Orca's frame: Google Fonts would only be refused.
   html = html.replace(/\s*<link[^>]*(fonts\.googleapis\.com|fonts\.gstatic\.com)[^>]*>/g, '');
+  // Orca shows its own tab icon, and the community catalog refuses .ico files.
+  html = html.replace(/\s*<link rel="icon"[^>]*>/g, '');
   // The slides-only engine lacks the Word, Excel and VBA exports; importing
   // the module as a namespace leaves those undefined instead of failing.
   html = patch(html, /import init, \{([^}]*)\} from '\.\/oxidocs_wasm\.js';/,
@@ -159,11 +161,11 @@ const wasm = path.join(pkg, 'oxidocs_wasm_bg.wasm');
 if (!fs.existsSync(wasm)) {
   throw new Error(`${wasm} is missing: build the slides engine first (see the top of this file)`);
 }
-const gz = zlib.gzipSync(fs.readFileSync(wasm), { level: 9 });
+const engine = fs.readFileSync(wasm);
 const parts = [];
-for (let i = 0; i * PART_BYTES < gz.length; i++) {
-  const name = `oxidocs_engine.gz.${i}.wasm`;
-  fs.writeFileSync(path.join(editor, name), gz.subarray(i * PART_BYTES, (i + 1) * PART_BYTES));
+for (let i = 0; i * PART_BYTES < engine.length; i++) {
+  const name = `oxidocs_engine.${i}.wasm`;
+  fs.writeFileSync(path.join(editor, name), engine.subarray(i * PART_BYTES, (i + 1) * PART_BYTES));
   parts.push(name);
 }
 fs.copyFileSync(path.join(pkg, 'oxidocs_wasm.js'), path.join(editor, 'oxidocs_wasm.js'));
@@ -185,7 +187,7 @@ while (queue.length) {
   }
 }
 // Loaded by name at run time rather than as a './' literal.
-for (const name of ['vba-worker.js', 'row-heights.json', 'favicon.ico']) {
+for (const name of ['vba-worker.js', 'row-heights.json']) {
   if (!copied.has(name) && fs.existsSync(path.join(web, name))) {
     fs.copyFileSync(path.join(web, name), path.join(editor, name));
   }
