@@ -20,6 +20,20 @@ node integrations/office-js-extension/build.mjs
 Then open `chrome://extensions` (or `edge://extensions`), turn on developer
 mode, choose **Load unpacked** and pick `integrations/office-js-extension/`.
 
+## Checking it in a real browser
+
+```
+node integrations/office-js-extension/build.mjs
+node integrations/office-js-extension/browser-check.mjs
+```
+
+Headless Edge loads the extension, opens a stand-in editor on localhost and an
+add-in page that asks for Microsoft's office.js; the check passes when that
+request is answered by oxi-office.js and the add-in's writes reach the editor.
+(A redirect needs host access to the page making the request as well as to
+office.js's address, which is why the editor's addresses are in
+`host_permissions`.)
+
 ## What an add-in can do
 
 What `oxi-office.js` implements: ranges (values, formulas, number formats,

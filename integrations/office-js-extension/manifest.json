@@ -8,7 +8,11 @@
     "nativeMessaging"
   ],
   "host_permissions": [
-    "https://appsforoffice.microsoft.com/*"
+    "https://appsforoffice.microsoft.com/*",
+    "https://oxi-dd65f4.gitlab.io/*",
+    "https://ryujiyasu.gitlab.io/oxi/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "background.js"
