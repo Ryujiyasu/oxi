@@ -1496,8 +1496,11 @@ pub fn add_pivot_parts(data: &[u8], added: &[(PivotSpec, PivotGrid)]) -> Result<
         );
     }
     // The workbook lists its caches after its calculation settings.
-    if !workbook.contains(&format!("xmlns:r=\"{REL_NS}\"")) {
-        workbook = workbook.replacen("<workbook ", &format!("<workbook xmlns:r=\"{REL_NS}\" "), 1);
+    // The `r` prefix has to be in scope on the root: openpyxl declares it on
+    // each <sheet> instead, which leaves <pivotCaches> without it.
+    let root_end = workbook.find("<workbook").and_then(|at| workbook[at..].find('>').map(|end| at + end)).unwrap_or(0);
+    if !workbook[..root_end].contains("xmlns:r=") {
+        workbook = workbook.replacen("<workbook", &format!("<workbook xmlns:r=\"{REL_NS}\""), 1);
     }
     if let Some(at) = workbook.find("</pivotCaches>") {
         workbook.insert_str(at, &caches_xml);
