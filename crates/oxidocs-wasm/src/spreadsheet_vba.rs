@@ -29,6 +29,9 @@ mod value_transport_tests;
 mod shapes;
 #[path = "spreadsheet_vba_shapes_members.rs"]
 mod shapes_members;
+#[path = "spreadsheet_vba_pivot.rs"]
+mod pivot_tables;
+use pivot_tables::{PivotAxis, PivotFieldRef};
 #[path = "spreadsheet_vba_regexp.rs"]
 mod regexp;
 #[path = "spreadsheet_vba_file_io.rs"]
@@ -487,6 +490,18 @@ enum HostObject {
     /// The tables of a sheet, one table by its number, and a table's rows
     /// and columns.
     ListObjects(usize),
+    /// A sheet's pivot tables.
+    PivotTables(usize),
+    /// A pivot table, by its place in the workbook's list.
+    PivotTable(usize),
+    PivotCache(usize),
+    PivotFields(usize, PivotAxis),
+    PivotField(usize, PivotFieldRef),
+    /// The workbook's pivot caches.
+    PivotCaches,
+    /// A cache a macro made, by its place in the host's list, not yet feeding
+    /// a table.
+    NewPivotCache(usize),
     ListObject(u64),
     ListRows(u64),
     ListRow(u64, u32),
@@ -3533,6 +3548,8 @@ struct WorkbookHost<'a> {
     /// `Find("apple", SearchDirection:=xlPrevious)` still looks at whole
     /// cells -- while MatchCase is not kept.
     find_settings: (i64, i64, i64),
+    /// The sources of the pivot caches a macro has made (`PivotCaches.Create`).
+    pivot_caches: Vec<(String, (u32, u32, u32, u32))>,
     selection: CellRange,
     cell_selection_areas: std::collections::HashMap<usize, Vec<CellRange>>,
     application_selection: Option<Vec<CellRange>>,
@@ -3934,6 +3951,7 @@ impl<'a> WorkbookHost<'a> {
             auto_filter: None,
             advanced_filter: None,
             find_settings: (-4163, 2, 1),
+            pivot_caches: Vec::new(),
             user_functions: Default::default(),
             selection: CellRange::single(CellAddress {
                 sheet: active_sheet,
@@ -4740,6 +4758,13 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::PageSetup(_) => "PageSetup",
                 HostObject::SheetProtection(_) => "Protection",
                 HostObject::ListObjects(_) => "ListObjects",
+                HostObject::PivotTables(_) => "PivotTables",
+                HostObject::PivotTable(_) => "PivotTable",
+                HostObject::PivotCache(_) => "PivotCache",
+                HostObject::PivotFields(..) => "PivotFields",
+                HostObject::PivotField(..) => "PivotField",
+                HostObject::PivotCaches => "PivotCaches",
+                HostObject::NewPivotCache(_) => "PivotCache",
                 HostObject::ListObject(_) => "ListObject",
                 HostObject::ListRows(_) => "ListRows",
                 HostObject::ListRow(..) => "ListRow",
@@ -15730,6 +15755,7 @@ impl<'a> WorkbookHost<'a> {
                 HostObject::PageSetup(sheet) => moved(sheet).map(HostObject::PageSetup),
                 HostObject::SheetProtection(sheet) => moved(sheet).map(HostObject::SheetProtection),
                 HostObject::ListObjects(sheet) => moved(sheet).map(HostObject::ListObjects),
+                HostObject::PivotTables(sheet) => moved(sheet).map(HostObject::PivotTables),
                 HostObject::Validation(held) => range(held).map(HostObject::Validation),
                 HostObject::FormatConditions(held) => range(held).map(HostObject::FormatConditions),
                 HostObject::DisplayFormat(held) => range(held).map(HostObject::DisplayFormat),
@@ -15827,6 +15853,12 @@ impl<'a> WorkbookHost<'a> {
                 | HostObject::RegExpMatch(..)
                 | HostObject::RegExpSubMatches(..)
                 | HostObject::SheetGroup(_)
+                | HostObject::PivotTable(_)
+                | HostObject::PivotCache(_)
+                | HostObject::PivotFields(..)
+                | HostObject::PivotField(..)
+                | HostObject::PivotCaches
+                | HostObject::NewPivotCache(_)
                 | HostObject::Gone => continue,
             };
             *object = followed.unwrap_or(HostObject::Gone);
@@ -33850,6 +33882,13 @@ impl Host for WorkbookHost<'_> {
                         _ => Err("Hyperlinks expects zero or one argument".to_string()),
                     };
                 }
+                if name.eq_ignore_ascii_case("pivottables") {
+                    return match args {
+                        [] => Ok(Some(self.object(HostObject::PivotTables(sheet)))),
+                        [wanted] => self.pivot_member(HostObject::PivotTables(sheet), "item", std::slice::from_ref(wanted)),
+                        _ => Err("PivotTables expects zero or one argument".to_string()),
+                    };
+                }
                 if name.eq_ignore_ascii_case("listobjects") {
                     return match args {
                         [] => Ok(Some(self.object(HostObject::ListObjects(sheet)))),
@@ -34061,6 +34100,13 @@ impl Host for WorkbookHost<'_> {
             // and ProtectStructure follows Protect and Unprotect.
             if self.is_workbook(receiver) {
                 if name.eq_ignore_ascii_case("linksources") { return self.workbook_link_sources(args).map(Some); }
+                if name.eq_ignore_ascii_case("pivotcaches") {
+                    return match args {
+                        [] => Ok(Some(self.object(HostObject::PivotCaches))),
+                        [wanted] => self.pivot_member(HostObject::PivotCaches, "item", std::slice::from_ref(wanted)),
+                        _ => Err(host_error(450, "PivotCaches takes one index")),
+                    };
+                }
                 if name.eq_ignore_ascii_case("iconsets") {
                     return match args { [] => Ok(Some(self.object(HostObject::IconSets))), [index] => self.icon_set_item(index).map(Some), _ => Err(host_error(450, "IconSets takes one index")) };
                 }
@@ -34075,6 +34121,9 @@ impl Host for WorkbookHost<'_> {
                     return Ok(Some(Value::Empty));
                 }
                 if name.eq_ignore_ascii_case("refreshall") {
+                    // Measured: RefreshAll lays every pivot table out again
+                    // over its source as it stands.
+                    self.refresh_all_pivots()?;
                     self.recalculate();
                     return Ok(Some(Value::Empty));
                 }
@@ -34099,6 +34148,9 @@ impl Host for WorkbookHost<'_> {
             }
             if let Some(sheet) = self.list_objects_sheet(receiver) {
                 return self.list_objects_member(sheet, name, args);
+            }
+            if let Some(held) = self.pivot_object(receiver) {
+                return self.pivot_member(held, name, args);
             }
             if let Some(sheet) = self.page_setup_sheet(receiver) {
                 return self.page_setup_member(sheet, name);
@@ -35797,6 +35849,9 @@ impl Host for WorkbookHost<'_> {
         if let Some(sheet) = self.list_objects_sheet(receiver) {
             return self.list_objects_member(sheet, name, &[]);
         }
+        if let Some(held) = self.pivot_object(receiver) {
+            return self.pivot_member(held, name, &[]);
+        }
         if let Some(sheet) = self.page_setup_sheet(receiver) {
             return self.page_setup_member(sheet, name);
         }
@@ -36689,6 +36744,9 @@ impl Host for WorkbookHost<'_> {
             if name.eq_ignore_ascii_case("listobjects") {
                 return Ok(Some(self.object(HostObject::ListObjects(sheet))));
             }
+            if name.eq_ignore_ascii_case("pivottables") {
+                return Ok(Some(self.object(HostObject::PivotTables(sheet))));
+            }
             if name.eq_ignore_ascii_case("pagesetup") {
                 return Ok(Some(self.object(HostObject::PageSetup(sheet))));
             }
@@ -36897,6 +36955,7 @@ impl Host for WorkbookHost<'_> {
         }
         if self.is_workbook(receiver) {
             if name.eq_ignore_ascii_case("linksources") { return self.workbook_link_sources(&[]).map(Some); }
+            if name.eq_ignore_ascii_case("pivotcaches") { return Ok(Some(self.object(HostObject::PivotCaches))); }
             if name.eq_ignore_ascii_case("iconsets") { return Ok(Some(self.object(HostObject::IconSets))); }
             if name.eq_ignore_ascii_case("colors") {
                 return Ok(Some(self.workbook_colors_value()));
@@ -37530,6 +37589,13 @@ impl Host for WorkbookHost<'_> {
         }
         if name.eq_ignore_ascii_case("commentthreaded") {
             return Ok(Some(self.threaded_comment_of(range)));
+        }
+        // The table a cell stands in: measured, Range("C7").PivotTable.Name is
+        // the table's name.
+        if name.eq_ignore_ascii_case("pivottable") {
+            if let Some(index) = self.pivot_at(range.first()) {
+                return Ok(Some(self.object(HostObject::PivotTable(index))));
+            }
         }
         // Of a cell in no pivot table, query table or outline: measured, each
         // of these raises 1004.
@@ -38582,6 +38648,9 @@ impl Host for WorkbookHost<'_> {
         }
         if let Some((id, part)) = self.table_part(receiver) {
             return self.set_table(id, part, name, value);
+        }
+        if let Some(held) = self.pivot_object(receiver) {
+            return self.set_pivot_member(held, name, &value);
         }
         if let Some(sheet) = self.page_setup_sheet(receiver) {
             return self.set_page_setup(sheet, name, value);
@@ -39987,6 +40056,9 @@ impl Host for WorkbookHost<'_> {
                 items.push(self.scoped_condition(id, range));
             }
             return Ok(Some(items));
+        }
+        if let Some(held) = self.pivot_object(receiver) {
+            return Ok(self.pivot_enumerate(held));
         }
         if let Some(sheet) = self.list_objects_sheet(receiver) {
             let names: Vec<String> = self.workbook.sheets[sheet]
@@ -48160,6 +48232,7 @@ struct WorkbookHostState {
     advanced_filter: Option<CellRange>,
     user_functions: std::rc::Rc<std::cell::RefCell<UserFunctions>>,
     find_settings: (i64, i64, i64),
+    pivot_caches: Vec<(String, (u32, u32, u32, u32))>,
     selection: CellRange,
     cell_selection_areas: std::collections::HashMap<usize, Vec<CellRange>>,
     application_selection: Option<Vec<CellRange>>,
@@ -48334,13 +48407,13 @@ struct WorkbookHostState {
 
 impl<'a> WorkbookHost<'a> {
     fn into_parts(self) -> (WorkbookStorage<'a>,WorkbookHostState) {
-        let Self { external_formula_sources: _, workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, cell_selection_areas, application_selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, normal_row_defaults, table_counter, table_identity_counter, next_link, linked_once, split, builtin_style_base, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, external_link_order, open_external_books, chart_link_sources, window_frames, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, drawing_identities, comment_shape_aliases, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = self;
-        (workbook,WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, cell_selection_areas, application_selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, normal_row_defaults, table_counter, table_identity_counter, next_link, linked_once, split, builtin_style_base, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, external_link_order, open_external_books, chart_link_sources, window_frames, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, drawing_identities, comment_shape_aliases, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects })
+        let Self { external_formula_sources: _, workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, cell_selection_areas, application_selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, normal_row_defaults, table_counter, table_identity_counter, next_link, linked_once, split, builtin_style_base, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, external_link_order, open_external_books, chart_link_sources, window_frames, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, drawing_identities, comment_shape_aliases, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects, pivot_caches } = self;
+        (workbook,WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, cell_selection_areas, application_selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, normal_row_defaults, table_counter, table_identity_counter, next_link, linked_once, split, builtin_style_base, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, external_link_order, open_external_books, chart_link_sources, window_frames, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, drawing_identities, comment_shape_aliases, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects, pivot_caches })
     }
 
     fn resume_storage(workbook:WorkbookStorage<'a>, state: WorkbookHostState) -> Self {
-        let WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, cell_selection_areas, application_selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, normal_row_defaults, table_counter, table_identity_counter, next_link, linked_once, split, builtin_style_base, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, external_link_order, open_external_books, chart_link_sources, window_frames, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, drawing_identities, comment_shape_aliases, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects } = state;
-        Self { external_formula_sources: Default::default(), workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, cell_selection_areas, application_selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, normal_row_defaults, table_counter, table_identity_counter, next_link, linked_once, split, builtin_style_base, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, external_link_order, open_external_books, chart_link_sources, window_frames, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, drawing_identities, comment_shape_aliases, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects }
+        let WorkbookHostState { active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, cell_selection_areas, application_selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, normal_row_defaults, table_counter, table_identity_counter, next_link, linked_once, split, builtin_style_base, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, external_link_order, open_external_books, chart_link_sources, window_frames, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, drawing_identities, comment_shape_aliases, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects, pivot_caches } = state;
+        Self { external_formula_sources: Default::default(), workbook, active_sheet, clipboard, pending_cut, auto_filter, advanced_filter, user_functions, find_settings, selection, cell_selection_areas, application_selection, active_cell, screen_updating, enable_events, display_alerts, calculation, protected, unlocked, hidden_formulas, notes, links, validations, conditions, data_bar_point_snapshots, data_bar_color_snapshots, condition_modified, next_condition, table_handles, table_extra, next_table, page_setups, selections, sheet_counter, chart_sheet_counter, sort_memory, views, outlines, tabs, sorts, shapes, shape_counters, next_shape_id, shape_clipboard, shape_selection, shape_ranges, regexps, sheet_groups, selected_group, regexp_hits, rotations, underlines, hatchings, indented, automatic_fonts, raised, book_protected, theme_fonts, templates, normal_row_defaults, table_counter, table_identity_counter, next_link, linked_once, split, builtin_style_base, styled, theme_paint, status_bar, cursor, interactive, last_find, objects, wrote, now, blocks, app_settings, application_font, cell_ids, name_handles, saved, compilation_stamp, compiled_modules, file_name, external_link_order, open_external_books, chart_link_sources, window_frames, window_caption, debug_output, messages, singletons, automation_code_page, application_setting_dirtied, comment_shape_counters, drawing_identities, comment_shape_aliases, document_code_names, error_language, file_io, ole_object_counters, threaded_notes, workbook_code_name, find_format_add_indent, find_format_bold, find_format_borders, find_format_font_color, find_format_font_color_index, find_format_font_name, find_format_font_size, find_format_font_theme, find_format_font_theme_font, find_format_font_tint, find_format_formula_hidden, find_format_horizontal_alignment, find_format_indent_level, find_format_interior_color, find_format_interior_color_index, find_format_interior_pattern, find_format_interior_theme_color, find_format_interior_tint, find_format_italic, find_format_locked, find_format_merge_cells, find_format_number_format, find_format_orientation, find_format_pattern_color, find_format_pattern_color_index, find_format_pattern_theme_color, find_format_pattern_tint, find_format_shrink_to_fit, find_format_strikethrough, find_format_subscript, find_format_superscript, find_format_underline, find_format_vertical_alignment, find_format_wrap_text, replace_format_add_indent, replace_format_bold, replace_format_borders, replace_format_font_color, replace_format_font_face_actions, replace_format_font_name, replace_format_font_paint_actions, replace_format_font_size, replace_format_font_theme_font, replace_format_font_touched, replace_format_formula_hidden, replace_format_horizontal_alignment, replace_format_indent_level, replace_format_interior_actions, replace_format_interior_color, replace_format_interior_pattern, replace_format_italic, replace_format_locked, replace_format_merge_cells, replace_format_number_format, replace_format_orientation, replace_format_pattern_color, replace_format_shrink_to_fit, replace_format_strikethrough, replace_format_subscript, replace_format_superscript, replace_format_underline, replace_format_vertical_alignment, replace_format_wrap_text, replace_format_font_color_index, replace_format_font_theme, replace_format_font_tint, replace_format_interior_color_index, replace_format_interior_theme_color, replace_format_interior_tint, replace_format_pattern_color_index, replace_format_pattern_theme_color, replace_format_pattern_tint, document_objects, pivot_caches }
     }
 }
 

@@ -1232,6 +1232,17 @@ impl XlsxEditor {
                 }
             }
         }
+        // A pivot table a macro made is written out with its parts. Its sheets
+        // and source are the edited book's -- a macro that made the table
+        // usually made the sheet it stands on too -- and the definition is the
+        // one the macro built.
+        for spec in edited.pivots.iter().filter(|spec| spec.created) {
+            let get = crate::pivot::source_reader(edited, &spec.source_sheet);
+            let grid = crate::pivot::compute(spec, &get, crate::pivot::Ui::Japanese);
+            let mut spec = spec.clone();
+            spec.created = false;
+            self.pivot_additions.push((spec, grid));
+        }
         Ok(())
     }
 

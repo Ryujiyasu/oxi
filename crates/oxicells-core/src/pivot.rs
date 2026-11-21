@@ -25,9 +25,10 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
 use crate::ir::{CellValue, Workbook};
+use serde::{Deserialize, Serialize};
 
 /// How a value field combines the source cells that land on one pivot cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Aggregate {
     Sum,
     Count,
@@ -60,7 +61,7 @@ impl Aggregate {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataField {
     pub name: String,
     pub field: usize,
@@ -68,7 +69,7 @@ pub struct DataField {
 }
 
 /// How the row fields are laid out: Excel's three report layouts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RowLayout {
     /// All row fields in one column, subtotals on the parent's row.
     Compact,
@@ -80,7 +81,7 @@ pub enum RowLayout {
 }
 
 /// One pivot table, as its parts define it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PivotSpec {
     pub name: String,
     /// The sheet the table stands on, as the workbook names it.
@@ -118,6 +119,10 @@ pub struct PivotSpec {
     pub show_col_headers: bool,
     pub show_row_stripes: bool,
     pub show_col_stripes: bool,
+    /// Made in this session (a macro's CreatePivotTable) and not yet in the
+    /// package: saving writes its parts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub created: bool,
 }
 
 /// The words a pivot shows that its file does not spell out, by UI language.
@@ -349,6 +354,7 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
         show_col_headers: true,
         show_row_stripes: false,
         show_col_stripes: false,
+        created: false,
     };
     let mut field = None::<usize>;
     let mut next_field = 0usize;
@@ -358,7 +364,11 @@ fn parse_table(xml: &str, sheet: &str, cache: &Cache) -> Option<PivotSpec> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match local(e.name().as_ref()).as_str() {
-                "pivotTableDefinition" => {
+                // Only the table's own element: the x14 extension a created
+                // table carries is also a `pivotTableDefinition` (with
+                // hideValuesRow), and reading it as one blanked the name and
+                // captions of every table Oxi made.
+                "pivotTableDefinition" if !e.name().as_ref().contains(&b':') => {
                     spec.name = attr(&e, "name").unwrap_or_default();
                     spec.row_header_caption = attr(&e, "rowHeaderCaption");
                     spec.col_header_caption = attr(&e, "colHeaderCaption");
@@ -1288,9 +1298,25 @@ pub fn lookup(spec: &PivotSpec, get: &dyn Fn(u32, u32) -> CellValue) -> oxicells
     oxicells_calc::PivotLookup { sheet: spec.sheet.clone(), range, data_names, values }
 }
 
+/// A source column's distinct values in the order a new table lists them:
+/// ascending, months and weekdays by the built-in lists.
+pub fn ascending_items(source: (u32, u32, u32, u32), field: usize, get: &dyn Fn(u32, u32) -> CellValue) -> Vec<CellValue> {
+    let (r0, c0, r1, _) = source;
+    let mut seen = std::collections::HashSet::new();
+    let mut items: Vec<CellValue> = Vec::new();
+    for r in r0 + 1..=r1 {
+        let v = get(r, c0 + field as u32);
+        if seen.insert(key(&v)) {
+            items.push(v);
+        }
+    }
+    items.sort_by(ascending);
+    items
+}
+
 /// A pivot table to be created: which source columns go where. Field indices
 /// count the source range's columns from zero.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewPivot {
     pub name: String,
     pub source_sheet: String,
@@ -1357,16 +1383,7 @@ pub fn spec_for_new(new: &NewPivot, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui)
     // A new table lists every field's items in ascending order.
     let mut item_order = vec![Vec::new(); width];
     for f in new.rows.iter().chain(&new.cols).chain(&new.pages) {
-        let mut seen = std::collections::HashSet::new();
-        let mut items: Vec<CellValue> = Vec::new();
-        for r in r0 + 1..=r1 {
-            let v = get(r, c0 + *f as u32);
-            if seen.insert(key(&v)) {
-                items.push(v);
-            }
-        }
-        items.sort_by(ascending);
-        item_order[*f] = items;
+        item_order[*f] = ascending_items(new.source, *f, get);
     }
     let mut cols: Vec<Option<usize>> = new.cols.iter().map(|c| Some(*c)).collect();
     if new.data.len() > 1 {
@@ -1402,6 +1419,7 @@ pub fn spec_for_new(new: &NewPivot, get: &dyn Fn(u32, u32) -> CellValue, ui: Ui)
         show_col_headers: true,
         show_row_stripes: false,
         show_col_stripes: false,
+        created: false,
     }
 }
 
@@ -1762,6 +1780,7 @@ mod tests {
             show_col_headers: true,
             show_row_stripes: false,
             show_col_stripes: false,
+            created: false,
         };
         let grid = compute(&spec, &get, Ui::English);
         assert_eq!(grid.kinds.len(), grid.cells.len());

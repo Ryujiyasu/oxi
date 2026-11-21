@@ -85,9 +85,10 @@ pub struct NamedCellStyle {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
-    /// The pivot tables the package defines, for GETPIVOTDATA. Read from the
-    /// parts, not carried through serialisation.
-    #[serde(skip)]
+    /// The pivot tables the package defines (and any a macro made), for
+    /// GETPIVOTDATA and a macro's PivotTables. Carried through serialisation
+    /// so a workbook that goes out to the page and back keeps them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pivots: Vec<crate::pivot::PivotSpec>,
     /// Copy instance identity -> source-template identity. A copy owns its
     /// edits while its template retains package features not represented here.
