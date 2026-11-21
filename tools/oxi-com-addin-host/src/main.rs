@@ -18,7 +18,13 @@
 //! told of `SheetChange` (DISPID 0x61C, Sh and Target) for each `--edit`
 //! made after it connected, as Excel tells it of a cell changed.
 //!
-//!   oxi-com-addin-host <ProgID> <in.xlsx> <out.xlsx> [--edit A2=5]...
+//! An add-in that is also IRibbonExtensibility is asked for its ribbon
+//! (`GetCustomUI("Microsoft.Excel.Workbook")`, the ID Excel asks with); the
+//! XML comes back in the output, and `--press <id>` presses one of its
+//! controls: its onAction callback is called by name through the add-in's
+//! IDispatch with an IRibbonControl (Id, Tag, Context), as Office calls it.
+//!
+//!   oxi-com-addin-host <ProgID> <in.xlsx> <out.xlsx> [--edit A2=5]... [--press id]...
 
 #[cfg(windows)]
 mod host {
@@ -41,6 +47,65 @@ mod host {
         fn OnAddInsUpdate(&self, custom: *mut *mut SAFEARRAY) -> HRESULT;
         fn OnStartupComplete(&self, custom: *mut *mut SAFEARRAY) -> HRESULT;
         fn OnBeginShutdown(&self, custom: *mut *mut SAFEARRAY) -> HRESULT;
+    }
+
+    /// Office's ribbon interface (mso.dll), dual.
+    #[windows::core::interface("000C0396-0000-0000-C000-000000000046")]
+    pub unsafe trait IRibbonExtensibility: IDispatch {
+        fn GetCustomUI(&self, ribbon_id: std::mem::ManuallyDrop<BSTR>, xml: *mut BSTR) -> HRESULT;
+    }
+
+    /// The control a ribbon callback is told of: Id, Tag and Context.
+    #[implement(IDispatch)]
+    struct RibbonControl {
+        id: String,
+        tag: String,
+        context: IDispatch,
+    }
+
+    impl IDispatch_Impl for RibbonControl_Impl {
+        fn GetTypeInfoCount(&self) -> Result<u32> {
+            Ok(0)
+        }
+        fn GetTypeInfo(&self, _: u32, _: u32) -> Result<ITypeInfo> {
+            Err(E_NOTIMPL.into())
+        }
+        fn GetIDsOfNames(&self, _: *const GUID, names: *const PCWSTR, count: u32, _: u32, ids: *mut i32) -> Result<()> {
+            for i in 0..count as usize {
+                let name = unsafe { (*names.add(i)).to_string().unwrap_or_default() }.to_ascii_lowercase();
+                let id = match name.as_str() {
+                    "id" => 1,
+                    "tag" => 2,
+                    "context" => 3,
+                    _ => return Err(DISP_E_UNKNOWNNAME.into()),
+                };
+                unsafe { *ids.add(i) = id };
+            }
+            Ok(())
+        }
+        fn Invoke(&self, id: i32, _: *const GUID, _: u32, _: DISPATCH_FLAGS, _: *const DISPPARAMS, result: *mut VARIANT, _: *mut EXCEPINFO, _: *mut u32) -> Result<()> {
+            let value = match id {
+                1 => VARIANT::from(BSTR::from(self.id.as_str())),
+                2 => VARIANT::from(BSTR::from(self.tag.as_str())),
+                3 => make(VT_DISPATCH.0, self.context.clone().into_raw() as u64),
+                _ => return Err(DISP_E_MEMBERNOTFOUND.into()),
+            };
+            if !result.is_null() {
+                unsafe { std::ptr::write(result, value) };
+            }
+            Ok(())
+        }
+    }
+
+    /// An attribute of the element with `id="<id>"` in ribbon XML.
+    fn ribbon_attribute(xml: &str, id: &str, attribute: &str) -> Option<String> {
+        let at = xml.find(&format!("id=\"{id}\""))?;
+        let start = xml[..at].rfind('<')?;
+        let end = at + xml[at..].find('>')?;
+        let element = &xml[start..end];
+        let key = format!("{attribute}=\"");
+        let from = element.find(&key)? + key.len();
+        Some(element[from..].split('"').next()?.to_string())
     }
 
     thread_local! {
@@ -279,7 +344,7 @@ mod host {
         }
     }
 
-    pub fn run(prog_id: &str, input: &str, output: &str, edits: &[(String, String)]) -> std::result::Result<serde_json::Value, String> {
+    pub fn run(prog_id: &str, input: &str, output: &str, edits: &[(String, String)], presses: &[String]) -> std::result::Result<serde_json::Value, String> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
@@ -317,6 +382,30 @@ mod host {
                 sheet_change(&touched.0, &touched.1);
             }
             steps.insert("events".into(), serde_json::json!(SINKS.with(|s| s.borrow().len())));
+            // The ribbon, when the add-in has one.
+            if let Ok(ribbon) = addin.cast::<IRibbonExtensibility>() {
+                let mut xml = BSTR::new();
+                let asked = ribbon.GetCustomUI(std::mem::ManuallyDrop::new(BSTR::from("Microsoft.Excel.Workbook")), &mut xml);
+                let xml = xml.to_string();
+                steps.insert("ribbon".into(), serde_json::json!({"GetCustomUI": format!("{asked:?}"), "xml": xml}));
+                let callbacks: IDispatch = addin.cast().map_err(|e| e.to_string())?;
+                for id in presses {
+                    let Some(action) = ribbon_attribute(&xml, id, "onAction") else {
+                        steps.insert(format!("press {id}"), serde_json::json!("no such control"));
+                        continue;
+                    };
+                    let control: IDispatch = RibbonControl { id: id.clone(), tag: ribbon_attribute(&xml, id, "tag").unwrap_or_default(), context: application.clone() }.into();
+                    let name = HSTRING::from(action.as_str());
+                    let names = [PCWSTR(name.as_ptr())];
+                    let mut dispid = 0i32;
+                    let called = callbacks.GetIDsOfNames(&GUID::zeroed(), names.as_ptr(), 1, 0, &mut dispid).and_then(|()| {
+                        let mut args = [make(VT_DISPATCH.0, control.clone().into_raw() as u64)];
+                        let params = DISPPARAMS { rgvarg: args.as_mut_ptr(), rgdispidNamedArgs: std::ptr::null_mut(), cArgs: 1, cNamedArgs: 0 };
+                        callbacks.Invoke(dispid, &GUID::zeroed(), 0, DISPATCH_METHOD, &params, None, None, None)
+                    });
+                    steps.insert(format!("press {id}"), serde_json::json!(format!("{action}: {called:?}")));
+                }
+            }
             steps.insert("OnBeginShutdown".into(), serde_json::json!(format!("{:?}", addin.OnBeginShutdown(&mut custom))));
             steps.insert("OnDisconnection".into(), serde_json::json!(format!("{:?}", addin.OnDisconnection(1, &mut custom))));
             let _ = SafeArrayDestroy(custom);
@@ -339,7 +428,8 @@ fn main() {
         .filter(|w| w[0] == "--edit")
         .filter_map(|w| w[1].split_once('=').map(|(a, v)| (a.to_string(), v.to_string())))
         .collect();
-    match host::run(&args[1], &args[2], &args[3], &edits) {
+    let presses: Vec<String> = args[4..].windows(2).filter(|w| w[0] == "--press").map(|w| w[1].clone()).collect();
+    match host::run(&args[1], &args[2], &args[3], &edits, &presses) {
         Ok(steps) => println!("{steps}"),
         Err(error) => {
             eprintln!("{error}");

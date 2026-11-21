@@ -165,12 +165,33 @@ unsafe fn listen(app: &IDispatch) -> Result<()> {
     Ok(())
 }
 
-#[implement(IDTExtensibility2, IDispatch)]
+/// Office's ribbon interface (mso.dll), dual: the add-in's own controls.
+#[windows::core::interface("000C0396-0000-0000-C000-000000000046")]
+pub unsafe trait IRibbonExtensibility: IDispatch {
+    fn GetCustomUI(&self, ribbon_id: std::mem::ManuallyDrop<BSTR>, xml: *mut BSTR) -> HRESULT;
+}
+
+/// One button on a tab of its own; pressing it calls OnOxiButton.
+const RIBBON: &str = r#"<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui"><ribbon><tabs><tab id="oxiTab" label="Oxi"><group id="oxiGroup" label="Test"><button id="oxiButton" label="Press" onAction="OnOxiButton"/></group></tab></tabs></ribbon></customUI>"#;
+
+/// The application, kept from OnConnection for the ribbon callback.
+static mut APP: Option<IDispatch> = None;
+
+#[implement(IDTExtensibility2, IRibbonExtensibility, IDispatch)]
 struct AddIn;
+
+impl IRibbonExtensibility_Impl for AddIn_Impl {
+    unsafe fn GetCustomUI(&self, ribbon_id: std::mem::ManuallyDrop<BSTR>, xml: *mut BSTR) -> HRESULT {
+        trace(format!("GetCustomUI {}", ribbon_id.to_string()));
+        std::ptr::write(xml, BSTR::from(RIBBON));
+        S_OK
+    }
+}
 
 impl IDTExtensibility2_Impl for AddIn_Impl {
     unsafe fn OnConnection(&self, application: *mut c_void, mode: i32, _: *mut c_void, _: *mut *mut SAFEARRAY) -> HRESULT {
         let Some(app) = IDispatch::from_raw_borrowed(&application) else { return E_POINTER };
+        APP = Some(app.clone());
         let listened = work(app, mode).and_then(|()| listen(app));
         trace(format!("connected mode {mode}: {listened:?}"));
         match listened {
@@ -195,6 +216,8 @@ impl IDTExtensibility2_Impl for AddIn_Impl {
     }
 }
 
+/// The ribbon's callbacks by name: OnOxiButton(control) writes
+/// "pressed <control.Id>" into I1.
 impl IDispatch_Impl for AddIn_Impl {
     fn GetTypeInfoCount(&self) -> Result<u32> {
         Ok(0)
@@ -202,11 +225,31 @@ impl IDispatch_Impl for AddIn_Impl {
     fn GetTypeInfo(&self, _: u32, _: u32) -> Result<ITypeInfo> {
         Err(E_NOTIMPL.into())
     }
-    fn GetIDsOfNames(&self, _: *const GUID, _: *const PCWSTR, _: u32, _: u32, _: *mut i32) -> Result<()> {
-        Err(DISP_E_UNKNOWNNAME.into())
+    fn GetIDsOfNames(&self, _: *const GUID, names: *const PCWSTR, count: u32, _: u32, ids: *mut i32) -> Result<()> {
+        let name = unsafe { (*names).to_string().unwrap_or_default() };
+        trace(format!("callback name {name}"));
+        if count == 1 && name.eq_ignore_ascii_case("OnOxiButton") {
+            unsafe { *ids = 1 };
+            Ok(())
+        } else {
+            Err(DISP_E_UNKNOWNNAME.into())
+        }
     }
-    fn Invoke(&self, _: i32, _: *const GUID, _: u32, _: DISPATCH_FLAGS, _: *const DISPPARAMS, _: *mut VARIANT, _: *mut EXCEPINFO, _: *mut u32) -> Result<()> {
-        Err(DISP_E_MEMBERNOTFOUND.into())
+    fn Invoke(&self, id: i32, _: *const GUID, _: u32, _: DISPATCH_FLAGS, params: *const DISPPARAMS, _: *mut VARIANT, _: *mut EXCEPINFO, _: *mut u32) -> Result<()> {
+        if id != 1 {
+            return Err(DISP_E_MEMBERNOTFOUND.into());
+        }
+        unsafe {
+            let p = &*params;
+            let control = object(&*p.rgvarg.add(p.cArgs as usize - 1))?;
+            let control_id = invoke(&control, "Id", DISPATCH_PROPERTYGET, &[])?;
+            let text = format!("pressed {}", BSTR::try_from(&control_id).map(|s| s.to_string()).unwrap_or_default());
+            let Some(app) = (*std::ptr::addr_of!(APP)).clone() else { return Err(E_FAIL.into()) };
+            let sheet = object(&invoke(&app, "ActiveSheet", DISPATCH_PROPERTYGET, &[])?)?;
+            let i1 = object(&invoke(&sheet, "Range", DISPATCH_PROPERTYGET | DISPATCH_METHOD, &[VARIANT::from(BSTR::from("I1"))])?)?;
+            invoke(&i1, "Value", DISPATCH_PROPERTYPUT, &[VARIANT::from(BSTR::from(text))])?;
+        }
+        Ok(())
     }
 }
 

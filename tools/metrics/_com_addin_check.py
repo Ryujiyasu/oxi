@@ -11,6 +11,8 @@ and removed again at the end.
 
     python tools/metrics/_com_addin_check.py
 """
+import json
+import os
 import subprocess
 import tempfile
 import winreg
@@ -68,8 +70,12 @@ def read(sh):
     return [sh.Range(a).Value for a in ("A1", "B1", "C1", "D1", "E1", "F1", "G1", "H1")] + [sh.Range("B1").Formula]
 
 
+TRACE = Path(os.environ.get("TEMP", tempfile.gettempdir())) / "oxi_testaddin.log"
+
+
 def main():
     register()
+    TRACE.unlink(missing_ok=True)
     work = Path(tempfile.mkdtemp(prefix="oxi_addin_"))
     base, mine = work / "base.xlsx", work / "oxi.xlsx"
     xl = win32com.client.DispatchEx("Excel.Application")
@@ -86,11 +92,16 @@ def main():
         excel = read(wb.ActiveSheet)
         addin.Connect = False
         wb.Close(False)
-        run = subprocess.run([str(HOST), PROGID, str(base), str(mine), "--edit", "A2=5"], capture_output=True, text=True)
-        print("  host:", run.stdout.strip() or run.stderr.strip())
+        run = subprocess.run([str(HOST), PROGID, str(base), str(mine), "--edit", "A2=5", "--press", "oxiButton"], capture_output=True, text=True)
+        try:
+            steps = json.loads(run.stdout)
+        except ValueError:
+            steps = {"error": run.stderr.strip()}
+        print("  host steps:", {k: v for k, v in steps.items() if k != "ribbon"})
         wb = xl.Workbooks.Open(str(mine))
         wb.Application.CalculateFull()
         oxi = read(wb.ActiveSheet)
+        pressed = wb.ActiveSheet.Range("I1").Value
         wb.Close(False)
     finally:
         xl.Quit()
@@ -103,6 +114,13 @@ def main():
         ok += same
         print(f"  {label:22s} excel {a!r:22s} oxi {b!r} {'OK' if same else 'DIFF'}")
     print(f"{ok}/{len(labels)} of what the add-in wrote match Excel")
+    # The ribbon: Excel asks for it on connection (the trace says with which
+    # ID); the host asks with the same ID and presses the button.
+    asked = [line.split(" ", 1)[1].strip() for line in TRACE.read_text(encoding="utf-8").splitlines() if line.startswith("GetCustomUI ")] if TRACE.exists() else []
+    ribbon = steps.get("ribbon", {})
+    same_id = bool(asked) and all(a == "Microsoft.Excel.Workbook" for a in asked)
+    print(f"  ribbon: Excel asked GetCustomUI with {asked} -> {'OK' if same_id else 'DIFF'} (the host asks with Microsoft.Excel.Workbook)")
+    print(f"  ribbon: host got {len(ribbon.get('xml', ''))} characters of XML, press -> {steps.get('press oxiButton')}, I1 = {pressed!r}")
 
 
 if __name__ == "__main__":
