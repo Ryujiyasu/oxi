@@ -297,6 +297,23 @@ impl DocxDocument {
         Ok(serde_json::to_string(&edits).unwrap())
     }
 
+    /// The edits Word's Layout › Size and Layout › Margins make for the
+    /// section holding body paragraph `para`, as a JSON array. `setup_json`
+    /// is `{"size": [width, height]?, "margins": [top, right, bottom, left]?}`
+    /// in twips; the size is given for portrait and turned for a landscape
+    /// section.
+    pub fn page_setup_edits(&self, para: usize, setup_json: &str) -> Result<String, JsError> {
+        #[derive(Deserialize)]
+        struct Setup {
+            size: Option<(u32, u32)>,
+            margins: Option<(u32, u32, u32, u32)>,
+        }
+        let setup: Setup = serde_json::from_str(setup_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let edits = oxidocs_model::edit::page_setup_edits(&self.model, para, setup.size, setup.margins)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(serde_json::to_string(&edits).unwrap())
+    }
+
     /// The edits that give the section holding body paragraph `para` a
     /// header (or, with `footer`, a footer) holding `text`, as a JSON array.
     pub fn header_footer_edits(&self, para: usize, footer: bool, text: &str) -> Result<String, JsError> {

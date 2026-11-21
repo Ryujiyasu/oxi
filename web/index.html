@@ -34,14 +34,15 @@
     --oxi-accent: #C84C3A;        /* 朱色 (Shu-iro) — vermilion accent */
     --oxi-text: #1a1a1a;
     --oxi-text-secondary: #5a5a5a;
-    --oxi-bg: #f7f5f0;            /* 生成り (Kinari) — warm off-white, like washi paper */
+    --oxi-bg: #e8e8e8;            /* Office's neutral gray, as the Word editor (docs.html) */
     --oxi-surface: #ffffff;
-    --oxi-border: #d5d0c8;        /* Warm gray, like aged paper edge */
-    --oxi-hover: #ece8e0;
-    /* Format accent colors — Japanese traditional tones */
-    --oxi-docs: #8B72BE;          /* 藤色 (Fuji-iro) — wisteria purple */
-    --oxi-cells: #86A95B;         /* 萌黄 (Moegi) — fresh green, like bamboo/matcha */
-    --oxi-slides: #E8927C;        /* 鴇色 (Toki-iro) — warm coral, like ibis feathers */
+    --oxi-border: #d6d6d6;
+    --oxi-hover: #e0e0e0;
+    /* Format accent colors: the ones people know these formats by, so a
+       workbook and a deck look like the Word editor's siblings. */
+    --oxi-docs: #185ABD;
+    --oxi-cells: #107C41;
+    --oxi-slides: #C43E1C;
     --oxi-pdf: #B5495B;           /* 紅 (Kurenai) — deep crimson */
     /* Dark mode vars (overridden by .dark) */
     --bg: var(--oxi-bg);
@@ -49,7 +50,7 @@
     --text: var(--oxi-text);
     --text-secondary: var(--oxi-text-secondary);
     --border: var(--oxi-border);
-    --ribbon-bg: #f0ece4;
+    --ribbon-bg: #f3f3f3;
     --ribbon-tab-bg: var(--surface);
     --ribbon-hover: var(--oxi-hover);
     --title-bar-bg: var(--oxi-primary);
@@ -493,7 +494,7 @@ input[type="file"] { display: none; }
     cursor: pointer; font-size: 14px; border-radius: 3px; color: rgba(255,255,255,0.9);
 }
 .zoom-controls button:hover { background: rgba(255,255,255,0.15); }
-.zoom-controls input[type="range"] { width: 100px; cursor: pointer; }
+.zoom-controls input[type="range"] { width: 100px; cursor: pointer; accent-color: #fff; }
 .zoom-controls .zoom-label { min-width: 40px; text-align: center; }
 
 /* Find & Replace dialog */
@@ -995,8 +996,9 @@ input[type="file"] { display: none; }
     border-radius: 4px;
     transition: background 0.1s;
 }
-.slide-thumb:hover { background: #e8e8e8; }
-.slide-thumb.active { background: #dde4f0; }
+.slide-thumb:hover { background: #dcdcdc; }
+.slide-thumb.active { background: #f6dcd4; }
+.dark .slide-thumb.active { background: #4a2a24; }
 .slide-thumb-num {
     font-size: 11px;
     color: #888;
@@ -1014,7 +1016,7 @@ input[type="file"] { display: none; }
 }
 .slide-main .slide-wrapper { zoom: var(--slide-zoom, 1); }
 .slide-thumb.active .slide-thumb-preview {
-    border-color: #C24A30;
+    border-color: var(--oxi-slides);
     border-width: 2px;
 }
 .slide-main {
@@ -1342,6 +1344,35 @@ const I18N = {
 let currentLang = (navigator.language || '').startsWith('ja') ? 'ja' : 'en';
 
 function t(key) { return I18N[currentLang][key] || I18N.en[key] || key; }
+// Ribbon tabs, groups and button tips are written in English where they are
+// defined; in Japanese they show Office's own Japanese names.
+const RIBBON_JA = {
+    // tabs
+    'Insert': '挿入', 'Design': 'デザイン', 'Transitions': '画面切り替え', 'Slide Show': 'スライド ショー',
+    'Developer': '開発', 'View': '表示', 'Hanko': '判子', 'Security': 'セキュリティ',
+    // groups
+    'Charts': 'グラフ', 'Drawing': '図形描画', 'Function Library': '関数ライブラリ', 'Images': '画像',
+    'Macros': 'マクロ', 'Show': '表示', 'Signatures': '署名', 'Slides': 'スライド',
+    'Sort & Filter': '並べ替えとフィルター', 'Stamp': '印鑑', 'Start': 'スライド ショーの開始', 'Text': 'テキスト',
+    'Themes': 'テーマ', 'Transition': '画面切り替え', 'Zoom': 'ズーム',
+    // button tips
+    'Align Left': '左揃え', 'Align Right': '右揃え', 'AutoSum': 'オート SUM', 'Bold': '太字', 'Center': '中央揃え',
+    'Chart': 'グラフ', 'Comma Style': '桁区切りスタイル', 'Copy': 'コピー', 'Cut': '切り取り',
+    'Decrease Decimal': '小数点以下の表示桁数を減らす', 'Fade': 'フェード', 'Filter': 'フィルター',
+    'Find & Replace': '検索と置換', 'From Beginning': '最初から', 'From Current Slide': '現在のスライドから',
+    'Gridlines': '目盛線', 'Headings': '見出し', 'Increase Decimal': '小数点以下の表示桁数を増やす',
+    'Insert Function': '関数の挿入', 'Italic': '斜体', 'Justify': '両端揃え', 'Link': 'リンク', 'Margins': '余白',
+    'New Slide': '新しいスライド', 'None': 'なし', 'Orientation': '印刷の向き', 'Oval (小判型)': '小判型',
+    'Paste': '貼り付け', 'Percent Style': 'パーセント スタイル', 'Picture': '画像', 'Print Layout': '印刷レイアウト',
+    'Read Mode': '閲覧モード', 'Redo (Ctrl+Y)': 'やり直し (Ctrl+Y)', 'Reset Zoom': '100% に戻す',
+    'Round (丸印)': '丸印', 'Run VBA Macro': 'VBA マクロの実行', 'Shape': '図形', 'Shape Fill': '図形の塗りつぶし',
+    'Shape Outline': '図形の枠線', 'Size': 'サイズ', 'Slide': 'スライド イン', 'Sort': '並べ替え',
+    'Square (角印)': '角印', 'Strikethrough': '取り消し線', 'Table': '表', 'Text Box': 'テキスト ボックス',
+    'Underline': '下線', 'Undo (Ctrl+Z)': '元に戻す (Ctrl+Z)', 'Variants': 'バリエーション',
+    'Verify Signatures': '署名の検証', 'Zoom In': '拡大', 'Zoom Out': '縮小',
+    'Font Family': 'フォント', 'Font Size': 'フォント サイズ', 'Font Color': 'フォントの色', 'Highlight Color': '蛍光ペンの色',
+};
+function ribbonText(text) { return currentLang === 'ja' && RIBBON_JA[text] || text; }
 
 function applyI18n() {
     document.querySelectorAll('[data-i18n]').forEach(el => {
@@ -1894,7 +1925,7 @@ function buildRibbon(format) {
     function createFontFamilySelect() {
         const sel = document.createElement('select');
         sel.className = 'ribbon-select ribbon-font-family';
-        sel.title = 'Font Family';
+        sel.title = ribbonText('Font Family');
         for (const f of FONT_FAMILIES) {
             const opt = document.createElement('option');
             opt.value = f;
@@ -1914,7 +1945,7 @@ function buildRibbon(format) {
     function createFontSizeSelect() {
         const sel = document.createElement('select');
         sel.className = 'ribbon-select ribbon-font-size';
-        sel.title = 'Font Size';
+        sel.title = ribbonText('Font Size');
         for (const s of FONT_SIZES) {
             const opt = document.createElement('option');
             opt.value = s;
@@ -1949,7 +1980,7 @@ function buildRibbon(format) {
 
         const btn = document.createElement('button');
         btn.className = 'ribbon-color-btn';
-        btn.title = title;
+        btn.title = ribbonText(title);
         const letterSpan = document.createElement('span');
         letterSpan.textContent = label;
         const bar = document.createElement('span');
@@ -2002,7 +2033,7 @@ function buildRibbon(format) {
         arrow.style.fontSize = '8px';
         arrow.style.minWidth = '14px';
         arrow.textContent = '▼';
-        arrow.title = 'Choose ' + title;
+        arrow.title = currentLang === 'ja' ? ribbonText(title) + 'を選ぶ' : 'Choose ' + title;
         arrow.addEventListener('mousedown', (e) => e.preventDefault());
         arrow.addEventListener('click', () => {
             // Close all other palettes first
@@ -2226,14 +2257,14 @@ function buildRibbon(format) {
                 }
                 const btn = document.createElement('button');
                 btn.className = item.large ? 'ribbon-btn ribbon-btn-large' : 'ribbon-btn';
-                btn.title = item.title;
+                btn.title = ribbonText(item.title);
                 if (item.large) {
                     const icon = document.createElement('span');
                     icon.className = 'rb-icon';
                     icon.textContent = item.icon || item.text;
                     const lbl = document.createElement('span');
                     lbl.className = 'rb-label';
-                    lbl.textContent = item.label || item.title;
+                    lbl.textContent = ribbonText(item.label || item.title);
                     btn.appendChild(icon);
                     btn.appendChild(lbl);
                 } else {
@@ -2251,7 +2282,7 @@ function buildRibbon(format) {
             g.appendChild(itemsRow);
             const label = document.createElement('div');
             label.className = 'ribbon-group-label';
-            label.textContent = group.label;
+            label.textContent = ribbonText(group.label);
             g.appendChild(label);
             contentArea.appendChild(g);
         }
@@ -2269,7 +2300,7 @@ function buildRibbon(format) {
     tabDefs.forEach((def, i) => {
         const tab = document.createElement('button');
         tab.className = 'ribbon-tab';
-        tab.textContent = def.name;
+        tab.textContent = ribbonText(def.name);
         tab.onclick = () => showTab(i);
         tabs.appendChild(tab);
     });
@@ -4405,7 +4436,9 @@ function formatCellValue(val, style) {
         else if ('Error' in val) return val.Error;
         else if ('Empty' in val) return '';
     } else if (typeof val === 'string') {
-        return val;
+        // An empty cell's value arrives as the bare variant name "Empty";
+        // text that reads "Empty" arrives as {String: "Empty"}.
+        return val === 'Empty' ? '' : val;
     }
     if (!isNumber) return String(raw);
     return format_cell_number(raw, (style && style.number_format) || 'General');

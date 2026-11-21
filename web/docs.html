@@ -1142,6 +1142,7 @@ async function renderDocument(docxBytes) {
     // Expose for automation
     window.__oxiRenderDone = true;
     window.__oxiLayout = result;
+    document.dispatchEvent(new CustomEvent('oxi:layout', { detail: result }));
     window.__oxiLayoutMs = layoutMs;
     window.__oxiTotalMs = totalMs;
     window.__oxiPageCount = result.pages.length;
@@ -1688,6 +1689,7 @@ function scheduleRender() {
     $('pgInfo').textContent = `${result.pages.length} ${t('pages')}`;
     $('statusText').textContent = `Layout ${layoutMs}ms`;
     window.__oxiLayout = result;
+    document.dispatchEvent(new CustomEvent('oxi:layout', { detail: result }));
     window.__oxiRenderDone = true;
 
     if (pendingModelCursor && modelDoc) {
@@ -2786,6 +2788,43 @@ $('lsPop').querySelectorAll('[data-ls]').forEach(b => {
     applyParaFormat({ line_spacing: parseFloat(b.dataset.ls) });
   });
 });
+
+// ---- Layout: size and margins ----
+// Word's galleries: A4 and Letter; Normal margins are 1 inch all round in
+// English Word and 35 mm top, 30 mm elsewhere in Japanese Word (the A4
+// default there); Narrow is 12.7 mm all round. Applied to the section the
+// cursor is in, or the first one when there is no cursor.
+const PAGE_SIZES = { pgA4: [11906, 16838], pgLetter: [12240, 15840] };
+function normalMargins() { return curLang === 'ja' ? [1985, 1701, 1701, 1701] : [1440, 1440, 1440, 1440]; }
+function applyPageSetup(setup) {
+  if (!modelDoc) { $('statusText').textContent = t('noCursor'); return false; }
+  const at = cursorModelPos();
+  let edits;
+  try { edits = JSON.parse(modelDoc.page_setup_edits(at ? at.para : 0, JSON.stringify(setup))); }
+  catch (e) { $('statusText').textContent = String(e.message || e); return false; }
+  return applyModelEdits(edits, at);
+}
+for (const [id, size] of Object.entries(PAGE_SIZES)) {
+  $(id).addEventListener('click', () => {
+    if (applyPageSetup({ size })) for (const other of Object.keys(PAGE_SIZES)) $(other).classList.toggle('active', other === id);
+  });
+}
+$('mgNorm').addEventListener('click', () => {
+  if (applyPageSetup({ margins: normalMargins() })) { $('mgNorm').classList.add('active'); $('mgNarrow').classList.remove('active'); }
+});
+$('mgNarrow').addEventListener('click', () => {
+  if (applyPageSetup({ margins: [720, 720, 720, 720] })) { $('mgNarrow').classList.add('active'); $('mgNorm').classList.remove('active'); }
+});
+// The size buttons show the paper the first page is laid out on.
+function syncPageSizeButtons(layout) {
+  const page = layout && layout.pages && layout.pages[0];
+  if (!page) return;
+  const short = Math.min(page.width, page.height), long = Math.max(page.width, page.height);
+  const near = (a, b) => Math.abs(a - b) < 2;
+  $('pgA4').classList.toggle('active', near(short, 595.3) && near(long, 841.9));
+  $('pgLetter').classList.toggle('active', near(short, 612) && near(long, 792));
+}
+document.addEventListener('oxi:layout', e => syncPageSizeButtons(e.detail));
 
 // ---- Home: styles group ----
 $('styNormal').addEventListener('click', () => applyParaFormat({ style_id: 'Normal' }));

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.6
+
+Word documents: the Layout tab's Size (A4, Letter) and Margins (Normal,
+Narrow) buttons work. They change the page setup of the section the cursor
+is in, as Word's galleries do, and Undo takes them back. In Japanese,
+Normal is Word's Japanese default (35 mm top, 30 mm elsewhere).
+
+Spreadsheets and decks take the colours people know these formats by (green
+for workbooks, orange-red for decks) on the same neutral grays as the Word
+editor, and the PowerPoint ribbon's tabs, groups and button tips are in
+Japanese when the editor is. An empty cell that still has formatting no
+longer reads "Empty".
+
 ## 0.9.5
 
 Word documents open in Oxi's Word editor, which edits through the document
