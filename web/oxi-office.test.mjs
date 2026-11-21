@@ -28,7 +28,7 @@ OxiOffice.attach({
       if (e.clear) { cells.delete(key(e.row, e.col)); continue; }
       if ('value' in e) { cell.value = e.value; delete cell.formula; }
       if ('formula' in e) { cell.formula = e.formula; cell.value = 0; }
-      for (const k of ['numberFormat', 'fill', 'fontColor', 'bold', 'italic']) if (k in e) cell[k] = e[k];
+      for (const k of ['numberFormat', 'fill', 'fontColor', 'bold', 'italic', 'fontName', 'fontSize', 'hAlign', 'vAlign', 'wrap', 'columnWidth', 'rowHeight']) if (k in e) cell[k] = e[k];
       cells.set(key(e.row, e.col), cell);
     }
   },
@@ -39,7 +39,29 @@ OxiOffice.attach({
     return { row: Math.min(...rs), col: Math.min(...cs), rows: Math.max(...rs) - Math.min(...rs) + 1, cols: Math.max(...cs) - Math.min(...cs) + 1 };
   },
   selection: () => ({ sheet: active, row: 1, col: 1, rows: 1, cols: 1 }),
+  names: () => definedNames,
+  tables: () => tables,
+  op: w => {
+    if (w.kind === 'name') definedNames.push({ name: w.name, formula: w.formula });
+    else if (w.kind === 'deleteName') definedNames = definedNames.filter(n => n.name !== w.name);
+    else if (w.kind === 'table') {
+      const name = `Table${tables.length + 1}`;
+      tables.push({ name, sheet: w.sheet, area: w.area, headerRows: w.hasHeaders ? 1 : 0, totalsRows: 0 });
+      return name;
+    } else if (w.kind === 'tableRows') {
+      const t = tables.find(x => x.name === w.name);
+      for (const row of w.values) {
+        row.forEach((v, j) => sheets[t.sheet].cells.set(key(t.area.row + t.area.rows, t.area.col + j), { value: v }));
+        t.area = { ...t.area, rows: t.area.rows + 1 };
+      }
+    }
+    return undefined;
+  },
+  on: (type, listen) => { listeners.push([type, listen]); return () => { listeners = listeners.filter(l => l[1] !== listen); }; },
 });
+let definedNames = [];
+const tables = [];
+let listeners = [];
 
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; console.log('ok -', name); }
@@ -125,6 +147,94 @@ await check('missing sheets fail with ItemNotFound', async () => {
     r.load('values');
     await ctx.sync();
   }), e => e.code === 'ItemNotFound');
+});
+
+
+await check('alignment, wrapping, font name and size are written and read back', async () => {
+  await Excel.run(async ctx => {
+    const range = ctx.workbook.worksheets.getItem('Data').getRange('C3:D3');
+    range.format.horizontalAlignment = 'Center';
+    range.format.wrapText = true;
+    range.format.font.name = 'Arial';
+    range.format.font.size = 14;
+    range.format.rowHeight = 30;
+    await ctx.sync();
+    range.format.load('horizontalAlignment, wrapText, rowHeight');
+    range.format.font.load('name, size');
+    await ctx.sync();
+    assert.equal(range.format.horizontalAlignment, 'Center');
+    assert.equal(range.format.wrapText, true);
+    assert.equal(range.format.rowHeight, 30);
+    assert.equal(range.format.font.name, 'Arial');
+    assert.equal(range.format.font.size, 14);
+  });
+});
+
+await check('names are added, listed and resolve to their range', async () => {
+  await Excel.run(async ctx => {
+    const sheet = ctx.workbook.worksheets.getItem('Sheet1');
+    ctx.workbook.names.add('Rate', sheet.getRange('A1'));
+    ctx.workbook.names.add('Label', '="hello"');
+    await ctx.sync();
+    const names = ctx.workbook.names.load('items');
+    const rate = ctx.workbook.names.getItem('rate').getRange().load('values, address');
+    await ctx.sync();
+    assert.deepEqual(names.items.map(n => [n.name, n.formula, n.type]), [['Rate', '=Sheet1!$A$1', 'Range'], ['Label', '="hello"', 'String']]);
+    assert.equal(rate.address, 'Sheet1!A1');
+    assert.deepEqual(rate.values, [[1]]);
+    const missing = ctx.workbook.names.getItemOrNullObject('nope');
+    await ctx.sync();
+    assert.equal(missing.isNullObject, true);
+  });
+});
+
+await check('a table is made from a range, its parts read, and rows added', async () => {
+  await Excel.run(async ctx => {
+    const sheet = ctx.workbook.worksheets.getItem('Data');
+    sheet.getRange('A1:B3').values = [['Item', 'Qty'], ['Pen', 2], ['Ink', 5]];
+    const table = sheet.tables.add('A1:B3', true);
+    table.load('name');
+    await ctx.sync();
+    assert.equal(table.name, 'Table1');
+    table.rows.add(null, [['Pad', 7]]);
+    await ctx.sync();
+    const body = table.getDataBodyRange().load('values, address');
+    const head = table.getHeaderRowRange().load('values');
+    const count = table.rows.getCount();
+    const all = ctx.workbook.tables.load('items');
+    await ctx.sync();
+    assert.deepEqual(head.values, [['Item', 'Qty']]);
+    assert.deepEqual(body.values, [['Pen', 2], ['Ink', 5], ['Pad', 7]]);
+    assert.equal(body.address, 'Data!A2:B4');
+    assert.equal(count.value, 3);
+    assert.deepEqual(all.items.map(t => t.name), ['Table1']);
+  });
+});
+
+await check('onChanged and onSelectionChanged hand over Excel-shaped arguments', async () => {
+  const seen = [];
+  let off;
+  await Excel.run(async ctx => {
+    const sheet = ctx.workbook.worksheets.getItem('Data');
+    off = sheet.onChanged.add(args => { seen.push(args); });
+    sheet.onSelectionChanged.add(args => { seen.push(args); });
+    await ctx.sync();
+  });
+  for (const [type, listen] of listeners) {
+    listen({ type, sheet: 1, address: 'B2' });
+    listen({ type, sheet: 0, address: 'A1' }); // another sheet: not told
+  }
+  assert.deepEqual(seen.map(a => [a.type, a.address, a.changeType ?? null]),
+    [['WorksheetChanged', 'B2', 'RangeEdited'], ['WorksheetSelectionChanged', 'B2', null]]);
+  off.remove();
+  assert.equal(listeners.length, 1);
+});
+
+await check('reading a table before sync throws PropertyNotLoaded', async () => {
+  await Excel.run(async ctx => {
+    const table = ctx.workbook.tables.getItem('Table1');
+    assert.throws(() => table.name, e => e.code === 'PropertyNotLoaded');
+  });
 });
 
 console.log(`${passed} passed`);

@@ -359,6 +359,55 @@ mod tests {
         assert_eq!(names, want);
     }
 
+    /// The editor's add-in bridge (docs/sheets.html `addinMacro`) turns an
+    /// Office.js batch into this macro; the engine must take every line and
+    /// the saved book must carry the sheet, formats, name and table.
+    #[test]
+    fn office_addin_batch_runs_as_a_macro() {
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut book = oxicells_core::parse_xlsx(original).unwrap();
+        let module = parse_module(r##"Private Function OxiTable(name As String) As Object
+  Dim ws As Object, lo As Object
+  For Each ws In Worksheets
+    For Each lo In ws.ListObjects
+      If LCase(lo.Name) = LCase(name) Then Set OxiTable = lo: Exit Function
+    Next
+  Next
+End Function
+Public Sub OxiAddin()
+  Worksheets.Add(After:=Worksheets(Worksheets.Count)).Name = "Report"
+  Worksheets(1).Cells(1, 1).Interior.Color = RGB(255, 255, 0)
+  Worksheets(1).Cells(1, 1).Font.Bold = True
+  Worksheets(1).Cells(1, 2).HorizontalAlignment = -4108
+  Worksheets(1).Cells(1, 2).ColumnWidth = 17.57
+  Worksheets(1).Cells(2, 1).NumberFormat = "0.00""x"""
+  ThisWorkbook.Names.Add Name:="Rate", RefersTo:="=Sheet1!$A$1"
+  Worksheets(1).ListObjects.Add(1, Worksheets(1).Range("$A$1:$B$3"), , 1).Name = "Table1"
+  OxiTable("Table1").ListRows.Add.Range.Value = Array("Pad", 7)
+End Sub"##).unwrap();
+        {
+            let mut host = WorkbookHost::new(&mut book, 0).unwrap();
+            host.set_cell_value_with_revision(CellAddress { sheet: 0, row: 1, column: 0 }, CellValue::String("Item".into()), true).unwrap();
+            host.set_cell_value_with_revision(CellAddress { sheet: 0, row: 1, column: 1 }, CellValue::String("Qty".into()), true).unwrap();
+            execute_with_host(&module, "OxiAddin", vec![], &mut host).unwrap();
+        }
+        let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();
+        editor.apply_workbook(&book).unwrap();
+        let saved = editor.save().unwrap();
+        let back = oxicells_core::parse_xlsx(&saved).unwrap();
+        assert!(back.sheets.iter().any(|s| s.name == "Report"));
+        let first = &back.sheets[0];
+        let cell = |r: u32, c: u32| first.rows.iter().find(|row| row.index == r).and_then(|row| row.cells.iter().find(|x| x.col == c)).unwrap();
+        assert!(cell(1, 0).style.bold);
+        assert_eq!(cell(1, 0).style.bg_color.as_deref(), Some("FFFF00"));
+        assert_eq!(cell(1, 1).style.horizontal_align.as_deref(), Some("center"));
+        assert_eq!(cell(2, 0).style.number_format.as_deref(), Some("0.00\"x\""));
+        assert!(back.defined_names.iter().any(|(n, v)| n == "Rate" && v == "Sheet1!$A$1"), "{:?}", back.defined_names);
+        let table = first.tables.iter().find(|t| t.name == "Table1").expect("table");
+        assert_eq!((table.start_row, table.end_row, table.start_col, table.end_col), (1, 4, 0, 1));
+        assert!(matches!(&cell(4, 0).value, CellValue::String(s) if s == "Pad"));
+    }
+
     /// AllDifferent: Excel's GRG answer for the probe's four jobs.
     #[test]
     fn all_different_finds_the_assignment_excel_finds() {

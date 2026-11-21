@@ -914,12 +914,14 @@ function select(p, extend = false, scrollTo = true) {
   }
   paint(scrollTo);
   if (extend && scrollTo) { const b = rectOf({ r0: c.row, c0: c.col, r1: c.row, c1: c.col }); if (b) reveal(b); }
+  tellAddin('selectionChanged', shown, range);
 }
 function selectRange(r, active = { row: r.r0, col: r.c0 }) {
   act = active;
   anchor = { ...active };
   range = withMerges(r);
   paint();
+  tellAddin('selectionChanged', shown, range);
 }
 function selectAll() {
   commitEdit();
@@ -1236,6 +1238,10 @@ function write(items) {
     step.push({ key, before, after });
   }
   if (!step.length) { paint(false); return; }
+  {
+    const rows = items.map(i => i.row), cols = items.map(i => i.col);
+    tellAddin('changed', shown, { r0: Math.min(...rows), c0: Math.min(...cols), r1: Math.max(...rows), c1: Math.max(...cols) });
+  }
   if (!rebuild()) {                      // the engine refused: put it back as it was
     for (const s of step) if (s.before) changes.set(s.key, s.before); else changes.delete(s.key);
     rebuild();
@@ -1731,6 +1737,13 @@ function cellJson(cell) {
   if (cell?.style?.font_color) out.fontColor = '#' + cell.style.font_color;
   if (cell?.style?.bold) out.bold = true;
   if (cell?.style?.italic) out.italic = true;
+  if (cell?.style?.font_name) out.fontName = cell.style.font_name;
+  if (cell?.style?.font_size) out.fontSize = cell.style.font_size;
+  const across = { left: 'Left', center: 'Center', right: 'Right', fill: 'Fill', justify: 'Justify', centerContinuous: 'CenterAcrossSelection', distributed: 'Distributed' };
+  const down = { top: 'Top', center: 'Center', bottom: 'Bottom', justify: 'Justify', distributed: 'Distributed' };
+  if (across[cell?.style?.horizontal_align]) out.hAlign = across[cell.style.horizontal_align];
+  if (down[cell?.style?.vertical_align]) out.vAlign = down[cell.style.vertical_align];
+  if (cell?.style?.wrap_text) out.wrap = true;
   return out;
 }
 function bookSnapshot() {
@@ -1747,11 +1760,99 @@ function bookSnapshot() {
     const used = r1 < 0 ? { row: 0, col: 0, rows: 1, cols: 1 } : { row: r0, col: c0, rows: r1 - r0 + 1, cols: c1 - c0 + 1 };
     return { cells, used };
   });
+  // The workbook's own names (not a sheet's hidden ones) and its tables.
+  const definedNames = (book.defined_names || [])
+    .filter(([name]) => !/^_xl|^solver_/i.test(name.split('!').pop()))
+    .map(([name, body]) => ({ name, formula: '=' + body }));
+  const tables = [];
+  book.sheets.forEach((sheet, i) => {
+    for (const t of sheet.tables || []) {
+      tables.push({
+        name: t.name, sheet: i, style: t.style ?? null,
+        area: { row: t.start_row - 1, col: t.start_col, rows: t.end_row - t.start_row + 1, cols: t.end_col - t.start_col + 1 },
+        headerRows: t.header_rows ?? 1, totalsRows: t.totals_rows ?? 0,
+      });
+    }
+  });
   return {
     names: book.sheets.map(sheet => sheet.name), active: shown,
     selection: { sheet: shown, row: range.r0 - 1, col: range.c0, rows: range.r1 - range.r0 + 1, cols: range.c1 - range.c0 + 1 },
-    sheets,
+    sheets, definedNames, tables,
   };
+}
+
+// What an add-in changes beyond values -- formats, sheets, names, tables -- is
+// done by the macro engine, which already knows how Excel does each: the
+// batch becomes a VBA procedure run on the workbook, and its result is the
+// new starting point, as a macro run's is.
+function addinMacro(ops) {
+  const q = s => '"' + String(s).replace(/"/g, '""') + '"';
+  const rgb = hex => {
+    const v = String(hex).replace('#', '');
+    const n = parseInt(v.length === 3 ? v.split('').map(c => c + c).join('') : v, 16);
+    return `RGB(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+  };
+  const across = { General: 1, Left: -4131, Center: -4108, Right: -4152, Fill: 5, Justify: -4130, CenterAcrossSelection: 7, Distributed: -4117 };
+  const down = { Top: -4160, Center: -4108, Bottom: -4107, Justify: -4130, Distributed: -4117 };
+  const a1 = a => {
+    const col = c => { let s = ''; for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s; return s; };
+    return `$${col(a.col)}$${a.row + 1}:$${col(a.col + a.cols - 1)}$${a.row + a.rows}`;
+  };
+  const lines = [];
+  for (const op of ops) {
+    if (op.kind === 'addSheet') {
+      lines.push(`Worksheets.Add(After:=Worksheets(Worksheets.Count)).Name = ${q(op.name)}`);
+    } else if (op.kind === 'format') {
+      const e = op.edit;
+      const at = `Worksheets(${e.sheet + 1}).Cells(${e.row + 1}, ${e.col + 1})`;
+      if ('fill' in e) lines.push(e.fill == null ? `${at}.Interior.Pattern = -4142` : `${at}.Interior.Color = ${rgb(e.fill)}`);
+      if ('fontColor' in e) lines.push(`${at}.Font.Color = ${rgb(e.fontColor)}`);
+      if ('bold' in e) lines.push(`${at}.Font.Bold = ${e.bold ? 'True' : 'False'}`);
+      if ('italic' in e) lines.push(`${at}.Font.Italic = ${e.italic ? 'True' : 'False'}`);
+      if ('fontName' in e) lines.push(`${at}.Font.Name = ${q(e.fontName)}`);
+      if ('fontSize' in e) lines.push(`${at}.Font.Size = ${Number(e.fontSize)}`);
+      if ('numberFormat' in e) lines.push(`${at}.NumberFormat = ${q(e.numberFormat)}`);
+      if ('hAlign' in e && e.hAlign in across) lines.push(`${at}.HorizontalAlignment = ${across[e.hAlign]}`);
+      if ('vAlign' in e && e.vAlign in down) lines.push(`${at}.VerticalAlignment = ${down[e.vAlign]}`);
+      if ('wrap' in e) lines.push(`${at}.WrapText = ${e.wrap ? 'True' : 'False'}`);
+      if ('rowHeight' in e) lines.push(`${at}.RowHeight = ${Number(e.rowHeight)}`);
+      // The API's width is in points; a column's is in characters of the
+      // standard digit (seven pixels and five of padding for Calibri 11).
+      if ('columnWidth' in e) lines.push(`${at}.ColumnWidth = ${Math.max(0, (Number(e.columnWidth) * 4 / 3 - 5) / 7).toFixed(2)}`);
+    } else if (op.kind === 'name') {
+      lines.push(`ThisWorkbook.Names.Add Name:=${q(op.name)}, RefersTo:=${q(op.formula)}`);
+    } else if (op.kind === 'deleteName') {
+      lines.push(`ThisWorkbook.Names(${q(op.name)}).Delete`);
+    } else if (op.kind === 'table') {
+      const ws = `Worksheets(${op.sheet + 1})`;
+      lines.push(`${ws}.ListObjects.Add(1, ${ws}.Range(${q(a1(op.area))}), , ${op.hasHeaders ? 1 : 2}).Name = ${q(op.name)}`);
+    } else if (op.kind === 'tableRows') {
+      for (const row of op.values) {
+        const cells = row.map(v => typeof v === 'number' || typeof v === 'boolean' ? String(v) : q(v ?? ''));
+        lines.push(`OxiTable(${q(op.name)}).ListRows.Add.Range.Value = Array(${cells.join(', ')})`);
+      }
+    }
+  }
+  if (!lines.length) return null;
+  return [
+    'Private Function OxiTable(name As String) As Object',
+    '  Dim ws As Object, lo As Object',
+    '  For Each ws In Worksheets',
+    '    For Each lo In ws.ListObjects',
+    '      If LCase(lo.Name) = LCase(name) Then Set OxiTable = lo: Exit Function',
+    '    Next',
+    '  Next',
+    'End Function',
+    'Public Sub OxiAddin()',
+    ...lines.map(line => '  ' + line),
+    'End Sub',
+  ].join('\n');
+}
+function runAddinMacro(source) {
+  const execution = vbaEngine.run_spreadsheet_vba_with_outcome(book, source, 'OxiAddin', [], shown, fileName, undefined);
+  if (execution.error) throw new Error(execution.error.message ?? String(execution.error));
+  const bytes = vbaEngine.edit_xlsx_from_workbook(current, execution.workbook);
+  adoptBytes(bytes);
 }
 function addinText(edit) {
   if (edit.clear) return '';
@@ -1766,28 +1867,52 @@ window.addEventListener('message', event => {
   if (!data || data.oxiOffice !== 'request' || event.source !== $('addinFrame').contentWindow || !book) return;
   const reply = extra => event.source.postMessage({ oxiOffice: 'reply', id: data.id, ...extra }, '*');
   if (data.op === 'snapshot') { reply({ snapshot: bookSnapshot() }); return; }
+  if (data.op === 'listen') { addinListening.add(data.type); return; }
   if (data.op !== 'sync') return;
-  const refused = [];
-  for (const item of data.batch || []) {
-    if (item.op === 'activate') switchSheet(item.index);
-    else if (item.op === 'addSheet') refused.push('worksheets.add');
-    else if (item.op === 'write') {
-      const bySheet = new Map();
-      for (const e of item.edits) {
-        const formatOnly = !('value' in e) && !('formula' in e) && !e.clear;
-        if (formatOnly) { refused.push('format'); continue; }
-        if (!bySheet.has(e.sheet)) bySheet.set(e.sheet, []);
-        bySheet.get(e.sheet).push({ row: e.row + 1, col: e.col, text: addinText(e) });
-      }
-      for (const [sheet, items] of bySheet) {
-        if (sheet !== shown) switchSheet(sheet);
-        write(items);
+  // Values go in as typed edits (undoable); the rest is gathered for the
+  // macro engine, in order, after them.
+  const macroOps = [];
+  addinWriting = true;
+  try {
+    for (const item of data.batch || []) {
+      if (item.op === 'activate') switchSheet(item.index);
+      else if (item.op === 'addSheet') macroOps.push({ kind: 'addSheet', name: item.name });
+      else if (item.op === 'op') macroOps.push(item.w);
+      else if (item.op === 'write') {
+        const bySheet = new Map();
+        for (const e of item.edits) {
+          const formatOnly = !('value' in e) && !('formula' in e) && !e.clear;
+          if (formatOnly) { macroOps.push({ kind: 'format', edit: e }); continue; }
+          if (!bySheet.has(e.sheet)) bySheet.set(e.sheet, []);
+          bySheet.get(e.sheet).push({ row: e.row + 1, col: e.col, text: addinText(e) });
+        }
+        for (const [sheet, items] of bySheet) {
+          if (sheet !== shown) switchSheet(sheet);
+          write(items);
+        }
       }
     }
+    const source = addinMacro(macroOps);
+    if (source) runAddinMacro(source);
+  } catch (error) {
+    addinWriting = false;
+    reply({ snapshot: bookSnapshot(), error: { code: 'GeneralException', message: String(error.message ?? error) } });
+    return;
   }
-  if (refused.length) say(t('addinRefused') + [...new Set(refused)].join(', '), true);
+  addinWriting = false;
   reply({ snapshot: bookSnapshot() });
 });
+// The add-in's onChanged / onSelectionChanged: told of the user's own edits
+// and selection moves, not of the add-in's writes.
+const addinListening = new Set();
+let addinWriting = false;
+function tellAddin(type, sheet, area) {
+  if (!addinListening.has(type) || addinWriting || $('addinPane').hidden) return;
+  const col = c => { let s = ''; for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s; return s; };
+  const address = area.r0 === area.r1 && area.c0 === area.c1
+    ? `${col(area.c0)}${area.r0}` : `${col(area.c0)}${area.r0}:${col(area.c1)}${area.r1}`;
+  $('addinFrame').contentWindow?.postMessage({ oxiOffice: 'event', type, sheet, address }, '*');
+}
 $('btnAddin').onclick = () => {
   const url = prompt(t('addinPrompt'), $('addinFrame').src || '');
   if (!url) return;
