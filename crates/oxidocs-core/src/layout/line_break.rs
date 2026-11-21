@@ -4334,6 +4334,15 @@ impl<'a> LineBreaker<'a> {
                         && ch.is_ascii_graphic()
                         && (char_width - 0.5 * font_size).abs() < 0.06 * font_size
                         && !crate::env_flag!("OXI_S1337_DISABLE")
+                        // OXI_S1337_NEEDS_CHARSPACE (2026-11-21, default ON, opt-out _DISABLE): a
+                        // linesAndChars grid with no charSpace has no cell to halve -- the body
+                        // twin of the cell path's S1374. blind-A ja/correspondence__03ca64d7
+                        // (Century digits, balance, linesAndChars 298 / no charSpace) and its slice
+                        // with balance on/off x compat 14/15: Word advances «500» at 5.76/5.87 and
+                        // leaves the 2.57 gap before «円»; Oxi laid the digits at 5.25 while drawing
+                        // them at 5.84, so the gap shrank to 0.86 (every «2019年», «500円»).
+                        && ((pitch - pitch / ratio).abs() >= 0.01
+                            || crate::env_flag!("OXI_S1337_NEEDS_CHARSPACE_DISABLE"))
                         && (self.balance_single_byte_double_byte_width
                             || std::env::var("OXI_S1337B").ok().as_deref() == Some("1"))
                     {
