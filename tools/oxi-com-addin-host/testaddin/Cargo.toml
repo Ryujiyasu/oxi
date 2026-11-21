@@ -1,0 +1,15 @@
+[package]
+name = "oxi-test-addin"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "A small COM add-in (IDTExtensibility2) for testing oxi-com-addin-host against Excel itself."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+windows = { version = "0.58", features = ["implement", "Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant"] }
+windows-core = "0.58"
+
+[workspace]

@@ -33,6 +33,9 @@ mod shapes_members;
 mod pivot_tables;
 #[path = "spreadsheet_vba_solver.rs"]
 mod solver_functions;
+#[path = "spreadsheet_vba_native.rs"]
+mod native_automation;
+pub use native_automation::NativeAutomation;
 use pivot_tables::{PivotAxis, PivotFieldRef, PivotItemSet};
 #[path = "spreadsheet_vba_regexp.rs"]
 mod regexp;

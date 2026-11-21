@@ -38,7 +38,7 @@ pub use spreadsheet_vba::{
     list_spreadsheet_vba_procedures, list_spreadsheet_vba_project_procedures, run_spreadsheet_vba, run_spreadsheet_vba_with_options,
     run_spreadsheet_vba_with_outcome, prepare_spreadsheet_vba_save, compile_spreadsheet_vba,
     compile_spreadsheet_vba_native, SpreadsheetVbaSession,
-    NativeVbaCall, NativeVbaAction, NativeVbaOutcome,
+    NativeVbaCall, NativeVbaAction, NativeVbaOutcome, NativeAutomation,
 };
 
 // Thread-local cached document for fast re-layout during editing
