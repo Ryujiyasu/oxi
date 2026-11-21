@@ -55,7 +55,7 @@ def main():
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page(accept_downloads=True)
-        page.on("pageerror", lambda e: print("  page error:", e))
+        page.on("pageerror", lambda e: print("  page error:", e, getattr(e, "stack", "")[:600]))
         page.goto(f"http://127.0.0.1:{port}/sheets.html")
         page.wait_for_function("!document.getElementById('btnSample').disabled", timeout=120000)
         # The truth is a Japanese Excel: captions in Japanese.
@@ -98,6 +98,21 @@ def main():
         values = [ws["A1"].value, ws["A2"].value]
         good = values == [4, 0] or values == [4.0, 0.0]
         print(f"  solver: message {message!r}, variables {values} {'OK' if good else 'DIFF'}")
+        ok &= good
+        # --- add-in through oxi-office.js
+        page.set_input_files("#fileIn", str(data))
+        page.wait_for_function("!document.getElementById('btnAddin').disabled", timeout=60000)
+        page.click("#langJa")
+        page.on("dialog", lambda d: d.accept(f"http://127.0.0.1:{port}/addin-sample.html"))
+        page.click("#btnAddin")
+        frame = page.frame_locator("#addinFrame")
+        frame.locator("#fill").click()
+        page.wait_for_timeout(1500)
+        frame.locator("#read").click()
+        page.wait_for_timeout(1500)
+        said = frame.locator("#out").inner_text()
+        good = said.strip() == "Data!B5 = 245"
+        print(f"  add-in: {said!r} {'OK' if good else 'DIFF'}")
         ok &= good
         browser.close()
     print("UI data features:", "OK" if ok else "FAILED")

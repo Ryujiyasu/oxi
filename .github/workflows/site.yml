@@ -113,7 +113,7 @@ jobs:
           set -eu
           mkdir -p public
           cp -r docs/* public/
-          cp web/vba-runner.js web/vba-worker.js web/vba-editor-settings.js web/vba-file-downloads.js public/
+          cp web/vba-runner.js web/vba-worker.js web/vba-editor-settings.js web/vba-file-downloads.js web/oxi-office.js public/
           cp crates/oxidocs-wasm/pkg/oxidocs_wasm.js crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm \
              crates/oxidocs-wasm/pkg/oxidocs_wasm.d.ts crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm.d.ts public/
           sh tools/site/split_font_catalog.sh public/font_catalog

@@ -275,6 +275,10 @@ body.dragging, body.dragging * { user-select: none }
 .pvdlg select { min-width: 140px; }
 .pvdlg menu { display: flex; gap: 8px; justify-content: flex-end; padding: 0; margin: 14px 0 0; }
 .pvnote { color: #5b6752; font-size: 13px; margin: 0 0 6px; }
+.addin { position: fixed; top: 56px; right: 0; bottom: 0; width: 340px; background: #fff; border-left: 1px solid #c9d3c1; display: flex; flex-direction: column; z-index: 20; }
+.addin[hidden] { display: none; }
+.addin-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid #e3e8de; font-size: 13px; }
+.addin iframe { flex: 1; border: 0; width: 100%; }
 </style>
 </head>
 <body>
@@ -288,6 +292,7 @@ body.dragging, body.dragging * { user-select: none }
     <button id="btnPivot" disabled data-i18n="pivot">Pivot table</button>
     <button id="btnPivotRefresh" hidden data-i18n="pivotRefresh">Refresh pivots</button>
     <button id="btnSolver" hidden data-i18n="solver">Solver</button>
+    <button id="btnAddin" disabled data-i18n="addins">Add-ins</button>
     <button id="btnOpen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span data-i18n="open">Open</span></button>
     <button id="btnUndo" class="icon" hidden disabled data-i18n-title="undo" title="Undo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
     <button id="btnRedo" class="icon" hidden disabled data-i18n-title="redo" title="Redo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
@@ -300,6 +305,11 @@ body.dragging, body.dragging * { user-select: none }
     <button id="langEn" class="on">EN</button><button id="langJa">JA</button>
   </span>
 </div>
+
+<aside id="addinPane" class="addin" hidden>
+  <div class="addin-head"><span id="addinTitle"></span><button id="addinClose" class="icon" title="Close">×</button></div>
+  <iframe id="addinFrame" title="Add-in" sandbox="allow-scripts allow-forms allow-same-origin allow-popups"></iframe>
+</aside>
 
 <dialog id="pivotDlg" class="pvdlg">
   <form method="dialog">
@@ -409,6 +419,8 @@ const I18N = {
       4: 'The objective cell values do not converge.', 5: 'Solver could not find a feasible solution.' })[code]
       ?? `Solver stopped (code ${code}).`,
     noModel: 'This sheet has no Solver model.',
+    addins: 'Add-ins', addinPrompt: 'The add-in page to open (its URL). It talks to this workbook through oxi-office.js, Oxi\'s office.js.',
+    addinRefused: 'The add-in asked for something this editor cannot do yet: ',
   },
   ja: {
     noFile: 'ファイル未選択', open: '開く', save: '保存', undo: '元に戻す (Ctrl+Z)', redo: 'やり直し (Ctrl+Y)',
@@ -444,6 +456,8 @@ const I18N = {
       4: '目的セルの値が収束しません。', 5: '実行可能解が見つかりませんでした。' })[code]
       ?? `ソルバーが停止しました (コード ${code})。`,
     noModel: 'このシートにはソルバーのモデルがありません。',
+    addins: 'アドイン', addinPrompt: '開くアドインのページ (URL)。アドインは oxi-office.js (Oxi 版の office.js) を通してこのブックとやりとりします。',
+    addinRefused: 'アドインの要求のうち、このエディタがまだできないもの: ',
   },
 };
 
@@ -502,7 +516,9 @@ function applyLang() {
   });
   $('langEn').className = lang === 'en' ? 'on' : '';
   $('langJa').className = lang === 'ja' ? 'on' : '';
-  $('btnTryVba').textContent = lang === 'ja' ? '\u0056\u0042\u0041\u3092\u8a66\u3059' : 'Try VBA';
+  // The welcome card (and its button) is gone once a workbook is open.
+  const tryVba = $('btnTryVba');
+  if (tryVba) tryVba.textContent = lang === 'ja' ? '\u0056\u0042\u0041\u3092\u8a66\u3059' : 'Try VBA';
   if (fileName) $('docName').textContent = fileName;
   if (book) { tabs(); render(); }
 }
@@ -1638,6 +1654,7 @@ function adoptBytes(bytes, message) {
 function dataButtons() {
   const ready = !!current && !!book;
   $('btnPivot').disabled = !ready;
+  $('btnAddin').disabled = !ready;
   let pivots = [];
   try { pivots = ready ? list_xlsx_pivots(current) : []; } catch { pivots = []; }
   $('btnPivotRefresh').hidden = !pivots.length;
@@ -1696,6 +1713,89 @@ $('btnSolver').onclick = () => {
     adoptBytes(result.workbook, I18N[lang].solverDone(result.code));
   } catch (error) { say(t('editFailed') + (error.message ?? error), true); }
 };
+
+// ---- add-ins (office.js through oxi-office.js) -------------------------------------
+// An add-in page runs in the side pane, on its own origin; oxi-office.js inside
+// it posts each context.sync() here. Writes go through `write`, so an add-in's
+// change is one undoable step like a typed one, and the reply is a mirror of
+// the workbook for the add-in's loads to read.
+function cellJson(cell) {
+  const v = cell?.value;
+  const value = v && typeof v === 'object'
+    ? ('Number' in v ? v.Number : 'String' in v ? v.String : 'Boolean' in v ? v.Boolean : 'Error' in v ? v.Error : '')
+    : '';
+  const out = { value, text: shownOf(cell) };
+  if (cell?.formula) out.formula = cell.formula.startsWith('=') ? cell.formula : '=' + cell.formula;
+  if (cell?.style?.number_format) out.numberFormat = cell.style.number_format;
+  if (cell?.style?.bg_color) out.fill = '#' + cell.style.bg_color;
+  if (cell?.style?.font_color) out.fontColor = '#' + cell.style.font_color;
+  if (cell?.style?.bold) out.bold = true;
+  if (cell?.style?.italic) out.italic = true;
+  return out;
+}
+function bookSnapshot() {
+  const sheets = book.sheets.map(sheet => {
+    const cells = [];
+    let r0 = Infinity, c0 = Infinity, r1 = -1, c1 = -1;
+    for (const row of sheet.rows || []) {
+      for (const cell of row.cells || []) {
+        cells.push([row.index - 1, cell.col, cellJson(cell)]);
+        r0 = Math.min(r0, row.index - 1); r1 = Math.max(r1, row.index - 1);
+        c0 = Math.min(c0, cell.col); c1 = Math.max(c1, cell.col);
+      }
+    }
+    const used = r1 < 0 ? { row: 0, col: 0, rows: 1, cols: 1 } : { row: r0, col: c0, rows: r1 - r0 + 1, cols: c1 - c0 + 1 };
+    return { cells, used };
+  });
+  return {
+    names: book.sheets.map(sheet => sheet.name), active: shown,
+    selection: { sheet: shown, row: range.r0 - 1, col: range.c0, rows: range.r1 - range.r0 + 1, cols: range.c1 - range.c0 + 1 },
+    sheets,
+  };
+}
+function addinText(edit) {
+  if (edit.clear) return '';
+  if ('formula' in edit) return String(edit.formula);
+  const v = edit.value;
+  if (v === '' || v == null) return '';
+  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+  return String(v);
+}
+window.addEventListener('message', event => {
+  const data = event.data;
+  if (!data || data.oxiOffice !== 'request' || event.source !== $('addinFrame').contentWindow || !book) return;
+  const reply = extra => event.source.postMessage({ oxiOffice: 'reply', id: data.id, ...extra }, '*');
+  if (data.op === 'snapshot') { reply({ snapshot: bookSnapshot() }); return; }
+  if (data.op !== 'sync') return;
+  const refused = [];
+  for (const item of data.batch || []) {
+    if (item.op === 'activate') switchSheet(item.index);
+    else if (item.op === 'addSheet') refused.push('worksheets.add');
+    else if (item.op === 'write') {
+      const bySheet = new Map();
+      for (const e of item.edits) {
+        const formatOnly = !('value' in e) && !('formula' in e) && !e.clear;
+        if (formatOnly) { refused.push('format'); continue; }
+        if (!bySheet.has(e.sheet)) bySheet.set(e.sheet, []);
+        bySheet.get(e.sheet).push({ row: e.row + 1, col: e.col, text: addinText(e) });
+      }
+      for (const [sheet, items] of bySheet) {
+        if (sheet !== shown) switchSheet(sheet);
+        write(items);
+      }
+    }
+  }
+  if (refused.length) say(t('addinRefused') + [...new Set(refused)].join(', '), true);
+  reply({ snapshot: bookSnapshot() });
+});
+$('btnAddin').onclick = () => {
+  const url = prompt(t('addinPrompt'), $('addinFrame').src || '');
+  if (!url) return;
+  $('addinTitle').textContent = url.replace(/^https?:\/\//, '').slice(0, 48);
+  $('addinFrame').src = url;
+  $('addinPane').hidden = false;
+};
+$('addinClose').onclick = () => { $('addinPane').hidden = true; $('addinFrame').src = 'about:blank'; };
 
 // ---- save ---------------------------------------------------------------------------
 function save() {

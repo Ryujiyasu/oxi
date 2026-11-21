@@ -233,7 +233,7 @@ jobs:
         if: ${{ matrix.shard == 1 }}
         working-directory: web
         run: |
-          for suite in page grid formula bands save row-model; do
+          for suite in page grid formula bands save row-model oxi-office; do
             node "$suite.test.mjs"
           done
       # Keep every suite and its arguments; distribute the slow independent

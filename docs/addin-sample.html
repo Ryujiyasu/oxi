@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oxi add-in sample</title>
+<!-- An Office add-in loads office.js from Microsoft's CDN. Under Oxi it loads
+     oxi-office.js instead, which answers the same Excel JavaScript API from the
+     workbook open in the sheet editor. Nothing else in the page changes. -->
+<script src="./oxi-office.js"></script>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 12px; color: #223; }
+  button { font: inherit; padding: 6px 12px; margin: 4px 0; display: block; }
+  #out { white-space: pre-wrap; background: #f3f5f1; padding: 8px; min-height: 2em; }
+</style>
+</head>
+<body>
+<h3>Sales summary</h3>
+<p>Writes a small table into the active sheet, totals it with a formula, and reads the total back.</p>
+<button id="fill">Write the table</button>
+<button id="read">Read the total</button>
+<div id="out"></div>
+<script>
+Office.onReady(() => {
+  const out = document.getElementById('out');
+  document.getElementById('fill').onclick = () => Excel.run(async context => {
+    const sheet = context.workbook.worksheets.getActiveWorksheet();
+    sheet.getRange('A1:B4').values = [
+      ['Region', 'Sales'],
+      ['East', 120],
+      ['West', 80],
+      ['North', 45],
+    ];
+    sheet.getRange('A5:B5').formulas = [['Total', '=SUM(B2:B4)']];
+    await context.sync();
+    out.textContent = 'written';
+  }).catch(error => { out.textContent = 'error: ' + error.message; });
+  document.getElementById('read').onclick = () => Excel.run(async context => {
+    const total = context.workbook.worksheets.getActiveWorksheet().getRange('B5');
+    total.load('values, address');
+    await context.sync();
+    out.textContent = `${total.address} = ${total.values[0][0]}`;
+  }).catch(error => { out.textContent = 'error: ' + error.message; });
+});
+</script>
+</body>
+</html>
