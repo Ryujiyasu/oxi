@@ -50,20 +50,30 @@ class OxiDocument {
     this.panel = null;
     this.pending = new Map();
     this.nextRequest = 1;
+    // Edits made since the file was opened, saved or reverted.
+    this.dirty = false;
+    this.disposables = [];
   }
 
   dispose() {
+    for (const d of this.disposables) d.dispose();
+    this.disposables = [];
     for (const { reject } of this.pending.values()) {
       reject(new Error('the editor was closed'));
     }
     this.pending.clear();
   }
 
-  /** Send the current bytes to the page, which lays the document out again. */
-  show() {
+  /**
+   * Send the current bytes to the page, which lays the document out again.
+   * `reload` keeps the page where it was (scroll, slide, sheet): the same
+   * file, changed on disk.
+   */
+  show(reload = false) {
     if (!this.panel) return;
     this.panel.webview.postMessage({
       type: 'oxi:open',
+      reload,
       name: basename(this.uri),
       // Webview messages are JSON, so the bytes travel as base64 rather than
       // as a Uint8Array turned inside out into an object of indices.
@@ -114,7 +124,64 @@ class OxiEditorProvider {
   async openCustomDocument(uri, openContext) {
     const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
     const bytes = await vscode.workspace.fs.readFile(source);
-    return new OxiDocument(uri, bytes);
+    const document = new OxiDocument(uri, bytes);
+    this.watch(document);
+    return document;
+  }
+
+  /**
+   * Follow the file on disk: when another program writes it (Claude Code, a
+   * script, git), the tab shows the new file. Edits not yet saved are never
+   * thrown away without asking.
+   */
+  watch(document) {
+    if (document.uri.scheme !== 'file') return;
+    const folder = vscode.Uri.joinPath(document.uri, '..');
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(folder, basename(document.uri))
+    );
+    let timer = null;
+    // A writer may write the file in pieces, or replace it by renaming a new
+    // file over it; act once it has been quiet for a moment.
+    const changed = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => this.reloadFromDisk(document), 400);
+    };
+    watcher.onDidChange(changed);
+    watcher.onDidCreate(changed);
+    document.disposables.push(watcher, { dispose: () => clearTimeout(timer) });
+  }
+
+  async reloadFromDisk(document) {
+    let bytes;
+    try {
+      bytes = await vscode.workspace.fs.readFile(document.uri);
+    } catch {
+      return; // Deleted or unreadable for now; a later change brings it back.
+    }
+    // Our own save, or a write of the same content.
+    if (Buffer.from(bytes).equals(Buffer.from(document.bytes))) return;
+    if (!document.dirty) {
+      document.bytes = bytes;
+      document.show(true);
+      return;
+    }
+    if (document.asking) return;
+    document.asking = true;
+    const ja = vscode.env.language.startsWith('ja');
+    const reload = ja ? '読み直す' : 'Reload';
+    const keep = ja ? 'このまま編集を続ける' : 'Keep my edits';
+    const choice = await vscode.window.showWarningMessage(
+      ja
+        ? `${basename(document.uri)} がほかのプログラムで書き換えられました。読み直すと、保存していない編集は失われます。`
+        : `${basename(document.uri)} was changed on disk. Reloading discards your unsaved edits.`,
+      reload, keep
+    );
+    document.asking = false;
+    if (choice === reload && document.panel) {
+      document.panel.reveal();
+      await vscode.commands.executeCommand('workbench.action.files.revert');
+    }
   }
 
   async resolveCustomEditor(document, panel) {
@@ -151,6 +218,7 @@ class OxiEditorProvider {
           document.show();
           break;
         case 'oxi:edit':
+          document.dirty = true;
           if (msg.step === undefined) {
             // The suite page has no undo stack: the file is just modified.
             this.changes.fire({ document });
@@ -202,7 +270,10 @@ class OxiEditorProvider {
   }
 
   async saveCustomDocument(document) {
-    await this.writeTo(document, document.uri);
+    const bytes = await this.writeTo(document, document.uri);
+    // What is on disk now: the watcher sees this write as no change.
+    document.bytes = bytes;
+    document.dirty = false;
   }
 
   async saveCustomDocumentAs(document, destination) {
@@ -212,11 +283,13 @@ class OxiEditorProvider {
   async writeTo(document, target) {
     const bytes = await document.requestBytes();
     await vscode.workspace.fs.writeFile(target, bytes);
+    return bytes;
   }
 
   async revertCustomDocument(document) {
     document.bytes = await vscode.workspace.fs.readFile(document.uri);
-    document.show();
+    document.dirty = false;
+    document.show(true);
   }
 
   async backupCustomDocument(document, context) {
