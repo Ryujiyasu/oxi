@@ -1242,6 +1242,7 @@ function onCanvasDrag(e, pageIndex) {
   cursorPos = { ...hit };
   drawSelectionOverlay();
   drawCursor();
+  syncRibbonFromCursor();
 }
 document.addEventListener('mouseup', () => { dragSelecting = false; });
 
@@ -2667,18 +2668,69 @@ function hex6(c) {
 }
 
 // Sync ribbon toggle states / font selects from the element at the cursor
-function syncRibbonFromCursor() {
-  const el = cursorEl();
-  if (!el) return;
-  $('btnBold').classList.toggle('active', !!el.bold);
-  $('btnItalic').classList.toggle('active', !!el.italic);
-  $('btnUnderline').classList.toggle('active', !!el.underline);
-  $('btnStrike').classList.toggle('active', !!el.strikethrough);
-  if (el.font_size != null) {
-    const v = String(el.font_size);
-    if ([...$('fontSize').options].some(o => o.value === v)) $('fontSize').value = v;
+// The text the ribbon describes: the selected text, or with no selection the
+// character at the caret.
+function ribbonElements() {
+  const rng = selectionRange();
+  if (!rng) { const el = cursorEl(); return el ? [el] : []; }
+  const els = layoutResult.pages[rng.page].elements;
+  const out = [];
+  for (let i = rng.a.elemIndex; i <= rng.b.elemIndex; i++) {
+    const el = els[i];
+    if (el.kind !== 'text' || !el.text || el.paragraph_index == null) continue;
+    const s = i === rng.a.elemIndex ? rng.a.charOffset : 0;
+    const en = i === rng.b.elemIndex ? rng.b.charOffset : el.text.length;
+    if (en > s) out.push(el);
   }
-  if (el.font_family) showDocumentFont(el.font_family.split(',')[0].replace(/['"]/g, '').trim());
+  return out;
+}
+
+// As in Word: a button is down when all of the text has its effect, and the
+// font and size boxes show a value only when all of the text shares it
+// (blank when it is mixed).
+function syncRibbonFromCursor() {
+  const els = ribbonElements();
+  if (!els.length) return;
+  const all = k => els.every(e => !!e[k]);
+  for (const [k, ids] of [['bold', ['btnBold', 'mBold']], ['italic', ['btnItalic', 'mItalic']],
+                          ['underline', ['btnUnderline', 'mUnder']], ['strikethrough', ['btnStrike', 'mStrike']]]) {
+    const on = all(k);
+    for (const id of ids) if ($(id)) $(id).classList.toggle('active', on);
+  }
+  const sizes = new Set(els.map(e => e.font_size));
+  showDocumentSize(sizes.size === 1 ? els[0].font_size : null);
+  const family = e => {
+    const name = (e.font_family || '').split(',')[0].replace(/['"]/g, '').trim();
+    return FONT_ALIASES[name] || name;
+  };
+  const families = new Set(els.map(family));
+  showDocumentFont(families.size === 1 ? family(els[0]) : null);
+}
+
+// The size boxes show the text's size even when it is not on their lists
+// (Word's Title is 26pt), in a passing entry; null leaves them blank.
+function showDocumentSize(size) {
+  for (const sel of [$('fontSize'), $('mFontSize')]) {
+    if (!sel) continue;
+    let passing = sel.querySelector('option[data-document-size]');
+    if (size == null) { if (passing) passing.remove(); sel.selectedIndex = -1; continue; }
+    const v = String(size);
+    if ([...sel.options].some(o => o.value === v && !o.dataset.documentSize)) {
+      if (passing) passing.remove();
+      sel.value = v;
+      continue;
+    }
+    if (!passing) {
+      passing = document.createElement('option');
+      passing.dataset.documentSize = '1';
+    }
+    passing.value = v;
+    passing.textContent = v;
+    // Kept in order among the listed sizes.
+    const after = [...sel.options].find(o => o !== passing && parseFloat(o.value) > size);
+    sel.insertBefore(passing, after || null);
+    sel.value = v;
+  }
 }
 
 // The pickers offer the faces Word users pick from, under the names Word
@@ -2692,6 +2744,7 @@ function showDocumentFont(name) {
   for (const sel of [$('fontFamily'), $('mFontFamily')]) {
     if (!sel) continue;
     let passing = sel.querySelector('option[data-document-font]');
+    if (name == null) { if (passing) passing.remove(); sel.selectedIndex = -1; continue; }
     if ([...sel.options].some(o => o.value === shown && !o.dataset.documentFont)) {
       if (passing) passing.remove();
       sel.value = shown;

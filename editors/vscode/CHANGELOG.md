@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.7
+
+Word documents: a selection that runs from body text into a table, or from
+one cell to another, is deleted with Backspace or Delete. The text it covers
+goes and the table keeps its rows and cells (before, nothing was deleted).
+
+The font and size boxes and the Bold, Italic, Underline and Strikethrough
+buttons follow the selected text, as in Word: a button is down when all of
+it has that effect, and a box is blank when the text mixes fonts or sizes.
+A size that is not on the list (26 pt, say) is shown as it is.
+
 ## 0.9.6
 
 Word documents: the Layout tab's Size (A4, Letter) and Margins (Normal,

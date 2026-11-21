@@ -1523,6 +1523,11 @@ fn delete(model: &mut DocxModel, from: &Pos, to: &Pos, join: bool) -> Result<(),
     if from.para == to.para {
         return delete_within(para_mut(model, &from.story, from.para)?, from.offset, to.offset);
     }
+    let pa = path_mut(model, &from.story, from.para)?;
+    let pb = path_mut(model, &from.story, to.para)?;
+    if pa.len() != pb.len() || pa[..pa.len() - 1] != pb[..pb.len() - 1] {
+        return delete_across(model, from, to, join);
+    }
     let (path, ia, ib) = siblings(model, &from.story, from.para, to.para)?;
     let blocks = story_list_mut(model, &from.story)?;
     let first_len = {
@@ -1548,6 +1553,41 @@ fn delete(model: &mut DocxModel, from: &Pos, to: &Pos, join: bool) -> Result<(),
         let Block::Paragraph(first) = &mut list[ia] else { unreachable!() };
         delete_within(first, from.offset, first_len)?;
         list.drain(ia + 1..ib);
+    }
+    Ok(())
+}
+
+/// Delete a range whose ends are in different lists of blocks: from body
+/// text into a table, or from one cell to another. Tables keep their rows
+/// and cells; what the range covers in each list is deleted there, as
+/// Google Docs does. The paragraphs of each list run together, so the range
+/// goes list by list, the last first, leaving the earlier positions where
+/// they were. The first list keeps the text before the range in one
+/// paragraph, a list the range covers keeps one empty paragraph (a cell
+/// needs one), and the last list keeps the text after it.
+fn delete_across(model: &mut DocxModel, from: &Pos, to: &Pos, join: bool) -> Result<(), EditError> {
+    let mut groups: Vec<(Vec<usize>, usize, usize)> = Vec::new();
+    for n in from.para..=to.para {
+        let path = path_mut(model, &from.story, n)?;
+        let list = path[..path.len() - 1].to_vec();
+        match groups.last_mut() {
+            Some((held, _, last)) if *held == list && *last + 1 == n => *last = n,
+            _ => groups.push((list, n, n)),
+        }
+    }
+    let count = groups.len();
+    for (i, (_, first, last)) in groups.into_iter().enumerate().rev() {
+        let start = if i == 0 { from.offset } else { 0 };
+        let end = if i + 1 == count {
+            to.offset
+        } else {
+            list_len(&para_mut(model, &from.story, last)?.content)
+        };
+        let a = Pos { story: from.story.clone(), para: first, offset: start };
+        let b = Pos { story: from.story.clone(), para: last, offset: end };
+        // Only the last list keeps a paragraph's tail; the others close up
+        // into one paragraph.
+        delete(model, &a, &b, join || i + 1 < count)?;
     }
     Ok(())
 }
