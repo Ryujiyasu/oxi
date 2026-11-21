@@ -6754,7 +6754,32 @@ mod windows_draw {
                     } else {
                         lines.len()
                     };
-                    let block = line_px * shown as i32;
+                    // English mode: the first line reaches down to the Normal
+                    // font's descent when that is the deeper one (SX148), so
+                    // the block is that much taller than its lines.
+                    // Only a line sat on the foot shows it: a centred one stays
+                    // where its own box puts it (blind `50193` / `54667` /
+                    // `55049`, all centred, moved the wrong way with it).
+                    let first_extra = if oxicells_core::parser::theme_script_is_latin()
+                        && !super::speaks_japanese(name)
+                        && matches!(cell.style.vertical_align.as_deref(), None | Some("bottom"))
+                        // East Asian letters are set in a fallback face whose
+                        // own box governs (blind `55049`'s 「#スピル!」 in Arial).
+                        && !text.chars().any(|c| c as u32 >= 0x2E80)
+                    {
+                        sheet
+                            .normal_font
+                            .as_ref()
+                            .and_then(|(normal, size)| super::line_box_of(normal, *size, false))
+                            .map(|(theirs, their_base)| {
+                                let own_under = line_px - (baseline * scale).round() as i32;
+                                ((theirs - their_base) as i32 - own_under).max(0)
+                            })
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    let block = line_px * shown as i32 + first_extra;
                     let slack = (box_.bottom - box_.top) - block;
                     if std::env::var("OXI_XLSX_DUMP_LINES").is_ok() {
                         eprintln!(
