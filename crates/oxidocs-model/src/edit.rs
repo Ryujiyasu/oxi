@@ -2561,6 +2561,81 @@ pub fn comment_edits(model: &DocxModel, from: &Pos, to: &Pos, text: &str, author
 /// or "footer" style (centre and right tabs at the middle and the end of the
 /// text width), and the section's properties name it as the default one.
 /// A section that has one already has its text replaced.
+/// The edits Word's Layout › Size and Layout › Margins make for the section
+/// holding body paragraph `para`: `size` is the page's (width, height) in
+/// twips, given for portrait and turned for a landscape section; `margins`
+/// are (top, right, bottom, left) in twips. The header and footer distances
+/// and the gutter are kept.
+pub fn page_setup_edits(
+    model: &DocxModel,
+    para: usize,
+    size: Option<(u32, u32)>,
+    margins: Option<(u32, u32, u32, u32)>,
+) -> Result<Vec<Edit>, EditError> {
+    let paras = paragraphs(model, &Story::Body)?;
+    if para >= paras.len() {
+        return err(format!("no paragraph {para}"));
+    }
+    // The section: the first section break at or after the paragraph, or
+    // the document's last section.
+    let owner = paras.iter().enumerate().skip(para)
+        .find(|(_, p)| p.props.as_ref().is_some_and(|pp| pp.get("w:sectPr").is_some())).map(|(i, _)| i);
+    let mut sect: Element = match owner {
+        Some(i) => paras[i].props.as_ref().and_then(|p| p.get("w:sectPr")).cloned(),
+        None => model.section.as_ref().map(|s| s.element().clone()),
+    }
+    .unwrap_or_else(|| Element::new("w:sectPr"));
+
+    // A child replaced where it is, or put after the ones the schema puts
+    // before it.
+    const BEFORE: [&str; 7] = ["w:headerReference", "w:footerReference", "w:footnotePr", "w:endnotePr", "w:type", "w:pgSz", "w:pgMar"];
+    let put = |sect: &mut Element, child: Element| {
+        let rank = BEFORE.iter().position(|n| *n == child.name).unwrap_or(BEFORE.len());
+        if let Some(slot) = sect.children.iter_mut().find(|c| matches!(c, Node::Element(e) if e.name == child.name)) {
+            *slot = Node::Element(child);
+            return;
+        }
+        let at = sect.children.iter().rposition(|c| matches!(c, Node::Element(e)
+            if BEFORE.iter().position(|n| *n == e.name).is_some_and(|r| r < rank))).map_or(0, |i| i + 1);
+        sect.children.insert(at, Node::Element(child));
+    };
+    if let Some((w, h)) = size {
+        let old = sect.child("w:pgSz").cloned().unwrap_or_else(|| Element::new("w:pgSz"));
+        let landscape = old.attr("w:orient") == Some("landscape");
+        let (w, h) = if landscape { (w.max(h), w.min(h)) } else { (w.min(h), w.max(h)) };
+        let mut e = Element::new("w:pgSz").with_attr("w:w", w.to_string()).with_attr("w:h", h.to_string());
+        for (k, v) in &old.attrs {
+            if k != "w:w" && k != "w:h" {
+                e = e.with_attr(k.clone(), v.clone());
+            }
+        }
+        put(&mut sect, e);
+    }
+    if let Some((top, right, bottom, left)) = margins {
+        let old = sect.child("w:pgMar").cloned().unwrap_or_else(|| Element::new("w:pgMar"));
+        let keep = |name: &str, default: &str| old.attr(name).unwrap_or(default).to_string();
+        let e = Element::new("w:pgMar")
+            .with_attr("w:top", top.to_string())
+            .with_attr("w:right", right.to_string())
+            .with_attr("w:bottom", bottom.to_string())
+            .with_attr("w:left", left.to_string())
+            .with_attr("w:header", keep("w:header", "720"))
+            .with_attr("w:footer", keep("w:footer", "720"))
+            .with_attr("w:gutter", keep("w:gutter", "0"));
+        put(&mut sect, e);
+    }
+    Ok(vec![match owner {
+        Some(i) => {
+            let pos = Pos::body(i, 0);
+            Edit::FormatParagraphs { from: pos.clone(), to: pos, patch: Patch { set: vec![sect], ..Default::default() } }
+        }
+        None => Edit::SetSection {
+            props: Some(Props::read("w:body", &sect).map_err(|u| EditError(u.to_string()))?),
+            at: model.section_at,
+        },
+    }])
+}
+
 pub fn header_footer_edits(model: &DocxModel, para: usize, footer: bool, text: &str) -> Result<Vec<Edit>, EditError> {
     use crate::docparts::Style;
     check_text(text)?;

@@ -363,3 +363,35 @@ fn a_paragraph_without_a_number_has_nothing_to_take_off() {
     let m = numbered_doc(None);
     assert!(edit::unnumber_edits(&m, &Pos::body(0, 0)).unwrap().is_empty());
 }
+
+#[test]
+fn page_size_and_margins_go_into_the_section_keeping_its_other_settings() {
+    let mut sect = Props::new("w:sectPr");
+    sect.set(Element::new("w:pgSz").with_attr("w:w", "12240").with_attr("w:h", "15840")).unwrap();
+    sect.set(Element::new("w:pgMar").with_attr("w:top", "1440").with_attr("w:right", "1440").with_attr("w:bottom", "1440")
+        .with_attr("w:left", "1440").with_attr("w:header", "851").with_attr("w:footer", "992").with_attr("w:gutter", "0")).unwrap();
+    sect.set(Element::new("w:cols").with_attr("w:space", "425")).unwrap();
+    let mut m = two_paras();
+    m.section = Some(sect);
+    let edits = edit::page_setup_edits(&m, 1, Some((11906, 16838)), Some((1985, 1701, 1701, 1701))).unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let s = m.section.as_ref().unwrap();
+    let size = s.get("w:pgSz").unwrap();
+    assert_eq!((size.attr("w:w"), size.attr("w:h")), (Some("11906"), Some("16838")));
+    let mar = s.get("w:pgMar").unwrap();
+    assert_eq!((mar.attr("w:top"), mar.attr("w:left"), mar.attr("w:header"), mar.attr("w:footer")),
+        (Some("1985"), Some("1701"), Some("851"), Some("992")));
+    assert_eq!(s.get("w:cols").and_then(|c| c.attr("w:space")), Some("425"));
+}
+
+#[test]
+fn a_landscape_section_stays_landscape_when_the_paper_changes() {
+    let mut sect = Props::new("w:sectPr");
+    sect.set(Element::new("w:pgSz").with_attr("w:w", "15840").with_attr("w:h", "12240").with_attr("w:orient", "landscape")).unwrap();
+    let mut m = two_paras();
+    m.section = Some(sect);
+    let edits = edit::page_setup_edits(&m, 0, Some((11906, 16838)), None).unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    let size = m.section.as_ref().unwrap().get("w:pgSz").cloned().unwrap();
+    assert_eq!((size.attr("w:w"), size.attr("w:h"), size.attr("w:orient")), (Some("16838"), Some("11906"), Some("landscape")));
+}
