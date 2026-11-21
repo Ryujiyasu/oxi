@@ -5,7 +5,9 @@
 //! A COM add-in (`Oxi.TestAddin`): on connection it works the workbook
 //! through the Application object it is handed, as add-ins do -- writes
 //! text, a formula, a value computed from the formula's result, the
-//! application's name and the connect mode into A1:E1 of the active sheet.
+//! application's name and the connect mode into A1:E1 of the active sheet --
+//! and listens to the application's events: when A2 changes it writes the
+//! changed cell's address into F1 and twice its value into G1.
 
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 
@@ -14,6 +16,14 @@ use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Com::*;
 use windows::Win32::System::Variant::*;
+
+/// What the add-in saw, appended to %TEMP%\oxi_testaddin.log.
+fn trace(what: String) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join("oxi_testaddin.log")) {
+        let _ = writeln!(f, "{what}");
+    }
+}
 
 pub const CLSID_ADDIN: GUID = GUID::from_u128(0x6f1c2b7e_3a55_4e2b_9c1d_0a7e5b4c3d31);
 
@@ -76,18 +86,95 @@ unsafe fn work(app: &IDispatch, mode: i32) -> Result<()> {
     Ok(())
 }
 
+/// Excel's application events (AppEvents): Advise asks the sink for it.
+#[windows::core::interface("00024413-0000-0000-C000-000000000046")]
+unsafe trait IAppEvents: IDispatch {}
+
+const DISPID_SHEET_CHANGE: i32 = 0x61C;
+
+#[implement(IAppEvents, IDispatch)]
+struct Sink;
+
+impl IAppEvents_Impl for Sink_Impl {}
+
+impl IDispatch_Impl for Sink_Impl {
+    fn GetTypeInfoCount(&self) -> Result<u32> {
+        Ok(0)
+    }
+    fn GetTypeInfo(&self, _: u32, _: u32) -> Result<ITypeInfo> {
+        Err(E_NOTIMPL.into())
+    }
+    fn GetIDsOfNames(&self, _: *const GUID, _: *const PCWSTR, _: u32, _: u32, _: *mut i32) -> Result<()> {
+        Err(DISP_E_UNKNOWNNAME.into())
+    }
+    fn Invoke(&self, id: i32, _: *const GUID, _: u32, _: DISPATCH_FLAGS, params: *const DISPPARAMS, _: *mut VARIANT, _: *mut EXCEPINFO, _: *mut u32) -> Result<()> {
+        unsafe {
+            let p = &*params;
+            let kinds: Vec<u16> = (0..p.cArgs as usize).map(|i| raw(&*p.rgvarg.add(i)).0).collect();
+            trace(format!("event {id:#x} args {kinds:?}"));
+        }
+        if id != DISPID_SHEET_CHANGE {
+            return Ok(());
+        }
+        unsafe {
+            let p = &*params;
+            if p.cArgs < 2 {
+                return Ok(());
+            }
+            // Measured: Excel hands an event's arguments in their declared
+            // order, not last first -- rgvarg[0] is Sh, rgvarg[1] is Target.
+            let sheet = object(&*p.rgvarg)?;
+            let target = object(&*p.rgvarg.add(1))?;
+            let address = invoke(&target, "Address", DISPATCH_PROPERTYGET, &[]);
+            trace(format!("Address -> {:?}", address.as_ref().map(|v| raw(v).0)));
+            let address = address?;
+            let text = BSTR::try_from(&address).map(|s| s.to_string()).unwrap_or_default();
+            trace(format!("address text {text:?}"));
+            // Only A2: the add-in's own writes below are changes too.
+            if text != "$A$2" {
+                return Ok(());
+            }
+            let value = f64::try_from(&invoke(&target, "Value", DISPATCH_PROPERTYGET, &[])?).unwrap_or(-1.0);
+            let range = |a: &str| -> Result<IDispatch> { object(&invoke(&sheet, "Range", DISPATCH_PROPERTYGET | DISPATCH_METHOD, &[VARIANT::from(BSTR::from(a))])?) };
+            let wrote = range("F1").and_then(|f1| invoke(&f1, "Value", DISPATCH_PROPERTYPUT, &[address]));
+            trace(format!("F1 write {:?}", wrote.as_ref().map(|_| ())));
+            wrote?;
+            invoke(&range("G1")?, "Value", DISPATCH_PROPERTYPUT, &[VARIANT::from(value * 2.0)])?;
+        }
+        Ok(())
+    }
+}
+
+/// The sink's connection: kept so OnDisconnection can let it go.
+static mut ADVISED: Option<(IConnectionPoint, u32)> = None;
+
+unsafe fn listen(app: &IDispatch) -> Result<()> {
+    let container: IConnectionPointContainer = app.cast()?;
+    let point = container.FindConnectionPoint(&<IAppEvents as Interface>::IID)?;
+    let sink: IAppEvents = Sink.into();
+    let unknown: IUnknown = sink.cast()?;
+    let cookie = point.Advise(&unknown)?;
+    ADVISED = Some((point, cookie));
+    Ok(())
+}
+
 #[implement(IDTExtensibility2, IDispatch)]
 struct AddIn;
 
 impl IDTExtensibility2_Impl for AddIn_Impl {
     unsafe fn OnConnection(&self, application: *mut c_void, mode: i32, _: *mut c_void, _: *mut *mut SAFEARRAY) -> HRESULT {
         let Some(app) = IDispatch::from_raw_borrowed(&application) else { return E_POINTER };
-        match work(app, mode) {
+        let listened = work(app, mode).and_then(|()| listen(app));
+        trace(format!("connected mode {mode}: {listened:?}"));
+        match listened {
             Ok(()) => S_OK,
             Err(e) => e.code(),
         }
     }
     unsafe fn OnDisconnection(&self, _: i32, _: *mut *mut SAFEARRAY) -> HRESULT {
+        if let Some((point, cookie)) = (*std::ptr::addr_of_mut!(ADVISED)).take() {
+            let _ = point.Unadvise(cookie);
+        }
         S_OK
     }
     unsafe fn OnAddInsUpdate(&self, _: *mut *mut SAFEARRAY) -> HRESULT {

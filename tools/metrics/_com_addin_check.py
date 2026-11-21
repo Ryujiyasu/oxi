@@ -2,8 +2,9 @@
 """Hold oxi-com-addin-host against Excel: the same COM add-in
 (tools/oxi-com-addin-host/testaddin, ProgID Oxi.TestAddin, IDTExtensibility2)
 is connected in Excel (COMAddIns(...).Connect = True) and run by the host on
-the same empty workbook; what it wrote into A1:E1 of the active sheet is read
-back from both (the host's saved book opened in Excel).
+the same empty workbook; then A2 is set to 5 (in Excel through COM, in the
+host with --edit) and the add-in's SheetChange sink writes F1:G1. What it
+wrote is read back from both (the host's saved book opened in Excel).
 
 The class and Excel's add-in entry are registered for this user for the run
 and removed again at the end.
@@ -64,7 +65,7 @@ def unregister():
 
 
 def read(sh):
-    return [sh.Range(a).Value for a in ("A1", "B1", "C1", "D1", "E1")] + [sh.Range("B1").Formula]
+    return [sh.Range(a).Value for a in ("A1", "B1", "C1", "D1", "E1", "F1", "G1")] + [sh.Range("B1").Formula]
 
 
 def main():
@@ -80,10 +81,12 @@ def main():
         xl.COMAddIns.Update()
         addin = xl.COMAddIns(PROGID)
         addin.Connect = True
+        # A change after connection: the add-in's SheetChange sink answers it.
+        wb.ActiveSheet.Range("A2").Value = 5
         excel = read(wb.ActiveSheet)
         addin.Connect = False
         wb.Close(False)
-        run = subprocess.run([str(HOST), PROGID, str(base), str(mine)], capture_output=True, text=True)
+        run = subprocess.run([str(HOST), PROGID, str(base), str(mine), "--edit", "A2=5"], capture_output=True, text=True)
         print("  host:", run.stdout.strip() or run.stderr.strip())
         wb = xl.Workbooks.Open(str(mine))
         wb.Application.CalculateFull()
@@ -92,7 +95,8 @@ def main():
     finally:
         xl.Quit()
         unregister()
-    labels = ["A1 text", "B1 value", "C1 from B1", "D1 Application.Name", "E1 connect mode", "B1 formula"]
+    labels = ["A1 text", "B1 value", "C1 from B1", "D1 Application.Name", "E1 connect mode",
+              "F1 SheetChange address", "G1 SheetChange value", "B1 formula"]
     ok = 0
     for label, a, b in zip(labels, excel, oxi):
         same = a == b

@@ -13,7 +13,12 @@
 //! write or a method call on the object -- and after the add-in's
 //! connection, startup and shutdown calls the workbook is saved.
 //!
-//!   oxi-com-addin-host <ProgID> <in.xlsx> <out.xlsx>
+//! The Application also answers IConnectionPointContainer for Excel's
+//! application events (AppEvents): an add-in that Advises a sink there is
+//! told of `SheetChange` (DISPID 0x61C, Sh and Target) for each `--edit`
+//! made after it connected, as Excel tells it of a cell changed.
+//!
+//!   oxi-com-addin-host <ProgID> <in.xlsx> <out.xlsx> [--edit A2=5]...
 
 #[cfg(windows)]
 mod host {
@@ -44,6 +49,40 @@ mod host {
         static NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         /// Our wrappers by their interface pointer, to know one handed back.
         static WRAPPED: RefCell<HashMap<usize, ObjectRef>> = RefCell::new(HashMap::new());
+        /// Sinks Advised on the application events, by cookie.
+        static SINKS: RefCell<Vec<(u32, IDispatch)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Excel's application event interface (AppEvents).
+    const DIID_APP_EVENTS: GUID = GUID::from_u128(0x00024413_0000_0000_c000_000000000046);
+    const DISPID_SHEET_CHANGE: i32 = 0x61C;
+
+    #[implement(IConnectionPoint)]
+    struct AppEventsPoint;
+
+    impl IConnectionPoint_Impl for AppEventsPoint_Impl {
+        fn GetConnectionInterface(&self) -> Result<GUID> {
+            Ok(DIID_APP_EVENTS)
+        }
+        fn GetConnectionPointContainer(&self) -> Result<IConnectionPointContainer> {
+            Err(E_NOTIMPL.into())
+        }
+        fn Advise(&self, sink: Option<&IUnknown>) -> Result<u32> {
+            let sink: IDispatch = sink.ok_or(E_POINTER)?.cast()?;
+            SINKS.with(|s| {
+                let mut s = s.borrow_mut();
+                let cookie = s.iter().map(|(c, _)| *c).max().unwrap_or(0) + 1;
+                s.push((cookie, sink));
+                Ok(cookie)
+            })
+        }
+        fn Unadvise(&self, cookie: u32) -> Result<()> {
+            SINKS.with(|s| s.borrow_mut().retain(|(c, _)| *c != cookie));
+            Ok(())
+        }
+        fn EnumConnections(&self) -> Result<IEnumConnections> {
+            Err(E_NOTIMPL.into())
+        }
     }
 
     fn raw(v: &VARIANT) -> (u16, u64) {
@@ -116,10 +155,39 @@ mod host {
         }
     }
 
-    /// One of the workbook's objects, answering IDispatch.
-    #[implement(IDispatch)]
+    /// One of the workbook's objects, answering IDispatch (and, for the
+    /// application's events, IConnectionPointContainer).
+    #[implement(IDispatch, IConnectionPointContainer)]
     struct Disp {
         object: ObjectRef,
+    }
+
+    impl IConnectionPointContainer_Impl for Disp_Impl {
+        fn EnumConnectionPoints(&self) -> Result<IEnumConnectionPoints> {
+            Err(E_NOTIMPL.into())
+        }
+        fn FindConnectionPoint(&self, riid: *const GUID) -> Result<IConnectionPoint> {
+            if unsafe { *riid } == DIID_APP_EVENTS {
+                Ok(AppEventsPoint.into())
+            } else {
+                Err(CONNECT_E_NOCONNECTION.into())
+            }
+        }
+    }
+
+    /// Tell every Advised sink that `target` on `sheet` changed.
+    fn sheet_change(sheet: &ObjectRef, target: &ObjectRef) {
+        let sinks: Vec<IDispatch> = SINKS.with(|s| s.borrow().iter().map(|(_, d)| d.clone()).collect());
+        for sink in sinks {
+            // In the declared order, Sh then Target: measured, Excel fills an
+            // event's rgvarg so (not last first, as for an ordinary call).
+            let mut args = [to_variant(Value::Object(sheet.clone())), to_variant(Value::Object(target.clone()))];
+            let params = DISPPARAMS { rgvarg: args.as_mut_ptr(), rgdispidNamedArgs: std::ptr::null_mut(), cArgs: 2, cNamedArgs: 0 };
+            let mut result = VARIANT::default();
+            unsafe {
+                let _ = sink.Invoke(DISPID_SHEET_CHANGE, &GUID::zeroed(), 0, DISPATCH_METHOD, &params, Some(&mut result), None, None);
+            }
+        }
     }
 
     impl IDispatch_Impl for Disp_Impl {
@@ -193,7 +261,7 @@ mod host {
         }
     }
 
-    pub fn run(prog_id: &str, input: &str, output: &str) -> std::result::Result<serde_json::Value, String> {
+    pub fn run(prog_id: &str, input: &str, output: &str, edits: &[(String, String)]) -> std::result::Result<serde_json::Value, String> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
@@ -215,6 +283,22 @@ mod host {
             let app_raw = application.as_raw();
             steps.insert("OnConnection".into(), serde_json::json!(format!("{:?}", addin.OnConnection(app_raw, 0, app_raw, &mut custom))));
             steps.insert("OnStartupComplete".into(), serde_json::json!(format!("{:?}", addin.OnStartupComplete(&mut custom))));
+            // The workbook changed after the add-in connected: each edit is
+            // made, then the add-in's sinks hear of it.
+            for (address, text) in edits {
+                let value = text.parse::<f64>().map(Value::Double).unwrap_or_else(|_| Value::String(text.clone()));
+                let touched = SESSION.with(|s| -> std::result::Result<(ObjectRef, ObjectRef), String> {
+                    let mut s = s.borrow_mut();
+                    let session = s.as_mut().ok_or("no session")?;
+                    let app = session.application()?;
+                    let Some(Value::Object(sheet)) = session.get(&app, "ActiveSheet")? else { return Err("no active sheet".into()) };
+                    let Some(Value::Object(target)) = session.call(&sheet, "Range", &[Value::String(address.clone())])? else { return Err(format!("no range {address}")) };
+                    session.set(&target, "Value", value)?;
+                    Ok((sheet, target))
+                })?;
+                sheet_change(&touched.0, &touched.1);
+            }
+            steps.insert("events".into(), serde_json::json!(SINKS.with(|s| s.borrow().len())));
             steps.insert("OnBeginShutdown".into(), serde_json::json!(format!("{:?}", addin.OnBeginShutdown(&mut custom))));
             steps.insert("OnDisconnection".into(), serde_json::json!(format!("{:?}", addin.OnDisconnection(1, &mut custom))));
             let _ = SafeArrayDestroy(custom);
@@ -229,10 +313,15 @@ mod host {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 4 {
-        eprintln!("usage: oxi-com-addin-host <ProgID> <in.xlsx> <out.xlsx>");
+        eprintln!("usage: oxi-com-addin-host <ProgID> <in.xlsx> <out.xlsx> [--edit A2=5]...");
         std::process::exit(2);
     }
-    match host::run(&args[1], &args[2], &args[3]) {
+    let edits: Vec<(String, String)> = args[4..]
+        .windows(2)
+        .filter(|w| w[0] == "--edit")
+        .filter_map(|w| w[1].split_once('=').map(|(a, v)| (a.to_string(), v.to_string())))
+        .collect();
+    match host::run(&args[1], &args[2], &args[3], &edits) {
         Ok(steps) => println!("{steps}"),
         Err(error) => {
             eprintln!("{error}");
