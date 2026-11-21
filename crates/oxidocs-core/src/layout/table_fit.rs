@@ -2774,6 +2774,14 @@ impl<'a> TableFitLayouter<'a> {
                 let vmerge_cut_bottom = cursor.visual_y;
                 // Push all accumulated elements (including previous rows) to current page
                 current_elements.extend(std::mem::take(&mut elements));
+                // OXI_CELL_BOX_PAGE (2026-11-21, default ON, opt-out _DISABLE): the deferred
+                // cell-anchored boxes drawn so far belong to the page being closed -- they were
+                // appended after the whole table and landed on its LAST page at this page's
+                // coordinates (blind-L ja/reference__7f15f980: «給食初登場メニュー» and the
+                // «給食週間» arrow of the p1 rows drawn on p2).
+                if !crate::env_flag!("OXI_CELL_BOX_PAGE_DISABLE") {
+                    current_elements.extend(std::mem::take(&mut deferred_cell_textboxes));
+                }
                 dbg_page_push(pages.len(), 0);
                 pages.push(LayoutPage {
                     width: page_width,
@@ -6138,7 +6146,7 @@ impl<'a> TableFitLayouter<'a> {
                                                             || s344_skip
                                                             || s1374_no_cell)
                                                         {
-                                                            let grid_base = if char_space_pt > 0.0 && cell_resolved_em(cm, &self.registry, ch, font_size) < 0.99 { cw } else { font_size };
+                                                            let grid_base = if (char_space_pt > 0.0 || super::cell_neg_grid_prop()) && cell_resolved_em(cm, &self.registry, ch, font_size) < 0.99 { cw } else { font_size };
                                 cw = if char_space_pt >= 0.0
                                                                 && !s1210
                                                             {
@@ -13873,6 +13881,14 @@ impl<'a> TableFitLayouter<'a> {
                 }
                 elements.extend(current_page_elems);
                 current_elements.extend(std::mem::take(&mut elements));
+                // OXI_CELL_BOX_PAGE (2026-11-21, default ON, opt-out _DISABLE): the deferred
+                // cell-anchored boxes drawn so far belong to the page being closed -- they were
+                // appended after the whole table and landed on its LAST page at this page's
+                // coordinates (blind-L ja/reference__7f15f980: «給食初登場メニュー» and the
+                // «給食週間» arrow of the p1 rows drawn on p2).
+                if !crate::env_flag!("OXI_CELL_BOX_PAGE_DISABLE") {
+                    current_elements.extend(std::mem::take(&mut deferred_cell_textboxes));
+                }
                 dbg_page_push(pages.len(), 0);
                 pages.push(LayoutPage {
                     width: page_width,
@@ -14493,6 +14509,10 @@ impl<'a> TableFitLayouter<'a> {
                             .filter(|e| matches!(&e.content, LayoutContent::Text { .. }))
                             .count();
                         eprintln!("[SPLIT-LOOP] next_split={:.1} -> pushed this_page txt={} | overflow txt={}", next_split, tp_txt, ov_txt);
+                    }
+                    let mut this_page = this_page;
+                    if !crate::env_flag!("OXI_CELL_BOX_PAGE_DISABLE") {
+                        this_page.extend(std::mem::take(&mut deferred_cell_textboxes));
                     }
                     dbg_page_push(pages.len(), 0);
                     pages.push(LayoutPage {

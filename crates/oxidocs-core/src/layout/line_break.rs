@@ -1983,7 +1983,7 @@ impl<'a> LineBreaker<'a> {
                 // OXI_VERT_TCY: in vertical text the 縦中横 unit spans its face's natural
                 // line box along the column (see place_vertical_column).
                 let tcy_adv = if vertical && !crate::env_flag!("OXI_VERT_TCY_DISABLE")
-                    && super::IN_VERT_TEXT_BOX.with(|c| c.get())
+                    && super::vert_tcy_in_scope()
                 {
                     self.vert_tcy_advance(text, style, para_style, font_size)
                 } else {

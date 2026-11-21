@@ -571,11 +571,36 @@ fn cell_aki_joint(a: char, b: char, de: bool, dn: bool) -> bool {
 // square compatibility symbols in a face with proportional kana advances.
 // A full-em glyph in such a face still uses the half addition. Latin pitch
 // and the current glyph alone cannot distinguish the CJK design.
+/// OXI_CELL_NEG_GRID_PROP: a proportional glyph keeps its own advance as the grid base for a
+/// negative charSpace as well (see cell_cjk_grid_increment); the cell wrap used the em.
+/// OXI_VERT_TCY_BODY (2026-11-21, opt-in OXI_VERT_TCY_BODY=1): the 縦中横 unit rule holds in a
+/// tbRl BODY section as in an eaVert box. `_pb_vert_tcy_body_gen.py` (5-column tbRl section, Word
+/// PDF): HGP創英角ﾎﾟｯﾌﾟ体 18 «２８» (w 85 / 100) advances 23.34 = 83/64 em with its glyphs 2.67 below
+/// the unit top; ＭＳ ゴシック 20 «２４» and «１２３» 25.94, glyphs 3.0 below. ja/correspondence__
+/// 1df021c1 stacked «２» «８» down the column and fit «続» into a column Word ends at «連».
+pub(crate) fn vert_tcy_in_scope() -> bool {
+    // Opt-in (OXI_VERT_TCY_BODY=1): the rule holds, but the changed column flow exposes
+    // the vertical breaker's missing 約物 squeeze -- ja/correspondence__0fc4a438 (same
+    // publisher) went 2 -> 3 pages because «参院本会議で可決し、成立» (Word: 、 at 7.08,
+    // twelve glyphs in the 122.6 band) wraps «立».
+    IN_VERT_TEXT_BOX.with(|c| c.get()) || std::env::var("OXI_VERT_TCY_BODY").map_or(false, |v| v == "1")
+}
+
+pub(crate) fn cell_neg_grid_prop() -> bool {
+    !crate::env_flag!("OXI_CELL_NEG_GRID_PROP_DISABLE")
+}
+
 fn cell_cjk_grid_increment(ch: char, metrics: &FontMetrics, registry: &FontMetricsRegistry, fs: f32, delta: f32, balance: bool) -> f32 {
     // OXI_GRID_HALF_NEEDS_BALANCE: the half increment is a balance effect in a
     // cell as in the body (`_pb_balance_propkana_gen.py` one-cell arms: ＭＳ Ｐゴシック
     // に 12.11 with balance, 13.19 without, spacing 22).
-    if delta > 0.0 && grid_half_increment_class(ch) && face_has_proportional_kana(metrics, registry, fs)
+    // OXI_CELL_NEG_GRID_PROP (2026-11-21, default ON, opt-out _DISABLE): the half increment
+    // holds for a NEGATIVE charSpace too. `_pb_cellfit_gen.py` (blind-L reference__7f15f980's
+    // styled table slice, UD Digi Kyokasho NK-R 12, charSpace -4164 = -1.017, balance, w 50..120):
+    // kana advance their own scaled width - 0.51 (ポ 11.16 -> 10.68, ク 9.36 -> 8.88, あ 11.04 ->
+    // 10.56; w85 9.48 -> 9.00), kanji the whole -1.0 (月 12 -> 11.00, w50 6 -> 5.00); +4164 mirrors.
+    if (delta > 0.0 || !crate::env_flag!("OXI_CELL_NEG_GRID_PROP_DISABLE"))
+        && grid_half_increment_class(ch) && face_has_proportional_kana(metrics, registry, fs)
         && (balance || crate::env_flag!("OXI_GRID_HALF_NEEDS_BALANCE_DISABLE"))
     {
         return delta * 0.5;
@@ -2346,6 +2371,9 @@ struct VertColumn {
     /// OXI_VERT_LIST_LABEL: the paragraph's numbering label on its first
     /// column -- (label, label run style, top measured down from the band top).
     marker: Option<(String, RunStyle, f32)>,
+    /// OXI_VERT_JUSTIFY: the space added after every glyph but the last of a
+    /// justified column.
+    justify_gap: f32,
 }
 
 // Natural text coordinates are retained until the table's row boundaries
@@ -8940,7 +8968,7 @@ impl LayoutEngine {
                                 blank: true,
                                 hard_break: false,
                                 image: false,
-                                spacer: true,
+                                spacer: true, justify_gap: 0.0,
                             });
                         }
                     }
@@ -8971,7 +8999,7 @@ impl LayoutEngine {
                         pitch: img.width.max(0.0),
                         blank: false,
                         hard_break: false,
-                        image: true, spacer: false,
+                        image: true, spacer: false, justify_gap: 0.0,
                     });
                     continue;
                 }
@@ -9179,7 +9207,7 @@ cells={} pitch={:.2} text={:?}",
                     pitch,
                     blank: true,
                     hard_break,
-                    image: false, spacer: false,
+                    image: false, spacer: false, justify_gap: 0.0,
                 });
                 continue;
             }
@@ -9321,7 +9349,7 @@ cells={} pitch={:.2} text={:?}",
                     // OXI_VERT_TCY: a 縦中横 run wider than the column widens it
                     // (`_pb_tcy_vert_gen.py`: «２４» 36pt -> a 72pt column, the other
                     // characters centred on it).
-                    let tcy_w = if crate::env_flag!("OXI_VERT_TCY_DISABLE") || !IN_VERT_TEXT_BOX.with(|c| c.get()) { 0.0 } else {
+                    let tcy_w = if crate::env_flag!("OXI_VERT_TCY_DISABLE") || !vert_tcy_in_scope() { 0.0 } else {
                         segs.iter().filter(|(ri, _)| para.runs[*ri].style.vert_in_horz).map(|(ri, t)| {
                             let st = &para.runs[*ri].style;
                             let fs = self.resolve_font_size(st, &para.style);
@@ -9339,11 +9367,35 @@ cells={} pitch={:.2} text={:?}",
                             top: line_start + jc_shift,
                             blank: false,
                             hard_break: hard_break && li == 0,
-                            image: false, spacer: false,
+                            image: false, spacer: false, justify_gap: 0.0,
                         });
                         if li == 0 {
                             if let (Some(c), Some((label, lstyle, top, _))) = (cols.last_mut(), &vert_label) {
                                 c.marker = Some((label.clone(), lstyle.clone(), *top));
+                            }
+                        }
+                        // OXI_VERT_JUSTIFY (2026-11-21, default ON, opt-out _DISABLE): a
+                        // justified paragraph spreads every column but its last to the band
+                        // end, the slack shared by the gaps between glyphs -- the horizontal
+                        // rule on its side. `_pb_vert_band_gen.py` (tbRl, 5 bands of 122.6pt,
+                        // 18pt, Word PDF): jc both «対前年同月比» advances 20.88 = 18 + 14.6 / 5
+                        // (ＭＳ 明朝, ＭＳ Ｐ明朝, HGP創英角ﾎﾟｯﾌﾟ体 alike), «上昇上昇まっし» 18 +
+                        // 1.32 per gap over its proportional advances; the last column («前進»)
+                        // and jc left keep 18.0. Oxi set every justified column at its natural
+                        // advances (ja/correspondence__1df021c1, the Normal style is jc both).
+                        let justify = match para.alignment {
+                            Alignment::Justify => li + 1 < lines.len() && matches!(line.break_type, LineBreakType::Normal),
+                            Alignment::Distribute => true,
+                            _ => false,
+                        };
+                        if justify && tcy_w <= 0.0 && !crate::env_flag!("OXI_VERT_JUSTIFY_DISABLE") {
+                            let w: f32 = line.fragments.iter().map(|f| f.width).sum();
+                            let n = line.fragments.iter().map(|f| f.text.chars().count()).sum::<usize>();
+                            let room = band_h - line_start - para.style.indent_right.unwrap_or(0.0).max(0.0) - w;
+                            if let Some(c) = cols.last_mut() {
+                                if n > 1 && room > 0.0 && room < band_h * 0.5 {
+                                    c.justify_gap = room / (n - 1) as f32;
+                                }
                             }
                         }
                     }
@@ -9367,7 +9419,7 @@ cells={} pitch={:.2} text={:?}",
                         pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                         blank: false,
                         hard_break: hard_break && first,
-                        image: false, spacer: false,
+                        image: false, spacer: false, justify_gap: 0.0,
                     });
                     first = false;
                     cur_y = s1331_left;
@@ -9394,7 +9446,7 @@ cells={} pitch={:.2} text={:?}",
                     pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                     blank: false,
                     hard_break: hard_break && first,
-                    image: false, spacer: false,
+                    image: false, spacer: false, justify_gap: 0.0,
                 });
             }
         }
@@ -9509,6 +9561,8 @@ cells={} pitch={:.2} text={:?}",
         let para = para.unwrap();
         let mut out = label_out;
         let mut cy = y;
+        let total_glyphs = col.segs.iter().map(|(_, t)| t.chars().count()).sum::<usize>();
+        let mut glyphs_done = 0usize;
         let vert_ruby = !crate::env_flag!("OXI_VERT_RUBY_DISABLE");
         // OXI_VERT_RUBY: a column carrying ruby sets its base LEFT of centre
         // (toward tbRl's "below"), by half the raise plus 0.3 x the ruby size,
@@ -9540,7 +9594,7 @@ cells={} pitch={:.2} text={:?}",
             // 83/64 em with 5.34 above and below its em box; at 20pt 25.9.
             // ja/reports__542222d0's «２４春闘だ！» stacked the 2 and the 4.
             if run.style.vert_in_horz && !text.is_empty() && !crate::env_flag!("OXI_VERT_TCY_DISABLE")
-                && IN_VERT_TEXT_BOX.with(|c| c.get()) {
+                && vert_tcy_in_scope() {
                 let fs = self.resolve_font_size(&run.style, &para.style);
                 let fam = self
                     .resolve_font_family_for_text(text, &run.style, &para.style)
@@ -9620,6 +9674,10 @@ cells={} pitch={:.2} text={:?}",
                             &glyph_family, &run.style, &para_style, recipe.block_idx,
                         ));
                         cy += advance;
+                        glyphs_done += 1;
+                        if glyphs_done < total_glyphs {
+                            cy += col.justify_gap;
+                        }
                     }
                     if vert_ruby {
                         out.extend(self.vertical_ruby_elements(run, para, &para_style, x, col.pitch, fs,
@@ -22721,7 +22779,7 @@ cells={} pitch={:.2} text={:?}",
                             let s1374_no_cell = char_space_pt.abs() < 0.01
                                 && !crate::env_flag!("OXI_S1374_DISABLE");
                             if !(h6_skip || h7_skip || h8_skip || s344_skip || s1374_no_cell) {
-                                let grid_base = if char_space_pt > 0.0 && cell_resolved_em(cm, &self.registry, ch, font_size) < 0.99 { cw } else { font_size };
+                                let grid_base = if (char_space_pt > 0.0 || cell_neg_grid_prop()) && cell_resolved_em(cm, &self.registry, ch, font_size) < 0.99 { cw } else { font_size };
                                 cw = if char_space_pt >= 0.0 && !s1210 {
                                     grid_base * pitch / default_fs
                                 } else {

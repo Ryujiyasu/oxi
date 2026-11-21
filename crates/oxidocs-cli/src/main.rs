@@ -2527,6 +2527,12 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     }
                     if *is_vertical && std::env::var_os("OXI_PDF_VERT_GLYPHS_DISABLE").is_none() {
                         let adv = fs + *character_spacing as f64;
+                        // OXI_VERT_GLYPH_TOP: no 1pt lift for an upright vertical glyph
+                        // (the renderer's rule, see oxi-dwrite-renderer).
+                        let text_y = if std::env::var("OXI_VERT_GLYPH_TOP").map_or(false, |v| v == "1")
+                            && std::env::var_os("OXI_PDF_BASELINE_DISABLE").is_none()
+                            && elem.baseline_offset.is_none()
+                        { text_y + 1.0 } else { text_y };
                         let cx = x + ((ew - fs) * 0.5).max(0.0);
                         for (k, ch) in chars.iter().enumerate() {
                             if ch.is_whitespace() {

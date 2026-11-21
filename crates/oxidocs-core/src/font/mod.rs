@@ -913,6 +913,10 @@ impl FontMetrics {
 struct VerticalFontMetrics {
     units_per_em: u16,
     advances: HashMap<u32, u16>,
+    /// OXI_VERT_PROP_FACES: a sparse table (only the advances that differ from the
+    /// em) names the em here; a full table leaves it out.
+    #[serde(default)]
+    default_advance: Option<u16>,
 }
 
 /// Registry of font metrics for multiple font families.
@@ -1523,7 +1527,23 @@ impl FontMetricsRegistry {
     /// Vertical advance after the font's vertical glyph substitution.
     pub fn vertical_advance_pt(&self, family: &str, ch: char, font_size: f32) -> Option<f32> {
         let table = self.vertical_metrics.get(family)?;
-        let advance = table.advances.get(&(ch as u32))?;
+        // OXI_VERT_PROP_FACES (2026-11-21, default ON, opt-out _DISABLE): the proportional
+        // faces beyond the four ＭＳ ones (HGP*, BIZ UDP*, UD Digi Kyokasho NK, the UI
+        // faces) carry sparse tables built by tools/metrics/gen_vertical_font_metrics.py --
+        // the vmtx advance after the 'vert' substitution. `_pb_vert_band_gen.py` (tbRl,
+        // HGP創英角ﾎﾟｯﾌﾟ体 18): Word advances ぐ 17.28 (246), ら 16.92 (240), し 16.32 (232),
+        // っ 9.72 (vert form 138); Oxi drew every kana at the em and fit one character
+        // too many per column (ja/correspondence__1df021c1 «ぐら消費者物|価»).
+        if table.default_advance.is_some() && crate::env_flag!("OXI_VERT_PROP_FACES_DISABLE") {
+            return None;
+        }
+        let advance = match table.advances.get(&(ch as u32)) {
+            Some(a) => a,
+            // The sparse tables start at U+2000: a Latin or other narrow glyph keeps
+            // its rotated horizontal advance, as before.
+            None if (ch as u32) >= 0x2000 => table.default_advance.as_ref()?,
+            None => return None,
+        };
         (table.units_per_em > 0).then(|| *advance as f32 * font_size / table.units_per_em as f32)
     }
 

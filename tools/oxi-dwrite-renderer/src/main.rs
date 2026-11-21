@@ -2173,7 +2173,16 @@ unsafe fn render_text(
         // the cell content column [x_pt, x_pt+w_pt] — Word centres tategaki
         // labels in their column. w_pt is the cell content width.
         let cx_dip = (x_pt + ((w_pt - font_size_pt) * 0.5).max(0.0)) * PT_TO_DIP;
-        let mut yy = (y_pt - 1.0) * PT_TO_DIP;
+        // OXI_VERT_GLYPH_TOP (2026-11-21, opt-in): an upright
+        // vertical glyph's em box starts at the element top. The 1pt lift is the
+        // horizontal glyph-top fix; `_pb_vert_top_gen.py` (tbRl, «対», 16..96pt, Word
+        // PDF vs this renderer, first ink row at 600dpi) puts ＭＳ 明朝 and
+        // HGP創英角ﾎﾟｯﾌﾟ体 exactly 0.96..1.08 above Word at every size.
+        // Opt-in (OXI_VERT_GLYPH_TOP=1) until the メイリオ rule is derived: Word draws
+        // メイリオ 0.023 x fs higher than ＭＳ 明朝 relative to this renderer, and the old
+        // lift happened to cancel it (ja/educational__047ff775 / 015355870669 -0.013 / -0.009).
+        let lift = if std::env::var("OXI_VERT_GLYPH_TOP").map_or(false, |v| v == "1") { 0.0 } else { 1.0 };
+        let mut yy = (y_pt - lift) * PT_TO_DIP;
         for ch in text.chars() {
             if !ch.is_whitespace() {
                 // OXI_VERT_FORMS: vertical presentation forms; the long-vowel

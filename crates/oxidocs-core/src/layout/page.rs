@@ -10168,7 +10168,13 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                         ((img_adv - ext) * 0.5).max(0.0)
                     } else { 0.0 };
                     let img_y = s1321_top.unwrap_or(cursor.visual_y + grid_center + if !self.doc_body_has_real_cjk { img.effect_extent_t.max(0.0) } else { 0.0 });
-                    if s1321_top.is_some() {
+                    // OXI_EXACT_IMG_CLIP: a PICTURE's paragraph keeps its line top as the anchor
+                    // base -- 7f15f980's tree (relativeFrom paragraph, +10.25) sits at 101.45 = the
+                    // 13pt line's top 91.2 + 10.25 in Word, not 490pt up at the bowl's top; only a
+                    // data-less shape placeholder (legal__02f84965's text-box frames) carries its
+                    // text box up with it.
+                    let s1321_picture = !img.data.is_empty() && !crate::env_flag!("OXI_EXACT_IMG_CLIP_DISABLE");
+                    if s1321_top.is_some() && !s1321_picture {
                         if let Some(v) = block_y_positions.last_mut() {
                             *v = img_y;
                         }
@@ -10187,18 +10193,36 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             }
                         })
                     } else { start_x };
+                    // OXI_EXACT_IMG_CLIP (2026-11-21, default ON, opt-out _DISABLE): Word clips
+                    // the picture of an EXACT line to the part of the line above its baseline,
+                    // 0.8 x the exact height -- the S1321 rect is painted through a clip
+                    // `re W n` of that strip. `_pb_exactimg_pos_gen.py`'s five exact arms (16pt
+                    // lines): clip 12.80 / 12.83 / 12.86 / 12.77 / 12.83 ending on the
+                    // baseline; blind-L ja/reference__7f15f980's 502pt soup bowl in a 13pt line
+                    // shows a 10.40 strip (its transparent bottom), where Oxi painted the whole
+                    // bowl over the page head.
+                    let (clip_y, clip_h, clip_crop) = match img.host_exact_line {
+                        Some(exact) if s1321_top.is_some() && s1321_picture && exact > 0.0 && 0.8 * exact < img.height
+                            && img.rotation.abs() < 0.01
+                            && !crate::env_flag!("OXI_EXACT_IMG_CLIP_DISABLE") =>
+                        {
+                            let keep = 0.8 * exact;
+                            let (t, r, b, l) = img.crop.as_ref().map_or((0.0, 0.0, 0.0, 0.0), |c| (c.top, c.right, c.bottom, c.left));
+                            let span = (100.0 - t - b).max(0.0);
+                            let t2 = t + span * (1.0 - keep / img.height);
+                            (img_y + img.height - keep, keep, Some((t2, r, b, l)))
+                        }
+                        _ => (img_y, img.height, img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left))),
+                    };
                     elements.push(LayoutElement::new(
                         img_x,
-                        img_y,
+                        clip_y,
                         img.width,
-                        img.height,
+                        clip_h,
                         LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
                             data: img.data.clone(), rotation: img.rotation,
                             content_type: img.content_type.clone(),
-                            crop: img
-                                .crop
-                                .as_ref()
-                                .map(|c| (c.top, c.right, c.bottom, c.left)),
+                            crop: clip_crop,
                         },
                     ));
                     if crate::env_flag!("OXI_DBG_IMGADV") {
