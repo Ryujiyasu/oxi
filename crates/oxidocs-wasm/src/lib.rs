@@ -431,7 +431,7 @@ pub fn resolve_spreadsheet_color(reference: JsValue, palette: JsValue, fallback:
     Ok(oxicells_core::parser::resolve_cell_color_reference(&reference, &palette.theme_colors, &palette.indexed_colors))
 }
 
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[wasm_bindgen]
 pub fn parse_presentation(data: &[u8]) -> Result<JsValue, JsError> {
     let pres = oxislides_core::parse_pptx(data)
@@ -1470,7 +1470,7 @@ pub fn format_cell_number(value: f64, format: &str) -> String {
 }
 
 /// A single slide text edit operation from JavaScript.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[derive(Deserialize)]
 struct JsSlideTextEdit {
     slide_index: usize,
@@ -1481,7 +1481,7 @@ struct JsSlideTextEdit {
 }
 
 /// One paragraph break from JavaScript.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[derive(Deserialize)]
 struct JsSlideSplit {
     slide_index: usize,
@@ -1491,7 +1491,7 @@ struct JsSlideSplit {
 }
 
 /// One paragraph join from JavaScript.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[derive(Deserialize)]
 struct JsSlideMerge {
     slide_index: usize,
@@ -1500,7 +1500,7 @@ struct JsSlideMerge {
 }
 
 /// One run's look, from JavaScript. Absent fields leave a property alone.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[derive(Deserialize)]
 struct JsRunFormat {
     slide_index: usize,
@@ -1545,7 +1545,7 @@ struct JsParaAlign {
 /// offset, which is what Enter means. Both are applied to the same save, and
 /// the text edit lands first so a split counts the characters the file will
 /// actually carry. `geoms` moves and sizes top-level shapes.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[wasm_bindgen]
 pub fn edit_pptx_with_splits(
     data: &[u8],
@@ -1639,7 +1639,7 @@ pub fn edit_pptx_with_splits(
 }
 
 /// Edit a .pptx file and return the modified bytes.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[wasm_bindgen]
 pub fn edit_pptx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
     let js_edits: Vec<JsSlideTextEdit> = serde_wasm_bindgen::from_value(edits)
@@ -1681,7 +1681,7 @@ pub fn edit_pptx(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsError> {
 ///
 /// `runs` is the paragraph's runs, so a line carrying a bold word is measured
 /// per run rather than wholly in one weight.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[wasm_bindgen]
 pub fn break_slide_paragraph(
     text: &str,
@@ -1722,7 +1722,7 @@ pub fn break_slide_paragraph(
 /// `chars` and `em` are parallel: the Nth character of `chars` advances `em[N]`
 /// EM units in this face. A string and an array keep the crossing small -- one
 /// entry per face, not per character.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[derive(Deserialize)]
 struct SuppliedFaceJs {
     family: String,
@@ -1738,7 +1738,7 @@ struct SuppliedFaceJs {
 ///
 /// An empty or absent list gives the compiled tables alone, which is exactly
 /// what every existing caller gets.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 fn supplied_metrics(v: JsValue) -> Result<oxislides_core::layout::SuppliedMetrics, JsError> {
     let mut m = oxislides_core::layout::SuppliedMetrics::new();
     if v.is_undefined() || v.is_null() {
@@ -1766,7 +1766,7 @@ fn supplied_metrics(v: JsValue) -> Result<oxislides_core::layout::SuppliedMetric
 /// back incomplete must not be drawn as if it were the engine's layout: the
 /// measured tables cover 17 of the 142 families the corpora name, and the rest
 /// are still the browser's own wrap.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[wasm_bindgen]
 pub fn layout_slide_shape(
     shape: JsValue,
@@ -1813,7 +1813,7 @@ pub fn layout_slide_shape(
 ///
 /// Null when a face cannot be measured; the caller then has to fall back to its
 /// own measuring and should say the answer is not the engine's.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[wasm_bindgen]
 pub fn slide_glyph_offsets(line: JsValue, advances: JsValue) -> Result<JsValue, JsError> {
     let line: oxislides_core::layout::PlacedLine =
@@ -1829,7 +1829,7 @@ pub fn slide_glyph_offsets(line: JsValue, advances: JsValue) -> Result<JsValue, 
 ///
 /// The page measures faces itself; this lets it check that measuring against a
 /// face the tables also carry, instead of trusting a canvas it never verified.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[wasm_bindgen]
 pub fn slide_face_advance(family: &str, bold: bool, italic: bool, ch: &str) -> Option<f32> {
     use oxislides_core::layout::FaceMetrics;
@@ -1839,7 +1839,7 @@ pub fn slide_face_advance(family: &str, bold: bool, italic: bool, ch: &str) -> O
 
 /// Whether the engine can measure this family at all, so a caller can tell a
 /// person which text on the page is laid out by the engine and which is not.
-#[cfg(feature = "suite")]
+#[cfg(any(feature = "suite", feature = "slides"))]
 #[wasm_bindgen]
 pub fn slide_family_measurable(family: &str) -> bool {
     oxislides_core::layout::TableMetrics::covers(family)

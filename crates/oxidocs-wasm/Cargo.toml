@@ -49,3 +49,7 @@ ovba = ["dep:ovba"]
 # Leave the ~34 MB per-face metric catalog out of the module; the page fetches
 # the members a document needs (font_catalog_missing / font_catalog_register).
 external-font-catalog = ["oxidocs-core/external-font-catalog"]
+# The PowerPoint bindings without the rest of the suite (no Excel, VBA, PDF or
+# hanko), for hosts that cap the module size: the Orca plugin
+# (integrations/orca) builds with `--features slides,external-font-catalog`.
+slides = ["dep:oxislides-core"]
