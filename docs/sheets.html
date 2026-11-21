@@ -1819,8 +1819,15 @@ function addinMacro(ops) {
       if ('wrap' in e) lines.push(`${at}.WrapText = ${e.wrap ? 'True' : 'False'}`);
       if ('rowHeight' in e) lines.push(`${at}.RowHeight = ${Number(e.rowHeight)}`);
       // The API's width is in points; a column's is in characters of the
-      // standard digit (seven pixels and five of padding for Calibri 11).
-      if ('columnWidth' in e) lines.push(`${at}.ColumnWidth = ${Math.max(0, (Number(e.columnWidth) * 4 / 3 - 5) / 7).toFixed(2)}`);
+      // workbook's digit. Width grows in a straight line with ColumnWidth, so
+      // two widths read back give the characters for the points asked for,
+      // whatever the font (the engine's widths agree with Excel's column for
+      // column).
+      if ('columnWidth' in e) {
+        const col = `Worksheets(${e.sheet + 1}).Columns(${e.col + 1})`;
+        lines.push(`${col}.ColumnWidth = 10`, `w10 = ${col}.Width`, `${col}.ColumnWidth = 20`, `w20 = ${col}.Width`,
+          `${col}.ColumnWidth = Application.Max(0, 10 + (${Number(e.columnWidth)} - w10) * 10 / (w20 - w10))`);
+      }
     } else if (op.kind === 'name') {
       lines.push(`ThisWorkbook.Names.Add Name:=${q(op.name)}, RefersTo:=${q(op.formula)}`);
     } else if (op.kind === 'deleteName') {
@@ -1846,6 +1853,7 @@ function addinMacro(ops) {
     '  Next',
     'End Function',
     'Public Sub OxiAddin()',
+    '  Dim w10 As Double, w20 As Double',
     ...lines.map(line => '  ' + line),
     'End Sub',
   ].join('\n');

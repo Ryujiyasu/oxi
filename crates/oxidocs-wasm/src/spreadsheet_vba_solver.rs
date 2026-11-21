@@ -375,21 +375,32 @@ mod tests {
   Next
 End Function
 Public Sub OxiAddin()
+  Dim w10 As Double, w20 As Double
   Worksheets.Add(After:=Worksheets(Worksheets.Count)).Name = "Report"
   Worksheets(1).Cells(1, 1).Interior.Color = RGB(255, 255, 0)
   Worksheets(1).Cells(1, 1).Font.Bold = True
   Worksheets(1).Cells(1, 2).HorizontalAlignment = -4108
-  Worksheets(1).Cells(1, 2).ColumnWidth = 17.57
+  Worksheets(1).Columns(2).ColumnWidth = 10
+  w10 = Worksheets(1).Columns(2).Width
+  Worksheets(1).Columns(2).ColumnWidth = 20
+  w20 = Worksheets(1).Columns(2).Width
+  Worksheets(1).Columns(2).ColumnWidth = Application.Max(0, 10 + (96 - w10) * 10 / (w20 - w10))
   Worksheets(1).Cells(2, 1).NumberFormat = "0.00""x"""
   ThisWorkbook.Names.Add Name:="Rate", RefersTo:="=Sheet1!$A$1"
   Worksheets(1).ListObjects.Add(1, Worksheets(1).Range("$A$1:$B$3"), , 1).Name = "Table1"
   OxiTable("Table1").ListRows.Add.Range.Value = Array("Pad", 7)
-End Sub"##).unwrap();
+End Sub
+Public Function W() As Double
+  W = Worksheets(1).Columns(2).Width
+End Function"##).unwrap();
         {
             let mut host = WorkbookHost::new(&mut book, 0).unwrap();
             host.set_cell_value_with_revision(CellAddress { sheet: 0, row: 1, column: 0 }, CellValue::String("Item".into()), true).unwrap();
             host.set_cell_value_with_revision(CellAddress { sheet: 0, row: 1, column: 1 }, CellValue::String("Qty".into()), true).unwrap();
             execute_with_host(&module, "OxiAddin", vec![], &mut host).unwrap();
+            // Office.js asked for 96 points; Excel rounds a column to whole pixels.
+            let width = execute_with_host(&module, "W", vec![], &mut host).unwrap();
+            assert!(matches!(width, Value::Double(w) if (w - 96.0).abs() <= 0.75), "{width:?}");
         }
         let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();
         editor.apply_workbook(&book).unwrap();
