@@ -3,11 +3,28 @@
   "id": "oxi-slides",
   "publisher": "ryujiyasu",
   "name": "Oxi Slides",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "execution": "sandboxed-ui",
   "description": "Read .pptx decks in Orca as slides, and play them full screen. Made for decks your agents write: the tab redraws when the file changes. Laid out by the Oxi engine (Rust + WebAssembly); nothing leaves the machine.",
   "license": "MPL-2.0",
   "repository": "https://github.com/Ryujiyasu/orca-oxi-slides",
+  "icon": "images/icon.png",
+  "cover": {
+    "path": "images/cover.png",
+    "alt": "Oxi Slides showing a deck titled Q4 Launch Plan: slide thumbnails on the left, the title slide on the right"
+  },
+  "screenshots": [
+    {
+      "path": "images/table-ja.png",
+      "alt": "A Japanese deck in Oxi Slides showing a slide with a budget table: item, owner, budget and status columns",
+      "caption": "Tables and Japanese text, laid out by the Oxi engine"
+    },
+    {
+      "path": "images/timeline.png",
+      "alt": "A timeline slide with four milestones from October to January, drawn as circles on a line above coloured boxes",
+      "caption": "Shapes and colours as the deck defines them"
+    }
+  ],
   "engines": {
     "orca": ">=1.4.248"
   },
