@@ -9277,7 +9277,13 @@ impl<'a> ParagraphLayouter<'a> {
                     && leader_grid.is_none()
                     && tab_leader_text.is_none()
                     && page.doc_grid_lines_and_chars
-                    && self.balance_single_byte_double_byte_width
+                    // OXI_GRID_LATIN_SPREAD_FULL (2026-11-22, default ON, opt-out _DISABLE): without
+                    // balance the letters carry the WHOLE charSpace each. `_pb_grid_autospace_gen.py`
+                    // b0 arms (Century 10.5): «1 2 3» / «a b c» advance 7.31 / 7.43 at charSpace 6338
+                    // (5.84 + 1.55) and 6.36 at 2048 (+ 0.50); Oxi drew them at 5.84 and opened the
+                    // whole sum after the run.
+                    && (self.balance_single_byte_double_byte_width
+                        || !crate::env_flag!("OXI_GRID_LATIN_SPREAD_FULL_DISABLE"))
                     && frag.style.fit_text.is_none()
                     && !frag.style.ruby_spread
                     && frag.field_type.is_none()
@@ -9287,7 +9293,8 @@ impl<'a> ParagraphLayouter<'a> {
                     && !crate::env_flag!("OXI_GRID_LATIN_SPREAD_DISABLE")
                 {
                     match (effective_char_pitch, page.grid_char_cw_ratio) {
-                        (Some(pitch), Some(ratio)) if pitch > 0.0 && ratio > 0.0 => 0.5 * (pitch - pitch / ratio),
+                        (Some(pitch), Some(ratio)) if pitch > 0.0 && ratio > 0.0 =>
+                            (if self.balance_single_byte_double_byte_width { 0.5 } else { 1.0 }) * (pitch - pitch / ratio),
                         _ => 0.0,
                     }
                 } else {
