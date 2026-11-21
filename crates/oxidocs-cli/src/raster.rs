@@ -29,11 +29,18 @@ use tiny_skia::{
 pub struct Size {
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// Draw only the part of the page that has ink (see [`render_page_trimmed`]),
+    /// fitted to the same box.
+    pub trim: bool,
 }
 
 impl Size {
     fn scale(&self, page: &Page) -> f32 {
-        let (w, h) = (page.width.max(1.0) as f32, page.height.max(1.0) as f32);
+        self.scale_for(page.width.max(1.0) as f32, page.height.max(1.0) as f32)
+    }
+
+    /// Pixels per point for something `w` × `h` points.
+    fn scale_for(&self, w: f32, h: f32) -> f32 {
         let by_w = self.width.map(|px| px as f32 / w);
         let by_h = self.height.map(|px| px as f32 / h);
         match (by_w, by_h) {
@@ -176,12 +183,89 @@ pub fn render_page(doc: &PdfDocument, index: usize, size: Size, stand_in: Option
     let scale = size.scale(page);
     let px_w = (page.width as f32 * scale).round().max(1.0) as u32;
     let px_h = (page.height as f32 * scale).round().max(1.0) as u32;
+    let whole = render_region(doc, page, scale, (0.0, 0.0), px_w, px_h, stand_in)?;
+    if !size.trim {
+        return Some(whole);
+    }
+    render_page_trimmed(doc, page, size, &whole, scale, stand_in).or(Some(whole))
+}
+
+/// The part of a page that has ink, drawn again as large as `size` allows.
+///
+/// A spreadsheet's printed page is mostly paper: a small table in the top
+/// left of an A4 sheet makes a thumbnail of white with a smudge in a corner,
+/// and a square crop of its middle shows nothing. So the ink found on the
+/// first drawing, with a margin, is drawn again on its own. The region is
+/// kept to 2:1 at most either way, grown down or right from the top left
+/// where a sheet starts, so one long row does not become a sliver.
+fn render_page_trimmed(
+    doc: &PdfDocument,
+    page: &Page,
+    size: Size,
+    whole: &Pixmap,
+    scale: f32,
+    stand_in: Option<&[u8]>,
+) -> Option<Pixmap> {
+    let (x0, y0, x1, y1) = ink_box(whole)?;
+    let (pw, ph) = (page.width.max(1.0) as f32, page.height.max(1.0) as f32);
+    // From pixels of the first drawing back to points.
+    let pad = 0.02 * pw.max(ph);
+    let mut l = (x0 as f32 / scale - pad).max(0.0);
+    let mut t = (y0 as f32 / scale - pad).max(0.0);
+    let mut r = ((x1 + 1) as f32 / scale + pad).min(pw);
+    let mut b = ((y1 + 1) as f32 / scale + pad).min(ph);
+    if r - l > 2.0 * (b - t) {
+        b = (t + (r - l) / 2.0).min(ph);
+        t = (b - (r - l) / 2.0).max(0.0);
+    } else if b - t > 2.0 * (r - l) {
+        r = (l + (b - t) / 2.0).min(pw);
+        l = (r - (b - t) / 2.0).max(0.0);
+    }
+    let (rw, rh) = (r - l, b - t);
+    if rw <= 0.0 || rh <= 0.0 {
+        return None;
+    }
+    let zoom = size.scale_for(rw, rh);
+    let px_w = (rw * zoom).round().max(1.0) as u32;
+    let px_h = (rh * zoom).round().max(1.0) as u32;
+    render_region(doc, page, zoom, (l, t), px_w, px_h, stand_in)
+}
+
+/// The smallest box holding every pixel that is not paper white, in pixels
+/// (left, top, right, bottom, inclusive). None for a blank page.
+fn ink_box(pixmap: &Pixmap) -> Option<(u32, u32, u32, u32)> {
+    let w = pixmap.width();
+    let mut found: Option<(u32, u32, u32, u32)> = None;
+    for (i, px) in pixmap.data().chunks_exact(4).enumerate() {
+        if px[0] >= 245 && px[1] >= 245 && px[2] >= 245 {
+            continue;
+        }
+        let (x, y) = (i as u32 % w, i as u32 / w);
+        found = Some(match found {
+            None => (x, y, x, y),
+            Some((l, t, r, b)) => (l.min(x), t.min(y), r.max(x), b.max(y)),
+        });
+    }
+    found
+}
+
+/// Draw `page` at `scale` pixels per point onto a `px_w` × `px_h` canvas
+/// whose top-left corner is the point `origin` of the page.
+fn render_region(
+    doc: &PdfDocument,
+    page: &Page,
+    scale: f32,
+    origin: (f32, f32),
+    px_w: u32,
+    px_h: u32,
+    stand_in: Option<&[u8]>,
+) -> Option<Pixmap> {
     let mut pixmap = Pixmap::new(px_w, px_h)?;
     pixmap.fill(tiny_skia::Color::WHITE);
 
     let mut fonts: HashMap<&str, Option<Font>> = HashMap::new();
     let stand_in_font = stand_in.and_then(Font::stand_in);
-    let base = Transform::from_scale(scale, scale);
+    let base = Transform::from_row(scale, 0.0, 0.0, scale, -origin.0 * scale, -origin.1 * scale);
     // q/Q scope the clip and nothing else the IR sets: every element carries
     // its own colours and widths.
     let mut clip: Option<Mask> = None;
@@ -409,13 +493,13 @@ mod tests {
     fn size_fits_the_box_and_keeps_the_aspect() {
         let doc = page(vec![]);
         let fit = |w, h| {
-            let p = render_page(&doc, 0, Size { width: w, height: h }, None).unwrap();
+            let p = render_page(&doc, 0, Size { width: w, height: h, trim: false }, None).unwrap();
             (p.width(), p.height())
         };
         assert_eq!(fit(Some(50), None), (50, 100));
         assert_eq!(fit(None, Some(50)), (25, 50));
         assert_eq!(fit(Some(50), Some(50)), (25, 50));
-        assert!(render_page(&doc, 1, Size { width: Some(50), height: None }, None).is_none());
+        assert!(render_page(&doc, 1, Size { width: Some(50), height: None, trim: false }, None).is_none());
     }
 
     #[test]
@@ -425,10 +509,38 @@ mod tests {
             stroke: None,
             fill: Some(Color::Rgb(1.0, 0.0, 0.0)),
         })]);
-        let p = render_page(&doc, 0, Size { width: Some(100), height: None }, None).unwrap();
+        let p = render_page(&doc, 0, Size { width: Some(100), height: None, trim: false }, None).unwrap();
         assert_eq!(pixel(&p, 10, 10), [255, 0, 0]);
         assert_eq!(pixel(&p, 10, 190), [255, 255, 255]);
         assert_eq!(pixel(&p, 75, 10), [255, 255, 255]);
+    }
+
+    #[test]
+    fn a_trimmed_page_is_its_ink_drawn_as_large_as_the_box_allows() {
+        // A 20 x 10 pt table in the top left of a 100 x 200 pt page.
+        let doc = page(vec![ContentElement::Path(PathData {
+            operations: rect(10.0, 10.0, 20.0, 10.0),
+            stroke: None,
+            fill: Some(Color::Rgb(0.0, 0.0, 1.0)),
+        })]);
+        let size = |trim| Size { width: Some(200), height: Some(200), trim };
+        let whole = render_page(&doc, 0, size(false), None).unwrap();
+        assert_eq!((whole.width(), whole.height()), (100, 200));
+
+        let trimmed = render_page(&doc, 0, size(true), None).unwrap();
+        // The region is the table and a 4 pt margin, 28 x 18 pt, held to
+        // 2:1 at most: it fills the box's width.
+        assert_eq!(trimmed.width(), 200);
+        assert!(trimmed.height() >= 100 && trimmed.height() < 200, "{}", trimmed.height());
+        let blue = trimmed.data().chunks_exact(4).filter(|p| p[2] > 200 && p[0] < 50).count();
+        assert!(blue as f32 / (200.0 * trimmed.height() as f32) > 0.3, "the table fills the thumbnail");
+    }
+
+    #[test]
+    fn a_blank_page_is_not_trimmed() {
+        let doc = page(vec![]);
+        let p = render_page(&doc, 0, Size { width: Some(50), height: None, trim: true }, None).unwrap();
+        assert_eq!((p.width(), p.height()), (50, 100));
     }
 
     #[test]
@@ -447,7 +559,7 @@ mod tests {
                 fill: Some(Color::Rgb(0.0, 0.0, 1.0)),
             }),
         ]);
-        let p = render_page(&doc, 0, Size { width: Some(100), height: None }, None).unwrap();
+        let p = render_page(&doc, 0, Size { width: Some(100), height: None, trim: false }, None).unwrap();
         assert_eq!(pixel(&p, 5, 5), [0, 0, 0], "inside the clip");
         assert_eq!(pixel(&p, 50, 50), [255, 255, 255], "outside the clip");
         assert_eq!(pixel(&p, 50, 150), [0, 0, 255], "after the restore");
@@ -467,7 +579,7 @@ mod tests {
             pixel_height: 2,
             alpha: None,
         })]);
-        let p = render_page(&doc, 0, Size { width: Some(100), height: None }, None).unwrap();
+        let p = render_page(&doc, 0, Size { width: Some(100), height: None, trim: false }, None).unwrap();
         assert_eq!(pixel(&p, 75, 150), [0, 255, 0]);
         assert_eq!(pixel(&p, 25, 50), [255, 255, 255]);
     }

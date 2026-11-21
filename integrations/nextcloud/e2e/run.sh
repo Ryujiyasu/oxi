@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# End-to-end check: Nextcloud with this app shows thumbnails of Word
-# documents, drawn by the bundled oxidocs, and without it shows none.
+# End-to-end check: Nextcloud with this app shows thumbnails of Word,
+# PowerPoint and Excel files, drawn by the bundled oxidocs, and without it
+# shows none.
 #
 # Needs bin/oxidocs-linux-x86_64 (a static build; see the workflow) and
 # Docker. NEXTCLOUD_VERSION picks the image (default 35).
@@ -49,9 +50,12 @@ for _ in $(seq 1 60); do
   if $docker exec "$name" curl -s -o /dev/null http://localhost/status.php; then break; fi
   sleep 2
 done
-docs=(comprehensive_test.docx with_image.docx)
+docs=(comprehensive_test.docx with_image.docx ppt_defaults.pptx multi_slide.pptx basic_test.xlsx merged_cells.xlsx)
+fixture() { # name → path in the repository
+  if [ -f "$repo/tests/fixtures/$1" ]; then echo "$repo/tests/fixtures/$1"; else echo "$repo/crates/oxicells-core/tests/fixtures/$1"; fi
+}
 for doc in "${docs[@]}"; do
-  $docker cp "$repo/tests/fixtures/$doc" "$name:/tmp/$doc"
+  $docker cp "$(fixture "$doc")" "$name:/tmp/$doc"
   code=$(req -o /dev/null -w '%{http_code}' -T "/tmp/$doc" "http://localhost/remote.php/dav/files/admin/$doc")
   [ "$code" = 201 ] || [ "$code" = 204 ] || { bad "upload $doc: HTTP $code"; exit 1; }
 done
@@ -88,7 +92,8 @@ im = Image.open(sys.argv[1]).convert("L")
 w, h = im.size
 ink = sum(1 for p in im.tobytes() if p < 200) / (w * h)
 print(f"  {w}x{h} ink={ink:.3f}")
-sys.exit(0 if max(w, h) == 256 and min(w, h) < 256 and ink > 0.005 else 1)
+# A trimmed sheet can come out square, so only the long side is pinned.
+sys.exit(0 if max(w, h) == 256 and ink > 0.005 else 1)
 PY
   then ok "$doc: thumbnail in ${ms} ms"; else bad "$doc: not a drawn page"; fi
 done

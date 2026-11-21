@@ -48,7 +48,7 @@ class Engine {
 			$this->resolved = $this->configured() ?? $this->bundled() ?? $this->onPath();
 			if ($this->resolved === null) {
 				$this->logger->warning(
-					'No usable oxidocs program for ' . php_uname('m') . ': Word previews are off. '
+					'No usable oxidocs program for ' . php_uname('m') . ': Office previews are off. '
 					. 'Install one and run: occ config:app:set oxidocs_preview binary --value=/path/to/oxidocs',
 					['app' => Application::APP_ID],
 				);
@@ -58,15 +58,18 @@ class Engine {
 	}
 
 	/**
-	 * Draw page 1 of $docx into $png, fitted inside $maxX × $maxY pixels.
+	 * Draw page 1 of $input into $png with $kind (`docx-to-png`,
+	 * `pptx-to-png` or `xlsx-to-png`), fitted inside $maxX × $maxY pixels.
 	 * False (and a log line) when the program fails or runs out of time.
+	 *
+	 * @param list<string> $options further options, such as `--trim`
 	 */
-	public function drawFirstPage(string $docx, string $png, int $maxX, int $maxY): bool {
+	public function drawFirstPage(string $kind, string $input, string $png, int $maxX, int $maxY, array $options = []): bool {
 		$binary = $this->binary();
 		if ($binary === null) {
 			return false;
 		}
-		$command = [$binary, 'docx-to-png', '--width', (string)max(1, $maxX), '--height', (string)max(1, $maxY), $docx, $png];
+		$command = [$binary, $kind, '--width', (string)max(1, $maxX), '--height', (string)max(1, $maxY), ...$options, $input, $png];
 		[$status, $stderr] = $this->run($command, $this->timeout());
 		if ($status === 0 && is_file($png) && filesize($png) > 0) {
 			return true;
