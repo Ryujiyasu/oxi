@@ -26,9 +26,15 @@ use oxicells_core::row_defaults;
 /// text, so it is not the width a person types into Excel: typing 10 stores
 /// 10.625. Pixels come back out of it by OOXML's own rule, which a ruled
 /// worksheet confirmed to the pixel.
+/// Excel first truncates the stated width to whole 1/256ths of a digit:
+/// `_xlsx_width_quantum.py` -- 256w of 2615.1 to 2615.99 all draw 71px with a
+/// 7px digit where the unrounded width reaches 72 from 2615.3 (blind `33157`'s
+/// 10.2166667-wide columns). The small allowance keeps a width that is an
+/// exact 1/256 multiple from losing a unit to f32 error.
 fn column_pixels(width: f32, digit: f32) -> f32 {
     let padding = (128.0 / digit).trunc();
-    (((256.0 * width + padding) / 256.0) * digit).trunc()
+    let units = (256.0 * width + 1e-3).floor();
+    (((units + padding) / 256.0) * digit).trunc()
 }
 /// What a digit measures when the standard font could not be asked: Calibri 11,
 /// which is what a workbook that names no font gets.
@@ -2916,6 +2922,48 @@ pub(crate) fn cell_text(value: &CellValue, style: &CellStyle) -> String {
             &host_number_format(style.number_format.as_deref().unwrap_or("General")),
         ),
     }
+}
+
+/// Where a number format's `*c` repeats `c` to fill the cell: the text
+/// before and after that point, and the filler. Excel's accounting formats
+/// (`_-[$£-809]* #,##0.00_-`, built-ins 41-44) put the currency sign at the
+/// cell's left and the number at its right this way; blind `57262` shows
+/// `£   0.04` across the cell where reading the `*` as nothing drew `£0.04`.
+pub(crate) fn cell_text_fill(value: &CellValue, style: &CellStyle) -> Option<(String, String, char)> {
+    const MARK: char = '\u{E000}';
+    let CellValue::Number(number) = value else {
+        return None;
+    };
+    let code = host_number_format(style.number_format.as_deref()?).into_owned();
+    let mut marked = String::new();
+    let mut filler = None;
+    let mut quoted = false;
+    let mut letters = code.chars();
+    while let Some(c) = letters.next() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                marked.push(c);
+            }
+            _ if quoted => marked.push(c),
+            '\\' | '_' => {
+                marked.push(c);
+                marked.extend(letters.next());
+            }
+            '*' => {
+                let held = letters.next()?;
+                filler.get_or_insert(held);
+                marked.push('"');
+                marked.push(MARK);
+                marked.push('"');
+            }
+            _ => marked.push(c),
+        }
+    }
+    let filler = filler?;
+    let text = oxicells_core::format_number(*number, &marked);
+    let (before, after) = text.split_once(MARK)?;
+    Some((before.to_string(), after.replace(MARK, ""), filler))
 }
 
 /// An error as Excel's window prints it. Of the error values only `#SPILL!`
@@ -6573,6 +6621,41 @@ mod windows_draw {
                     );
                     SetBkMode(dc, TRANSPARENT);
 
+                    // A `*` fill: as many fillers as fit between the two
+                    // halves, the whole set on the cell's right edge.
+                    let (text, placed) = match super::cell_text_fill(&cell.value, &cell.style)
+                        .filter(|_| cell.runs.is_empty() && !cell.style.wrap_text)
+                    {
+                        Some((before, after, filler)) => {
+                            let measure = |line: &str| -> i32 {
+                                let held = wide(line);
+                                let mut measured = SIZE::default();
+                                if held.len() > 1
+                                    && GetTextExtentPoint32W(dc, &held[..held.len() - 1], &mut measured)
+                                        .as_bool()
+                                {
+                                    measured.cx
+                                } else {
+                                    0
+                                }
+                            };
+                            let room = area.right - area.left;
+                            let mut filled = format!("{before}{after}");
+                            if measure(&filled) <= room {
+                                let mut n = 1;
+                                while n < 400 {
+                                    let next = format!("{before}{}{after}", filler.to_string().repeat(n));
+                                    if measure(&next) > room {
+                                        break;
+                                    }
+                                    filled = next;
+                                    n += 1;
+                                }
+                            }
+                            (filled, Align::Right)
+                        }
+                        None => (text, placed),
+                    };
                     // The lines to draw: the cell's own breaks, and where it
                     // wraps, the breaks the row's height was measured with.
                     let lines = super::wrapped_lines(
