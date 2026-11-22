@@ -3939,9 +3939,16 @@ fn instweight_on() -> bool {
     std::env::var("OXI_INSTWEIGHT_DISABLE").is_err()
 }
 
-/// S-CFFSKIP (2026-11-23) unless OXI_CFFSKIP_DISABLE is set.
+/// S-CFFSKIP -- PARKED opt-in (OXI_CFFSKIP_ENABLE, 2026-11-23). The full rule
+/// is a SPLIT: PowerPoint BREAKS lines with the CFF part's advances (d15 s5:
+/// "printed as a means of" + "inspiration" fits the 417.87pt box at Calibri's
+/// 403pt but not Barlow's ~425, and PowerPoint breaks there) while it DRAWS,
+/// positions (PDF glyph origins = Calibri Bold Italic advances exactly) and
+/// sets the baseline (d15 titles 164.14/216.0/267.84) with the missing-font
+/// substitute. Dropping the part outright fixes the draw half and breaks the
+/// break half: d15 -0.0077. Unpark with a break-family / draw-family split.
 fn cffskip_on() -> bool {
-    std::env::var("OXI_CFFSKIP_DISABLE").is_err()
+    std::env::var("OXI_CFFSKIP_ENABLE").is_ok()
 }
 
 /// Whether an embedded part decompresses to a CFF-flavoured (PostScript
