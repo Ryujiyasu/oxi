@@ -13634,11 +13634,20 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         };
                         match decoded {
                             Ok(dyn_img) => {
+                                let full = dyn_img.to_rgba8();
+                                // PX-JPEGSIM decides on the ORIGINAL picture: the
+                                // 1536 cap's resample invents colours (d58's
+                                // 660-colour dot screen counts > 3100 after it).
+                                let to_jpeg = data.starts_with(&[0x89, b'P', b'N', b'G'])
+                                    && jpegsim_wants(&full);
                                 let mut rgba = cap_image_long_side_cropped(
-                                    dyn_img.to_rgba8(),
+                                    full,
                                     (1.0 - (sl + sr)) as f64,
                                     (1.0 - (st + sb)) as f64,
                                 );
+                                if to_jpeg {
+                                    rgba = jpeg_export_sim(rgba);
+                                }
                                 // `a:clrChange` then `a:duotone`, in the order
                                 // PowerPoint applies them (252cbc8c s69: a black
                                 // backdrop made transparent, the grey figure
@@ -14230,7 +14239,7 @@ fn create_font_for_wiu(
             1,
             0,
             0,
-            5,
+            text_quality(),
             0,
             PCWSTR(family_buf.as_ptr()),
         )
@@ -18787,6 +18796,71 @@ fn final_filter() -> image::imageops::FilterType {
     }
 }
 
+/// GDI text quality for DRAWN text (probe: OXI_TEXTQ=4 grayscale antialias, 5 ClearType).
+fn text_quality() -> u32 {
+    static Q: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *Q.get_or_init(|| std::env::var("OXI_TEXTQ").ok().and_then(|v| v.parse().ok()).unwrap_or(5))
+}
+
+/// PX-JPEGSIM (default on, OXI_JPEGSIM_DISABLE to turn off, 2026-11-23). PowerPoint's PDF export
+/// stores many PNG pictures as baseline 4:2:0 JPEG at IJG quality 75 (all 676
+/// JPEGs in 30 dev PDFs), with the colour PREMULTIPLIED by the alpha and the
+/// soft mask carrying /Matte [0 0 0] -- so the viewer divides the JPEG error by
+/// alpha. d28's texture: premultiply -> q75 reproduces the PDF's samples to
+/// MAD 2.3/255 (q70 3.5, q80 3.6, no JPEG 4.9). WHICH pictures go to JPEG is not
+/// derived; this uses the corpus colour-count split (> ~3100 visible colours,
+/// 92% of 851 pictures).
+fn jpegsim_wants(rgba: &image::RgbaImage) -> bool {
+    if std::env::var("OXI_JPEGSIM_DISABLE").is_ok() {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for p in rgba.pixels() {
+        if p[3] > 0 {
+            seen.insert((p[0], p[1], p[2]));
+            if seen.len() > 3100 {
+                break;
+            }
+        }
+    }
+    if std::env::var("OXI_JPEGSIM_DEBUG").is_ok() {
+        eprintln!("JPEGSIM {}x{} colours>{} apply={}", rgba.width(), rgba.height(), seen.len(), seen.len() > 3100);
+    }
+    seen.len() > 3100
+}
+
+fn jpeg_export_sim(rgba: image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = (rgba.width(), rgba.height());
+    let mut pm = image::RgbImage::new(w, h);
+    for (x, y, p) in rgba.enumerate_pixels() {
+        let a = p[3] as u32;
+        let f = |c: u8| ((c as u32 * a + 127) / 255) as u8;
+        pm.put_pixel(x, y, image::Rgb([f(p[0]), f(p[1]), f(p[2])]));
+    }
+    let mut buf = Vec::new();
+    if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 75)
+        .encode_image(&pm)
+        .is_err()
+    {
+        return rgba;
+    }
+    let Ok(dec) = image::load_from_memory_with_format(&buf, image::ImageFormat::Jpeg) else {
+        return rgba;
+    };
+    let dec = dec.to_rgb8();
+    let mut out = rgba;
+    for (x, y, p) in out.enumerate_pixels_mut() {
+        let a = p[3] as u32;
+        if a == 0 {
+            continue;
+        }
+        let j = dec.get_pixel(x, y);
+        let u = |c: u8| ((c as u32 * 255 + a / 2) / a).min(255) as u8;
+        *p = image::Rgba([u(j[0]), u(j[1]), u(j[2]), p[3]]);
+    }
+    out
+}
+
 fn imgcap_on() -> bool {
     std::env::var("OXI_IMGCAP_DISABLE").is_err()
 }
@@ -18815,13 +18889,13 @@ fn cap_image_long_side(rgba: image::RgbaImage) -> image::RgbaImage {
 fn cap_image_long_side_cropped(rgba: image::RgbaImage, cw: f64, ch: f64) -> image::RgbaImage {
     const CAP: f64 = 1536.0;
     let (w, h) = (rgba.width(), rgba.height());
-    // PARKED OPT-IN (2026-11-22): measuring the kept part is what the truth
+    // Shipped with PX-JPEGSIM (2026-11-23, jsc2 +0.000654). Was parked: measuring the kept part is what the truth
     // PDFs show, but gated it is a wash -- icap1122 -> icrop1122 -0.000065,
     // 10 up / 13 down (d37 -0.0028, d05 -0.0016). The same photos are stored
     // in the PDF as q75 JPEG, which Oxi does not model; the coarser whole-
     // picture cap happened to stand in for that smoothing. Until the JPEG
     // choice is derived the default measures the whole picture.
-    let (cw, ch) = if std::env::var("OXI_IMGCAPCROP_ENABLE").is_ok() { (cw, ch) } else { (1.0, 1.0) };
+    let (cw, ch) = if std::env::var("OXI_IMGCAPCROP_DISABLE").is_err() { (cw, ch) } else { (1.0, 1.0) };
     let kept_long = (w as f64 * cw.clamp(0.0, 1.0)).max(h as f64 * ch.clamp(0.0, 1.0));
     if !imgcap_on() || kept_long <= CAP + 0.5 {
         return rgba;
