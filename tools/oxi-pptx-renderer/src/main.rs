@@ -17529,7 +17529,11 @@ fn needs_faux_bold(family: &str, italic: bool) -> bool {
 /// The break test asked 16384 and kept d31 s16's "involves decorating" on one
 /// line that PowerPoint breaks.
 ///
-/// PARKED opt-in (2026-11-21): dev +0.000014 (d31 +0.0024, d44 -0.0027), blind
+/// Default ON since 2026-11-23 (OXI_FAUXUPM_DISABLE to turn off): COM probes
+/// put PowerPoint's faux-bold LETTERS on GDI@upm within the 1/8pt grid (PX-
+/// FAUXSPACE); the space keeps the large probe (context rule not derived).
+/// Gate cfb1123 -> fu2 +0.000019 (d31 +0.0024 break fixed, d44 -0.0022 space).
+/// Earlier: PARKED opt-in (2026-11-21): dev +0.000014 (d31 +0.0024, d44 -0.0027), blind
 /// -0.000002 (deck 35 mixed). The letters land on GDI@upm; the SPACE does not
 /// (PowerPoint's bold space is 0.97-1.01 x GDI's, Bebas Neue 0.975), and d44's
 /// tight 137pt title turns on that. Unpark once the space is derived. `None` when the flag is off or the em is
@@ -17546,7 +17550,7 @@ fn fauxspace_keep(ch: char) -> bool {
 #[cfg(windows)]
 fn fauxbold_probe_em(family: &str, italic: bool) -> Option<i32> {
     use windows::Win32::Graphics::Gdi::*;
-    if std::env::var("OXI_FAUXUPM_ENABLE").is_err() || !needs_faux_bold(family, italic) {
+    if std::env::var("OXI_FAUXUPM_DISABLE").is_ok() || !needs_faux_bold(family, italic) {
         return None;
     }
     thread_local! {
