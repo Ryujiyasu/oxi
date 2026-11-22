@@ -375,7 +375,7 @@ fn parse_master_txstyles(xml: &str) -> Result<MasterTxStyles, PptxError> {
                     // Children of a non-self-closing level (Start form).
                     "spcPct" if in_ln_spc && s_txspacing => {
                         if let Some(x) = get_attr(&e, "val").and_then(|v| v.parse::<f32>().ok()) {
-                            cur_level.line_spacing = Some(x / 100000.0);
+                            cur_level.line_spacing = Some(ln_spc_multiple(x));
                         }
                     }
                     "spcPts" if in_spc_bef && s_txspacing => {
@@ -887,7 +887,7 @@ fn parse_layout_ph_lststyles(
                     "spcPct" if in_lst && in_ln_spc_lvl && cur_lvl.is_some() => {
                         if let (Some(idx), Some(v)) = (cur_lvl, get_attr(&e, "val")) {
                             if let Ok(x) = v.parse::<f32>() {
-                                levels[idx].line_spacing = Some(x / 100000.0);
+                                levels[idx].line_spacing = Some(ln_spc_multiple(x));
                             }
                         }
                     }
@@ -3363,7 +3363,7 @@ fn parse_slide(
                         // a:lnSpc/a:spcPct/@val is the multiple in 100000ths.
                         if let Some(v) = get_attr(&e, "val") {
                             if let Ok(x) = v.parse::<f32>() {
-                                para_line_spacing = Some(x / 100000.0);
+                                para_line_spacing = Some(ln_spc_multiple(x));
                             }
                         }
                     }
@@ -7324,9 +7324,35 @@ pub fn parse_pptx(data: &[u8]) -> Result<Presentation, PptxError> {
     Ok(pres)
 }
 
+/// `a:lnSpc/a:spcPct/@val` (100000ths) as the multiple PowerPoint lays out.
+///
+/// S-LNSPCROUND: PowerPoint keeps line spacing in WHOLE percent, rounding half
+/// up. Cut from dev d53 s16's Open Sans title (lnSpc 100015, a Google Slides
+/// export; PowerPoint PDF, 19 arms): 100001..100499 and 99600 land exactly
+/// where 100% does, 100500..101499 where 101% does, 101500 / 101600 at 102%,
+/// 99400 at 99%, 119500 at 120%. Taking 100015 as "more than single" put the
+/// title 2.86pt high (the quarter floor of n > 1).
+pub(crate) fn ln_spc_multiple(val: f32) -> f32 {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var("OXI_LNSPCROUND_DISABLE").is_err()) {
+        (val / 1000.0 + 0.5).floor() / 100.0
+    } else {
+        val / 100000.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_spacing_is_kept_in_whole_percent() {
+        // dev d53 s16 (PowerPoint PDF): 100015 lays out as 100%, 100500 as 101%.
+        for (val, want) in [(100015.0, 1.0), (100499.0, 1.0), (99600.0, 1.0), (100500.0, 1.01),
+                            (101500.0, 1.02), (99400.0, 0.99), (120006.0, 1.2), (119500.0, 1.2)] {
+            assert!((ln_spc_multiple(val) - want).abs() < 1e-6, "{val} -> {}", ln_spc_multiple(val));
+        }
+    }
 
     #[test]
     fn quad_bezier_becomes_the_same_cubic() {
