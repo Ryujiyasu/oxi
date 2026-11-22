@@ -3988,7 +3988,30 @@ impl<'a> LineBreaker<'a> {
                                     fragments.get(frag_outer_idx + 1).and_then(|f| f.0.chars().next())
                                 } else { None })
                                 .map_or(false, is_sp));
-                    if prev_is_cjk || next_is_cjk || bal_space_run {
+                    // OXI_BAL_NBSP (2026-11-22, default ON, opt-out _DISABLE): an NBSP is
+                    // not balanced by an East Asian neighbour, and joins the space-run rule
+                    // only when the run follows a Latin character. `_pb_bal_nbsp_run.py`
+                    // (balance, compat 14, ＭＳ Ｐゴシック / Century 12): «あ___い» «あ___b»
+                    // «あ_い» «a_b» and a trailing «あ___» keep the face's space (3.72 / 3.48),
+                    // «a___b» «a___い» take 6.00; ASCII spaces take 6.00 in every run and
+                    // next to «あ». blind-A ja/creative__097ed6a9 «野中　涼 » + 3 NBSP (jc=right):
+                    // Word 3.72 each, Oxi 6.05, the name 7.3pt left.
+                    let balanced = if ch == '\u{00a0}' && !crate::env_flag!("OXI_BAL_NBSP_DISABLE") {
+                        let before = chars_vec[..char_index.min(chars_vec.len())]
+                            .iter()
+                            .rev()
+                            .copied()
+                            .find(|c| !is_sp(*c))
+                            .or_else(|| {
+                                fragments
+                                    .get(frag_outer_idx.wrapping_sub(1))
+                                    .and_then(|f| f.0.chars().rev().find(|c| !is_sp(*c)))
+                            });
+                        bal_space_run && !before.map_or(false, s1333_ea)
+                    } else {
+                        prev_is_cjk || next_is_cjk || bal_space_run
+                    };
+                    if balanced {
                         // S1337S (2026-09-06, HELD opt-in OXI_S1337S=1): on a character
                         // grid the balanced space is half the CELL, like every other
                         // single-byte character -- 0ea3ec86 p5 「能訓練 31か所 生活訓練

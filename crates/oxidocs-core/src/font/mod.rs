@@ -3216,6 +3216,11 @@ pub fn is_fullwidth(ch: char) -> bool {
         0xFFE0..=0xFFE6 |  // Fullwidth currency/symbols
         0x20000..=0x2A6DF  // CJK Unified Ideographs Extension B
     )
+    // Roman numerals Ⅰ..ↂ: 1em in ＭＳ 明朝 / ＭＳ ゴシック and their P faces (hmtx
+    // 256/256; the fractions ⅓.. before them are 0.5em). OXI_ROMAN_FULLWIDTH
+    // (2026-11-22, default ON, opt-out _DISABLE): blind-A ja/reference__0a43e3b0
+    // «シップⅠに加え» in ＭＳ 明朝 -- Word advances Ⅰ 10.44, Oxi set it at 5.25.
+    || (matches!(ch as u32, 0x2160..=0x2182) && !crate::env_flag!("OXI_ROMAN_FULLWIDTH_DISABLE"))
 }
 
 #[cfg(test)]

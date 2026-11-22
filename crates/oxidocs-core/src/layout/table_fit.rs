@@ -7588,7 +7588,31 @@ impl<'a> TableFitLayouter<'a> {
                                                                 line_x + buf_w + cw - n_comp as f32 * font_size * 0.5
                                                                     > effective_wrap + 0.01
                                                             });
-                                                    let s1583_left = s1583_left || cell_both_push;
+                                                    // OXI_CELL_MARK_OIDASHI (2026-11-22, default ON, opt-out _DISABLE): a
+                                                    // cell lends a line-final 、。 half its em and never hangs it whole.
+                                                    // When the fit test above has already spent that half em and the
+                                                    // mark still overflows, Word pushes it down with the character
+                                                    // before it. Faithful slice of blind-A ja/forms__003298e3 (compat 11
+                                                    // and 15, compressPunctuation, jc=both, one-cell tables swept 1pt):
+                                                    // «…場合は、» natural 200 holds from 195, with an earlier 、/） from
+                                                    // 200; 、 and 。 alike. Oxi force-fitted the mark from 190.
+                                                    let cell_mark_oidashi = !crate::env_flag!("OXI_CELL_MARK_OIDASHI_DISABLE")
+                                                        && self.doc_body_has_real_cjk
+                                                        && self.compress_punctuation
+                                                        // measured on jc=both; a legacy jc=left cell hangs the mark
+                                                        // whole (ja/educational__13344a6b «…見積もってい|る。» 9.6pt over)
+                                                        && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                                                        && matches!(ch, '、' | '。' | '，' | '．')
+                                                        && line_x + buf_w + cw - effective_wrap
+                                                            > 0.5 * cw * (1.0 + current_line.iter()
+                                                                .flat_map(|f| f.0.chars())
+                                                                .chain(buf.chars())
+                                                                // every mark that lends the cell pool its half em, ・ and
+                                                                // U+3000 included (golden 3a4f «…データ・情報…ならない。»
+                                                                // 8.1pt over keeps 。; «①　振替…ですから、» 15.6pt keeps 、)
+                                                                .filter(|c| kinsoku::cell_yaku_type_a(*c) || kinsoku::cell_yaku_type_b(*c))
+                                                                .count() as f32) + 0.01;
+                                                    let s1583_left = s1583_left || cell_both_push || cell_mark_oidashi;
                                                     if !crate::env_flag!("OXI_S421_DISABLE")
                                                         && (s412_cellmar_subtract
                                                             || (std::env::var("OXI_S443_DISABLE")

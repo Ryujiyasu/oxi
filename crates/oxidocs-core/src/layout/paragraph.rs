@@ -7152,6 +7152,8 @@ impl<'a> ParagraphLayouter<'a> {
                 // (render_width / extra_indent / line_text_width) before guessing a
                 // third time.
                 let mut slack = render_width - extra_indent - line_text_width - grid_extra_on_line;
+                // OXI_YAKU_LEND_ORDER: the blank half of a last 約物 that hangs.
+                let mut lend_credit = 0.0f32;
                 // OXI_DBG_SLACK: the three terms behind the unexplained 2.20pt
                 // undershoot, plus the fragment tail so the trailing-space question
                 // is answered from data rather than from the source shape.
@@ -7179,6 +7181,7 @@ impl<'a> ParagraphLayouter<'a> {
                 // to natural and let Phase 2 distribute.
                 if s472_render {
                     let nfr = line.fragments.len();
+                    let mut lend_half: Option<f32> = None;
                     let mut comps: Vec<(usize, f32, f32)> = Vec::new(); // (fi, fs, cap)
                     let s_open_even = !crate::env_flag!("OXI_YAKU_OPEN_EVEN_DISABLE");
                     let mut open_fi: Vec<usize> = Vec::new();
@@ -7288,6 +7291,7 @@ impl<'a> ParagraphLayouter<'a> {
                             nat_total += if last_fit && matches!(c0, '、' | '。' | '，' | '．') {
                                 0.0
                             } else if effective_char_pitch.is_none() {
+                                lend_half = Some(cap);
                                 fs - cap
                             } else {
                                 fs
@@ -7315,6 +7319,39 @@ impl<'a> ParagraphLayouter<'a> {
                             open_fi.retain(|&o| o != fi);
                             dot_fi.retain(|&o| o != fi);
                             nat_total += f.width;
+                        }
+                    }
+                    // OXI_YAKU_LEND_ORDER (2026-11-22, default ON, opt-out _DISABLE): the
+                    // line's last 約物 does not always lend its blank half. With `over` the
+                    // overflow of the line at natural width, Word
+                    //   over <= 0                 keeps it whole (the line spreads);
+                    //   0 < over <= its half      hangs its half and spreads the rest;
+                    //   over > its half           keeps it whole and squeezes the inner 約物,
+                    //                             hanging the half only when they cannot
+                    //                             absorb the whole overflow.
+                    // Faithful slice of blind-A ja/creative__1507a363 (compat 14, compress-
+                    // Punctuation, ＭＳ 明朝 10.5, no char grid; 3 paragraphs, right indent
+                    // swept 1pt, 63 arms): «…さやかちゃんは、» over 5.35..10.35 with two inner 。
+                    // -> 、 whole, 。7.92..5.28; 11.35+ -> 、 half out, 。7.56; «…おうと、» /
+                    // «…ちゃね、» over 0.85..4.9 -> half out, kana spread 10.56..10.70;
+                    // «…ね、と、» 5.9..14.9 with three inner -> whole. golden ohnoitaku_21
+                    // «…場合には、» (half out, inner 、 6.36) is the third case.
+                    // A mark whose pair partner opens the NEXT line keeps the pair's
+                    // half even when the line fits: «…一緒に、» / «「きれいな…» (1507a363,
+                    // 11 arms, 、 half out at every width) and «…（３６点）» / «・お子さん…»
+                    // (blind-A ja/reports__0f8fe403 p4, ） at edge − 5.3 on a 5pt-slack line).
+                    let pair_next = !crate::env_flag!("OXI_YAKU_LEND_PAIR_NEXT_DISABLE")
+                        && lines.get(line_idx + 1)
+                            .and_then(|nl| nl.fragments.first())
+                            .and_then(|f| f.text.chars().next())
+                            .is_some_and(|c| matches!(c, '（' | '「' | '『' | '【' | '〔' | '《' | '〈' | '｛' | '［' | '・'));
+                    if let Some(half) = lend_half.filter(|_| !crate::env_flag!("OXI_YAKU_LEND_ORDER_DISABLE")) {
+                        let over = nat_total + half - (render_width - extra_indent);
+                        let inner: f32 = comps.iter().map(|c| c.2).sum();
+                        if (over <= 0.0 && !pair_next) || (over > half + 0.01 && inner + 0.01 >= over) {
+                            nat_total += half;
+                        } else {
+                            lend_credit = half;
                         }
                     }
                     let nat_slack = render_width - extra_indent - nat_total
@@ -7453,7 +7490,7 @@ impl<'a> ParagraphLayouter<'a> {
                 } else {
                     render_width - extra_indent - post_phase1_ltw + s1118_trailing_hang
                         - grid_extra_on_line
-                };
+                } + lend_credit;
 
                 // 2026-04-21: Stage 2b — de-compress pre-compressed 、。,．toward
                 // natural using positive slack. COM-proven (d77a + R19 + R6):
