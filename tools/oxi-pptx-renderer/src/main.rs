@@ -13609,7 +13609,11 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         };
                         match decoded {
                             Ok(dyn_img) => {
-                                let mut rgba = cap_image_long_side(dyn_img.to_rgba8());
+                                let mut rgba = cap_image_long_side_cropped(
+                                    dyn_img.to_rgba8(),
+                                    (1.0 - (sl + sr)) as f64,
+                                    (1.0 - (st + sb)) as f64,
+                                );
                                 // `a:clrChange` then `a:duotone`, in the order
                                 // PowerPoint applies them (252cbc8c s69: a black
                                 // backdrop made transparent, the grey figure
@@ -18745,14 +18749,31 @@ fn imgcap_on() -> bool {
 /// further by PowerPoint (a ppi rule not derived yet); only the cap is applied.
 /// Off with `OXI_IMGCAP_DISABLE`.
 fn cap_image_long_side(rgba: image::RgbaImage) -> image::RgbaImage {
-    const CAP: u32 = 1536;
+    cap_image_long_side_cropped(rgba, 1.0, 1.0)
+}
+
+/// The cap measures the part a `a:srcRect` crop KEEPS: PowerPoint deletes the
+/// cropped-away area first, then resamples what is left. d05's 1666x2500
+/// photos cropped to 16:9 come out 1536x864; d58's 2304x1536 photo with 28.857%
+/// cut from each side keeps its full 974x1536 (capping the whole picture first
+/// would leave 649x1024 and blur it). `cw`/`ch` are the kept fractions.
+fn cap_image_long_side_cropped(rgba: image::RgbaImage, cw: f64, ch: f64) -> image::RgbaImage {
+    const CAP: f64 = 1536.0;
     let (w, h) = (rgba.width(), rgba.height());
-    let long = w.max(h);
-    if !imgcap_on() || long <= CAP {
+    // PARKED OPT-IN (2026-11-22): measuring the kept part is what the truth
+    // PDFs show, but gated it is a wash -- icap1122 -> icrop1122 -0.000065,
+    // 10 up / 13 down (d37 -0.0028, d05 -0.0016). The same photos are stored
+    // in the PDF as q75 JPEG, which Oxi does not model; the coarser whole-
+    // picture cap happened to stand in for that smoothing. Until the JPEG
+    // choice is derived the default measures the whole picture.
+    let (cw, ch) = if std::env::var("OXI_IMGCAPCROP_ENABLE").is_ok() { (cw, ch) } else { (1.0, 1.0) };
+    let kept_long = (w as f64 * cw.clamp(0.0, 1.0)).max(h as f64 * ch.clamp(0.0, 1.0));
+    if !imgcap_on() || kept_long <= CAP + 0.5 {
         return rgba;
     }
-    let nw = ((w as f64 * CAP as f64 / long as f64).round() as u32).max(1);
-    let nh = ((h as f64 * CAP as f64 / long as f64).round() as u32).max(1);
+    let k = CAP / kept_long;
+    let nw = ((w as f64 * k).round() as u32).max(1);
+    let nh = ((h as f64 * k).round() as u32).max(1);
     image::imageops::resize(&rgba, nw, nh, image::imageops::FilterType::CatmullRom)
 }
 
