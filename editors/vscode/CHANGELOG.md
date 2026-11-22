@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.10
+
+Word documents: Up and Down move the caret a line at a time, keeping its
+column, and Shift+Up and Shift+Down select line by line (before, only Left
+and Right moved the caret). Pages on a character grid break lines closer to
+Word. Excel: compact pivot tables draw their expand buttons.
+
 ## 0.9.9
 
 PowerPoint decks: tables are drawn in the editor (before, a slide's table
