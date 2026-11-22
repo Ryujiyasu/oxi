@@ -15,14 +15,17 @@ Version 1.1, by their own authors:
   Digitized data copyright (c) 2010 Google Corporation, with Reserved Font Arimo,
   Tinos and Cousine. Copyright (c) 2012 Red Hat, Inc., with Reserved Font Name
   Liberation.
-- OxiGothic (OxiGothic.ttf): Noto Sans JP 2.004, renamed
+- OxiGothic (OxiGothic.ttf): derived from Noto Sans JP 2.004
   Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
-- OxiMincho (OxiMincho.ttf): Noto Serif JP 2.002, renamed
+- OxiMincho (OxiMincho.ttf): derived from Noto Serif JP 2.002
   Copyright 2017-2023 Adobe (http://www.adobe.com/).
 
-OxiGothic and OxiMincho are the Japanese subsets of Noto Sans / Noto Serif CJK
-(Source Han Sans / Serif) as published on Google Fonts, cut to their Regular
-(400) instance and renamed. They are Modified Versions under the license below.
+OxiGothic and OxiMincho take the Regular (400) instance of Noto Sans JP / Noto
+Serif JP (the Japanese subsets of Noto Sans / Serif CJK, i.e. Source Han Sans /
+Serif, as published on Google Fonts), keep their outlines, and change their
+metrics to those of MS Gothic / MS Mincho (half-width 500-unit advances for
+Latin, ascent 859 / descent 140) so text laid out with Word's measurements
+fits. They are Modified Versions under the license below.
 
 The per-font license files are in crates/oxidocs-fonts-latin/fonts/ and
 crates/oxidocs-fonts-jp/fonts/ in the source repository

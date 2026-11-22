@@ -1,8 +1,10 @@
 Copyright 2017-2023 Adobe (http://www.adobe.com/).
 
-OxiMincho.ttf is Noto Serif JP 2.002 (Google Fonts), the Japanese subset of
-Noto Serif CJK / Source Han Serif, cut to its Regular (400) instance and renamed
-OxiMincho. It is a Modified Version under the license below.
+OxiMincho.ttf is derived from Noto Serif JP 2.002 (Google Fonts), the Japanese
+subset of Noto Serif CJK / Source Han Serif: its Regular (400) instance, with the
+outlines unchanged and the metrics changed to MS Mincho's (half-width 500-unit
+advances for Latin, ascent 859 / descent 140), renamed OxiMincho. It is a
+Modified Version under the license below.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
