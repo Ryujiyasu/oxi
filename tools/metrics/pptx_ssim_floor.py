@@ -61,6 +61,14 @@ PDF_DIR = DEV / "pdf"
 PNG_ROOT = DEV / "oxi_png"
 RESULT_ROOT = DEV / "ssim_floor"
 REF_ROOT = DEV / "ppt_png"
+# --ref ss: the SAME-RASTER-PATH reference -- the PowerPoint PDF drawn by MuPDF
+# at 3x (450 dpi) and reduced bilinearly to 150 dpi, i.e. through the
+# supersample-and-reduce path a renderer like Oxi's takes. On the direct
+# 150 dpi reference even a pixel-perfect-geometry render through that path is
+# capped near 0.985 (the same PDF re-rasterised this way scores 0.982-0.986);
+# this reference removes that rasterisation term so the score measures content
+# fidelity. Results are written as <tag>_ss.json.
+REF_MODE = "direct"
 # MuPDF keeps shared state, so the reference rasters are produced under
 # one lock and then reused from disk.
 LOCK = threading.Lock()
@@ -139,7 +147,8 @@ def reference_pages(pdf_path: Path) -> list[Path]:
     reproducible) and makes every later run much cheaper, since the truth
     side never changes.
     """
-    cache = REF_ROOT / pdf_path.stem
+    root = REF_ROOT if REF_MODE == "direct" else DEV / "ppt_png_ss450"
+    cache = root / pdf_path.stem
     pngs = sorted(cache.glob("p*.png"), key=lambda p: int(p.stem[1:]))
     if pngs:
         return pngs
@@ -148,8 +157,15 @@ def reference_pages(pdf_path: Path) -> list[Path]:
         pdf = pymupdf.open(pdf_path)
         try:
             for index in range(pdf.page_count):
-                pix = pdf[index].get_pixmap(matrix=pymupdf.Matrix(DPI / 72, DPI / 72), alpha=False)
-                pix.save(cache / f"p{index + 1}.png")
+                if REF_MODE == "direct":
+                    pix = pdf[index].get_pixmap(matrix=pymupdf.Matrix(DPI / 72, DPI / 72), alpha=False)
+                    pix.save(cache / f"p{index + 1}.png")
+                else:
+                    # Same size as the direct raster (MuPDF's own rounding).
+                    ref = pdf[index].get_pixmap(matrix=pymupdf.Matrix(DPI / 72, DPI / 72), alpha=False)
+                    big = pdf[index].get_pixmap(matrix=pymupdf.Matrix(3 * DPI / 72, 3 * DPI / 72), alpha=False)
+                    im = Image.frombytes("RGB", (big.width, big.height), big.samples)
+                    im.resize((ref.width, ref.height), Image.Resampling.BILINEAR).save(cache / f"p{index + 1}.png")
         finally:
             pdf.close()
     return sorted(cache.glob("p*.png"), key=lambda p: int(p.stem[1:]))
@@ -336,7 +352,8 @@ def run(args) -> dict:
         )
 
     RESULT_ROOT.mkdir(parents=True, exist_ok=True)
-    out = Path(args.json) if args.json else RESULT_ROOT / f"{args.tag}.json"
+    suffix = "_ss" if REF_MODE == "ss" else ""
+    out = Path(args.json) if args.json else RESULT_ROOT / f"{args.tag}{suffix}.json"
     out.write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"\nwrote {out}")
     return summary
@@ -385,7 +402,15 @@ def main() -> None:
         default=None,
         help="reuse this tag's scores for decks whose renders are byte-identical",
     )
+    parser.add_argument(
+        "--ref",
+        choices=("direct", "ss"),
+        default="direct",
+        help="reference raster: MuPDF direct 150 dpi (official) or the same-raster-path 450->150",
+    )
     args = parser.parse_args()
+    global REF_MODE
+    REF_MODE = args.ref
 
     if args.ab:
         ab(*args.ab)
