@@ -14061,7 +14061,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
             let final_img = if supersample > 1 && (w as u32 != out_w || h as u32 != out_h) {
                 let dynamic = image::DynamicImage::ImageRgb8(img);
                 dynamic
-                    .resize_exact(out_w, out_h, image::imageops::FilterType::Lanczos3)
+                    .resize_exact(out_w, out_h, final_filter())
                     .to_rgb8()
             } else {
                 img
@@ -18770,6 +18770,23 @@ fn cloud_registered() -> &'static std::sync::Mutex<std::collections::BTreeSet<St
 /// and Pacifico went to the cache in the same probe; their dev decks do not
 /// move under this rule.) A family INSTALLED on the machine is not covered:
 /// there PowerPoint mostly draws the installed copy (S-EMBEDCOLLIDE, d47).
+/// S-FINALTRI (2026-11-22): the final supersample-to-output reduction is a
+/// TRIANGLE (bilinear-area) filter. The reference is MuPDF's direct 150 dpi
+/// raster; rendering the truth PDF itself at 450 dpi and reducing it scores
+/// 0.9859 with bilinear, 0.9852 box, 0.9847 Lanczos against that reference
+/// (24 slides, PX-SSIMCEILING), and on Oxi's own output Triangle beats
+/// Lanczos3 on all 10 probe decks (+0.0027). `OXI_FINALFILTER=lanczos` restores
+/// the old filter (also catmull / gaussian / nearest for probing).
+fn final_filter() -> image::imageops::FilterType {
+    match std::env::var("OXI_FINALFILTER").as_deref() {
+        Ok("lanczos") => image::imageops::FilterType::Lanczos3,
+        Ok("catmull") => image::imageops::FilterType::CatmullRom,
+        Ok("gaussian") => image::imageops::FilterType::Gaussian,
+        Ok("nearest") => image::imageops::FilterType::Nearest,
+        _ => image::imageops::FilterType::Triangle,
+    }
+}
+
 fn imgcap_on() -> bool {
     std::env::var("OXI_IMGCAP_DISABLE").is_err()
 }
