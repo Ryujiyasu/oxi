@@ -679,13 +679,34 @@ function switchMode(m) {
   if (m === 'preview') { syncDocx(); renderPreview(); }
 }
 
+// A symbol-encoded face (Symbol, Wingdings) states its glyphs at private-use
+// code points U+F020..U+F0FF. Where the face is not installed (Linux, macOS,
+// most phones) the browser has nothing to draw for them and the bullet
+// vanishes, so they are drawn as the Unicode character of the same shape.
+// The table is per face: U+F0A7 is a club in Symbol and a small square in
+// Wingdings.
+const SYMBOL_FACE_UNICODE = {
+  symbol: { '': '•', '': '◊', '': '→' },
+  wingdings: { '': '■', '': '▪', '': '➢', '': '✓',
+    '': '❖', '': '•', '': '◻', '': '●', '': '❑',
+    '': '➡', '': '⇨' },
+};
+function symbolFaceText(text, fam) {
+  if (!text || !/[-]/.test(text)) return null;
+  const key = /wingdings/i.test(fam || '') ? 'wingdings' : /symbol/i.test(fam || '') ? 'symbol' : null;
+  if (!key) return null;
+  const map = SYMBOL_FACE_UNICODE[key];
+  return text.replace(/[-]/g, c => map[c] || c);
+}
+
 /** Render a single layout page to a canvas 2D context. */
 function renderPageToCanvas(ctx, pg) {
   for (const el of pg.elements) {
     if (el.kind === 'text') {
       if (renderVerticalText(ctx, el)) continue;
       const fs = el.font_size || 11;
-      const fam = el.font_family || 'sans-serif';
+      const symText = symbolFaceText(el.text, el.font_family);
+      const fam = symText !== null ? 'sans-serif' : (el.font_family || 'sans-serif');
       ctx.font = `${el.italic?'italic ':''}${el.bold?'bold ':''}${fs}px ${fam}`;
       ctx.fillStyle = el.color || '#000';
       if (el.highlight && el.highlight !== 'none') {
@@ -693,7 +714,7 @@ function renderPageToCanvas(ctx, pg) {
         ctx.fillRect(el.x, el.y, el.width, el.height);
         ctx.restore(); ctx.fillStyle = el.color || '#000';
       }
-      ctx.fillText(el.text || '', el.x, el.y + fs * .85);
+      ctx.fillText(symText !== null ? symText : (el.text || ''), el.x, el.y + fs * .85);
       if (el.underline) {
         ctx.beginPath(); ctx.strokeStyle = el.color || '#000'; ctx.lineWidth = fs * .05;
         ctx.moveTo(el.x, el.y + fs); ctx.lineTo(el.x + el.width, el.y + fs); ctx.stroke();
@@ -2059,7 +2080,10 @@ function renderPara(p) {
     // already gets it right from the layout; this is the edit view catching up.
     const face = m.textContent.includes('\uF0B7') ? 'Symbol'
       : m.textContent.includes('\uF06E') ? 'Wingdings' : '';
-    if (face) m.style.fontFamily = face;
+    // ...and where that face is not installed it has no glyph either, so the
+    // marker is shown as the Unicode character of the same shape.
+    const symMarker = face ? symbolFaceText(m.textContent, face) : null;
+    if (symMarker !== null) m.textContent = symMarker;
     el.appendChild(m);
   }
   if (p.runs?.length) {
