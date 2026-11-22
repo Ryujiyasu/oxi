@@ -92,6 +92,10 @@ pub enum Outcome {
     NotLinear = 7,
     /// 13: the model has an error Solver will not run on.
     ModelError = 13,
+    /// 18: the Evolutionary engine was given a variable without both an
+    /// upper and a lower bound (measured: Excel answers 18 and leaves the
+    /// cells as they were, even with AssumeNonNeg on).
+    NeedsBounds = 18,
 }
 
 fn sheet_of(workbook: &Workbook, name: &str) -> Option<usize> {
@@ -760,7 +764,7 @@ fn solve_evolutionary(probe: &mut Probe<'_>, start: &[f64]) -> Result<Vec<f64>, 
     let n = model.variables.len();
     let (lo, hi, int) = variable_bounds(probe.workbook, model);
     if lo.iter().chain(&hi).any(|v| !v.is_finite()) {
-        return solve_nonlinear(probe, start.to_vec());
+        return Err(Failure(Outcome::NeedsBounds, None));
     }
     let sign = match model.goal {
         Goal::Max => -1.0,
@@ -1176,6 +1180,24 @@ mod tests {
         assert_eq!(outcome, Outcome::Optimal);
         // the best of the minima: f(2.0944, -1) = 0.00892
         assert!(f < 0.01, "f = {f}");
+    }
+
+    #[test]
+    fn evolutionary_wants_every_variable_bounded() {
+        // (A1-3)^2 with only AssumeNonNeg: Excel answers 18 and A1 stays 0.
+        let mut book = model_book(&[
+            (0, 0, CellValue::Number(0.0), None),
+            (1, 0, CellValue::Number(0.0), Some("(A1-3)^2")),
+        ]);
+        for (name, body) in [
+            ("solver_opt", "M!$A$2"), ("solver_typ", "2"), ("solver_adj", "M!$A$1"), ("solver_eng", "3"), ("solver_neg", "1"), ("solver_num", "0"),
+        ] {
+            book.defined_names.push((format!("M!{name}"), body.into()));
+        }
+        crate::formula::evaluate_workbook_formulas(&mut book);
+        assert_eq!(solve(&mut book, 0), Outcome::NeedsBounds);
+        assert_eq!(get_number(&book, (0, 0, 0)), 0.0);
+        assert_eq!(get_number(&book, (0, 1, 0)), 9.0);
     }
 
     #[test]
