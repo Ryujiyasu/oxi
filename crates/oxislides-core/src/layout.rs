@@ -93,6 +93,12 @@ pub fn first_baseline_off(
     let offset_em = metrics
         .baseline_offset_em(family)
         .unwrap_or_else(|| table_baseline_offset_em(family));
+    first_baseline_off_em(offset_em, fs, n, joined_rule)
+}
+
+/// `first_baseline_off` for a face already reduced to its ascent split
+/// `offset_em` (1.2 x usWinAscent / (usWinAscent + usWinDescent)).
+pub fn first_baseline_off_em(offset_em: f32, fs: f32, n: f32, joined_rule: bool) -> f32 {
     if !joined_rule {
         return if (n - 1.0).abs() > 1e-4 {
             0.75 * (fs * 1.2 * n)
@@ -105,10 +111,48 @@ pub fn first_baseline_off(
     let quarter = 0.25 * pitch;
     let descent = if n <= 1.0 {
         (natural_descent + quarter * (n - 1.0)).max(natural_descent.min(quarter * n))
-    } else {
+    } else if natural_descent >= quarter * n || !descent_floor_on() {
         natural_descent.max(quarter * n)
+    } else {
+        // S-DESCFLOOR: once the quarter-per-line floor takes over, it is laid
+        // on top of the 100% line's own descent, not on zero. Cut from dev
+        // d60's Teko title (lnSpc 80-200% x mark none / Arial / Poppins, 37
+        // arms, PowerPoint PDF): the baseline follows the 100% line until
+        // 0.25 P n passes its descent, then jumps to max(D0, 0.25 P) +
+        // 0.25 P (n - 1) -- 130% and 140% of a Teko title land on the same y.
+        // Bebas Neue at 120% (gen_pptx_parmark4.py) agrees within 0.1pt.
+        natural_descent.max(quarter) + quarter * (n - 1.0)
     };
     pitch * n - descent
+}
+
+fn descent_floor_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("OXI_DESCFLOOR_DISABLE").is_err())
+}
+
+/// The ascent split of a paragraph's LAST line, whose paragraph mark is set in
+/// another face.
+///
+/// PowerPoint lets the mark (`a:endParaRPr`) take part in placing the line it
+/// ends, by its FACE alone: each face is reduced to its usWin split
+/// r = ascent / (ascent + descent) (`offset_em` = 1.2 r), the line takes the
+/// larger ascent share and the larger descent share, and the 1.2 line box is
+/// split by the result. The box itself does not move -- the next paragraph and
+/// a ctr / b anchor are where they were -- only the baseline inside it.
+///
+/// Measured on PowerPoint's own PDF (`gen_pptx_parmark.py`, `_parmark2.py`,
+/// `_parmark3.py`): 6 body faces x 10 mark faces at 200pt, 4 x 5 at 60pt with
+/// lnSpc 80 / 100%, anchors t / ctr / b -- all within 0.08pt. The mark's SIZE
+/// does nothing (8, 18 and 60pt marks land alike), an ordinary trailing run of
+/// the other face does nothing, and an empty `<a:endParaRPr/>` acts as the
+/// level's face. This is the "Bebas Neue last line 0.0235 em low" of 2026-10-01:
+/// d32 / d39 / d44 titles end on an empty mark whose level face is not Bebas.
+pub fn mark_baseline_offset_em(body_em: f32, mark_em: f32) -> f32 {
+    let (rb, rm) = (body_em / 1.2, mark_em / 1.2);
+    let ascent = rb.max(rm);
+    let descent = (1.0 - rb).max(1.0 - rm);
+    1.2 * ascent / (ascent + descent)
 }
 
 /// The PowerPoint-97 master unit: 1/8 pt, 576 to the inch.
@@ -1416,6 +1460,52 @@ mod geometry_tests {
         assert_eq!(g.rest_width, 200.0);
     }
 
+    /// 1.2 x usWinAscent / (usWinAscent + usWinDescent).
+    fn split(ascent: f32, descent: f32) -> f32 {
+        1.2 * ascent / (ascent + descent)
+    }
+
+    #[test]
+    fn a_mark_in_the_same_face_leaves_the_split_alone() {
+        let arial = split(1854.0, 434.0);
+        assert!((mark_baseline_offset_em(arial, arial) - arial).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_mark_face_moves_the_last_baseline_as_powerpoint_does() {
+        // PowerPoint's PDF, 200pt, lnSpc 100%, box top = 0 (gen_pptx_parmark2.py).
+        let bebas = split(950.0, 350.0);
+        let arial = split(1854.0, 434.0);
+        let courier = split(1705.0, 615.0);
+        let at = |body: f32, mark: f32| {
+            first_baseline_off_em(mark_baseline_offset_em(body, mark), 200.0, 1.0, true)
+        };
+        assert!((at(bebas, arial) - 180.14).abs() < 0.1, "{}", at(bebas, arial));
+        assert!((at(arial, courier) - 180.86).abs() < 0.1, "{}", at(arial, courier));
+        assert!((at(bebas, courier) - 175.70).abs() < 0.1, "{}", at(bebas, courier));
+        // 60pt at lnSpc 80%: Bebas with an Arial mark sits where the quarter binds.
+        let low = first_baseline_off_em(mark_baseline_offset_em(bebas, arial), 60.0, 0.8, true);
+        assert!((low - 43.22).abs() < 0.1, "{low}");
+    }
+
+    #[test]
+    fn the_quarter_floor_sits_on_the_lines_own_descent() {
+        // dev d60's Teko Bold title, 96.57pt (PowerPoint PDF, box top = 0):
+        // the 100% line puts the baseline 77.54pt down, so offset_em = 0.8029.
+        let teko = 77.54 / 96.57;
+        let at = |n: f32| first_baseline_off_em(teko, 96.57, n, true);
+        // The line follows its 100% place while its descent is above the floor ...
+        assert!((at(1.3) - 112.22).abs() < 0.1, "{}", at(1.3));
+        // ... then the floor takes over ON TOP of that descent: 135% is above 130%.
+        assert!((at(1.35) - 107.90).abs() < 0.1, "{}", at(1.35));
+        assert!((at(1.4) - 112.22).abs() < 0.1, "{}", at(1.4));
+        assert!((at(2.0) - 164.42).abs() < 0.1, "{}", at(2.0));
+        // A face whose descent is under the quarter keeps the plain 0.75 P n.
+        let arial = split(1854.0, 434.0);
+        let a = first_baseline_off_em(arial, 96.0, 1.2, true);
+        assert!((a - 0.75 * 96.0 * 1.2 * 1.2).abs() < 1e-3, "{a}");
+    }
+
     #[test]
     fn a_same_size_step_is_the_flat_advance() {
         let step = mixed_pitch_step(&Arial, "Arial", 40.0, 40.0, 1.0, true);
@@ -1626,6 +1716,7 @@ mod size_tests {
             lvl: 0,
             end_para_size: None,
             end_para_mark: false,
+            end_para_family: None,
             mar_l: None,
             indent: None,
             bullet: crate::ir::SlideBullet::default(),
@@ -2528,6 +2619,7 @@ mod shape_tests {
             lvl: 0,
             end_para_size: None,
             end_para_mark: false,
+            end_para_family: None,
             mar_l: None,
             indent: None,
             bullet: crate::ir::SlideBullet::default(),

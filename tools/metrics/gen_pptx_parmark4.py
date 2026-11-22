@@ -1,0 +1,125 @@
+# -*- coding: utf-8 -*-
+"""Probe (parmark, from parlast): does the paragraph MARK move the last line?
+
+Same arms as parlast but the end-of-paragraph run varies: same font/size,
+empty <a:endParaRPr/> (inherits the defaults, as d32 / d39 titles do), or
+Arial 18pt.
+
+Original parlast doc: is a paragraph's LAST line placed by a different ascent split?
+
+d32 / d39 / d44 set titles in embedded Bebas Neue, whose usWin split is 0.8769
+and whose hhea/typo split is 0.9000. PowerPoint puts every line of those
+paragraphs where the shipped first-baseline rule computes with usWin -- except
+the paragraph's last line, which sits 0.0235 em lower (= 0.9000 - 0.8769). A
+one-line paragraph's only line IS its last line, which is why one-line titles
+looked "hhea" and multi-line ones "win" in the corpus scorer.
+
+Each arm is one paragraph of 1-3 lines (hard `a:br` breaks or a narrow box that
+wraps) in a fixed box: `anchor=t`, insets 0, `noAutofit`, so every baseline can
+be read from PowerPoint's PDF as an offset from the box top. Fonts are installed
+faces whose hhea, typo and usWin splits all DIFFER (Palatino, Candara,
+Consolas), whose hhea exceeds usWin the way Bebas Neue's does (Magneto, Old
+English Text MT), and Arial as the control where the three agree.
+
+    python tools/metrics/gen_pptx_parlast.py
+    python tools/metrics/export_pptx_parlast.py   # PowerPoint COM -> PDF
+    python tools/metrics/read_pptx_parlast.py     # read baselines back
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+from lxml import etree
+from pptx import Presentation
+from pptx.util import Emu
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+REPO = Path(__file__).resolve().parents[2]
+OUT = REPO / "pipeline_data" / "pptx_probes" / "parmark4"
+A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+BOX_X = Emu(457200)      # 36pt
+BOX_Y = Emu(914400)      # 72pt -- the reader's origin
+BOX_H = Emu(5486400 * 3)     # 432pt, room for three 60pt lines at 120%
+SIZE = int(__import__("os").environ.get("PARMARK_SIZE", "200"))
+FONTS = ["Teko", "Poppins", "Forum", "Bebas Neue"]
+SPACINGS = [100, 120]
+MARKS = ["same", "empty", "Arial"]
+WORDS = ["HAM", "MIN", "BAX"]
+
+ARMS = []
+for font in FONTS:
+    for pct in SPACINGS:
+        for lines in (1,):
+            for mark in MARKS:
+                for bold in (0, 1):
+                    ARMS.append({"font": font, "pct": pct, "lines": lines, "mode": "br", "mark": mark, "anchor": "t", "bold": bold})
+
+
+MARK_XML = {
+    "same": '<a:endParaRPr lang="en-US" sz="{sz}"><a:latin typeface="{font}"/></a:endParaRPr>',
+    "empty": '<a:endParaRPr/>',
+    "none": '',
+    "arial18": '<a:endParaRPr lang="en-US" sz="1800"><a:latin typeface="Arial"/></a:endParaRPr>',
+    "arial8": '<a:endParaRPr lang="en-US" sz="800"><a:latin typeface="Arial"/></a:endParaRPr>',
+    "arial60": '<a:endParaRPr lang="en-US" sz="6000"><a:latin typeface="Arial"/></a:endParaRPr>',
+    "calibri18": '<a:endParaRPr lang="en-US" sz="1800"><a:latin typeface="Calibri"/></a:endParaRPr>',
+    "calibri60": '<a:endParaRPr lang="en-US" sz="6000"><a:latin typeface="Calibri"/></a:endParaRPr>',
+    # an ordinary run of the same small font at the end of the last line, mark = body
+    "run_arial18": '<a:r><a:rPr lang="en-US" sz="1800"><a:latin typeface="Arial"/></a:rPr><a:t>.</a:t></a:r><a:endParaRPr lang="en-US" sz="{sz}"><a:latin typeface="{font}"/></a:endParaRPr>',
+    "run_calibri18": '<a:r><a:rPr lang="en-US" sz="1800"><a:latin typeface="Calibri"/></a:rPr><a:t>.</a:t></a:r><a:endParaRPr lang="en-US" sz="{sz}"><a:latin typeface="{font}"/></a:endParaRPr>',
+}
+
+
+MARK_FACE = '<a:endParaRPr lang="en-US" sz="1800"><a:latin typeface="{face}"/></a:endParaRPr>'
+
+
+def body_xml(arm: dict) -> str:
+    rpr = (f'<a:rPr lang="en-US" sz="{SIZE * 100}" b="{arm["bold"]}" dirty="0">'
+           f'<a:latin typeface="{arm["font"]}"/></a:rPr>')
+    words = WORDS[:arm["lines"]]
+    if arm["mode"] == "br":
+        runs = f'<a:br>{rpr}</a:br>'.join(f'<a:r>{rpr}<a:t>{w}</a:t></a:r>' for w in words)
+    else:
+        runs = f'<a:r>{rpr}<a:t>{" ".join(words)}</a:t></a:r>'
+    return (
+        f'<p:txBody xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        f'xmlns:a="{A}">'
+        f'<a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0" anchor="{arm["anchor"]}"><a:noAutofit/></a:bodyPr>'
+        '<a:lstStyle/>'
+        f'<a:p><a:pPr><a:lnSpc><a:spcPct val="{arm["pct"] * 1000}"/></a:lnSpc>'
+        '<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
+        f'{runs}{(MARK_XML[arm["mark"]] if arm["mark"] in MARK_XML else MARK_FACE).format(sz=SIZE * 100, font=arm["font"], face=arm["mark"])}</a:p>'
+        f'<a:p><a:pPr><a:lnSpc><a:spcPct val="100000"/></a:lnSpc><a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
+        f'<a:r>{rpr}<a:t>MIN</a:t></a:r><a:endParaRPr lang="en-US" sz="{SIZE * 100}"><a:latin typeface="{arm["font"]}"/></a:endParaRPr></a:p>'
+        '</p:txBody>'
+    )
+
+
+def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    prs = Presentation()
+    prs.slide_width = Emu(12192000)
+    prs.slide_height = Emu(6858000 * 3)
+    blank = prs.slide_layouts[6]
+    for arm in ARMS:
+        slide = prs.slides.add_slide(blank)
+        # a wrap arm gets a box narrower than two words, wider than either one
+        width = Emu(11277600) if arm["mode"] == "br" else Emu(4114800)
+        box = slide.shapes.add_textbox(BOX_X, BOX_Y, width, BOX_H)
+        sp = box._element
+        old = sp.find("{http://schemas.openxmlformats.org/presentationml/2006/main}txBody")
+        sp.replace(old, etree.fromstring(body_xml(arm)))
+    path = OUT / "probe_parmark4.pptx"
+    prs.save(path)
+    (OUT / "arms.json").write_text(json.dumps(
+        {"box_top_pt": BOX_Y / 12700, "size": SIZE, "arms": ARMS}, indent=1), encoding="utf-8")
+    print("wrote", path, len(ARMS), "arms")
+
+
+if __name__ == "__main__":
+    main()

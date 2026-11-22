@@ -19882,6 +19882,11 @@ fn first_baseline_off(family: &str, fs: f32, n: f32) -> f32 {
     oxislides_core::layout::first_baseline_off(&GdiFaceMetrics, family, fs, n, firstline_on())
 }
 
+/// S-MARKFACE: the paragraph mark's face moves the last line unless this is set.
+fn markface_on() -> bool {
+    std::env::var("OXI_MARKFACE_DISABLE").is_err()
+}
+
 /// A level's `a:defRPr/@b` is honoured unless this is set.
 fn lvlbold_on() -> bool {
     std::env::var("OXI_LVLBOLD_DISABLE").is_err()
@@ -20779,6 +20784,47 @@ fn layout_paragraph_baselines(
             .map(|em| em * fs)
             .unwrap_or(0.0)
     };
+    // ★S-MARKFACE. The paragraph MARK's face shares in placing the LAST line:
+    // both faces' usWin splits combine (larger ascent share, larger descent
+    // share) and the line's baseline moves inside its unchanged box -- see
+    // `layout::mark_baseline_offset_em`. An empty mark is the level's face, as
+    // for a run with no a:latin; a paragraph with NO endParaRPr element keeps
+    // its line where it is (probe parmark3 arm "none": the mark then wears the
+    // runs' face). OXI_MARKFACE_DISABLE leaves the line alone.
+    let mark_shift = if markface_on() && para.end_para_mark {
+        use oxislides_core::layout::FaceMetrics;
+        let mark_family = effective_family(
+            dc,
+            &para
+                .end_para_family
+                .clone()
+                .or_else(|| {
+                    let lvl = para.lvl as usize;
+                    [ph_levels, master].into_iter().find_map(|levels| {
+                        levels
+                            .get(lvl.min(levels.len().saturating_sub(1)))
+                            .and_then(|l| l.font_family.clone())
+                    })
+                })
+                .unwrap_or_else(|| default_family.to_string()),
+        );
+        let em = |f: &str| {
+            GdiFaceMetrics
+                .baseline_offset_em(f)
+                .unwrap_or_else(|| oxislides_core::layout::table_baseline_offset_em(f))
+        };
+        let (body_em, mark_em) = (em(&family), em(&mark_family));
+        if (body_em - mark_em).abs() > 1e-6 {
+            let size = *line_sizes.last().unwrap_or(&fs);
+            let comb = oxislides_core::layout::mark_baseline_offset_em(body_em, mark_em);
+            oxislides_core::layout::first_baseline_off_em(comb, size, n, firstline_on())
+                - oxislides_core::layout::first_baseline_off_em(body_em, size, n, firstline_on())
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
     let mut out = Vec::with_capacity(n_lines);
     let mut align_at = 0usize; // char offset of this line within the paragraph
     for (i, line) in lines.iter().enumerate() {
@@ -20788,7 +20834,7 @@ fn layout_paragraph_baselines(
             text_area_top
                 + if mixpitch_on() || is_first { first_off } else { 0.0 }
                 + i as f32 * adv
-        };
+        } + if i + 1 == n_lines { mark_shift } else { 0.0 };
         // Logical line width in pt = hmtx design-advance sum of the VISIBLE
         // characters (trailing spaces excluded; final visible char included).
         // GDI's measured width (hinted / pixel-snapped) over-measures a line by

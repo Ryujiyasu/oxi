@@ -1603,6 +1603,9 @@ fn parse_slide(
     let (mut pb_pend, mut pb_color, mut pb_size): (bool, Option<String>, Option<f32>) = (false, None, None);
     let mut para_end_size: Option<f32> = None;
     let mut para_end_mark = false;
+    // The mark's own face, and whether we are inside a non-empty endParaRPr.
+    let mut para_end_family: Option<String> = None;
+    let mut in_end_para_rpr = false;
 
     // Run state
     let mut in_run = false;
@@ -2360,6 +2363,8 @@ fn parse_slide(
                         para_bullet_font = None;
                         para_end_size = None;
                         para_end_mark = false;
+                        para_end_family = None;
+                        in_end_para_rpr = false;
                     }
                     // `a:prstTxWarp` is normally self-closing, so both arms
                     // route here (the Start/Empty trap this file keeps).
@@ -2535,6 +2540,7 @@ fn parse_slide(
                         para_end_size = get_attr(&e, "sz")
                             .and_then(|v| v.parse::<f32>().ok())
                             .map(|v| v / 100.0);
+                        in_end_para_rpr = true;
                     }
                     "hlinkClick" if in_run => {
                         run_hlink = true;
@@ -3454,6 +3460,9 @@ fn parse_slide(
                             }
                         }
                     }
+                    "latin" if in_end_para_rpr => {
+                        para_end_family = get_attr(&e, "typeface");
+                    }
                     _ => {}
                 }
             }
@@ -3485,6 +3494,9 @@ fn parse_slide(
                     }
                     "bg" => {
                         in_bg = false;
+                    }
+                    "endParaRPr" => {
+                        in_end_para_rpr = false;
                     }
                     "bgPr" => {
                         in_bg_pr = false;
@@ -3918,6 +3930,7 @@ fn parse_slide(
                             bullet: std::mem::take(&mut para_bullet),
                             end_para_size: para_end_size.take(),
                             end_para_mark: std::mem::take(&mut para_end_mark),
+                            end_para_family: para_end_family.take(),
                             hanging_punct: para_hang.take(),
                             ea_ln_brk: para_ea_brk.take(),
                             tab_stops: para_tabs.take(),

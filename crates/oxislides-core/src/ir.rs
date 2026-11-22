@@ -1056,6 +1056,13 @@ pub struct SlideParagraph {
     /// a 28pt line over an 18pt level).
     #[serde(default)]
     pub end_para_mark: bool,
+    /// `a:endParaRPr/a:latin/@typeface` -- the paragraph MARK's own face, None
+    /// when the mark names none (it then takes the level's face, like a run
+    /// with no `a:latin`). PowerPoint lets the mark's face share in placing the
+    /// paragraph's LAST line (`gen_pptx_parmark*.py`, see
+    /// `layout::mark_baseline_offset_em`).
+    #[serde(default)]
+    pub end_para_family: Option<String>,
     /// Left indent (a:pPr/@marL) in points. None = not specified (the master
     /// txStyles level provides it).
     #[serde(default)]
