@@ -3939,6 +3939,34 @@ fn instweight_on() -> bool {
     std::env::var("OXI_INSTWEIGHT_DISABLE").is_err()
 }
 
+thread_local! {
+    /// (family, bold, italic) slots whose embedded part has CFF outlines.
+    static CFF_STYLES: std::cell::RefCell<std::collections::HashSet<(String, bool, bool)>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// PX-CFFBASE (default on, OXI_CFFSPLIT_DISABLE to turn off): a family whose embedded part is CFF
+/// is laid out and drawn with that part, but its first BASELINE is placed with
+/// the missing-font substitute's (Calibri's) vertical metrics. d15: the
+/// rendered truth matches Barlow glyphs at Barlow advances to the pixel (s5
+/// line extents 853/722/803/998/362 = Oxi drawing Barlow), while the titles
+/// sit at Calibri's baseline (164.14/216.0/267.84; Barlow's gives +2.8pt). The
+/// PDF itself names these fonts "Calibri*" with Calibri Widths -- the name and
+/// the Widths array are not what the page shows.
+fn cffsplit_on() -> bool {
+    std::env::var("OXI_CFFSPLIT_DISABLE").is_err()
+}
+
+/// The family to DRAW with for `family` at this style: Calibri when the
+/// deck's part for that slot is CFF (see PX-CFFSPLIT).
+fn cff_draw_family(family: &str, bold: bool, italic: bool) -> Option<&'static str> {
+    if !cffsplit_on() {
+        return None;
+    }
+    let key = (norm_family(family), bold, italic);
+    CFF_STYLES.with(|c| c.borrow().contains(&key)).then_some("Calibri")
+}
+
 /// S-CFFSKIP -- PARKED opt-in (OXI_CFFSKIP_ENABLE, 2026-11-23). The full rule
 /// is a SPLIT: PowerPoint BREAKS lines with the CFF part's advances (d15 s5:
 /// "printed as a means of" + "inspiration" fits the 417.87pt box at Calibri's
@@ -4135,6 +4163,11 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             // it then falls to the missing-font substitute, as d15's Barlow
             // does. A partly-CFF family (d15 Barlow Light: CFF regular, TT bold)
             // needs per-style substitution, which is not modelled yet.
+            if cffsplit_on() && cff_part(&font.data) {
+                CFF_STYLES.with(|c| {
+                    c.borrow_mut().insert((norm_family(&font.typeface), font.bold, font.italic))
+                });
+            }
             if cffskip_on()
                 && cff_part(&font.data)
                 && pres
@@ -18491,6 +18524,9 @@ impl oxislides_core::layout::FaceMetrics for GdiFaceMetrics {
     }
 
     fn baseline_offset_em(&self, family: &str) -> Option<f32> {
+        let family = cff_draw_family(family, false, false)
+            .or_else(|| cff_draw_family(family, true, false))
+            .unwrap_or(family);
         rtbaseline_on().then(|| runtime_baseline_offset_em(family)).flatten()
     }
 
