@@ -126,6 +126,11 @@ pub fn first_baseline_off_em(offset_em: f32, fs: f32, n: f32, joined_rule: bool)
     pitch * n - descent
 }
 
+fn markface_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("OXI_MARKFACE_DISABLE").is_err())
+}
+
 fn descent_floor_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("OXI_DESCFLOOR_DISABLE").is_err())
@@ -2491,6 +2496,28 @@ pub fn layout_text_shape(
         };
 
         let first_off = first_baseline_off(metrics, &family, fs, n, true);
+        // S-MARKFACE: the LAST line is also placed by the paragraph mark's
+        // face (see `mark_baseline_offset_em`); the renderer applies the same.
+        let mark_shift = if para.end_para_mark && markface_on() {
+            let mark_family = effective_family(
+                metrics,
+                para.end_para_family
+                    .clone()
+                    .or_else(|| level_family(master, ph_levels, para.lvl))
+                    .unwrap_or_else(|| default_family.to_string())
+                    .as_str(),
+                true,
+            );
+            let em = |f: &str| metrics.baseline_offset_em(f).unwrap_or_else(|| table_baseline_offset_em(f));
+            let (body_em, mark_em) = (em(&family), em(&mark_family));
+            if (body_em - mark_em).abs() > 1e-6 {
+                first_baseline_off_em(mark_baseline_offset_em(body_em, mark_em), fs, n, true) - first_off
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
         let align = para.alignment.or(level.algn).unwrap_or_default();
         let mut char_at = 0usize;
         for (li, line) in broken.iter().enumerate() {
@@ -2541,7 +2568,8 @@ pub fn layout_text_shape(
                     level_italic(master, ph_levels, para.lvl),
                 ),
                 x: shape.l_ins + geom_l + x + align_offset(align, width, line_w),
-                baseline: cursor + first_off + li as f32 * adv,
+                baseline: cursor + first_off + li as f32 * adv
+                    + if li + 1 == broken.len() { mark_shift } else { 0.0 },
                 font_size: fs,
                 family: family.clone(),
                 bold,
