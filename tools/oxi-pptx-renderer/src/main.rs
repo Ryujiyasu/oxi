@@ -6474,10 +6474,35 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
         // true 1754.25 scale into a 1755-row bitmap with the last row partially
         // covered -- decoupling bitmap size from content scale. Not done: the
         // whole artifact is worth about 0.0001.
-        let out_w = (pres.slide_width as f64 * dpi as f64 / 72.0).round() as u32;
-        let out_h = (pres.slide_height as f64 * dpi as f64 / 72.0).round() as u32;
-        let w = (pres.slide_width as f64 * scale).round() as i32;
-        let h = (pres.slide_height as f64 * scale).round() as i32;
+        // With S-EXACTGRID the content scale no longer depends on the bitmap
+        // size, so the output takes the reference raster's size -- the CEILING
+        // of the fractional page (A4 1754.25 -> 1755, as MuPDF does), with the
+        // partial last row simply carrying page colour. Rounding to 1754 made
+        // the scorer resize the whole page by 1755/1754 (d07/d63/d62/d26/d03
+        // each -0.005 against an otherwise +0.0008 change).
+        let exact_grid = supersample > 1 && std::env::var("OXI_EXACTGRID_DISABLE").is_err();
+        let page_out = |pt: f32| -> u32 {
+            let px = pt as f64 * dpi as f64 / 72.0;
+            if exact_grid { (px - 1e-3).ceil() as u32 } else { px.round() as u32 }
+        };
+        let out_w = page_out(pres.slide_width);
+        let out_h = page_out(pres.slide_height);
+        // S-EXACTGRID (2026-11-22): the supersampled bitmap is EXACTLY `ss`
+        // output pixels per output pixel, with the content still drawn at the
+        // true `scale`. Rounding the 3x page on its own (810pt -> 5062.5 ->
+        // 5063 rows) and then resizing 5063 -> 1688 stretched every slide by
+        // 0.02% vertically, so content drifted down toward the bottom: picture
+        // regions across the dev corpus sit dy = -0.000237*y px low on 405pt
+        // pages and 0.06-0.19px low on 810pt pages (E:/oxi-scratch/imgshift.py,
+        // 1887 regions; x, whose page width is integral, shows no bias).
+        let (w, h) = if exact_grid {
+            ((out_w * supersample) as i32, (out_h * supersample) as i32)
+        } else {
+            (
+                (pres.slide_width as f64 * scale).round() as i32,
+                (pres.slide_height as f64 * scale).round() as i32,
+            )
+        };
         // The page in device pixels, under a name no shape-level `w` shadows.
         let page_px = (w, h);
 
