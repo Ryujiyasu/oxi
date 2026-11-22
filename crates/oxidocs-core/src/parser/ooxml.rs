@@ -6535,8 +6535,17 @@ fn parse_paragraph_properties(
                                                     ppr_rpr.font_family = Some(v);
                                                 }
                                                 "hAnsi" => {
-                                                    if ppr_rpr.font_family.is_none()
-                                                        || std::env::var("OXI_S583_DISABLE").is_ok()
+                                                    // OXI_HANSI_NOT_ASCII (2026-11-22, default ON, opt-out _DISABLE):
+                                                    // w:hAnsi names the high-Latin face only; ASCII keeps w:ascii or
+                                                    // the inherited face. `ha/ha.docx` probe (docDefaults Century,
+                                                    // run rFonts hAnsi only): Word sets «(12-34)abcW» in Century for
+                                                    // hAnsi=ＭＳ 明朝 (with or without hint) and for hAnsi=Arial,
+                                                    // «Ä é» in the hAnsi face; Oxi set the ASCII in the hAnsi face.
+                                                    // blind-A ja/technical__7cc63ebc: «(電話：０２３８-４６…)» lost
+                                                    // 5pt per line to ＭＳ 明朝 half-width brackets.
+                                                    if (ppr_rpr.font_family.is_none()
+                                                        || std::env::var("OXI_S583_DISABLE").is_ok())
+                                                        && crate::env_flag!("OXI_HANSI_NOT_ASCII_DISABLE")
                                                     {
                                                         ppr_rpr.font_family = Some(v);
                                                     }
@@ -14458,7 +14467,7 @@ fn parse_run_properties(
                     let mut s1341_ascii_seen = false;
                     for attr in e.attributes().flatten() {
                         let key = local_name(attr.key.as_ref());
-                        if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                        if key == "ascii" || (key == "hAnsi" && crate::env_flag!("OXI_HANSI_NOT_ASCII_DISABLE") && !(s1341_ascii_wins && s1341_ascii_seen)) {
                             if key == "ascii" {
                                 s1341_ascii_seen = true;
                             }
@@ -14648,7 +14657,7 @@ fn parse_run_properties(
                         let mut s1341_ascii_seen = false;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
-                            if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                            if key == "ascii" || (key == "hAnsi" && crate::env_flag!("OXI_HANSI_NOT_ASCII_DISABLE") && !(s1341_ascii_wins && s1341_ascii_seen)) {
                                 if key == "ascii" {
                                     s1341_ascii_seen = true;
                                 }

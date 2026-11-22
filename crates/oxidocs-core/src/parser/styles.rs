@@ -686,7 +686,7 @@ fn parse_run_properties_block(reader: &mut Reader<&[u8]>, theme: &ThemeColors) -
                     let mut s1341_ascii_seen = false;
                     for attr in e.attributes().flatten() {
                         let key = local_name(attr.key.as_ref());
-                        if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                        if key == "ascii" || (key == "hAnsi" && crate::env_flag!("OXI_HANSI_NOT_ASCII_DISABLE") && !(s1341_ascii_wins && s1341_ascii_seen)) {
                             if key == "ascii" {
                                 s1341_ascii_seen = true;
                             }
@@ -975,7 +975,7 @@ fn apply_run_property_empty(e: &quick_xml::events::BytesStart, rs: &mut RunStyle
             let mut s1341_ascii_seen = false;
             for attr in e.attributes().flatten() {
                 let key = local_name(attr.key.as_ref());
-                if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                if key == "ascii" || (key == "hAnsi" && crate::env_flag!("OXI_HANSI_NOT_ASCII_DISABLE") && !(s1341_ascii_wins && s1341_ascii_seen)) {
                     if key == "ascii" {
                         s1341_ascii_seen = true;
                     }
@@ -1528,7 +1528,7 @@ fn parse_style_definition(
                         let mut s1341_ascii_seen = false;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
-                            if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                            if key == "ascii" || (key == "hAnsi" && crate::env_flag!("OXI_HANSI_NOT_ASCII_DISABLE") && !(s1341_ascii_wins && s1341_ascii_seen)) {
                                 if key == "ascii" {
                                     s1341_ascii_seen = true;
                                 }
@@ -1747,7 +1747,7 @@ fn parse_style_definition(
                             let mut s1341_ascii_seen = false;
                             for attr in e.attributes().flatten() {
                                 let key = local_name(attr.key.as_ref());
-                                if key == "ascii" || (key == "hAnsi" && !(s1341_ascii_wins && s1341_ascii_seen)) {
+                                if key == "ascii" || (key == "hAnsi" && crate::env_flag!("OXI_HANSI_NOT_ASCII_DISABLE") && !(s1341_ascii_wins && s1341_ascii_seen)) {
                                     if key == "ascii" {
                                         s1341_ascii_seen = true;
                                     }
