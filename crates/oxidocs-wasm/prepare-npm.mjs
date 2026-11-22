@@ -34,6 +34,9 @@ if (!existsSync(join(pkg, 'package.json'))) {
 
 copyFileSync(join(here, 'README.md'), join(pkg, 'README.md'));
 copyFileSync(join(here, 'fonts.js'), join(pkg, 'fonts.js'));
+// The module carries the Carlito, Caladea, Liberation and Noto JP faces, which
+// are OFL-1.1, not the bindings' MIT/Apache; their notices go with it.
+copyFileSync(join(here, '..', '..', 'LICENSE-FONTS'), join(pkg, 'LICENSE-FONTS'));
 
 // A module built without external-font-catalog has the catalog compiled in;
 // published as this package it would weigh 34 MB more and never use the
@@ -67,6 +70,7 @@ Object.assign(manifest, {
     'README.md',
     'LICENSE-APACHE',
     'LICENSE-MIT',
+    'LICENSE-FONTS',
   ],
 });
 // wasm-pack writes this for a build that has snippets; this one has none, and

@@ -13,5 +13,7 @@ for arch in x86_64 aarch64; do
 done
 # The bundled engine is MPL-2.0; its source is the Oxi repository.
 cp ../../LICENSE "$stage/bin/LICENSE-MPL-2.0"
+# The faces built into it are OFL-1.1.
+cp ../../LICENSE-FONTS "$stage/bin/LICENSE-FONTS"
 tar -C build --owner=0 --group=0 -czf "build/oxidocs_preview-$version.tar.gz" oxidocs_preview
 echo "build/oxidocs_preview-$version.tar.gz"

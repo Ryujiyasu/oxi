@@ -555,6 +555,7 @@ Oxi is licensed in three layers, chosen to maximize both adoption and the flow o
 | **Core engine** (`oxidocs`, `oxidocs-common`, `oxidocs-core`, `oxicells-core`, `oxislides-core`, `oxipdf-core`, `oxihanko`, `oxidocs-cli`, `oxi-desktop`) | [MPL-2.0](LICENSE) | File-level copyleft: modifications to engine files must be published, so layout-fidelity improvements converge into one tree. Embedding Oxi in proprietary or commercial products is fully permitted — only changes to Oxi's own files must be shared. Same license as LibreOffice and Firefox |
 | **Bindings and integrations** (`oxidocs-wasm`, `oxidocs-python`, `integrations/gotenberg`) | MIT OR Apache-2.0 | Standard Rust dual license — zero friction for embedding in any stack |
 | **Conformance corpus** (self-authored repro documents under `tools/golden-test/repros/`) | CC BY-SA 4.0 | The Word-compatibility test suite is a shared public asset; improvements to it must stay shared |
+| **Bundled fonts** (`oxidocs-fonts-latin`, `oxidocs-fonts-jp`: Carlito, Caladea, Liberation, and OxiGothic / OxiMincho = Noto Sans / Serif JP outlines on MS Gothic / Mincho metrics) | [SIL OFL 1.1](LICENSE-FONTS) | The fonts' own license from their authors. The binary, the WebAssembly module and the packages that carry them ship `LICENSE-FONTS` |
 
 Contributions are accepted under the [Developer Certificate of Origin](https://developercertificate.org/) (`git commit -s`). There is no CLA — contributors keep their copyright, and the project cannot relicense your work out from under you.
 

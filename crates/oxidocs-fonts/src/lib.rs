@@ -136,4 +136,34 @@ mod tests {
         keys.dedup();
         assert_eq!(keys.len(), before, "two faces answer to the same key");
     }
+
+    /// Every shipped face is named in LICENSE-FONTS, the notice that travels
+    /// with the binary and the npm package: the faces are OFL-1.1, not the
+    /// code's licence, and a face added without its notice would ship
+    /// without its terms.
+    #[test]
+    fn every_shipped_face_has_its_notice() {
+        let notice = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../LICENSE-FONTS"),
+        )
+        .expect("LICENSE-FONTS at the repository root");
+        assert!(notice.contains("SIL OPEN FONT LICENSE Version 1.1"));
+        for (_, file, _) in faces() {
+            // "LiberationSans-Bold.ttf" is listed as "Liberation*-*.ttf",
+            // "Carlito-Regular.ttf" as "Carlito-*.ttf".
+            let family = file.split(['-', '.']).next().unwrap();
+            let listed = notice.contains(&format!("({file})"))
+                || notice.contains(&format!("({family}-*.ttf)"))
+                || (family.starts_with("Liberation") && notice.contains("(Liberation*-*.ttf)"));
+            assert!(listed, "{file} is shipped but not named in LICENSE-FONTS");
+        }
+        // The Python package ships its own copy beside the binary it bundles.
+        let copy = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../oxidocs-python/python/oxidocs/LICENSE-FONTS");
+        assert_eq!(
+            std::fs::read_to_string(copy).expect("the Python package's LICENSE-FONTS"),
+            notice,
+            "crates/oxidocs-python/python/oxidocs/LICENSE-FONTS is not a copy of LICENSE-FONTS",
+        );
+    }
 }
