@@ -16351,7 +16351,9 @@ fn runtime_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
         let value = unsafe {
             // S-FAUXUPM: a synthesised bold is set at the em-sized probe.
             let probe_em = if weight >= 700 {
-                fauxbold_probe_em(family, italic).unwrap_or_else(advance_probe_em)
+                fauxbold_probe_em(family, italic)
+                    .filter(|_| !fauxspace_keep(ch))
+                    .unwrap_or_else(advance_probe_em)
             } else {
                 advance_probe_em()
             };
@@ -17358,6 +17360,15 @@ fn needs_faux_bold(family: &str, italic: bool) -> bool {
 /// (PowerPoint's bold space is 0.97-1.01 x GDI's, Bebas Neue 0.975), and d44's
 /// tight 137pt title turns on that. Unpark once the space is derived. `None` when the flag is off or the em is
 /// unreadable; the caller keeps its own probe size then.
+/// The SPACE of a synthesised bold is not set at GDI@upm (158 for Bebas Neue)
+/// but depends on the word before it -- 153..160 in COM probes (archive
+/// PX-FAUXSPACE), centred near 0.98 x its regular advance, which is what the
+/// large probe size gives. Until that context rule is derived the space keeps
+/// the large probe; `OXI_FAUXSPACE_UPM` sets it at the em like the letters.
+fn fauxspace_keep(ch: char) -> bool {
+    ch == ' ' && std::env::var("OXI_FAUXSPACE_UPM").is_err()
+}
+
 #[cfg(windows)]
 fn fauxbold_probe_em(family: &str, italic: bool) -> Option<i32> {
     use windows::Win32::Graphics::Gdi::*;
@@ -18162,7 +18173,9 @@ fn precise_advance_em(family: &str, bold: bool, italic: bool, ch: char) -> Optio
     // S-FAUXUPM: a synthesised bold is set at the em-sized probe, see
     // `fauxbold_probe_em`.
     let probe_em = if weight >= 700 && !aliased {
-        fauxbold_probe_em(family, italic).unwrap_or(PRECISE_PROBE_EM)
+        fauxbold_probe_em(family, italic)
+            .filter(|_| !fauxspace_keep(ch))
+            .unwrap_or(PRECISE_PROBE_EM)
     } else {
         PRECISE_PROBE_EM
     };
