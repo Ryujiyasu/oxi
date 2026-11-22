@@ -100,8 +100,8 @@ def main():
             # No limit that stops it with Solver's "show trial solution" form
             # (time, iterations, subproblems): it ends when it stops
             # improving (MaxTimeNoImp 5 s), seed fixed.
-            run("Solver.xlam!SolverOptions", 300, 32767, 0.000001, False, False, 1, 1, 1, 1, False, 0.0001, True,
-                100, 1, False, True, 100000, 100000, 0.075, 5)
+            say(f"{name}_options", run("Solver.xlam!SolverOptions", 300, 32767, 0.000001, False, False, 1, 1, 1, 1, False, 0.0001, True,
+                100, 1, False, True, 0.075, 32767, 32767, False, 5))
             run("Solver.xlam!SolverOk", obj, goal, 0, adj, 3)
             for lhs, rel, rhs in cons:
                 if rhs is None:

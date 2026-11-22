@@ -82,6 +82,10 @@ pub enum Outcome {
     Optimal = 0,
     /// 1: converged to the current solution.
     Converged = 1,
+    /// 2: cannot improve the current solution. What the Evolutionary engine
+    /// answers when it stops on its own (measured: both bounded models, with
+    /// MaxTimeNoImp 5 s, end on 2 at the optimum).
+    NoImprovement = 2,
     /// 4: the objective cell's values do not converge (unbounded).
     Unbounded = 4,
     /// 5: could not find a feasible solution.
@@ -1123,7 +1127,11 @@ pub fn solve(workbook: &mut Workbook, sheet: usize) -> Outcome {
                 set_number(workbook, *cell, v);
             }
             crate::formula::evaluate_workbook_formulas(workbook);
-            Outcome::Optimal
+            if model.engine == Engine::Evolutionary && !all_different {
+                Outcome::NoImprovement
+            } else {
+                Outcome::Optimal
+            }
         }
         Err(Failure(outcome, point)) => {
             let at = point.unwrap_or(start);
@@ -1177,7 +1185,7 @@ mod tests {
         crate::formula::evaluate_workbook_formulas(&mut book);
         let outcome = solve(&mut book, 0);
         let f = get_number(&book, (0, 2, 0));
-        assert_eq!(outcome, Outcome::Optimal);
+        assert_eq!(outcome, Outcome::NoImprovement);
         // the best of the minima: f(2.0944, -1) = 0.00892
         assert!(f < 0.01, "f = {f}");
     }
@@ -1219,7 +1227,7 @@ mod tests {
         }
         crate::formula::evaluate_workbook_formulas(&mut book);
         let outcome = solve(&mut book, 0);
-        assert_eq!(outcome, Outcome::Optimal);
+        assert_eq!(outcome, Outcome::NoImprovement);
         // brute force over [1,10]^2: the least is 3 at (1, 1)
         let best = (1..=10).flat_map(|x| (1..=10).map(move |y| ((7 * x - 5 * y - 3) as i64).abs() + x + y)).min().unwrap();
         assert_eq!(get_number(&book, (0, 2, 0)), best as f64);
