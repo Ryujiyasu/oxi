@@ -362,6 +362,11 @@ function main() {
     throw new Error(`web/ is missing files the pages load: ${missing.join(', ')}` +
       ' (build the WebAssembly package and copy it into web/ first)');
   }
+
+  // The engine module carries the Carlito, Caladea, Liberation and Noto JP
+  // faces, which are OFL-1.1; their notices ship beside it.
+  fs.copyFileSync(path.join(root, 'LICENSE-FONTS'), path.join(media, 'LICENSE-FONTS'));
+  console.log('LICENSE-FONTS  <- LICENSE-FONTS');
 }
 
 main();

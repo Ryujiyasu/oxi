@@ -54,7 +54,7 @@ jobs:
         run: |
           name="oxidocs-${{ matrix.arch }}-unknown-linux-musl"
           mkdir "$name"
-          cp target/musl/release/oxidocs LICENSE "$name/"
+          cp target/musl/release/oxidocs LICENSE LICENSE-FONTS "$name/"
           tar --owner=0 --group=0 -czf "$name.tar.gz" "$name"
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
