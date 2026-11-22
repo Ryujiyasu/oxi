@@ -4382,7 +4382,12 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
             let bold_only_part = font.bold
                 && !font.italic
                 && BOLD_ONLY.with(|s| s.borrow().contains(&font.typeface));
-            let retried = (embedcollide_on() || bold_only_part)
+            let cache_collision = embedcache_on()
+                && cloud_registered()
+                    .lock()
+                    .map(|set| set.contains(&font.typeface.to_ascii_lowercase()))
+                    .unwrap_or(false);
+            let retried = (embedcollide_on() || bold_only_part || cache_collision)
                 && slot_face_name(&font.typeface, font.bold)
                     .map(|slot| {
                         let ok = load_font_as(&font.data, &slot);
@@ -4868,6 +4873,9 @@ fn install_cloud_fonts() -> usize {
         if !gdi_face_for(family).eq_ignore_ascii_case(family) {
             missing.insert(family.clone());
         }
+    }
+    if let Ok(mut set) = cloud_registered().lock() {
+        set.extend(missing.iter().map(|f| f.to_ascii_lowercase()));
     }
     let mut loaded = 0;
     for (path, family) in &files {
@@ -18695,6 +18703,33 @@ fn sf_debug() -> bool {
 /// under its slot name when this is set (opt-in while it is being measured).
 fn embedcollide_on() -> bool {
     std::env::var("OXI_EMBEDCOLLIDE_ENABLE").is_ok()
+}
+
+/// Families this process registered from the Office cloud cache (lower case).
+#[cfg(windows)]
+fn cloud_registered() -> &'static std::sync::Mutex<std::collections::BTreeSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeSet<String>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeSet::new()))
+}
+
+/// S-EMBEDCACHE (2026-11-22): an embedded part whose name collides with a
+/// family that only the Office CLOUD CACHE supplies is retried under its slot
+/// name, so the deck's own part answers -- unless this is set.
+///
+/// PowerPoint draws the deck's part over the cache copy. d37's Lato runs come
+/// out of the PDF as a numbered (privately loaded) font with the embedded
+/// Lato 1.104's widths (space 193/1000), not the cache's Lato 2.015 (256);
+/// d31 and d56 likewise. Probed in fresh PowerPoint processes on d37 with the
+/// cache's own TTF wrapped as the embedded part: numbered every time, whatever
+/// the version string, and for Montserrat, Nunito, Poppins, Roboto, Playfair
+/// Display, Merriweather and Josefin Sans too. Only with the family removed
+/// from p:embeddedFontLst does the cache's copy appear. (Open Sans, Bebas Neue
+/// and Pacifico went to the cache in the same probe; their dev decks do not
+/// move under this rule.) A family INSTALLED on the machine is not covered:
+/// there PowerPoint mostly draws the installed copy (S-EMBEDCOLLIDE, d47).
+fn embedcache_on() -> bool {
+    std::env::var("OXI_EMBEDCACHE_DISABLE").is_err()
 }
 
 /// A centred line is centred in the width left after its indent, and carries
