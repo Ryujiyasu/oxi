@@ -3939,6 +3939,81 @@ fn instweight_on() -> bool {
     std::env::var("OXI_INSTWEIGHT_DISABLE").is_err()
 }
 
+/// S-CFFSKIP (2026-11-23) unless OXI_CFFSKIP_DISABLE is set.
+fn cffskip_on() -> bool {
+    std::env::var("OXI_CFFSKIP_DISABLE").is_err()
+}
+
+/// Whether an embedded part decompresses to a CFF-flavoured (PostScript
+/// outline) font. PowerPoint does not use such a part:
+///   - d15 embeds Barlow regular+bold as CFF only; every Barlow run is drawn in
+///     Calibri / Calibri-Bold (truth 11-18 and a 11-22 re-export, any text).
+///   - d15's "Barlow Light" regular part is CFF and its BOLD slot is a
+///     TrueType "Barlow Regular"; the Light text is drawn with that TrueType
+///     part ("6" in the PDF: Widths match it exactly, max err 0).
+///   - Minimal repro (d37 with its Lato parts replaced): the CFF Barlow part
+///     wrapped as "Barlowq" -> Calibri; the TrueType part as "Barlowr" ->
+///     used. A TrueType copy renamed "Barlow" is also used, so it is the
+///     outline format and not the name.
+/// Detection loads the part privately under a throwaway name, asks GDI for its
+/// `CFF ` table, and unloads it.
+#[cfg(windows)]
+fn cff_part(data: &[u8]) -> bool {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Graphics::Gdi::*;
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let name = format!("OxiCffProbe{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let mut stream = Box::new(FontStream { data: data.to_vec(), pos: 0 });
+    let mut handle = HANDLE::default();
+    let mut priv_status = EMBEDDED_FONT_PRIV_STATUS::default();
+    let mut status = TTLOAD_EMBEDDED_FONT_STATUS::default();
+    let mut win_name: Vec<u16> = name.encode_utf16().collect();
+    win_name.push(0);
+    let rc = unsafe {
+        TTLoadEmbeddedFont(
+            &mut handle,
+            TTLOAD_PRIVATE,
+            &mut priv_status,
+            LICENSE_INSTALLABLE,
+            &mut status,
+            Some(read_embedded_font),
+            stream.as_mut() as *mut FontStream as *const core::ffi::c_void,
+            windows::core::PCWSTR(win_name.as_ptr()),
+            None,
+            None,
+        )
+    };
+    if rc != 0 {
+        return false;
+    }
+    let is_cff = unsafe {
+        let dc = probe_dc();
+        let font = CreateFontW(
+            -1000, 0, 0, 0, 400, 0, 0, 0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            DEFAULT_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            windows::core::PCWSTR(win_name.as_ptr()),
+        );
+        let mut got = false;
+        if !font.is_invalid() {
+            let old = SelectObject(dc, font);
+            let tag = u32::from_le_bytes(*b"CFF ");
+            let n = GetFontData(dc, tag, 0, None, 0);
+            got = n != 0 && n != u32::MAX;
+            SelectObject(dc, old);
+            let _ = DeleteObject(font);
+        }
+        let mut st = 0u32;
+        let _ = TTDeleteEmbeddedFont(handle, 0, &mut st);
+        got
+    };
+    drop(stream);
+    is_cff
+}
+
 /// Load one embedded part under `name`, returning whether GDI took it.
 #[cfg(windows)]
 fn load_font_as(data: &[u8], name: &str) -> bool {
@@ -4046,6 +4121,31 @@ fn install_embedded_fonts(pres: &Presentation) -> usize {
     let kept: Vec<_> = pres
         .embedded_fonts
         .iter()
+        .filter(|font| {
+            // S-CFFSKIP: PowerPoint does not load an embedded part whose
+            // outlines are CFF (see `cff_part`).
+            // Only a family with NO usable (TrueType) part is dropped whole --
+            // it then falls to the missing-font substitute, as d15's Barlow
+            // does. A partly-CFF family (d15 Barlow Light: CFF regular, TT bold)
+            // needs per-style substitution, which is not modelled yet.
+            if cffskip_on()
+                && cff_part(&font.data)
+                && pres
+                    .embedded_fonts
+                    .iter()
+                    .filter(|f| norm_family(&f.typeface) == norm_family(&font.typeface))
+                    .all(|f| cff_part(&f.data))
+            {
+                if sf_debug() {
+                    eprintln!(
+                        "INSTALL typeface={:?} bold={} italic={} SKIPPED -- CFF outlines",
+                        font.typeface, font.bold, font.italic
+                    );
+                }
+                return false;
+            }
+            true
+        })
         .filter(|font| {
             if !misname_on() || !skipembed_on() || honest(font) {
                 return true;
