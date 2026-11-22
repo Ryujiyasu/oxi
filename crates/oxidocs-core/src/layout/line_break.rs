@@ -3276,10 +3276,18 @@ impl<'a> LineBreaker<'a> {
                         if next_of(i).map_or(false, kinsoku::is_yakumono_trigger) {
                             v[i] = true;
                         }
-                    } else if c == '\u{30FB}'
+                    } else if (c == '\u{30FB}' || (matches!(c, '\u{FF1A}' | '\u{FF1B}')
+                            && !crate::env_flag!("OXI_COLON_OPEN_PAIR_DISABLE")))
                         && !crate::env_flag!("OXI_DOT_OPEN_PAIR_DISABLE")
                         && next_of(i).map_or(false, kinsoku::is_yakumono_opening)
                     {
+                        // OXI_COLON_OPEN_PAIR (2026-11-22, default ON, opt-out _DISABLE): ：
+                        // and ； before an opening bracket give up their half em exactly like
+                        // ・ (`_pb_pair_colon_bracket_gen.py`, ＭＳ 明朝 / HG丸ｺﾞｼｯｸM-PRO 12,
+                        // compress / doNotCompress, jc left / both, no grid / linesAndChars:
+                        // «：「» «：（» «；「» 6.00 (6.12 on the grid) in all 16, «：あ» 12.00).
+                        // Word-PDF census: ： before an opener at 0.5 em in 15+ docs;
+                        // blind-A ja/reference__0ae2d13d «場合：「家族登録」».
                         // OXI_DOT_OPEN_PAIR (2026-11-03, default ON, opt-out _DISABLE): a
                         // middle dot before an opening bracket gives up its half em, like
                         // 、「 and 」「 -- on a slack line, jc both or left, compressPunctuation
@@ -6457,9 +6465,18 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // model under-credits there and Oxi keeps its current break).
                     // The document's line 1 (48 chars, 5 gaps) overflows 10.8 tw
                     // in Oxi and Word keeps it; the pure-CJK arm refuses 22 tw.
+                    // OXI_S1499_AFTER_S1585 (2026-11-22, default ON, opt-out _DISABLE): where
+                    // S1585 already credited the line's gaps, S1499 adds nothing -- S1585's
+                    // 1.5 x (fs/4) x G/(G+2) IS S1499's measurement (10.5pt: 39 / 52 / 59 tw
+                    // for 2 / 4 / 6 gaps against c5bb00's 30 / 50 / 60), and both together
+                    // counted every gap twice. blind-A ja/technical__52b9cff8 (ＭＳ 明朝 12,
+                    // doNotCompress, compat 15, jc both): «…付「 第20回東洋|療» overflows
+                    // 76 tw with 3 gaps; S1585 gives 54 and Word sends «療» down, S1585 +
+                    // S1499 gave 105 and kept it by squeezing «）» to 6.
                     if overflow_tw > 0
                         && !s475_break
                         && !crate::env_flag!("OXI_S1499_DISABLE")
+                        && !(s1585_on && !crate::env_flag!("OXI_S1499_AFTER_S1585_DISABLE"))
                         && !self.compress_punctuation
                         && is_justified
                         && self.compat_mode >= 15
@@ -7702,7 +7719,8 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         if k + 1 < n && kinsoku::is_yakumono_trigger(line_chars[k + 1].1) {
                             v[k] = true;
                         }
-                    } else if c == '\u{30FB}'
+                    } else if (c == '\u{30FB}' || (matches!(c, '\u{FF1A}' | '\u{FF1B}')
+                            && !crate::env_flag!("OXI_COLON_OPEN_PAIR_DISABLE")))
                         && !crate::env_flag!("OXI_DOT_OPEN_PAIR_DISABLE")
                         && k + 1 < n
                         && kinsoku::is_yakumono_opening(line_chars[k + 1].1)
@@ -8071,8 +8089,16 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // OXI_MIDDOT_RUN_SQUEEZE: a line that kept a run of ・ past the edge draws
         // them uniformly compressed, each no narrower than half its natural width.
         if !crate::env_flag!("OXI_MIDDOT_RUN_SQUEEZE_DISABLE") {
-            let avail = available_tw as f32 / 20.0;
-            for line in &mut lines {
+            // OXI_MIDDOT_SQUEEZE_FIRST_INDENT (2026-11-22, default ON, opt-out _DISABLE): the
+            // first line is measured against the width it was broken in -- the available
+            // width less the first-line indent (a hanging indent widens it). Faithful slice
+            // of blind-A ja/reference__0ae2d13d (HG丸ｺﾞｼｯｸM-PRO 12, left 780 / hanging 360):
+            // «※＜月・水・木・金の17:00～18:00＞と» fits at 235.2 in a 242.9 first line; Word
+            // keeps every ・ at 12.00, Oxi squeezed them to 8.56 against the bare 224.9.
+            let first_indent_ok = !crate::env_flag!("OXI_MIDDOT_SQUEEZE_FIRST_INDENT_DISABLE");
+            for (line_index, line) in lines.iter_mut().enumerate() {
+                let avail = available_tw as f32 / 20.0
+                    - if first_indent_ok && line_index == 0 { first_line_indent } else { 0.0 };
                 let total: f32 = line.fragments.iter().map(|f| f.width).sum();
                 let dots: Vec<usize> = line.fragments.iter().enumerate()
                     .filter(|(_, f)| !f.text.is_empty() && f.text.chars().all(|c| c == '・'))

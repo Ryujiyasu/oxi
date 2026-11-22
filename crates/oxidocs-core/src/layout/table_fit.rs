@@ -10836,6 +10836,77 @@ impl<'a> TableFitLayouter<'a> {
                                                 } else {
                                                     None
                                                 };
+                                            // OXI_CELL_FONT_SPLIT (2026-11-22, default ON, opt-out _DISABLE): a
+                                            // cell fragment whose characters resolve to different faces (Latin
+                                            // in the ascii face, kana in the eastAsia face) is drawn as one
+                                            // element per face, each glyph at its own face's advance -- the
+                                            // widths the cell breaker already measured it with. The fragment
+                                            // took the face of its whole text (the eastAsia face once it held
+                                            // a kana), so its Latin was drawn in ＭＳ 明朝 at the half-em: «あいう
+                                            // ABCDE» in a cell drew A..E 5.5 apart in MS-Mincho where the body
+                                            // draws Century; docs/sample.docx's «.docx エンジン — パーサー, IR,
+                                            // レイアウト» (Cambria ascii) ran 23pt past its 201.8pt cell. The
+                                            // auto-space segments and their gaps are kept.
+                                            let fam_split: Option<Vec<(String, f32, f32, Option<String>)>> =
+                                                if !crate::env_flag!("OXI_CELL_FONT_SPLIT_DISABLE")
+                                                    && single_byte_grid.is_none()
+                                                    && text.chars().count() > 1
+                                                {
+                                                    let chars: Vec<char> = text.chars().collect();
+                                                    let fams: Vec<Option<String>> = chars.iter().map(|&c| {
+                                                        self.resolve_font_family_for_text(&c.to_string(), _source_style, &para.style)
+                                                            .map(|f| f.to_string())
+                                                    }).collect();
+                                                    if fams.iter().all(|f| f == font_family) {
+                                                        None
+                                                    } else {
+                                                        let base: Vec<(String, f32, f32)> = ascell_split.clone()
+                                                            .unwrap_or_else(|| vec![(text.clone(), 0.0, (adj_w - aki_leading).max(0.0))]);
+                                                        let cs_r = *cs + justify_char_spacing + grid_cs_adj;
+                                                        let scale = *ts / 100.0;
+                                                        let mut out: Vec<(String, f32, f32, Option<String>)> = Vec::new();
+                                                        let mut x = 0.0f32;
+                                                        let mut prev_end = 0.0f32;
+                                                        let mut ci = 0usize;
+                                                        for (k, (st, sdx, sw)) in base.iter().enumerate() {
+                                                            if k > 0 {
+                                                                x += (sdx - prev_end).max(0.0);
+                                                            }
+                                                            prev_end = sdx + sw;
+                                                            let mut cur = String::new();
+                                                            let mut cur_w = 0.0f32;
+                                                            let mut cur_x = x;
+                                                            let mut cur_f: Option<Option<String>> = None;
+                                                            for c in st.chars() {
+                                                                let f = fams.get(ci).cloned().unwrap_or(None);
+                                                                let m = self.metrics_for_char_in(
+                                                                    c, !self.s1052_cell_latin_quote(&chars, ci), _source_style, &para.style);
+                                                                let w = self.registry.char_width_pt_with_fallback(c, *fs, &m) * scale + cs_r;
+                                                                if cur_f.as_ref().is_some_and(|cf| *cf != f) {
+                                                                    out.push((std::mem::take(&mut cur), cur_x, cur_w, cur_f.take().unwrap()));
+                                                                    cur_x += cur_w;
+                                                                    cur_w = 0.0;
+                                                                }
+                                                                cur_f = Some(f);
+                                                                cur.push(c);
+                                                                cur_w += w;
+                                                                ci += 1;
+                                                            }
+                                                            if let Some(f) = cur_f {
+                                                                out.push((cur, cur_x, cur_w, f));
+                                                            }
+                                                            x = cur_x + cur_w;
+                                                        }
+                                                        Some(out)
+                                                    }
+                                                } else {
+                                                    None
+                                                };
+                                            let ascell_split: Option<Vec<(String, f32, f32, Option<String>)>> = match fam_split {
+                                                Some(v) => Some(v),
+                                                None => ascell_split.map(|v| v.into_iter()
+                                                    .map(|(a, b, c)| (a, b, c, font_family.clone())).collect()),
+                                            };
                                             if let Some(segs) = ascell_split {
                                                 let base_x = cell_x
                                                     + pad_l
@@ -10843,7 +10914,7 @@ impl<'a> TableFitLayouter<'a> {
                                                     + align_offset
                                                     + rx + aki_leading;
                                                 let lrpb = cell_el.is_paragraph_start_with_lrpb;
-                                                for (si, (seg_text, seg_dx, seg_w)) in
+                                                for (si, (seg_text, seg_dx, seg_w, seg_fam)) in
                                                     segs.iter().enumerate()
                                                 {
                                                     let mut se = LayoutElement::new(
@@ -10854,7 +10925,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         LayoutContent::Text {
                                                             text: seg_text.clone(),
                                                             font_size: *fs,
-                                                            font_family: font_family.clone(),
+                                                            font_family: seg_fam.clone(),
                                                             bold: *bold,
                                                             italic: *italic,
                                                             underline: *underline,
