@@ -5326,7 +5326,7 @@ unsafe fn paint_bg_image(
         Ok(d) => d,
         Err(_) => return false,
     };
-    let rgba = dyn_img.to_rgba8();
+    let rgba = cap_image_long_side(dyn_img.to_rgba8());
     let (iw, ih) = (rgba.width() as i32, rgba.height() as i32);
     if iw <= 0 || ih <= 0 {
         return false;
@@ -13609,7 +13609,7 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                         };
                         match decoded {
                             Ok(dyn_img) => {
-                                let mut rgba = dyn_img.to_rgba8();
+                                let mut rgba = cap_image_long_side(dyn_img.to_rgba8());
                                 // `a:clrChange` then `a:duotone`, in the order
                                 // PowerPoint applies them (252cbc8c s69: a black
                                 // backdrop made transparent, the grey figure
@@ -18728,6 +18728,34 @@ fn cloud_registered() -> &'static std::sync::Mutex<std::collections::BTreeSet<St
 /// and Pacifico went to the cache in the same probe; their dev decks do not
 /// move under this rule.) A family INSTALLED on the machine is not covered:
 /// there PowerPoint mostly draws the installed copy (S-EMBEDCOLLIDE, d47).
+fn imgcap_on() -> bool {
+    std::env::var("OXI_IMGCAP_DISABLE").is_err()
+}
+
+/// S-IMGCAP (2026-11-22): PowerPoint's PDF export stores no raster picture
+/// with a long side over 1536 px -- it resamples the picture down to exactly
+/// that, bicubically, before placing it. Across the dev truth PDFs 370 picture
+/// objects are exactly 1536 on the long side and none whose original exceeds
+/// 1536 is kept at full size (2221 matched against their media parts). The
+/// reduction is what the reference raster shows: d58's full-slide 2048x1152
+/// dot screen comes out of the PDF as 1536x864, and the alpha of a bicubic
+/// 2048->1536 resample matches it to 0.48/255 mean (Lanczos 1.02, bilinear
+/// 1.78, box 3.32). Drawing the full-resolution original aliases the dot
+/// screen differently from the truth. Pictures a deck shows small are reduced
+/// further by PowerPoint (a ppi rule not derived yet); only the cap is applied.
+/// Off with `OXI_IMGCAP_DISABLE`.
+fn cap_image_long_side(rgba: image::RgbaImage) -> image::RgbaImage {
+    const CAP: u32 = 1536;
+    let (w, h) = (rgba.width(), rgba.height());
+    let long = w.max(h);
+    if !imgcap_on() || long <= CAP {
+        return rgba;
+    }
+    let nw = ((w as f64 * CAP as f64 / long as f64).round() as u32).max(1);
+    let nh = ((h as f64 * CAP as f64 / long as f64).round() as u32).max(1);
+    image::imageops::resize(&rgba, nw, nh, image::imageops::FilterType::CatmullRom)
+}
+
 fn embedcache_on() -> bool {
     std::env::var("OXI_EMBEDCACHE_DISABLE").is_err()
 }
