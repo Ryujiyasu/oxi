@@ -13778,14 +13778,13 @@ fn render_slides_gdi(pres: &Presentation, prefix: &str, dpi: u32, supersample: u
                                 // PX-JPEGSIM decides on the ORIGINAL picture: the
                                 // 1536 cap's resample invents colours (d58's
                                 // 660-colour dot screen counts > 3100 after it).
-                                let to_jpeg = data.starts_with(&[0x89, b'P', b'N', b'G'])
-                                    && jpegsim_wants(&full);
+                                let is_png = data.starts_with(&[0x89, b'P', b'N', b'G']);
                                 let mut rgba = cap_image_long_side_cropped(
                                     full,
                                     (1.0 - (sl + sr)) as f64,
                                     (1.0 - (st + sb)) as f64,
                                 );
-                                if to_jpeg {
+                                if is_png {
                                     rgba = jpeg_export_sim(rgba);
                                 }
                                 // `a:clrChange` then `a:duotone`, in the order
@@ -18957,26 +18956,38 @@ fn text_quality() -> u32 {
 /// MAD 2.3/255 (q70 3.5, q80 3.6, no JPEG 4.9). WHICH pictures go to JPEG is not
 /// derived; this uses the corpus colour-count split (> ~3100 visible colours,
 /// 92% of 851 pictures).
-fn jpegsim_wants(rgba: &image::RgbaImage) -> bool {
-    if std::env::var("OXI_JPEGSIM_DISABLE").is_ok() {
+fn jpegsim_on() -> bool {
+    std::env::var("OXI_JPEGSIM_DISABLE").is_err()
+}
+
+/// Which pictures PowerPoint's export turns into JPEG (PX-JPEGCHOICE, derived
+/// 2026-11-23 inside a Google-exported deck -- a COM-created deck carries
+/// p14:defaultImageDpi=32767 and exports by other rules): the size race. The
+/// premultiplied RGB of the (capped) picture is deflated and q75-JPEG'd; JPEG
+/// is chosen when deflate is more than 2.56x the JPEG. 9/9 probe arms in d28's
+/// own deck (noise of 16..200 colours -> JPEG, 3000/3200-colour gradients and
+/// d58's dot screen -> PNG, d28's texture -> JPEG) and 94.6% of 851 corpus
+/// pictures (the colour-count split was 92%).
+fn jpeg_size_race(pm: &image::RgbImage, jpeg_len: usize) -> bool {
+    use std::io::Write;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
+    if z.write_all(pm.as_raw()).is_err() {
         return false;
     }
-    let mut seen = std::collections::HashSet::new();
-    for p in rgba.pixels() {
-        if p[3] > 0 {
-            seen.insert((p[0], p[1], p[2]));
-            if seen.len() > 3100 {
-                break;
-            }
-        }
-    }
+    let deflated = z.finish().map(|v| v.len()).unwrap_or(0);
+    let ratio = deflated as f64 / jpeg_len.max(1) as f64;
     if std::env::var("OXI_JPEGSIM_DEBUG").is_ok() {
-        eprintln!("JPEGSIM {}x{} colours>{} apply={}", rgba.width(), rgba.height(), seen.len(), seen.len() > 3100);
+        eprintln!("JPEGSIM {}x{} deflate={} jpeg={} ratio={:.2}", pm.width(), pm.height(), deflated, jpeg_len, ratio);
     }
-    seen.len() > 3100
+    // 2.564 with libjpeg (PIL) sizes; the image crate's q75 files are ~1.29x
+    // larger on the same pixels (d28 texture 3.07 vs 2.38), hence 2.0 here.
+    ratio > 2.0
 }
 
 fn jpeg_export_sim(rgba: image::RgbaImage) -> image::RgbaImage {
+    if !jpegsim_on() {
+        return rgba;
+    }
     let (w, h) = (rgba.width(), rgba.height());
     let mut pm = image::RgbImage::new(w, h);
     for (x, y, p) in rgba.enumerate_pixels() {
@@ -18989,6 +19000,9 @@ fn jpeg_export_sim(rgba: image::RgbaImage) -> image::RgbaImage {
         .encode_image(&pm)
         .is_err()
     {
+        return rgba;
+    }
+    if !jpeg_size_race(&pm, buf.len()) {
         return rgba;
     }
     let Ok(dec) = image::load_from_memory_with_format(&buf, image::ImageFormat::Jpeg) else {
