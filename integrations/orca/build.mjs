@@ -25,9 +25,12 @@ const editor = path.join(out, 'editor');
 
 // Orca's isolated frames read WebAssembly, scripts and JSON whole, at most
 // 16 MiB a file. The engine is larger, so it ships in parts that the page
-// joins. They stay plain WebAssembly: the community catalog refuses archives
-// (a gzipped engine was rejected as one).
+// joins. The community catalog looks at what each file holds: a gzipped part
+// was refused as an archive, and a raw slice of the module (no WebAssembly
+// header) as an unknown binary. So each part is a WebAssembly module of its
+// own whose only section is a custom section, PART_SECTION, holding the slice.
 const PART_BYTES = 15 * 1024 * 1024;
+const PART_SECTION = 'oxi-engine-part';
 // A plugin folder holds at most 50 MiB.
 const PLUGIN_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -56,11 +59,29 @@ const STYLE = `
 
 const LOADER = (parts) => `
 // === Oxi engine loader (inserted by integrations/orca/build.mjs) ===
+// Each part is a WebAssembly module whose one custom section,
+// "${PART_SECTION}", holds a slice of the engine; the slices are joined.
 async function __oxiEngineBytes() {
+    const slice = (name, b) => {
+        let at = 8;
+        const leb = () => {
+            let v = 0, shift = 0, x;
+            do { x = b[at++]; v += (x & 0x7f) * 2 ** shift; shift += 7; } while (x & 0x80);
+            return v;
+        };
+        if (b[0] !== 0 || b[1] !== 0x61 || b[2] !== 0x73 || b[3] !== 0x6d || b[at++] !== 0) {
+            throw new Error(name + ': not an engine part');
+        }
+        const end = leb() + at;
+        const nameLen = leb();
+        const label = new TextDecoder().decode(b.subarray(at, at + nameLen));
+        if (label !== '${PART_SECTION}' || end !== b.length) throw new Error(name + ': not an engine part');
+        return b.subarray(at + nameLen, end);
+    };
     const parts = await Promise.all(${JSON.stringify(parts)}.map(async (name) => {
         const r = await fetch('./' + name);
         if (!r.ok) throw new Error(name + ': HTTP ' + r.status);
-        return new Uint8Array(await r.arrayBuffer());
+        return slice(name, new Uint8Array(await r.arrayBuffer()));
     }));
     return await new Blob(parts).arrayBuffer();
 }
@@ -161,11 +182,29 @@ const wasm = path.join(pkg, 'oxidocs_wasm_bg.wasm');
 if (!fs.existsSync(wasm)) {
   throw new Error(`${wasm} is missing: build the slides engine first (see the top of this file)`);
 }
+const leb128 = (n) => {
+  const out = [];
+  do {
+    let b = n & 0x7f;
+    n = Math.floor(n / 128);
+    if (n) b |= 0x80;
+    out.push(b);
+  } while (n);
+  return Buffer.from(out);
+};
+// A WebAssembly module (magic, version 1) with one custom section, id 0.
+const partModule = (bytes) => {
+  const label = Buffer.from(PART_SECTION);
+  const body = Buffer.concat([leb128(label.length), label, bytes]);
+  return Buffer.concat([Buffer.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 0]), leb128(body.length), body]);
+};
 const engine = fs.readFileSync(wasm);
 const parts = [];
 for (let i = 0; i * PART_BYTES < engine.length; i++) {
   const name = `oxidocs_engine.${i}.wasm`;
-  fs.writeFileSync(path.join(editor, name), engine.subarray(i * PART_BYTES, (i + 1) * PART_BYTES));
+  const part = partModule(engine.subarray(i * PART_BYTES, (i + 1) * PART_BYTES));
+  if (!WebAssembly.validate(part)) throw new Error(`${name} is not a valid WebAssembly module`);
+  fs.writeFileSync(path.join(editor, name), part);
   parts.push(name);
 }
 fs.copyFileSync(path.join(pkg, 'oxidocs_wasm.js'), path.join(editor, 'oxidocs_wasm.js'));
