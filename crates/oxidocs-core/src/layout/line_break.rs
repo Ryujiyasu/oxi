@@ -4528,9 +4528,17 @@ impl<'a> LineBreaker<'a> {
                     // Scoped to explicit compat 15 (the probe's mode): reference__13e1b7fc
                     // (compat 14, charSpace 3194) packs its bracket-heavy lines at the bare
                     // em in Word, and this fold broke them a character early.
+                    // OXI_GRID_SMALL_FOLD (2026-11-23, default ON, opt-out _DISABLE): a run SMALLER
+                    // than the grid's default size is broken at the widened cell in compat 14 too.
+                    // `_pb_0b_note_gen.py` (reference__0b6f3b32's 注 paragraph, linesAndChars 411 /
+                    // charSpace 3042, Normal 11pt): sz 10/13/16/18 break at the 541 margin in Word
+                    // under compat 14 exactly as under 15 (line for line); Oxi broke them at the
+                    // bare em and ran the lines out to the page edge (596). sz 22/24 are untouched.
+                    let small_fold = !crate::env_flag!("OXI_GRID_SMALL_FOLD_DISABLE")
+                        && matches!((grid_char_pitch, grid_char_cw_ratio), (Some(p), Some(r))
+                            if r > 0.0 && font_size < p / r - 0.01);
                     if !crate::env_flag!("OXI_S1584_DISABLE")
-                        && self.compat_mode >= 15
-                        && self.compat_mode_explicit
+                        && ((self.compat_mode >= 15 && self.compat_mode_explicit) || small_fold)
                     {
                         pre_yakumono_width += char_grid_extra;
                     }
