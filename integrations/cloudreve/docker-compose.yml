@@ -1,0 +1,14 @@
+# Cloudreve, with Oxi drawing the .docx / .pptx / .xlsx thumbnails.
+# `docker compose up -d --build`, then open http://localhost:5212.
+services:
+  cloudreve:
+    build: .
+    image: cloudreve-oxidocs
+    restart: unless-stopped
+    ports:
+      - "5212:5212"
+    volumes:
+      - cloudreve-data:/cloudreve/data
+
+volumes:
+  cloudreve-data:
