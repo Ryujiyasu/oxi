@@ -8780,10 +8780,18 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             // the +0.5 pushed each following paragraph onto the next grid line,
                             // 16pt by p4, where Word keeps it). Opt-out OXI_S1536_DISABLE;
                             // OXI_S1536 still forces it on everywhere.
+                            // OXI_S1536_ALL_COMPAT (2026-11-23, default ON, opt-out _DISABLE): the
+                            // rule width below a linesAndChars table in compat 14 too.
+                            // `_pb_0b_aftertbl_gen.py` (blind-A ja/reference__0b6f3b32 p9, compat
+                            // 14, table / «各種手当…» / table, tblBorders sz4): Word's next top rule
+                            // sits 21.24 below the bottom rule on linesAndChars 411 = the `lines`
+                            // arm (Oxi 21.30 there) -- Oxi lc gave 20.80; snapToGrid=0 15.00 vs
+                            // 14.52; pitch 360 / 500 -0.5 alike. The 0ea3ec86 ~0.2 reading was a
+                            // glyph-top estimate the archive left undecided.
                             let s1536_on = crate::env_flag!("OXI_S1536")
                                 || (!crate::env_flag!("OXI_S1536_DISABLE")
-                                    && self.compat_mode >= 15
-                                    && self.compat_mode_explicit);
+                                    && ((self.compat_mode >= 15 && self.compat_mode_explicit)
+                                        || !crate::env_flag!("OXI_S1536_ALL_COMPAT_DISABLE")));
                             if page.grid_char_pitch.is_some() && s1536_on {
                                 table.style.bottom_border.as_ref().map_or(
                                     table.style.border_width.unwrap_or(0.5),
