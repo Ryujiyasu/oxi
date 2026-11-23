@@ -430,6 +430,20 @@ Or download a desktop installer for Windows, macOS or Linux from
 [Releases](https://github.com/Ryujiyasu/oxi/releases). Installed apps update
 themselves from that feed.
 
+### In place of LibreOffice
+
+Programs that convert with `soffice --headless --convert-to pdf --outdir DIR FILE`
+can run Oxi instead: link the binary as `soffice` (or call `oxidocs soffice …`)
+and point them at it. It takes that command line for .docx, .pptx and .xlsx to
+PDF, or to PNG of the first page, writing `DIR/<name>.pdf` as LibreOffice does.
+Any other file, target or option goes to the LibreOffice named by
+`OXIDOCS_SOFFICE_FALLBACK`, or fails if none is set.
+
+```bash
+ln -s "$(command -v oxidocs)" /usr/local/bin/soffice
+soffice --headless --convert-to pdf --outdir out report.docx deck.pptx book.xlsx
+```
+
 The published npm package uses the default Word-focused build. To use the spreadsheet, presentation and VBA browser editors, build the full suite below.
 
 The Rust engine crates include `oxidocs` (the facade), `oxidocs-core`, `oxicells-core`, `oxislides-core`, `oxipdf-core`,

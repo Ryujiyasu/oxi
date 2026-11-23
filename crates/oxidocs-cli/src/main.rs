@@ -18,6 +18,7 @@ mod emf;
 mod pptx;
 mod xlsx;
 mod raster;
+mod soffice;
 
 #[cfg(target_env = "musl")]
 #[global_allocator]
@@ -42,6 +43,10 @@ macro_rules! note {
 
 fn main() {
     let mut args: Vec<String> = std::env::args().collect();
+    // Run as `soffice`, or as `oxidocs soffice …`: a LibreOffice command line.
+    if let Some(rest) = soffice::invocation(&args) {
+        std::process::exit(soffice::run(rest));
+    }
     if let Some(at) = args.iter().skip(2).position(|a| a == "--quiet" || a == "-q") {
         args.remove(at + 2);
         QUIET.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -269,6 +274,9 @@ fn main() {
             eprintln!("                content Oxi does not draw (listed as JSON on stderr)");
             eprintln!("      --quiet:  print nothing on success: no progress notes, no closing line");
             eprintln!("                (also for serve); warnings and errors are still written");
+            eprintln!("  oxi soffice --convert-to pdf|png [--outdir DIR] FILE...");
+            eprintln!("      LibreOffice's command line for .docx/.pptx/.xlsx (also when this binary");
+            eprintln!("      is run as `soffice`); anything else goes to ${}", soffice::FALLBACK_VAR);
             eprintln!("  oxi --version");
             eprintln!("  oxi vba-analyze <input.xlsm>");
             eprintln!("  oxi vba-safety <input.xlsm>");
