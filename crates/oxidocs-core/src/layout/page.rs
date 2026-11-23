@@ -11905,7 +11905,15 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                                 + if rb { 0.0 } else { sb }
                                 + if ra { 0.0 } else { sa }
                         } else {
-                            self.estimate_para_height(para, hdr_width, grid_pitch, None, false, None, None)
+                            // OXI_HF_NO_GRID_EST (2026-11-24, default ON, opt-out _DISABLE): the
+                            // footer stack is measured off the grid, as OXI_HF_NO_GRID paints it.
+                            // ja/reference__0b6f3b32's jc=right Normal footer (snap on, lines 411)
+                            // was reserved one grid line tall and painted a natural line, so its
+                            // page number sat 6.7pt above Word's 801.1; the snapToGrid=0 Footer
+                            // style pages already matched (800.7).
+                            let est_grid = if !crate::env_flag!("OXI_HF_NO_GRID_DISABLE")
+                                && !crate::env_flag!("OXI_HF_NO_GRID_EST_DISABLE") { None } else { grid_pitch };
+                            self.estimate_para_height(para, hdr_width, est_grid, None, false, None, None)
                         };
                         if ftr_paint_spacing {
                             // the lines alone, then the stack's own spacing model

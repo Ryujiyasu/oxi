@@ -2374,6 +2374,9 @@ struct VertColumn {
     /// OXI_VERT_JUSTIFY: the space added after every glyph but the last of a
     /// justified column.
     justify_gap: f32,
+    /// OXI_VERT_PUNCT_SQUEEZE: the advance taken off each compressible mark of a
+    /// column the breaker packed past the band end.
+    punct_squeeze: f32,
 }
 
 // Natural text coordinates are retained until the table's row boundaries
@@ -7612,6 +7615,20 @@ impl LayoutEngine {
             // section-break MARK does, and that is not an Oxi block.
             let (recipes, cols) =
                 self.vertical_section_columns(page, run_start, run_end, band_h, page_pitch, false);
+            // OXI_VERT_MARK_FULL_COL, the page edge: a section holding only the empty mark
+            // paragraph takes its column only where the page still has room for it; it is
+            // never carried to the next page. 015355870669f8d3 p4 is full to x=113 when the
+            // cols=3 notes end, and Word opens p5 with «【重要単語・文法】» in the first
+            // column (725) -- the cols=1 mark section between them left no column.
+            if !crate::env_flag!("OXI_VERT_MARK_FULL_COL_DISABLE")
+                && run_end - run_start == 1
+                && matches!(&page.blocks[run_start], Block::Paragraph(p)
+                    if p.style.continuous_section_break && p.runs.iter().all(|r| r.text.is_empty()))
+                && !cols.is_empty()
+                && cols.iter().map(|c| c.pitch).sum::<f32>() > (avail_right - left) + 0.01
+            {
+                continue;
+            }
 
             // ---- Phase B: place them ----------------------------------------
             // A section that ends in a continuous break balances; the LAST run
@@ -8978,7 +8995,7 @@ impl LayoutEngine {
                                 blank: true,
                                 hard_break: false,
                                 image: false,
-                                spacer: true, justify_gap: 0.0,
+                                spacer: true, justify_gap: 0.0, punct_squeeze: 0.0,
                             });
                         }
                     }
@@ -9009,7 +9026,7 @@ impl LayoutEngine {
                         pitch: img.width.max(0.0),
                         blank: false,
                         hard_break: false,
-                        image: true, spacer: false, justify_gap: 0.0,
+                        image: true, spacer: false, justify_gap: 0.0, punct_squeeze: 0.0,
                     });
                     continue;
                 }
@@ -9025,9 +9042,20 @@ impl LayoutEngine {
             // Charging it a column made section 1 run 55 columns instead of 54,
             // so the cut landed one column late and every section after it was
             // off by one — p4 opened at col 2 where Word opens at col 1.
+            // OXI_VERT_MARK_FULL_COL (2026-11-23, default ON, opt-out _DISABLE): the mark
+            // rides a column only of its OWN section. A section that holds nothing but the
+            // empty mark paragraph takes one column of its own. `_pb_015_p5_gen.py`
+            // (faithful slice of 015355870669f8d3 p5): the cols=2 section ends at x=149 and
+            // the one-paragraph mark section takes 113, so «４、現代語訳» opens p2; with
+            // ☆９ cut to 8 characters (its column half empty) Word still leaves an empty
+            // column (149) and puts the heading at 113. Without the mark section the
+            // heading sits right after the cols=2 section.
+            let mark_rides = crate::env_flag!("OXI_VERT_MARK_FULL_COL_DISABLE")
+                || cols.iter().any(|c| !c.spacer);
             if !crate::env_flag!("OXI_S730_DISABLE")
                 && para.style.continuous_section_break
                 && para.runs.iter().all(|r| r.text.is_empty())
+                && mark_rides
             {
                 continue;
             }
@@ -9217,7 +9245,7 @@ cells={} pitch={:.2} text={:?}",
                     pitch,
                     blank: true,
                     hard_break,
-                    image: false, spacer: false, justify_gap: 0.0,
+                    image: false, spacer: false, justify_gap: 0.0, punct_squeeze: 0.0,
                 });
                 continue;
             }
@@ -9327,7 +9355,15 @@ cells={} pitch={:.2} text={:?}",
                     &fragments, band_h - s1331_left, s1331_first,
                     &para.style,
                     char_grid.map(|g| g.0), char_grid.map(|g| g.1),
-                    false, true, true, false, false, true,
+                    false, true,
+                    // OXI_VERT_JC_BREAK (2026-11-23, default ON, opt-out _DISABLE): a vertical
+                    // column breaks justified only when the paragraph is -- jc=left breaks at
+                    // natural like the horizontal line. `_pb_015_vert_gen.py` c_vert_left:
+                    // Word 39 / 40 / 37 = its horizontal jc=left lines; Oxi packed it as
+                    // justified (40 / 41 / 35).
+                    crate::env_flag!("OXI_VERT_JC_BREAK_DISABLE")
+                        || matches!(para.alignment, Alignment::Justify | Alignment::Distribute),
+                    false, false, true,
                     !crate::env_flag!("OXI_VERTICAL_CAPACITY_DISABLE"),
                     char_grid.map_or(false, |g| g.2),
                 );
@@ -9377,7 +9413,7 @@ cells={} pitch={:.2} text={:?}",
                             top: line_start + jc_shift,
                             blank: false,
                             hard_break: hard_break && li == 0,
-                            image: false, spacer: false, justify_gap: 0.0,
+                            image: false, spacer: false, justify_gap: 0.0, punct_squeeze: 0.0,
                         });
                         if li == 0 {
                             if let (Some(c), Some((label, lstyle, top, _))) = (cols.last_mut(), &vert_label) {
@@ -9398,6 +9434,29 @@ cells={} pitch={:.2} text={:?}",
                             Alignment::Distribute => true,
                             _ => false,
                         };
+                        // OXI_VERT_PUNCT_SQUEEZE (2026-11-23, default ON, opt-out _DISABLE): a
+                        // column the breaker packed past the band end (compressPunctuation, the
+                        // horizontal packing rules, OXI_VERT_AS_HORZ) takes the overflow out of
+                        // its compressible marks, shared evenly, half an em at most. Word PDF
+                        // `_pb_015_vert_gen.py` a_vert line 2 (42 glyphs, 425pt band, メイリオ
+                        // 10.5 bold): its five 、。 advance 7.56-7.68 and the column ends at the
+                        // band end (83.3 .. 508.6); Oxi drew them whole and ran 16pt past it.
+                        if self.compress_punctuation && tcy_w <= 0.0
+                            && !crate::env_flag!("OXI_VERT_PUNCT_SQUEEZE_DISABLE")
+                        {
+                            let w: f32 = line.fragments.iter().map(|f| f.natural_width.max(f.width)).sum();
+                            let room = band_h - line_start - para.style.indent_right.unwrap_or(0.0).max(0.0) - w;
+                            let marks = line.fragments.iter().flat_map(|f| f.text.chars())
+                                .filter(|&c| matches!(c, '、' | '。' | '，' | '．') || kinsoku::is_yakumono_closing(c))
+                                .count();
+                            if room < -0.01 && marks > 0 {
+                                let fs_line = line.fragments.iter()
+                                    .map(|f| f.style.font_size.unwrap_or(10.5)).fold(0.0f32, f32::max);
+                                if let Some(c) = cols.last_mut() {
+                                    c.punct_squeeze = (-room / marks as f32).min(0.5 * fs_line);
+                                }
+                            }
+                        }
                         if justify && tcy_w <= 0.0 && !crate::env_flag!("OXI_VERT_JUSTIFY_DISABLE") {
                             let w: f32 = line.fragments.iter().map(|f| f.width).sum();
                             let n = line.fragments.iter().map(|f| f.text.chars().count()).sum::<usize>();
@@ -9429,7 +9488,7 @@ cells={} pitch={:.2} text={:?}",
                         pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                         blank: false,
                         hard_break: hard_break && first,
-                        image: false, spacer: false, justify_gap: 0.0,
+                        image: false, spacer: false, justify_gap: 0.0, punct_squeeze: 0.0,
                     });
                     first = false;
                     cur_y = s1331_left;
@@ -9456,7 +9515,7 @@ cells={} pitch={:.2} text={:?}",
                     pitch: if per_line { col_pitch(lo, hi) } else { pitch },
                     blank: false,
                     hard_break: hard_break && first,
-                    image: false, spacer: false, justify_gap: 0.0,
+                    image: false, spacer: false, justify_gap: 0.0, punct_squeeze: 0.0,
                 });
             }
         }
@@ -9629,6 +9688,17 @@ cells={} pitch={:.2} text={:?}",
             let seg_start = cy;
             let ruby_out = out.len();
             let fs = self.resolve_font_size(&run.style, &para.style);
+            // OXI_VERT_SCRIPT_SIZE (2026-11-23, default ON, opt-out _DISABLE): a
+            // superscript/subscript run whose size came from the style chain is set at the
+            // shrunk size along the column too -- the size the breaker (S899b) already
+            // measured it at. `_pb_047_sup_gen.py` (047ff775, メイリオ Bold 10.5, ④..⑦
+            // superscript): Word tbRl draws them at 7.0 and advances 7.0, as horizontal.
+            let fs = if !crate::env_flag!("OXI_VERT_SCRIPT_SIZE_DISABLE")
+                && run.style.font_size.is_some()
+                && matches!(run.style.vertical_align, Some(VerticalAlign::Superscript | VerticalAlign::Subscript))
+            {
+                Self::vertical_align_font_size(fs)
+            } else { fs };
             let fam = self
                 .resolve_font_family_for_text(text, &run.style, &para.style)
                 .map(|s| s.to_string());
@@ -9648,7 +9718,10 @@ cells={} pitch={:.2} text={:?}",
                     };
                     (metrics, advance)
                 }).collect();
-                if advances.iter().any(|(_, advance)| advance.is_some()) || char_grid_active {
+                if advances.iter().any(|(_, advance)| advance.is_some()) || char_grid_active
+                    // OXI_VERT_PUNCT_SQUEEZE: a squeezed column is set glyph by glyph
+                    || col.punct_squeeze > 0.0
+                {
                     for (ci, (ch, (metrics, advance))) in glyph_chars.iter().copied().zip(advances).enumerate() {
                         let scale = run.style.text_scale.unwrap_or(100.0) / 100.0;
                         let cs = run.style.character_spacing.unwrap_or(0.0);
@@ -9675,6 +9748,11 @@ cells={} pitch={:.2} text={:?}",
                                 Self::vertical_grid_fullwidth_advance(fs, pitch, ratio, quantized))
                         } else { natural };
                         let advance = advance * scale + spacing;
+                        let advance = if col.punct_squeeze > 0.0
+                            && (matches!(ch, '、' | '。' | '，' | '．') || kinsoku::is_yakumono_closing(ch))
+                        {
+                            (advance - col.punct_squeeze).max(0.5 * advance)
+                        } else { advance };
                         // A mixed segment can select a different face per glyph.
                         // Paint with the face whose vertical metric was used.
                         let glyph_family = Some(metrics.family.clone());

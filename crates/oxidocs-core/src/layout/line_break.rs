@@ -80,6 +80,15 @@ impl<'a> LineBreaker<'a> {
         vertical: bool,
         quantized_char_grid: bool,
     ) -> Vec<Line> {
+        // OXI_VERT_AS_HORZ (2026-11-23, default ON, opt-out _DISABLE): under
+        // compressPunctuation a vertical column takes the horizontal line's packing rules
+        // (S1490 / S1585 / the Japanese pull-in ...). `_pb_015_vert_gen.py` (blind-A
+        // ja/educational__01535587, bold メイリオ 10.5, 425pt column, compat 15): Word's
+        // tbRl lines equal its horizontal lines at the same measure in every arm (39 / 42
+        // / 35 justified); Oxi horizontal matched and Oxi vertical, with every horizontal
+        // packing rule gated off, broke 40 / 41 / 35. doNotCompress already matched.
+        let vertical_hz = vertical
+            && !(self.compress_punctuation && !crate::env_flag!("OXI_VERT_AS_HORZ_DISABLE"));
         // Helper: convert pt to twips for Word-GDI-compatible integer comparison
         let pt_to_tw = |pt: f32| -> i32 { (pt * 20.0).round() as i32 };
         let available_tw = pt_to_tw(available_width);
@@ -94,9 +103,19 @@ impl<'a> LineBreaker<'a> {
             || (!self.compat_mode_explicit
                 && !crate::env_flag!("OXI_IMPLICIT_COMPAT_EXACT_DISABLE")))
             && !is_justified
-            && !vertical
+            && !vertical_hz
             && !crate::env_flag!("OXI_LEGACY_EXACT_DISABLE")
-            && fragments.iter().all(|f| !f.0.chars().any(kinsoku::is_cjk));
+            && fragments.iter().all(|f| !f.0.chars().any(|c| kinsoku::is_cjk(c)
+                // OXI_LATIN_EXACT_PUNCT (2026-11-24, default ON, opt-out _DISABLE): in a
+                // document without real CJK, General Punctuation (‘ ’ “ ” – — • …) is
+                // Latin text and keeps the line on the exact sum. `_pb_0026_quote_gen.py`
+                // (Calibri 11, compat 14, measure swept 7004..7016 tw): Word wraps «on» at
+                // 7009 and fits it at 7011 with a ’ in the paragraph or an ASCII ' alike;
+                // Oxi matched with ' and wrapped until 7016 with ’ (per-word twips).
+                // en/policies__0026b7f7's text boxes («child’s», «‘cabined account,’»).
+                && !(matches!(c, '\u{2010}'..='\u{2027}')
+                    && !self.doc_body_has_real_cjk
+                    && !crate::env_flag!("OXI_LATIN_EXACT_PUNCT_DISABLE"))));
         // S1446 (2026-09-17, default ON, opt-out OXI_S1446_DISABLE): a vertical
         // character set at a PROPORTIONAL advance (ＭＳ Ｐ明朝 kana / 、。) breaks
         // on its exact width: no compression absorb and no hang past the column
@@ -262,7 +281,7 @@ impl<'a> LineBreaker<'a> {
         // leaves commas and quotes under their existing Latin-only policy.
         let cjk_latin_period_hang = self.doc_body_has_real_cjk
             && self.compat_mode >= 15 && self.compat_mode_explicit
-            && is_justified && s476_body && !vertical
+            && is_justified && s476_body && !vertical_hz
             && grid_char_pitch.is_none() && !s929_right_fence;
         let mut word_trail_hang_w: f32 = 0.0;
         // S245 (2026-05-24): removed dead variable `word_grid_extra`
@@ -298,7 +317,7 @@ impl<'a> LineBreaker<'a> {
             && self.compat_mode <= 14
             && self.doc_body_has_real_cjk
             && s476_body
-            && !vertical
+            && !vertical_hz
             && !fragments.iter().any(|f| f.0.chars().any(kinsoku::is_cjk));
         // S1100 (2026-08-08, default ON, opt-out OXI_S1100_DISABLE): an EM DASH
         // (U+2014) / EN DASH (U+2013) carries a break OPPORTUNITY AFTER it.
@@ -818,7 +837,7 @@ impl<'a> LineBreaker<'a> {
             && self.doc_body_has_real_cjk
             && is_justified
             && s476_body
-            && !vertical
+            && !vertical_hz
             && grid_char_pitch.is_none()
             && self.compat_mode >= 15
             && self.compat_mode_explicit;
@@ -886,7 +905,7 @@ impl<'a> LineBreaker<'a> {
             && self.compress_punctuation
             && self.compat_mode <= 14
             && s476_body
-            && !vertical
+            && !vertical_hz
             && !lines_and_chars
             && grid_char_pitch.is_none();
         let legacy_gap_floor = |chars: &[char], fs: f32| -> f32 {
@@ -915,7 +934,7 @@ impl<'a> LineBreaker<'a> {
             gaps as f32 * fs / 8.0
         };
         let ideographic_closing_spacing = s476_body && is_justified && self.compress_punctuation
-            && grid_char_pitch.is_none() && !vertical;
+            && grid_char_pitch.is_none() && !vertical_hz;
         let mut ideographic_closing_lines = std::collections::BTreeSet::new();
         let ideographic_space_capacity = |line: &Line| -> f32 {
             line.fragments.iter()
@@ -2084,7 +2103,10 @@ impl<'a> LineBreaker<'a> {
                 let ruby_group_fits = {
                     let over_tw = current_width_tw + cw_tw - available_tw;
                     let x = text.chars().count();
-                    if over_tw <= 0 || x == 0 || vertical || !prev_s1490_regime
+                    // OXI_VERT_AS_HORZ: a compressPunctuation column packs a ruby field as
+                    // the horizontal line does (047ff775 «…うちに、千年»: Word keeps 千年 in
+                    // tbRl as in horizontal; `_pb_047_key_gen.py` PB_KEY=さて池め).
+                    if over_tw <= 0 || x == 0 || vertical_hz || !prev_s1490_regime
                         || current_line.fragments.is_empty()
                         || crate::env_flag!("OXI_RUBY_GROUP_CAP_DISABLE")
                     {
@@ -2116,7 +2138,7 @@ impl<'a> LineBreaker<'a> {
                         }
                     }
                 };
-                if (if vertical { current_capw_tw } else { current_width_tw }) + cw_tw > available_tw
+                if (if vertical_hz { current_capw_tw } else { current_width_tw }) + cw_tw > available_tw
                     && !current_line.fragments.is_empty()
                     && !para_all_whitespace
                     && !ruby_group_fits
@@ -2605,7 +2627,7 @@ impl<'a> LineBreaker<'a> {
             // Japanese run language permits a half-cell pull-in without a
             // character grid, and with a grid in modern compatibility mode. Word probes retain this limit with one to three
             // separated periods; English overrides retain natural wrapping.
-            let english_ea_natural = s476_body && !vertical
+            let english_ea_natural = s476_body && !vertical_hz
                 && style.east_asia_lang.as_deref().map_or(false, |lang|
                     lang.eq_ignore_ascii_case("en") || lang.to_ascii_lowercase().starts_with("en-"));
             // Proportional punctuation does not provide a full-width compression budget.
@@ -2634,7 +2656,7 @@ impl<'a> LineBreaker<'a> {
             // jc left and both, compat absent / 14 / 15 -- and Oxi matched ja-JP but
             // packed 1-2 characters more for zh-CN when justified under a legacy
             // compat (the generic capacity break squeezed 〔 〕 ） 《 0.2 em each).
-            let japanese_language_oikomi = s476_body && !vertical
+            let japanese_language_oikomi = s476_body && !vertical_hz
                 && !narrow_punctuation_natural
                 && (self.compat_mode < 15 || is_justified)
                 && !para_off_grid
@@ -2862,7 +2884,7 @@ impl<'a> LineBreaker<'a> {
             let s1490_regime = !crate::env_flag!("OXI_S1490_DISABLE")
                 && !narrow_punctuation_natural
                 && !natural_break_jc
-                && !vertical
+                && !vertical_hz
                 && (!lines_and_chars || (is_justified
                     // OXI_CATALOG_OWN_WIDTH (2026-11-02, default ON, opt-out
                     // OXI_CATALOG_OWN_WIDTH_DISABLE): read 、。 off the face's own
@@ -5701,7 +5723,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // (linesAndChars, b837) and s590 (legacy justified) keep
                     // their calibrated behavior.
                     let modern_cjk_line_end = crate::env_flag!("OXI_CJK_MODERN_LINE_END")
-                        && s476_body && !vertical && !lines_and_chars
+                        && s476_body && !vertical_hz && !lines_and_chars
                         && self.compat_mode_explicit && self.compat_mode >= 15
                         // Justified text may hang a mark when its preceding text
                         // fits at natural width. Compression credit must not also
@@ -5740,7 +5762,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && kinsoku::is_yakumono_closing(ch)
                         && !matches!(ch, '、' | '。' | '，' | '．');
                     let s725_final_char = !crate::env_flag!("OXI_S725_DISABLE")
-                        && !vertical
+                        && !vertical_hz
                         && self.compat_mode >= 15
                         && self.compat_mode_explicit
                         && !lines_and_chars
@@ -5985,14 +6007,23 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // WORD overflowing after CJK (「…）12」 「…）123」 「…の80」) is
                     // rescued. A pair's natural half still counts (「…（…）」…1字」 keeps 字).
                     let s1318_zw = |c: char| matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}');
+                    // OXI_HINT_CIRCLED_NOT_LATIN (2026-11-23, default ON, opt-out _DISABLE): a
+                    // circled number (U+2460..2473) in a run hinted eastAsia is drawn from the
+                    // East Asian face and is not a Latin-script element here. `_pb_047_sup_gen.py`
+                    // (047ff775 «…さるは⑦便», superscript ⑦ hinted eastAsia, メイリオ Bold):
+                    // Word keeps 便 on the line by compressing the line's 、。 (horizontal and
+                    // tbRl alike); Oxi read ⑦ as Latin and wrapped 便.
+                    let s1318_circled_ea = !crate::env_flag!("OXI_HINT_CIRCLED_NOT_LATIN_DISABLE");
                     let s1318_prev_latin = {
                         let pc = chars_vec[..char_index]
                             .iter()
                             .rev()
-                            .copied()
-                            .chain(current_line.fragments.iter().rev().flat_map(|f| f.text.chars().rev()))
-                            .find(|c| !s1318_zw(*c));
-                        pc.map_or(false, |c| (c as u32) < 0x2E80 && !c.is_control() && !s1318_is_mark(c))
+                            .map(|c| (*c, style))
+                            .chain(current_line.fragments.iter().rev().flat_map(|f| f.text.chars().rev().map(move |c| (c, &f.style))))
+                            .find(|(c, _)| !s1318_zw(*c));
+                        pc.map_or(false, |(c, st)| (c as u32) < 0x2E80 && !c.is_control() && !s1318_is_mark(c)
+                            && !(s1318_circled_ea && matches!(c, '\u{2460}'..='\u{2473}')
+                                && self.ambiguous_symbol_east_asia(c, st, para_style) == Some(true)))
                     };
                     // S1346: a ZERO WIDTH JOINER after this character glues the next one
                     // to it (0ea3ec86 「…福祉ホ‍ーム」: Word sends ホ‍ー down together; the
@@ -6511,7 +6542,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         && !self.compress_punctuation
                         && is_justified
                         && self.compat_mode >= 15
-                        && !vertical
+                        && !vertical_hz
                         && !lines_and_chars
                         && s476_body
                         && IN_TABLE_LAYOUT.with(|c| c.get()) == 0
@@ -6585,7 +6616,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // (k=4) 17.0 kept, 6 / 11 / 16 / 17.5 pushed. blind-A ja/creative__14af1ca6
                     // «…います。24 時間…あり、日々»: Word squeezes 。 and 、 to 6.12 and keeps «々»;
                     // Oxi pushed «日» (k=2, 9.4pt over).
-                    if overflow_tw > 0 && prev_s1490_regime && is_justified && !vertical
+                    if overflow_tw > 0 && prev_s1490_regime && is_justified && !vertical_hz
                         && kinsoku::is_line_start_prohibited(ch)
                         && !crate::env_flag!("OXI_KINSOKU_OIKOMI_CAP_DISABLE")
                     {
@@ -6604,7 +6635,7 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                         }
                     }
                     if overflow_tw > 0 && s476_body && is_justified
-                        && !vertical && !lines_and_chars
+                        && !vertical_hz && !lines_and_chars
                         && kinsoku::is_line_start_prohibited(ch)
                         && crate::env_flag!("OXI_CJK_AUTOSPACE_COMPRESSION")
                     {
@@ -7900,6 +7931,13 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     // Measure the segment width after this tab until next tab or end of line
                     let mut segment_width: f32 = 0.0;
                     let mut decimal_offset: Option<f32> = None;
+                    // OXI_DECIMAL_DIGIT_RUN (2026-11-24, default ON, opt-out _DISABLE): the
+                    // decimal point is the first '.', else the end of the first run of ASCII
+                    // digits (a ',' inside it is a group separator), else the segment end.
+                    // `_pb_0b6_dec_gen.py` f_body_tab: Word puts «\t15,800円»'s 円 at the stop, not
+                    // the ','; «\t１２３円» and «\tあいう» end at it.
+                    let dec_digit_run = !crate::env_flag!("OXI_DECIMAL_DIGIT_RUN_DISABLE");
+                    let mut dec_in_num = false;
                     let mut j = i + 1;
                     while j < frag_count {
                         if line.fragments[j].tab_alignment.is_some() {
@@ -7911,12 +7949,25 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                             let fs = line.fragments[j].style.font_size.unwrap_or(11.0);
                             let metrics = self.registry.default_metrics();
                             for ch in line.fragments[j].text.chars() {
-                                if ch == '.' || ch == ',' {
+                                let hit = if dec_digit_run {
+                                    ch == '.' || (dec_in_num && !(ch.is_ascii_digit() || ch == ','))
+                                } else {
+                                    ch == '.' || ch == ','
+                                };
+                                if hit {
                                     decimal_offset = Some(segment_width + char_offset);
                                     break;
                                 }
-                                char_offset +=
-                                    self.registry.char_width_pt_with_fallback(ch, fs, &metrics);
+                                if ch.is_ascii_digit() { dec_in_num = true; }
+                                char_offset += if dec_digit_run {
+                                    // the fragment's own faces, scaled to its laid width
+                                    let f = &line.fragments[j];
+                                    let em = |c: char| self.metrics_for_char_in(c, false, &f.style, para_style).char_width_em(c) * fs;
+                                    let tot: f32 = f.text.chars().map(em).sum();
+                                    if tot > 0.0 { em(ch) * f.width / tot } else { 0.0 }
+                                } else {
+                                    self.registry.char_width_pt_with_fallback(ch, fs, &metrics)
+                                };
                             }
                         }
                         segment_width += line.fragments[j].width;

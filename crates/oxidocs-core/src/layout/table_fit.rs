@@ -9285,6 +9285,55 @@ impl<'a> TableFitLayouter<'a> {
                                                 _ => 0.0,
                                             }
                                         };
+                                        // OXI_CELL_IMPLICIT_DECIMAL (2026-11-24, default ON, opt-out _DISABLE): in a
+                                        // table cell, a paragraph without a tab character whose first tab stop is
+                                        // decimal is set at that stop as if a tab led every line. The anchor is the
+                                        // first '.', else the end of the first run of ASCII digits (',' inside the
+                                        // run), else the line end; a line that would cross the right edge rests on
+                                        // it; jc=center centres the line with that leading gap. `_pb_0b6_dec_gen.py`
+                                        // (12 texts; cell / body / left-first / centre / right-tab / wrap arms):
+                                        // Word sets «15,800円»'s 円, «15.8円»'s '.', «あいう»'s end and «１２３円»'s end
+                                        // at the stop, per line; the body and a left-first or right stop do nothing.
+                                        // ja/reference__0b6f3b32 p18's fee table (decimal 1811 / 2084, no tabs).
+                                        let align_offset = match (!should_justify
+                                            && !crate::env_flag!("OXI_CELL_IMPLICIT_DECIMAL_DISABLE"))
+                                            .then(|| para.style.tab_stops.iter().filter(|t| !t.clear)
+                                                .min_by(|a, b| a.position.total_cmp(&b.position)))
+                                            .flatten()
+                                            .filter(|t| t.alignment == TabStopAlignment::Decimal
+                                                && !para.runs.iter().any(|r| r.text.contains('\t')))
+                                        {
+                                            Some(stop) => {
+                                                let mut acc = 0.0f32;
+                                                let mut in_num = false;
+                                                let mut anchor: Option<f32> = None;
+                                                'dec: for f in line.iter() {
+                                                    let chars: Vec<char> = f.0.chars().collect();
+                                                    let ws: Vec<f32> = chars.iter().map(|&c| {
+                                                        self.metrics_for_char_in(c, false, &f.16, &para.style).char_width_em(c) * f.1
+                                                    }).collect();
+                                                    let tot: f32 = ws.iter().sum();
+                                                    let k = if tot > 0.0 { f.2 / tot } else { 0.0 };
+                                                    for (c, w) in chars.iter().zip(ws) {
+                                                        if *c == '.' || (in_num && !(c.is_ascii_digit() || *c == ',')) {
+                                                            anchor = Some(acc);
+                                                            break 'dec;
+                                                        }
+                                                        if c.is_ascii_digit() { in_num = true; }
+                                                        acc += w * k;
+                                                    }
+                                                }
+                                                let anchor = anchor.unwrap_or(line_total_w);
+                                                let shift = (stop.position - line_indent - anchor)
+                                                    .min(align_avail - line_total_w).max(0.0);
+                                                match para.alignment {
+                                                    Alignment::Center => shift + (align_avail - shift - line_total_w).max(0.0) / 2.0,
+                                                    Alignment::Right => align_offset,
+                                                    _ => shift,
+                                                }
+                                            }
+                                            None => align_offset,
+                                        };
 
                                         // Justify: CJK punctuation compression + space/gap distribution
                                         let aki_plan = if crate::env_flag!("OXI_CELL_AKI") {

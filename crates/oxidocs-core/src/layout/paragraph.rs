@@ -7500,10 +7500,32 @@ impl<'a> ParagraphLayouter<'a> {
                 // Safe because: only fires when slack > 0, only de-compresses
                 // (never over-extends).
                 if slack > 0.5 && txbx_ok && !s472_render {
+                    // OXI_STAGE2B_KEEP_PAIR (2026-11-24, default ON, opt-out _DISABLE): a
+                    // kern pair's halved first mark stays half on a loose justified line,
+                    // as the break keeps it (S532) -- the slack goes to the other gaps.
+                    // `_pb_52b_pair_gen.py` (ja/technical__52b9cff8, ＭＳ 明朝 12, kern 2,
+                    // doNotCompress): «場合、「開会式» Word 、 = 6.0 + gap at jc=both and
+                    // 6.0 at jc=left; Oxi 6.0 left, restored to 12.15 justified.
+                    let keep_pair = !crate::env_flag!("OXI_STAGE2B_KEEP_PAIR_DISABLE")
+                        && !(self.no_punctuation_kerning && !crate::env_flag!("OXI_NO_PUNCT_KERN_DISABLE"));
+                    let line_seq: Vec<(usize, char)> = line.fragments.iter().enumerate()
+                        .flat_map(|(i, f)| f.text.chars().map(move |c| (i, c))).collect();
+                    let mut seq_k = 0usize;
                     let mut compressed: Vec<(usize, f32, f32)> = Vec::new();
                     for (fi, frag) in line.fragments.iter().enumerate() {
                         for ch in frag.text.chars() {
+                            let k = seq_k;
+                            seq_k += 1;
                             if !matches!(ch, '、' | '。' | '，' | '．') {
+                                continue;
+                            }
+                            if keep_pair
+                                && frag.style.kern
+                                    .or_else(|| para.style.default_run_style.as_ref().and_then(|r| r.kern))
+                                    .is_some_and(|k| k > 0.0)
+                                && kinsoku::is_yakumono_closing(ch)
+                                && line_seq.get(k + 1).is_some_and(|&(_, n)| kinsoku::is_yakumono_trigger(n))
+                            {
                                 continue;
                             }
                             let fs = frag.style.font_size.unwrap_or(para_font_size);
