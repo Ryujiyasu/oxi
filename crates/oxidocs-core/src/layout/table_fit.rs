@@ -10005,9 +10005,19 @@ impl<'a> TableFitLayouter<'a> {
                                         // cells sat a uniform 1.0pt higher (blind-G forms__020115bc and
                                         // administrative__19bb32f7, 65 lines at -1.2).
                                         let mut cjk_dominant_baseline: Option<f32> = None;
+                                        // OXI_CELL_NATBOX_ATLEAST (2026-11-23, default ON, opt-out _DISABLE): the
+                                        // body's OXI_NATBOX_ATLEAST in a cell -- `line=0 atLeast` is the
+                                        // natural line. `_pb_742_cell_gen.py` (blind-A ja/technical__742dd29b
+                                        // header row, ＭＳ Ｐ明朝 12, lines grid 396, legacy compat): Word's
+                                        // baseline is the auto arm's in every arm (vAlign top / centre, no
+                                        // trHeight, no grid, ＭＳ 明朝); Oxi drew atLeast 0 1.25 high.
+                                        let cell_atleast_zero = !crate::env_flag!("OXI_CELL_NATBOX_ATLEAST_DISABLE")
+                                            && effective_line_rule == Some("atLeast")
+                                            && effective_line_spacing.map_or(false, |v| v <= 0.01);
                                         let cell_text_y_off = if !crate::env_flag!("OXI_CJK_NATBOX_DISABLE")
-                                            && matches!(effective_line_rule, None | Some("auto"))
-                                            && effective_line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01)
+                                            && (cell_atleast_zero
+                                                || (matches!(effective_line_rule, None | Some("auto"))
+                                                    && effective_line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01)))
                                             && para.style.list_marker.is_none()
                                             && (!crate::env_flag!("OXI_CELL_NATBOX_GRID_DISABLE")
                                                 || !(row_line_pitch.map_or(false, |p| p > 0.0) && para.style.snap_to_grid))
@@ -11308,9 +11318,30 @@ impl<'a> TableFitLayouter<'a> {
                                     }
                                     _ => 0.0,
                                 };
+                                // OXI_CELL_IMG_GRID_BOTTOM (2026-11-23, default ON, opt-out _DISABLE):
+                                // an inline picture on a grid-snapped cell line is CENTRED in its
+                                // whole-pitch line box (half the remainder above it), as in the body.
+                                // `_pb_136_img_gen.py` (blind-A ja/reports__136d1ce5's 138.25pt chart,
+                                // linesAndChars 360 -> 8 x 18 = 144, remainder 5.75): Word's picture
+                                // top is 2.87 below Oxi's (which sat on the line top) in the top /
+                                // center / tall-row / image-only cell arms; the body arm already
+                                // matched. 136d1ce5's four charts were 2.9 / 1.2 / 0.5 / 2.1 high =
+                                // half of each one's remainder (5.75 / 2.4 / 1.0 / 4.3).
+                                let grid_drop = if img.position.is_none()
+                                    && !crate::env_flag!("OXI_S715_DISABLE")
+                                    && !crate::env_flag!("OXI_CELL_IMG_GRID_BOTTOM_DISABLE")
+                                {
+                                    let line = self.s971_image_line_h(img, 1.0e6, row_line_pitch, false);
+                                    match row_line_pitch {
+                                        Some(p) if p > 0.0 => 0.5 * ((line / p).ceil() * p - line).max(0.0),
+                                        _ => 0.0,
+                                    }
+                                } else {
+                                    0.0
+                                };
                                 cell_elements.push(LayoutElement::new(
                                     cell_x + pad_l + img_host_dx,
-                                    content_h + effect_top,
+                                    content_h + effect_top + grid_drop,
                                     img.width,
                                     img.height,
                                     LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,

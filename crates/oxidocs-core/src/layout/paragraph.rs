@@ -8683,9 +8683,22 @@ impl<'a> ParagraphLayouter<'a> {
                         && line_has_mixed_sizes
                         && !(grid_script_only_mix && !is_script_fragment(frag))
                     {
-                        (line_max_render_ascent
-                            - frag_metrics.baseline_ascent() * resolved_font_size)
-                            .max(0.0)
+                        let d = line_max_render_ascent
+                            - frag_metrics.baseline_ascent() * resolved_font_size;
+                        // OXI_WS_FRAG_ON_BASELINE (2026-11-23, default ON, opt-out _DISABLE): a
+                        // whitespace-only run kept out of the shared baseline (OXI_WS_BASELINE)
+                        // still sits ON it -- its char border box rides with the text. Word PDF
+                        // `_pb_0ae_base_gen.py`: the 22pt bordered space beside 20pt text has
+                        // the same origin in every arm; Oxi drew it 1.72 lower.
+                        if d < 0.0
+                            && !crate::env_flag!("OXI_WS_FRAG_ON_BASELINE_DISABLE")
+                            && LayoutEngine::s1298_glyphless(frag)
+                            && LayoutEngine::s1298_has_visible(&line.fragments)
+                        {
+                            d
+                        } else {
+                            d.max(0.0)
+                        }
                     } else {
                         0.0
                     };

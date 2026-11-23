@@ -20088,8 +20088,20 @@ cells={} pitch={:.2} text={:?}",
                             } else {
                                 None
                             };
+                            // OXI_EXACT_WS_BASE (2026-11-23, default ON, opt-out _DISABLE): a
+                            // whitespace-only run is not that font in a CJK document either
+                            // (S1045 stands down there). `_pb_0ae_base_gen.py` (blind-A
+                            // ja/reference__0ae2d13d «内科診察（２０才…», exact 22pt, 22pt space
+                            // runs beside 20 / 12pt HGPｺﾞｼｯｸE): Word's baseline is 69.12 with or
+                            // without the spaces; Oxi converted through the 22pt space's
+                            // ascent and drew the text 1.72 high.
+                            let ws_skip = !crate::env_flag!("OXI_EXACT_WS_BASE_DISABLE")
+                                && Self::s1298_has_visible(&line.fragments);
                             for (i, f) in line.fragments.iter().enumerate() {
                                 if Self::s1045_skip(bounds, i, f, para_font_size) {
+                                    continue;
+                                }
+                                if ws_skip && Self::s1298_glyphless(f) {
                                     continue;
                                 }
                                 let fs = f.style.font_size.unwrap_or(para_font_size);
