@@ -7434,6 +7434,7 @@ pub(crate) fn parse_paragraph_borders(
         left: None,
         right: None,
         between: None,
+        none_space: 0.0,
     };
 
     loop {
@@ -7441,6 +7442,18 @@ pub(crate) fn parse_paragraph_borders(
             Event::Empty(e) => {
                 let local = local_name(e.name().as_ref());
                 let bdr = parse_border_attrs(&e);
+                if bdr.is_none() && matches!(local.as_str(), "top" | "bottom") {
+                    let mut none = false;
+                    let mut space = 0.0f32;
+                    for attr in e.attributes().flatten() {
+                        match local_name(attr.key.as_ref()).as_str() {
+                            "val" => none = matches!(attr.value.as_ref(), b"none" | b"nil"),
+                            "space" => space = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0.0),
+                            _ => {}
+                        }
+                    }
+                    if none { borders.none_space += space.max(0.0); }
+                }
                 match local.as_str() {
                     "top" => borders.top = bdr,
                     "bottom" => borders.bottom = bdr,

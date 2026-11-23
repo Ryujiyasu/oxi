@@ -2189,6 +2189,10 @@ pub struct ParagraphBorders {
     pub right: Option<BorderDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub between: Option<BorderDef>,
+    /// OXI_NONE_BORDER_SPACE: the `w:space` of top/bottom edges whose val is
+    /// none/nil (summed). Word still reserves it in a header stack.
+    #[serde(default)]
+    pub none_space: f32,
 }
 
 /// A single border definition

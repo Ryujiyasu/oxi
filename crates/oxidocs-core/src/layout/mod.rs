@@ -13018,6 +13018,14 @@ cells={} pitch={:.2} text={:?}",
                         })
                         .unwrap_or(&fallback_style);
                     let fs = self.resolve_font_size(mark_style, &para.style);
+                    // OXI_HDR_ANCHOR_HOST_ASCII: see the ¶-mark arm below.
+                    let anchor_host = visible_run.is_none()
+                        && !crate::env_flag!("OXI_HDR_ANCHOR_HOST_ASCII_DISABLE")
+                        && !para.runs.is_empty()
+                        && para.runs.iter().all(|r| r.text.is_empty())
+                        && matches!(blocks.get(bi + 1), Some(Block::Image(img))
+                            if img.position.is_some()
+                                && img.wrap_type != Some(crate::ir::WrapType::TopAndBottom));
                     let metrics = if let Some(run) = visible_run {
                         self.metrics_for(&run.style, &para.style)
                     } else if let Some(mark) = para.style.ppr_rpr.as_ref().filter(|_| s862) {
@@ -13032,7 +13040,16 @@ cells={} pitch={:.2} text={:?}",
                         // the header stack by ~6pt per page.
                         let s1106_ascii = !self.doc_body_has_real_cjk
                             && !crate::env_flag!("OXI_S1106_DISABLE");
-                        self.metrics_for_para_mark_g(mark, &para.style, s1106_ascii)
+                        // OXI_HDR_ANCHOR_HOST_ASCII (2026-11-23, default ON, opt-out
+                        // _DISABLE): a header paragraph whose only content is an
+                        // anchored (non-band) drawing is priced like a text line in the
+                        // ASCII face, also in a CJK document. ja/educational__05a78ecd
+                        // variants (header 42.55, Normal.dotm after 8): Word's body push
+                        // is identical with the drawing or a «H» in its place (TNR 20:
+                        // 32.93 below the header top; 30pt 44.45; all faces SimSun or
+                        // ＭＳ 明朝 35.93); Oxi took the eastAsia ＭＳ 明朝 box (25.875
+                        // where TNR gives 23.25). TopAndBottom bands keep S1010.
+                        self.metrics_for_para_mark_g(mark, &para.style, s1106_ascii || anchor_host)
                     } else if !self.doc_body_has_real_cjk {
                         // An empty header mark still inherits its paragraph font.
                         // Resolve that chain even without a direct pPr/rPr, just
@@ -13052,7 +13069,9 @@ cells={} pitch={:.2} text={:?}",
                     // header ALSO wants hhea (its "line 12.65" IS Arial-11 hhea
                     // 12.649, not the 12.75 GDI value). CJK headers keep the
                     // word_line_height (83/64) calibration.
-                    let mut lh = if !self.doc_body_has_real_cjk
+                    // An anchor host line in a Latin face is its hhea box (with line
+                    // gap) in a CJK document too: TNR 20 / 30 -> Word 23.0 / 34.4.
+                    let mut lh = if (!self.doc_body_has_real_cjk || anchor_host)
                         && !metrics.is_cjk_83_64_font()
                         && !crate::env_flag!("OXI_S979_DISABLE")
                     {
@@ -13287,6 +13306,14 @@ cells={} pitch={:.2} text={:?}",
                     } else { None };
                     last_header_measured = text_height.is_some();
                     hdr_h += text_height.unwrap_or(lh_used);
+                    // OXI_NONE_BORDER_SPACE (2026-11-23, default ON, opt-out _DISABLE):
+                    // a top/bottom pBdr edge of val none still reserves its w:space.
+                    // ja/educational__05a78ecd's header style (none, space 1 / 1):
+                    // Word's body push 0+0 136.10, 1+1 138.02, 4+1 / 1+4 141.02,
+                    // 4+4 144.02 -- the same with a text line in place of the drawing.
+                    if !crate::env_flag!("OXI_NONE_BORDER_SPACE_DISABLE") {
+                        hdr_h += para.style.borders.as_ref().map_or(0.0, |b| b.none_space);
+                    }
                     // An isolated bottom border also consumes space before the next header paragraph.
                     if text_height.is_none() && !self.doc_body_has_real_cjk
                         && matches!(blocks.get(bi + 1), Some(Block::Paragraph(next)) if next.style.borders.is_none())
