@@ -296,6 +296,21 @@ body.presenting #presrail { display: block }
   <span class="geo-l">Y</span><input id="geoY" class="fmtnum geo" type="number" step="1" title="Y" disabled />
   <span class="geo-l">W</span><input id="geoW" class="fmtnum geo" type="number" min="1" step="1" title="W" disabled />
   <span class="geo-l">H</span><input id="geoH" class="fmtnum geo" type="number" min="1" step="1" title="H" disabled />
+  <span class="fsep"></span>
+  <span class="fgrp"><button id="opUndo" class="fmt" data-i18n-title="oUndo" title="Undo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
+  <button id="opRedo" class="fmt" data-i18n-title="oRedo" title="Redo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button></span>
+  <span class="fsep"></span>
+  <label class="fmtlabel" data-i18n="oSlide">Slide</label>
+  <span class="fgrp"><button id="opDupSlide" class="fmt" data-i18n-title="oDup" title="Duplicate slide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button>
+  <button id="opUpSlide" class="fmt" data-i18n-title="oUp" title="Move slide up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+  <button id="opDownSlide" class="fmt" data-i18n-title="oDown" title="Move slide down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></button>
+  <button id="opDelSlide" class="fmt" data-i18n-title="oDelSlide" title="Delete slide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></span>
+  <span class="fsep"></span>
+  <span class="fgrp"><button id="opAddText" class="fmt" data-i18n-title="oAddText" title="Add text box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5h16v2M12 5v14M9 19h6"/></svg></button>
+  <button id="opDelShape" class="fmt" data-i18n-title="oDelShape" title="Delete shape" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9l6 6M15 9l-6 6"/></svg></button></span>
+  <label class="fmtlabel" data-i18n="oFill">Fill</label>
+  <input id="opFill" class="fmtcol" type="color" value="#4472c4" disabled />
+  <button id="opNoFill" class="fmt" data-i18n-title="oNoFill" title="No fill" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 20L20 4"/></svg></button>
   <span class="sp"></span>
   <span class="fmthint" id="fmtHint" data-i18n="fHint">Select text, then apply</span>
 </div>
@@ -344,6 +359,9 @@ const I18N = {
     fColor: 'Colour', fHint: 'Select text, then apply a style',
     fPos: 'Shape',
     aLeft: 'Align left', aCenter: 'Align centre', aRight: 'Align right', aJustify: 'Justify',
+    oUndo: 'Undo (Ctrl+Z)', oRedo: 'Redo (Ctrl+Y)', oSlide: 'Slide', oDup: 'Duplicate slide', oUp: 'Move slide up',
+    oDown: 'Move slide down', oDelSlide: 'Delete slide', oAddText: 'Add text box', oDelShape: 'Delete the selected shape',
+    oFill: 'Fill', oNoFill: 'No fill', oNewText: 'Text', oLastSlide: 'A presentation needs at least one slide.',
     saved: 'Saved. The file was written in your browser.',
     noEdits: 'Nothing has been changed yet.',
     saveFailed: 'Could not save: ',
@@ -366,6 +384,9 @@ const I18N = {
     fColor: '色', fHint: '文字を選んでから書式を適用',
     fPos: '図形',
     aLeft: '左揃え', aCenter: '中央揃え', aRight: '右揃え', aJustify: '両端揃え',
+    oUndo: '元に戻す (Ctrl+Z)', oRedo: 'やり直し (Ctrl+Y)', oSlide: 'スライド', oDup: 'スライドを複製', oUp: 'スライドを上へ',
+    oDown: 'スライドを下へ', oDelSlide: 'スライドを削除', oAddText: 'テキストボックスを追加', oDelShape: '選んだ図形を削除',
+    oFill: '塗り', oNoFill: '塗りなし', oNewText: 'テキスト', oLastSlide: 'スライドは 1 枚以上必要です。',
     saved: '保存しました。ファイルはブラウザの中で作られています。',
     noEdits: 'まだ変更がありません。',
     saveFailed: '保存できませんでした: ',
@@ -958,10 +979,11 @@ function render() {
   document.getElementById('prescur').textContent = current + 1;
   document.getElementById('presrail').style.width =
     ((current + 1) / pres.slides.length * 100) + '%';
+  syncOpsBar();
 }
 
 // ---- engine ----------------------------------------------------------------
-import init, { parse_presentation, edit_pptx_with_splits } from './oxidocs_wasm.js';
+import init, { parse_presentation, edit_pptx_with_splits, edit_pptx_structure } from './oxidocs_wasm.js';
 
 const btnSample = document.getElementById('btnSample');
 say(t('loading'));
@@ -1025,6 +1047,8 @@ async function open(name, data, opts) {
   try {
     say(t('parsing'));
     bytes = data;
+    undoStack.length = 0;
+    redoStack.length = 0;
     edits.clear();
     runFmt.clear();
     geomEdits.clear();
@@ -1387,6 +1411,7 @@ function clearSelection() {
     selectedDiv = null;
   }
   syncGeomBar();
+  syncOpsBar();
 }
 function selectShape(div) {
   if (selectedDiv === div) return;
@@ -1397,6 +1422,7 @@ function selectShape(div) {
   h.className = 'rz-handle';
   div.appendChild(h);
   syncGeomBar();
+  syncOpsBar();
 }
 function commitGeom(div) {
   geomEdits.set(div.dataset.geokey, {
@@ -1561,6 +1587,7 @@ function splitHere() {
   const { list, formats, geoms, aligns } = collectPending();
   try {
     const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [where], [], formats, geoms, aligns);
+    pushUndo(bytes, current);
     bytes = out;
     clearPending();
     pres = parse_presentation(new Uint8Array(bytes));
@@ -1628,6 +1655,7 @@ function mergeHere() {
     const merge = { slide_index: where.slide_index, shape_index: where.shape_index,
                     paragraph_index: where.paragraph_index };
     const out = edit_pptx_with_splits(new Uint8Array(bytes), list, [], [merge], formats, geoms, aligns);
+    pushUndo(bytes, current);
     bytes = out;
     clearPending();
     pres = parse_presentation(new Uint8Array(bytes));
@@ -1678,6 +1706,137 @@ document.getElementById('btnSave').onclick = async () => {
   }
 };
 
+/* ---- structure: slides and shapes, with undo ------------------------------
+   Duplicating, deleting and moving slides, adding a text box, deleting a shape
+   and setting a fill change the file's structure, so like Enter and Backspace
+   they go through the engine at once (`edit_pptx_structure`) and the deck is
+   re-read. Pending text, style and position edits are flushed into the bytes
+   first, so nothing typed is lost and shape indices are the file's own.
+
+   Undo keeps whole-file snapshots: the bytes are what the page shows, so going
+   back is putting the previous bytes back and re-reading them. Every structural
+   step records one. Plain typing between them is left to the browser's own
+   undo while the caret is in the text. */
+const undoStack = [], redoStack = [];
+const UNDO_MAX = 50;
+function flushPending() {
+  harvest();
+  if (!edits.size && !runFmt.size && !geomEdits.size && !alignEdits.size) return bytes;
+  const { list, formats, geoms, aligns } = collectPending();
+  return edit_pptx_with_splits(new Uint8Array(bytes), list, [], [], formats, geoms, aligns);
+}
+function showBytes(b, at) {
+  bytes = b;
+  clearPending();
+  pres = parse_presentation(new Uint8Array(bytes));
+  current = Math.max(0, Math.min(at, pres.slides.length - 1));
+  render();
+  syncOpsBar();
+  keepDeck(document.getElementById('docName').textContent, bytes);
+}
+function pushUndo(b, at) {
+  undoStack.push({ bytes: b, at });
+  if (undoStack.length > UNDO_MAX) undoStack.shift();
+  redoStack.length = 0;
+}
+function structural(ops, at) {
+  try {
+    const base = flushPending();
+    const out = edit_pptx_structure(new Uint8Array(base), ops);
+    pushUndo(base, current);
+    showBytes(out, at);
+    return true;
+  } catch (err) {
+    say(t('saveFailed') + (err.message || err), true);
+    return false;
+  }
+}
+function undo() {
+  if (!undoStack.length) return;
+  let now;
+  try { now = flushPending(); } catch (e) { now = bytes; }
+  const prev = undoStack.pop();
+  redoStack.push({ bytes: now, at: current });
+  showBytes(prev.bytes, prev.at);
+}
+function redo() {
+  if (!redoStack.length) return;
+  const next = redoStack.pop();
+  let now;
+  try { now = flushPending(); } catch (e) { now = bytes; }
+  undoStack.push({ bytes: now, at: current });
+  showBytes(next.bytes, next.at);
+}
+function selectedShapeIndex() {
+  if (!selectedDiv || !selectedDiv.dataset.geokey) return null;
+  const [si, sp] = selectedDiv.dataset.geokey.split('/').map(Number);
+  return si === current ? sp : null;
+}
+function syncOpsBar() {
+  const has = !!pres;
+  const sh = has ? selectedShapeIndex() : null;
+  const n = has ? pres.slides.length : 0;
+  document.getElementById('opUndo').disabled = !undoStack.length;
+  document.getElementById('opRedo').disabled = !redoStack.length;
+  document.getElementById('opDupSlide').disabled = !has;
+  document.getElementById('opUpSlide').disabled = !has || current === 0;
+  document.getElementById('opDownSlide').disabled = !has || current >= n - 1;
+  document.getElementById('opDelSlide').disabled = !has || n <= 1;
+  document.getElementById('opAddText').disabled = !has;
+  for (const id of ['opDelShape', 'opFill', 'opNoFill'])
+    document.getElementById(id).disabled = sh === null;
+}
+document.getElementById('opUndo').onclick = undo;
+document.getElementById('opRedo').onclick = redo;
+document.getElementById('opDupSlide').onclick = () =>
+  structural([{ op: 'duplicate_slide', slide: current }], current + 1);
+document.getElementById('opDelSlide').onclick = () => {
+  if (pres.slides.length <= 1) { say(t('oLastSlide'), true); return; }
+  structural([{ op: 'delete_slide', slide: current }], current);
+};
+document.getElementById('opUpSlide').onclick = () => {
+  if (current > 0) structural([{ op: 'move_slide', from: current, to: current - 1 }], current - 1);
+};
+document.getElementById('opDownSlide').onclick = () => {
+  if (current < pres.slides.length - 1)
+    structural([{ op: 'move_slide', from: current, to: current + 1 }], current + 1);
+};
+document.getElementById('opAddText').onclick = () => {
+  const w = Math.round(pres.slide_width * 0.4), h = 40;
+  const x = Math.round((pres.slide_width - w) / 2), y = Math.round((pres.slide_height - h) / 2);
+  structural([{ op: 'add_text_box', slide: current, x, y, width: w, height: h,
+                text: t('oNewText'), font_size: 18 }], current);
+};
+function deleteSelectedShape() {
+  const sh = selectedShapeIndex();
+  if (sh !== null) structural([{ op: 'delete_shape', slide: current, shape: sh }], current);
+}
+document.getElementById('opDelShape').onclick = deleteSelectedShape;
+document.getElementById('opFill').onchange = e => {
+  const sh = selectedShapeIndex();
+  if (sh !== null) structural([{ op: 'set_shape_fill', slide: current, shape: sh,
+                                 color: e.target.value.replace('#', '').toUpperCase() }], current);
+};
+document.getElementById('opNoFill').onclick = () => {
+  const sh = selectedShapeIndex();
+  if (sh !== null) structural([{ op: 'set_shape_fill', slide: current, shape: sh, color: null }], current);
+};
+// Ctrl+Z / Ctrl+Y and Delete act on the deck only when the caret is not in
+// text or a field; there the browser's own editing keys keep their meaning.
+document.addEventListener('keydown', e => {
+  if (!editing || !pres) return;
+  const a = document.activeElement;
+  if (a && (a.isContentEditable || a.tagName === 'INPUT')) return;
+  const k = e.key.toLowerCase();
+  if (e.ctrlKey || e.metaKey) {
+    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+    else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+  } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedShapeIndex() !== null) {
+    e.preventDefault();
+    deleteSelectedShape();
+  }
+});
+
 document.getElementById('btnClose').onclick = async () => {
   await forgetDeck();
   pres = null;
@@ -1692,6 +1851,8 @@ document.getElementById('btnClose').onclick = async () => {
   runFmt.clear();
   geomEdits.clear();
   alignEdits.clear();
+  undoStack.length = 0;
+  redoStack.length = 0;
   clearSelection();
   document.body.classList.remove('editing');
   markDirty();

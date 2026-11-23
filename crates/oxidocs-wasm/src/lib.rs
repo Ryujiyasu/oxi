@@ -1638,6 +1638,46 @@ pub fn edit_pptx_with_splits(
     editor.save().map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// One structural edit on a .pptx, from JavaScript. `op` names the edit; slide
+/// and shape indices are 0-based and use the same shape count as the text edits.
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+enum JsSlideStructOp {
+    DuplicateSlide { slide: usize },
+    DeleteSlide { slide: usize },
+    MoveSlide { from: usize, to: usize },
+    DeleteShape { slide: usize, shape: usize },
+    AddTextBox { slide: usize, x: f32, y: f32, width: f32, height: f32, text: String, font_size: Option<f32> },
+    SetShapeFill { slide: usize, shape: usize, color: Option<String> },
+}
+
+/// Apply structural edits (slides: duplicate / delete / move; shapes: add a
+/// text box / delete / fill colour) in order, returning the modified bytes.
+#[cfg(any(feature = "suite", feature = "slides"))]
+#[wasm_bindgen]
+pub fn edit_pptx_structure(data: &[u8], ops: JsValue) -> Result<Vec<u8>, JsError> {
+    use oxislides_core::structure as st;
+    let ops: Vec<JsSlideStructOp> =
+        serde_wasm_bindgen::from_value(ops).map_err(|e| JsError::new(&e.to_string()))?;
+    let mut bytes = data.to_vec();
+    for op in ops {
+        let r = match op {
+            JsSlideStructOp::DuplicateSlide { slide } => st::duplicate_slide(&bytes, slide),
+            JsSlideStructOp::DeleteSlide { slide } => st::delete_slide(&bytes, slide),
+            JsSlideStructOp::MoveSlide { from, to } => st::move_slide(&bytes, from, to),
+            JsSlideStructOp::DeleteShape { slide, shape } => st::delete_shape(&bytes, slide, shape),
+            JsSlideStructOp::AddTextBox { slide, x, y, width, height, text, font_size } => {
+                st::add_text_box(&bytes, slide, x, y, width, height, &text, font_size).map(|(b, _)| b)
+            }
+            JsSlideStructOp::SetShapeFill { slide, shape, color } => {
+                st::set_shape_fill(&bytes, slide, shape, color.as_deref())
+            }
+        };
+        bytes = r.map_err(|e| JsError::new(&e.to_string()))?;
+    }
+    Ok(bytes)
+}
+
 /// Edit a .pptx file and return the modified bytes.
 #[cfg(any(feature = "suite", feature = "slides"))]
 #[wasm_bindgen]

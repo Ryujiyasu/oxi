@@ -9,6 +9,7 @@ pub mod ir;
 pub mod layout;
 mod normalize;
 pub mod parser;
+pub mod structure;
 
 pub use editor::PptxEditor;
 pub use parser::parse_pptx;
