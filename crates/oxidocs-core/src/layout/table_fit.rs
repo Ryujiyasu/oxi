@@ -7374,7 +7374,22 @@ impl<'a> TableFitLayouter<'a> {
                                                 || crate::env_flag!("OXI_S1201_DISABLE")
                                                 || (!crate::env_flag!("OXI_CJK_CELL_COMPRESSED_CLOSER_DISABLE") /* S1408 */
                                                     && self.compress_punctuation
-                                                    && matches!(para.alignment, Alignment::Justify | Alignment::Distribute))
+                                                    && matches!(para.alignment, Alignment::Justify | Alignment::Distribute)
+                                                    // OXI_S1408_OVERFLOW_ONLY (2026-11-24, default ON, opt-out
+                                                    // _DISABLE): the squeeze-in is for a character that itself
+                                                    // overflows (06c631e8 «る。», ja/reference__530de8d7 «（153㌻）»:
+                                                    // Word keeps both). A character that FITS but drags two closers
+                                                    // still needs the whole group to fit (S1201 case 2): blind-A
+                                                    // ja/technical__7cc63ebc «…を除く。）» -- `_pb_7cc_oikomi_gen.py`
+                                                    // r -40..30tw, Word pushes «く。）» down at 0.25..3.75pt over.
+                                                    // (A compat <= 14 gate on the whole S1408 broke 530de8d7 and
+                                                    // tokyoshugyo -- reverted.)
+                                                    // Compat 11 only: blind-G ja/policies__1e87d3e6 (compat 14) keeps
+                                                    // «…定期券(小児を除く。)» whole in its cell (Word 35 pages; pushing
+                                                    // «く。)» made 36), while compat 11 pushes (7cc63ebc, and S1201's own
+                                                    // tokyoshugyo p20 «間」）»).
+                                                    && (would_overflow_natural || self.compat_mode > 11
+                                                        || crate::env_flag!("OXI_S1408_OVERFLOW_ONLY_DISABLE")))
                                                 || kinsoku::is_line_start_prohibited(ch)
                                             {
                                                 would_overflow
