@@ -10542,6 +10542,69 @@ cells={} pitch={:.2} text={:?}",
                     },
                 ));
             }
+            // OXI_TXBX_GRADIENT (2026-11-24, default ON, opt-out _DISABLE): an axis-aligned
+            // linear gradient is painted as 64 bands across the box (each clipped to the
+            // rounded corners), and the box keeps only its outline. blind-A ja/creative__13152ea1:
+            // the ✓-list roundRect (accent1 tint 66 / 44.5 / 23.5, lin 270 + rot 90 ->
+            // left to right) is dark blue on the left in Word; Oxi filled it with the mean.
+            let fill_hex = match text_box.fill_gradient.as_ref() {
+                Some((ang, stops)) if stops.len() >= 2 && fill_hex.is_some()
+                    && [0.0f32, 90.0, 180.0, 270.0].iter().any(|a| (ang - a).abs() < 0.5) =>
+                {
+                    use crate::ir::PathSeg;
+                    let (w, h) = (text_box.width.max(0.01), text_box.height.max(0.01));
+                    let horiz = (ang - 0.0).abs() < 0.5 || (ang - 180.0).abs() < 0.5;
+                    let rev = (ang - 180.0).abs() < 0.5 || (ang - 270.0).abs() < 0.5;
+                    let hex = |c: &str| -> [f32; 3] {
+                        let c = c.trim_start_matches('#');
+                        let v = |i: usize| u8::from_str_radix(c.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0) as f32;
+                        [v(0), v(2), v(4)]
+                    };
+                    let mut st: Vec<(f32, [f32; 3])> = stops.iter().map(|(p, c)| (p / 100.0, hex(c))).collect();
+                    st.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let at = |t: f32| -> String {
+                        let t = if rev { 1.0 - t } else { t };
+                        let (mut a, mut b) = (st[0], st[st.len() - 1]);
+                        for k in 0..st.len() - 1 {
+                            if t >= st[k].0 && t <= st[k + 1].0 { a = st[k]; b = st[k + 1]; break; }
+                        }
+                        let f = if t <= a.0 { 0.0 } else if t >= b.0 { 1.0 } else { (t - a.0) / (b.0 - a.0).max(1e-6) };
+                        let m = |i: usize| (a.1[i] + (b.1[i] - a.1[i]) * f).round().clamp(0.0, 255.0) as u8;
+                        format!("{:02X}{:02X}{:02X}", m(0), m(1), m(2))
+                    };
+                    let r = cr.min(w / 2.0).min(h / 2.0).max(0.0);
+                    // the box's extent across the band axis at u (0..len along it)
+                    let len = if horiz { w } else { h };
+                    let span = if horiz { h } else { w };
+                    let inset = |u: f32| -> f32 {
+                        let d = if u < r { r - u } else if u > len - r { u - (len - r) } else { 0.0 };
+                        if r > 0.0 && d > 0.0 { r - (r * r - d.min(r) * d.min(r)).max(0.0).sqrt() } else { 0.0 }
+                    };
+                    let n = 64usize;
+                    for i in 0..n {
+                        let u0 = len * i as f32 / n as f32;
+                        let u1 = (len * (i + 1) as f32 / n as f32 + 0.3).min(len);
+                        let us: Vec<f32> = (0..=6).map(|k| u0 + (u1 - u0) * k as f32 / 6.0).collect();
+                        let mut pts: Vec<(f32, f32)> = us.iter().map(|&u| (u, inset(u))).collect();
+                        pts.extend(us.iter().rev().map(|&u| (u, span - inset(u))));
+                        let norm = |(u, v): (f32, f32)| if horiz { (u / w, v / h) } else { (v / w, u / h) };
+                        let mut segs = Vec::with_capacity(pts.len() + 1);
+                        for (k, p) in pts.iter().enumerate() {
+                            let (x, y) = norm(*p);
+                            segs.push(if k == 0 { PathSeg::M(x, y) } else { PathSeg::L(x, y) });
+                        }
+                        segs.push(PathSeg::Z);
+                        elements.push(LayoutElement::new(abs_x, abs_y, w, h, LayoutContent::VectorPath {
+                            segs,
+                            fill: Some(at((u0 + u1) / 2.0 / len)),
+                            stroke_color: None,
+                            stroke_width: 0.0,
+                        }));
+                    }
+                    None
+                }
+                _ => fill_hex,
+            };
             // OXI_TXBX_CMPD (2026-11-03, default ON, opt-out _DISABLE): a compound
             // outline is bands across the line width w, measured from its outer edge
             // (w/2 outside the box edge). `_pb_shape_cmpd_shadow_gen.py`, w 6 and 3:

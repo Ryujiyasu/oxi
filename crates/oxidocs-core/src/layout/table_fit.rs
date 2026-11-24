@@ -9420,8 +9420,17 @@ impl<'a> TableFitLayouter<'a> {
                                                         if kind != 0 && fi == 0 && ci == 0 {
                                                             continue;
                                                         }
-                                                        let fm = self.registry.default_metrics();
-                                                        let w = self.registry.char_width_pt_with_fallback(ch, fs, &fm);
+                                                        // OXI_CELL_YAKU_CAP (2026-11-24, default ON, opt-out _DISABLE): each
+                                                        // mark gives up to half the em of its run. The default face (a
+                                                        // Latin one) measured «、» at a half em, so the cap was fs/4:
+                                                        // `_pb_oikomi_limit_gen.py` k1t (one «、», 4.9pt over) Word draws
+                                                        // it 5.64, Oxi stopped at 7.88 and ran 1.9pt past the cell.
+                                                        let w = if crate::env_flag!("OXI_CELL_YAKU_CAP_DISABLE") {
+                                                            let fm = self.registry.default_metrics();
+                                                            self.registry.char_width_pt_with_fallback(ch, fs, &fm)
+                                                        } else {
+                                                            fs
+                                                        };
                                                         comps.push((fi, ci, w * 0.5, kind));
                                                     }
                                                 }

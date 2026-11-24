@@ -8994,6 +8994,7 @@ fn parse_drawing_inner(
     let mut shape_adj_map: Vec<(String, f32)> = Vec::new(); // OXI_TXBX_CALLOUT
     let mut gradient_stops: Vec<GradientStop> = Vec::new();
     let mut gradient_angle: Option<f32> = None;
+    let mut grad_rot_with_shape = false;
     // Text body insets (from bodyPr lIns/rIns/tIns/bIns, in EMU)
     let mut text_inset_left: Option<f32> = None;
     let mut text_upright = false;
@@ -9697,6 +9698,8 @@ fn parse_drawing_inner(
                     }
                     // Gradient fill
                     "gradFill" => {
+                        grad_rot_with_shape = e.attributes().flatten().any(|a| local_name(a.key.as_ref()) == "rotWithShape"
+                            && matches!(a.value.as_ref(), b"1" | b"true"));
                         let mut gf_depth = 1;
                         let mut current_gs_pos: Option<f32> = None;
                         loop {
@@ -11158,7 +11161,7 @@ fn parse_drawing_inner(
                             };
                             if wpg_children_on && !w.blocks.is_empty() {
                                 let (cx, cy, cw, ch) = member_rect(w.off, w.ext);
-                                s839_text_children.push(TextBox { warp_plain: false,
+                                s839_text_children.push(TextBox { warp_plain: false, fill_gradient: None,
                                     wrap_polygon: Vec::new(),
                                     // OXI_WPG_CHILD_OUTLINE_INSET (2026-10-25, default ON, opt-out
                                     // _DISABLE): the member's own `a:ln w`, halved, as for a stand-
@@ -11346,7 +11349,7 @@ fn parse_drawing_inner(
                                     relative_height,
                                     behind_doc,
                                 };
-                                s839_pic_children.push(TextBox { warp_plain: false,
+                                s839_pic_children.push(TextBox { warp_plain: false, fill_gradient: None,
                                     wrap_polygon: Vec::new(),
                                     text_outline_inset: 0.0,
                                     vertical_text: false,
@@ -11835,6 +11838,14 @@ fn parse_drawing_inner(
     {
         Some(TextBox {
             warp_plain: text_warp_plain && !crate::env_flag!("OXI_WORDART_TEXTPLAIN_DISABLE"),
+            // OXI_TXBX_GRADIENT (2026-11-24, default ON, opt-out _DISABLE): the gradient
+            // itself, its a:lin angle turned with the shape when rotWithShape is set.
+            fill_gradient: (!has_no_fill && gradient_stops.len() >= 2 && !crate::env_flag!("OXI_TXBX_GRADIENT_DISABLE"))
+                .then(|| {
+                    let rot = if grad_rot_with_shape { rotation.unwrap_or(0.0) } else { 0.0 };
+                    ((gradient_angle.unwrap_or(0.0) + rot).rem_euclid(360.0),
+                        gradient_stops.iter().map(|g| (g.position, g.color.clone())).collect())
+                }),
             wrap_polygon: wrapping_points.clone(),
             text_outline_inset: stroke_width_saved.unwrap_or(0.0) * 0.5,
             vertical_text: text_vertical,
@@ -12272,7 +12283,7 @@ fn vml_group_stroke_member(e: &quick_xml::events::BytesStart, local: &str) -> Op
 
 /// An absolute VML text-box shape as a TextBox (wrap none, VML default insets).
 fn vml_shape_text_box(sh: &Shape) -> TextBox {
-    TextBox { warp_plain: false,
+    TextBox { warp_plain: false, fill_gradient: None,
         wrap_polygon: Vec::new(),
         text_outline_inset: 0.0,
         vertical_text: false,
@@ -13291,7 +13302,7 @@ fn parse_vml_pict(
         }
         let grp_children: Vec<TextBox> = grp_texts.drain(..).map(|(b, blocks, inset)| {
             let ins = inset.unwrap_or([7.2, 3.6, 7.2, 3.6]);
-            TextBox { warp_plain: false,
+            TextBox { warp_plain: false, fill_gradient: None,
                 wrap_polygon: Vec::new(),
                 text_outline_inset: 0.0,
                 vertical_text: false,
@@ -13351,7 +13362,7 @@ fn parse_vml_pict(
             v.h *= sy;
             v
         }).collect();
-        let text_box = Some(TextBox { warp_plain: false,
+        let text_box = Some(TextBox { warp_plain: false, fill_gradient: None,
             wrap_polygon: Vec::new(),
             text_outline_inset: 0.0,
             vertical_text: false,
@@ -13460,7 +13471,7 @@ fn parse_vml_pict(
         pos.h_relative = map_rel(pos.h_relative.take(), "column");
         pos.v_relative = map_rel(pos.v_relative.take(), "paragraph");
         let inset = vml_tb_inset.unwrap_or([7.2, 3.6, 7.2, 3.6]);
-        let text_box = Some(TextBox { warp_plain: false,
+        let text_box = Some(TextBox { warp_plain: false, fill_gradient: None,
             wrap_polygon: Vec::new(),
             text_outline_inset: 0.0,
             vertical_text: false,
@@ -13514,7 +13525,7 @@ fn parse_vml_pict(
         && image.is_none()
         && std::env::var("OXI_S746_DISABLE").is_err();
     if s746_inline_txbx {
-        let text_box = Some(TextBox { warp_plain: false,
+        let text_box = Some(TextBox { warp_plain: false, fill_gradient: None,
             wrap_polygon: shape_wrap_points.iter()
                 .map(|&(x,y)| (x / shape_coord_size.0, y / shape_coord_size.1)).collect(),
             text_outline_inset: 0.0,

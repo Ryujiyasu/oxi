@@ -1310,6 +1310,10 @@ pub struct TextBox {
     /// stretched to fill its share of the inner box.
     #[serde(default)]
     pub warp_plain: bool,
+    /// OXI_TXBX_GRADIENT: a linear gradient fill as (effective angle in degrees, 0 = left to
+    /// right, clockwise; stops as (position 0..100, hex)). The flat `fill` stays its mean.
+    #[serde(default)]
+    pub fill_gradient: Option<(f32, Vec<(f32, String)>)>,
     /// Normalized contour used to exclude surrounding text; it can extend
     /// outside the object's rectangle and does not resize painted content.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
