@@ -156512,6 +156512,36 @@ End Function
     }
 
     #[test]
+    fn chart_source_without_plot_by_and_cell_like_table_names_follow_excel() {
+        fn run(book: &mut Workbook, body: &str) -> Value {
+            let module = parse_module(&format!("Public Function Probe() As String\n{body}\nEnd Function\n")).unwrap();
+            let mut host = WorkbookHost::new(book, 0).unwrap();
+            execute_with_host(&module, "Probe", vec![], &mut host).unwrap()
+        }
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut book = oxicells_core::parse_xlsx(original).unwrap();
+        // Product/Q1..Q4 over two labelled rows: measured, two series by rows;
+        // Product/Q1 over the same rows: one series by columns.
+        assert_eq!(run(&mut book,
+            "Dim a As Object, b As Object\n\
+             Set a = ActiveSheet.Shapes.AddChart2(201, 51, 300, 20, 360, 220).Chart\n\
+             a.SetSourceData Source:=Range(\"A1:E3\")\n\
+             Set b = ActiveSheet.Shapes.AddChart2(201, 51, 300, 260, 360, 220).Chart\n\
+             b.SetSourceData Source:=Range(\"A1:B3\")\n\
+             Probe = a.SeriesCollection.Count & \"|\" & a.SeriesCollection(1).Name & \"|\" & a.SeriesCollection(2).Name & \"|\" & b.SeriesCollection.Count & \"|\" & b.SeriesCollection(1).Name"),
+            Value::String("2|Widget A|Widget B|1|Q1".into()));
+        let mut book = oxicells_core::parse_xlsx(original).unwrap();
+        run(&mut book, "ActiveSheet.ListObjects.Add(1, Range(\"A1:E3\"), , 1).Name = \"Tbl1\"\nProbe = \"\"");
+        let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();
+        editor.apply_workbook(&book).unwrap();
+        let saved = editor.save().unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("xl/tables/table1.xml").unwrap(), &mut xml).unwrap();
+        assert!(xml.contains("name=\"Tbl1\"") && xml.contains("displayName=\"Tbl1_\""), "{xml}");
+    }
+
+    #[test]
     fn worksheet_protection_changes_roundtrip_with_saved_and_password_rules() {
         fn run(book: &mut Workbook, body: &str) -> Value {
             let module = parse_module(&format!("Public Function Probe() As String\n{body}\nEnd Function\n")).unwrap();

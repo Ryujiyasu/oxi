@@ -1914,8 +1914,32 @@ impl<'a> WorkbookHost<'a> {
         Ok(Some(Value::Boolean(true)))
     }
 
+    /// The way `SetSourceData` plots a block when it is given no PlotBy.
+    /// Measured on 26 blocks (Excel, a chart added with nothing selected):
+    /// leave out a first row of text above the numbers and a first column of
+    /// text beside them; the series run along the rows when what is left has
+    /// no more rows than columns (2x4, 2x2, 3x3, 1x4 by rows) and down the
+    /// columns otherwise (3x2, 4x1, 4x3). A1:E3 over a header and two
+    /// labelled rows of four numbers is two series by rows, not four.
+    fn default_plot_by_rows(&mut self, range: CellRange) -> bool {
+        self.settle(range);
+        let sheet = range.sheet;
+        let text = |host: &Self, row: u32, column: u32| {
+            host.cell_here(sheet, row, column)
+                .is_some_and(|cell| !matches!(cell.value, CellValue::Number(_) | CellValue::Empty))
+        };
+        let rows = range.end_row - range.start_row + 1;
+        let columns = range.end_column - range.start_column + 1;
+        let header = rows > 1
+            && ((range.start_column + 1..=range.end_column).any(|c| text(self, range.start_row, c))
+                || (columns == 1 && text(self, range.start_row, range.start_column)));
+        let first_data = range.start_row + u32::from(header);
+        let labels = columns > 1 && (first_data..=range.end_row).any(|r| text(self, r, range.start_column));
+        rows - u32::from(header) <= columns - u32::from(labels)
+    }
+
     /// `Chart.SetSourceData Source, PlotBy`: the block is read the way
-    /// Excel reads it. By columns (the default), a first row of text is the
+    /// Excel reads it. By columns, a first row of text is the
     /// series' names and a first column of text the categories; by rows the
     /// other way about. Measured: A1:B3 (k v / a 1 / b 2) gives one series
     /// `v` with categories a, b and formula
@@ -5238,7 +5262,10 @@ impl<'a> WorkbookHost<'a> {
                         return Err(host_error(1004, "SetSourceData takes a Range"));
                     };
                     // xlRows 1, xlColumns 2.
-                    let by_rows = args.get(1).and_then(any_whole_number) == Some(1);
+                    let by_rows = match args.get(1).filter(|value| !matches!(value, Value::Missing)) {
+                        Some(value) => any_whole_number(value) == Some(1),
+                        None => self.default_plot_by_rows(range),
+                    };
                     self.set_source_data(id, range, by_rows)?;
                     Ok(Some(Value::Empty))
                 }

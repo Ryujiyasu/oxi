@@ -3047,6 +3047,32 @@ fn table_filter_buttons(xml: &str, table: &crate::ir::Table) -> Result<String, X
     Ok(output)
 }
 
+/// The `displayName` Excel stores for a table called `name`: a name that reads
+/// as a cell reference cannot be one, so Excel moves it off. Measured (Excel
+/// `ListObject.Name =` then `.DisplayName`): an R1C1 reference with a number
+/// (R2, C3, RC5, R5C, r1c1, R1C16385) gains a leading `_`; an A1 cell inside
+/// the sheet (T1, Tbl1, XFD1, A1048576) and a bare R, C or RC gain a trailing
+/// one; XFE1, A1048577, A0, AAAA1, A1B and Sales2026 stay as they are.
+pub(crate) fn table_display_name(name: &str) -> String {
+    let upper = name.to_ascii_uppercase();
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let opt_digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    let r1c1 = upper.strip_prefix('R').is_some_and(|rest| {
+        let (row, col) = match rest.find('C') { Some(at) => (&rest[..at], Some(&rest[at + 1..])), None => (rest, None) };
+        opt_digits(row) && col.is_none_or(opt_digits) && (digits(row) || col.is_some_and(digits))
+    }) || upper.strip_prefix('C').is_some_and(digits);
+    if r1c1 {
+        return format!("_{name}");
+    }
+    let letters = upper.bytes().take_while(|b| b.is_ascii_uppercase()).count();
+    let a1 = (1..=3).contains(&letters) && digits(&upper[letters..]) && {
+        let col = upper[..letters].bytes().fold(0u32, |n, b| n * 26 + u32::from(b - b'A') + 1);
+        let row: u64 = upper[letters..].parse().unwrap_or(0);
+        col <= 16_384 && (1..=1_048_576).contains(&row)
+    };
+    if a1 || matches!(upper.as_str(), "R" | "C" | "RC") { format!("{name}_") } else { name.to_string() }
+}
+
 fn table_xml(table: &crate::ir::Table, id: u32, original: Option<&str>) -> Result<String, XlsxError> {
     if table.start_row == 0 || table.end_row < table.start_row || table.end_col < table.start_col
         || table.columns.len() != (table.end_col - table.start_col + 1) as usize {
@@ -3055,7 +3081,7 @@ fn table_xml(table: &crate::ir::Table, id: u32, original: Option<&str>) -> Resul
     let reference = format!("{}{}:{}{}", col_to_letter(table.start_col), table.start_row, col_to_letter(table.end_col), table.end_row);
     let empty = "<table xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"></table>";
     let mut output = table_root_attributes(original.unwrap_or(empty), &[
-        ("id", id.to_string()), ("name", table.name.clone()), ("displayName", table.name.clone()),
+        ("id", id.to_string()), ("name", table.name.clone()), ("displayName", table_display_name(&table.name)),
         ("ref", reference.clone()), ("headerRowCount", table.header_rows.to_string()),
         ("totalsRowCount", table.totals_rows.to_string()), ("totalsRowShown", u8::from(table.totals_rows > 0).to_string()),
         ("insertRow", u8::from(table.insert_row).to_string()),
@@ -24418,5 +24444,24 @@ mod serialized_style_component_tests {
         assert_ne!(serialize_cell_fill(&plain),serialize_cell_fill(&explicit));
         explicit.border_top=Some(crate::ir::BorderLine {style:"thin".into(),color:Some("000000".into()),color_reference:None});
         assert_ne!(serialize_cell_border(&plain),serialize_cell_border(&explicit));
+    }
+}
+
+#[cfg(test)]
+mod table_display_name_tests {
+    use super::table_display_name;
+
+    #[test]
+    fn cell_like_table_names_move_off_the_reference_as_excel_does() {
+        for (name, shown) in [
+            ("Tbl1", "Tbl1_"), ("T1", "T1_"), ("ab12", "ab12_"), ("XFD1", "XFD1_"), ("A1048576", "A1048576_"),
+            ("R", "R_"), ("c", "c_"), ("RC", "RC_"),
+            ("R1C1", "_R1C1"), ("r1c1", "_r1c1"), ("R2", "_R2"), ("C3", "_C3"), ("RC5", "_RC5"), ("R5C", "_R5C"),
+            ("R1C16385", "_R1C16385"),
+            ("XFE1", "XFE1"), ("A1048577", "A1048577"), ("A0", "A0"), ("AAAA1", "AAAA1"), ("A1B", "A1B"),
+            ("Sales2026", "Sales2026"), ("Q4x", "Q4x"), ("X_1", "X_1"), ("Table1", "Table1"),
+        ] {
+            assert_eq!(table_display_name(name), shown, "{name}");
+        }
     }
 }

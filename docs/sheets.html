@@ -167,6 +167,9 @@ html[data-host="desktop"] .src { display: none }
 .rib button.on { background: var(--accent-l); border-color: var(--accent); color: var(--accent-h) }
 .rib select, .rib input[type=number] { height: 28px; border: 1px solid var(--line2); border-radius: 6px; background: var(--surface);
   padding: 0 4px; font-size: 13px }
+.rib #fCond, .rib #fChart { width: 118px }
+.rz-guide { position: absolute; z-index: 6; background: var(--accent); pointer-events: none }
+.rz-guide.col { width: 1px } .rz-guide.row { height: 1px }
 .rib #fFont { width: 130px } .rib #fSize { width: 52px } .rib #fNum { width: 120px } .rib #fBorder { width: 96px }
 .rib label.cl { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 4px; border-radius: 6px; cursor: pointer }
 .rib label.cl:hover { background: var(--surface) }
@@ -378,6 +381,12 @@ body.dragging, body.dragging * { user-select: none }
   <button id="fDecUp" data-i18n-title="tDecUp" title="Increase decimal">.0+</button><button id="fDecDown" data-i18n-title="tDecDown" title="Decrease decimal">.0−</button>
   <select id="fBorder" data-i18n-title="tBorder" title="Borders"><option value="" data-i18n="bBorders">Borders</option><option value="all" data-i18n="bAll">All borders</option><option value="outside" data-i18n="bOutside">Outside</option><option value="thick" data-i18n="bThick">Thick outside</option><option value="bottom" data-i18n="bBottom">Bottom</option><option value="none" data-i18n="bNone">No border</option></select>
   <button id="fClear" data-i18n-title="tClear" title="Clear formats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h10M14 4l6 6-9 9H6l-2-2z"/></svg></button>
+  <button id="fPaint" data-i18n-title="tPaint" title="Format painter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="14" height="6" rx="1"/><path d="M18 6h2v5h-8v3"/><rect x="10" y="14" width="4" height="7" rx="1"/></svg></button>
+  <span class="rs"></span>
+  <button id="fSum" data-i18n-title="tSum" title="AutoSum (Alt+=)" style="font-size:16px">Σ</button>
+  <button id="fTable" data-i18n-title="tTable" title="Format as table"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 9v11M15 9v11"/></svg></button>
+  <select id="fCond" data-i18n-title="tCond" title="Conditional formatting"><option value="" data-i18n="cCond">Conditional</option><option value="gt" data-i18n="cGt">Greater than…</option><option value="lt" data-i18n="cLt">Less than…</option><option value="eq" data-i18n="cEq">Equal to…</option><option value="bar" data-i18n="cBar">Data bars</option><option value="scale3" data-i18n="cScale3">Colour scale (3)</option><option value="scale2" data-i18n="cScale2">Colour scale (2)</option><option value="icons" data-i18n="cIcons">Icon set</option><option value="clear" data-i18n="cClear">Clear rules (selection)</option><option value="clearSheet" data-i18n="cClearSheet">Clear rules (sheet)</option></select>
+  <select id="fChart" data-i18n-title="tChart" title="Insert chart"><option value="" data-i18n="gChart">Chart</option><option value="column" data-i18n="gColumn">Column</option><option value="bar" data-i18n="gBar">Bar</option><option value="line" data-i18n="gLine">Line</option><option value="pie" data-i18n="gPie">Pie</option><option value="area" data-i18n="gArea">Area</option><option value="scatter" data-i18n="gScatter">Scatter</option></select>
   <span class="rs"></span>
   <span class="rg"><button id="fSortAsc" data-i18n-title="tSortAsc" title="Sort A to Z">A↓Z</button><button id="fSortDesc" data-i18n-title="tSortDesc" title="Sort Z to A">Z↓A</button><button id="fFilter" data-i18n-title="tFilter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16l-6 8v5l-4 2v-7z"/></svg></button></span>
   <button id="fFreeze" data-i18n-title="tFreeze" title="Freeze panes at the active cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg></button>
@@ -430,6 +439,8 @@ body.dragging, body.dragging * { user-select: none }
   <button data-act="cut" role="menuitem"><span data-i18n="cut">Cut</span><kbd>Ctrl+X</kbd></button>
   <button data-act="copy" role="menuitem"><span data-i18n="copy">Copy</span><kbd>Ctrl+C</kbd></button>
   <button data-act="paste" role="menuitem"><span data-i18n="paste">Paste</span><kbd>Ctrl+V</kbd></button>
+  <button data-act="pasteValues" role="menuitem"><span data-i18n="pasteValues">Paste values</span></button>
+  <button data-act="pasteFormats" role="menuitem"><span data-i18n="pasteFormats">Paste formats</span></button>
   <hr>
   <button data-act="fillDown" role="menuitem"><span data-i18n="fillDown">Fill down</span><kbd>Ctrl+D</kbd></button>
   <button data-act="fillRight" role="menuitem"><span data-i18n="fillRight">Fill right</span><kbd>Ctrl+R</kbd></button>
@@ -451,6 +462,8 @@ body.dragging, body.dragging * { user-select: none }
   <hr>
   <button data-act="insComment" role="menuitem"><span data-i18n="insComment">Comment…</span></button>
   <button data-act="insLink" role="menuitem"><span data-i18n="insLink">Link…</span><kbd>Ctrl+K</kbd></button>
+  <button data-act="listValid" role="menuitem"><span data-i18n="listValid">Drop-down list…</span></button>
+  <button data-act="noValid" role="menuitem"><span data-i18n="noValid">Remove data validation</span></button>
 </div>
 
 <div class="ctx" id="tabCtx" hidden role="menu">
@@ -513,6 +526,14 @@ const I18N = {
     askLink: 'Link address', askSheetName: 'Sheet name', askDeleteSheet: name => `Delete the sheet "${name}"?`,
     fdWhat: 'Find', fdWith: 'Replace with', fdCase: 'Match case', fdWhole: 'Whole cell', fdRepMode: 'Replace…',
     fdAll: 'Replace all', fdNext: 'Find next', fdClose: 'Close', notFound: 'Not found.', replaced: 'Replaced on this sheet.',
+    tPaint: 'Format painter (click, then select where the look goes)', tSum: 'AutoSum (Alt+=)', tTable: 'Format as table',
+    tCond: 'Conditional formatting', cCond: 'Conditional', cGt: 'Greater than…', cLt: 'Less than…', cEq: 'Equal to…',
+    cBar: 'Data bars', cScale3: 'Colour scale (3)', cScale2: 'Colour scale (2)', cIcons: 'Icon set',
+    cClear: 'Clear rules (selection)', cClearSheet: 'Clear rules (sheet)', tChart: 'Insert chart', gChart: 'Chart',
+    gColumn: 'Column', gBar: 'Bar', gLine: 'Line', gPie: 'Pie', gArea: 'Area', gScatter: 'Scatter',
+    pasteValues: 'Paste values', pasteFormats: 'Paste formats', listValid: 'Drop-down list…', noValid: 'Remove data validation',
+    askCondValue: 'Format cells that are… (a number or text)', askList: 'Items, separated by commas',
+    noSum: 'No numbers next to this cell to add up.', nothingCopied: 'Copy some cells first.',
     saved: 'Saved. The file was written in your browser.',
     leave: 'You have edits that are not saved.',
     empty: 'The workbook holds no sheets.',
@@ -569,6 +590,14 @@ const I18N = {
     askLink: 'リンク先のアドレス', askSheetName: 'シート名', askDeleteSheet: name => `シート「${name}」を削除しますか?`,
     fdWhat: '検索する文字列', fdWith: '置換後の文字列', fdCase: '大文字と小文字を区別', fdWhole: 'セル内容が完全に同一', fdRepMode: '置換…',
     fdAll: 'すべて置換', fdNext: '次を検索', fdClose: '閉じる', notFound: '見つかりませんでした。', replaced: 'このシートで置換しました。',
+    tPaint: '書式のコピー/貼り付け (押してから貼り付け先を選ぶ)', tSum: '合計 (Alt+=)', tTable: 'テーブルとして書式設定',
+    tCond: '条件付き書式', cCond: '条件付き書式', cGt: '指定の値より大きい…', cLt: '指定の値より小さい…', cEq: '指定の値に等しい…',
+    cBar: 'データ バー', cScale3: 'カラー スケール (3 色)', cScale2: 'カラー スケール (2 色)', cIcons: 'アイコン セット',
+    cClear: 'ルールのクリア (選択範囲)', cClearSheet: 'ルールのクリア (シート全体)', tChart: 'グラフの挿入', gChart: 'グラフ',
+    gColumn: '縦棒', gBar: '横棒', gLine: '折れ線', gPie: '円', gArea: '面', gScatter: '散布図',
+    pasteValues: '値の貼り付け', pasteFormats: '書式の貼り付け', listValid: 'ドロップダウン リスト…', noValid: '入力規則の削除',
+    askCondValue: '次の値のセルを書式設定 (数値または文字列)', askList: '項目 (カンマ区切り)',
+    noSum: 'このセルの隣に合計できる数値がありません。', nothingCopied: '先にセルをコピーしてください。',
     saved: '保存しました。ファイルはブラウザの中で作られています。',
     leave: '保存していない編集があります。',
     empty: 'このブックにはシートがありません。',
@@ -890,6 +919,10 @@ function render() {
   }
   colhead.onmousedown = e => headDown(e, 'col');
   rowhead.onmousedown = e => headDown(e, 'row');
+  colhead.onmousemove = e => headMove(e, 'col');
+  rowhead.onmousemove = e => headMove(e, 'row');
+  colhead.ondblclick = e => headDouble(e, 'col');
+  rowhead.ondblclick = e => headDouble(e, 'row');
   layer.colhead = colhead;
   layer.rowhead = rowhead;
 
@@ -1116,6 +1149,7 @@ function paperDown(e) {
 function headDown(e, kind) {
   if (e.button !== 0 || !e.target.dataset[kind]) return;
   e.preventDefault();
+  { const edge = headEdge(e, kind); if (edge !== null) { closeMenu(); resizeHead(e, kind, edge); return; } }
   commitEdit();
   closeMenu();
   const at = Number(e.target.dataset[kind]);
@@ -1985,6 +2019,207 @@ $('fBorder').onchange = e => {
   ed.focus({ preventScroll: true });
 };
 
+// ---- more of the ribbon: sums, paste special, format painter, tables,
+// conditional formats, drop-down lists, charts, and sizing by the headings ----
+
+/** AutoSum: a SUM under (or beside) the numbers next to the selection, as
+    Excel's Σ: one cell picks the run of numbers above it, else to its left;
+    a block gets a total under each of its columns. */
+function autoSum() {
+  if (!book) return;
+  commitEdit();
+  const isNum = (r, c) => numberOf(cellAt(r, c)) !== null && !rawOf(cellAt(r, c)).startsWith('=SUM(');
+  const single = range.r0 === range.r1 && range.c0 === range.c1;
+  if (single) {
+    const { row, col } = act;
+    let r = row - 1;
+    while (r >= 1 && isNum(r, col)) r--;
+    if (r < row - 1) { write([{ row, col, text: `=SUM(${a1(r + 1, col)}:${a1(row - 1, col)})` }]); return; }
+    let c = col - 1;
+    while (c >= 0 && isNum(row, c)) c--;
+    if (c < col - 1) { write([{ row, col, text: `=SUM(${a1(row, c + 1)}:${a1(row, col - 1)})` }]); return; }
+    say(t('noSum'));
+    return;
+  }
+  const items = [];
+  for (let c = range.c0; c <= range.c1; c++) {
+    let any = false;
+    for (let r = range.r0; r <= range.r1; r++) if (isNum(r, c)) any = true;
+    if (any) items.push({ row: range.r1 + 1, col: c, text: `=SUM(${a1(range.r0, c)}:${a1(range.r1, c)})` });
+  }
+  if (items.length) write(items); else say(t('noSum'));
+}
+
+/** Paste only the values, or only the formats, of what was copied in the page. */
+function pasteSpecial(kind) {
+  if (!clip || !clip.range) { say(t('nothingCopied')); return; }
+  const src = `Worksheets(${clip.sheet + 1}).Range(${vq(addrOf(clip.range))})`;
+  runUi([`${src}.Copy`, `${ws()}.Range(${vq(a1(act.row, act.col))}).PasteSpecial Paste:=${kind === 'values' ? -4163 : -4122}`,
+    'Application.CutCopyMode = False']);
+}
+
+// Format painter: arm it on the cells whose look to copy; the next selection
+// made with the mouse receives that look. Escape lets it go.
+let painter = null;
+function armPainter() {
+  if (painter) { painter = null; $('fPaint').classList.remove('on'); return; }
+  painter = { sheet: shown, range: { ...range } };
+  $('fPaint').classList.add('on');
+}
+function applyPainter() {
+  if (!painter) return;
+  const p = painter;
+  painter = null;
+  $('fPaint').classList.remove('on');
+  runUi([`Worksheets(${p.sheet + 1}).Range(${vq(addrOf(p.range))}).Copy`,
+    `${selRange()}.PasteSpecial Paste:=-4122`, 'Application.CutCopyMode = False']);
+}
+document.addEventListener('mouseup', e => {
+  if (painter && paper && paper.contains(e.target)) setTimeout(applyPainter, 0);
+});
+document.addEventListener('keydown', e => {
+  if (painter && e.key === 'Escape') { painter = null; $('fPaint').classList.remove('on'); }
+});
+
+/** The block an action works on: the selection, or the data around one cell. */
+const blockOf = () => range.r0 === range.r1 && range.c0 === range.c1
+  ? `${ws()}.Range(${vq(a1(act.row, act.col))}).CurrentRegion` : selRange();
+
+function insertTable() {
+  // xlSrcRange, the block, no link, xlGuess for the header row.
+  runUi([`${ws()}.ListObjects.Add 1, ${blockOf()}, , 0`]);
+}
+
+// Conditional formats, with Excel's own default look for a highlight rule
+// (light red fill, dark red text).
+function condFormat(kind) {
+  const r = selRange();
+  const highlight = (operator, value) => [
+    `With ${r}.FormatConditions.Add(Type:=1, Operator:=${operator}, Formula1:=${vq(value)})`,
+    '.Interior.Color = RGB(255, 199, 206)', '.Font.Color = RGB(156, 0, 6)', 'End With'];
+  const ask = () => {
+    const v = prompt(t('askCondValue'), String(numberOf(cellAt(act.row, act.col)) ?? ''));
+    return v === null || v.trim() === '' ? null : (Number.isFinite(Number(v)) ? v.trim() : '="' + v.replace(/"/g, '""') + '"');
+  };
+  let lines = null;
+  if (kind === 'gt' || kind === 'lt' || kind === 'eq') {
+    const v = ask();
+    if (v === null) return;
+    lines = highlight({ gt: 5, lt: 6, eq: 3 }[kind], v);
+  } else if (kind === 'bar') lines = [`${r}.FormatConditions.AddDatabar`];
+  else if (kind === 'scale3') lines = [`${r}.FormatConditions.AddColorScale ColorScaleType:=3`];
+  else if (kind === 'scale2') lines = [`${r}.FormatConditions.AddColorScale ColorScaleType:=2`];
+  else if (kind === 'icons') lines = [`${r}.FormatConditions.AddIconSetCondition`];
+  else if (kind === 'clear') lines = [`${r}.FormatConditions.Delete`];
+  else if (kind === 'clearSheet') lines = [`${ws()}.Cells.FormatConditions.Delete`];
+  if (lines) runUi(lines);
+}
+
+function listValidation() {
+  const v = prompt(t('askList'), 'Yes,No');
+  if (v === null || !v.trim()) return;
+  runUi([`With ${selRange()}.Validation`, '.Delete',
+    `.Add Type:=3, AlertStyle:=1, Operator:=1, Formula1:=${vq(v.trim())}`, 'End With']);
+}
+
+// A chart of the block, placed to the right of it.
+const CHARTS = { column: [201, 51], bar: [216, 57], line: [227, 4], pie: [251, 5], area: [276, 1], scatter: [240, -4169] };
+function insertChart(kind) {
+  const [style, type] = CHARTS[kind] || CHARTS.column;
+  let right = range.c1, top = range.r0;
+  if (range.r0 === range.r1 && range.c0 === range.c1) {
+    // The data around the cell: go right past its last filled column.
+    let c = act.col;
+    while (hasData(act.row, c + 1)) c++;
+    right = c;
+    let r = act.row;
+    while (r > 1 && hasData(r - 1, act.col)) r--;
+    top = r;
+  }
+  runUi(['Dim ch As Object', `With ${ws()}.Range(${vq(a1(top, right + 2))})`,
+    `Set ch = ${ws()}.Shapes.AddChart2(${style}, ${type}, .Left, .Top, 360, 216).Chart`, 'End With',
+    `ch.SetSourceData Source:=${blockOf()}`]);
+}
+
+Object.assign(RIB, {
+  fSum: autoSum, fPaint: armPainter, fTable: insertTable,
+});
+Object.assign(UI_ACTS, {
+  pasteValues: () => pasteSpecial('values'),
+  pasteFormats: () => pasteSpecial('formats'),
+  listValid: listValidation,
+  noValid: () => runUi([`${selRange()}.Validation.Delete`]),
+});
+$('fCond').onchange = e => { if (e.target.value) condFormat(e.target.value); e.target.value = ''; ed.focus({ preventScroll: true }); };
+$('fChart').onchange = e => { if (e.target.value) insertChart(e.target.value); e.target.value = ''; ed.focus({ preventScroll: true }); };
+
+/* Sizing by the headings: drag the line between two headings to set the
+   width (or height) of the column before it -- of every selected column when
+   it is one of them -- and double-click the line to fit the column to its
+   contents. The page draws at 96 dpi, so a pixel is 0.75 pt. Widths go in as
+   points through the column's own width line (two widths read back give the
+   characters for the points), whatever the workbook's font. */
+function headEdge(e, kind) {
+  const el = e.target;
+  if (!el || !el.dataset || el.dataset[kind] === undefined) return null;
+  const r = el.getBoundingClientRect();
+  const n = Number(el.dataset[kind]);
+  const far = kind === 'col' ? r.right - e.clientX : r.bottom - e.clientY;
+  const near = kind === 'col' ? e.clientX - r.left : e.clientY - r.top;
+  if (far <= 4) return n;
+  if (near <= 3 && n > (kind === 'col' ? 0 : 1)) {
+    const prev = el.previousElementSibling;
+    return prev && prev.dataset[kind] !== undefined ? Number(prev.dataset[kind]) : null;
+  }
+  return null;
+}
+function spanFor(kind, n) {
+  const whole = kind === 'col' ? (range.r0 <= geo.first && range.r1 >= geo.last) : (range.c0 <= 0 && range.c1 >= geo.colCount - 1);
+  const lo = kind === 'col' ? range.c0 : range.r0, hi = kind === 'col' ? range.c1 : range.r1;
+  return whole && n >= lo && n <= hi ? [lo, hi] : [n, n];
+}
+function setColumnWidthPt(c0, c1, pt) {
+  const col = `${ws()}.Columns(${c0 + 1})`;
+  runUi(['Dim w10 As Double, w20 As Double', `${col}.ColumnWidth = 10`, `w10 = ${col}.Width`,
+    `${col}.ColumnWidth = 20`, `w20 = ${col}.Width`,
+    `${ws()}.Columns(${vq(colName(c0) + ':' + colName(c1))}).ColumnWidth = Application.Max(0, 10 + (${pt.toFixed(2)} - w10) * 10 / (w20 - w10))`]);
+}
+function resizeHead(e, kind, n) {
+  commitEdit();
+  const start = kind === 'col' ? e.clientX : e.clientY;
+  const i = kind === 'col' ? n : n - geo.first;
+  const size0 = kind === 'col' ? geo.columns[n + 1] - geo.columns[n] : geo.tops[i + 1] - geo.tops[i];
+  const edge0 = kind === 'col' ? geo.columns[n + 1] : geo.tops[i + 1];
+  const guide = div('rz-guide ' + kind, paper);
+  const place = px => {
+    if (kind === 'col') { guide.style.left = `${edge0 - size0 + px}px`; guide.style.top = '0'; guide.style.height = `${paper.offsetHeight}px`; }
+    else { guide.style.top = `${edge0 - size0 + px}px`; guide.style.left = '0'; guide.style.width = `${paper.offsetWidth}px`; }
+  };
+  let size = size0;
+  place(size);
+  drag(ev => {
+    size = Math.max(0, size0 + (kind === 'col' ? ev.clientX : ev.clientY) - start);
+    place(size);
+  }, () => {
+    guide.remove();
+    if (Math.abs(size - size0) < 1) return;
+    const [lo, hi] = spanFor(kind, n);
+    if (kind === 'col') setColumnWidthPt(lo, hi, size * 0.75);
+    else runUi([`${ws()}.Rows(${vq(lo + ':' + hi)}).RowHeight = ${(Math.round(size * 0.75 * 4) / 4).toFixed(2)}`]);
+  });
+}
+function headMove(e, kind) {
+  e.currentTarget.style.cursor = headEdge(e, kind) !== null ? (kind === 'col' ? 'col-resize' : 'row-resize') : '';
+}
+function headDouble(e, kind) {
+  const n = headEdge(e, kind);
+  if (n === null) return;
+  e.preventDefault();
+  const [lo, hi] = spanFor(kind, n);
+  if (kind === 'col') runUi([`${ws()}.Columns(${vq(colName(lo) + ':' + colName(hi))}).AutoFit`]);
+  else runUi([`${ws()}.Rows(${vq(lo + ':' + hi)}).AutoFit`]);
+}
+
 // ---- keys ---------------------------------------------------------------------------
 const ARROWS = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
 
@@ -2033,6 +2268,7 @@ function readyKey(e) {
   if (mod && /^[zZ]$/.test(k)) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
   if (mod && /^[yY]$/.test(k)) { e.preventDefault(); redo(); return; }
   if (mod && /^[aA]$/.test(k)) { e.preventDefault(); selectAll(); return; }
+  if (e.altKey && !mod && (k === '=' || e.code === 'Minus' && e.shiftKey)) { e.preventDefault(); autoSum(); return; }
   if (mod && !e.shiftKey && /^[bB]$/.test(k)) { e.preventDefault(); RIB.fBold(); return; }
   if (mod && !e.shiftKey && /^[iI]$/.test(k)) { e.preventDefault(); RIB.fItalic(); return; }
   if (mod && !e.shiftKey && /^[uU]$/.test(k)) { e.preventDefault(); RIB.fUnder(); return; }
