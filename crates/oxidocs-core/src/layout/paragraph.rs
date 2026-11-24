@@ -7642,7 +7642,21 @@ impl<'a> ParagraphLayouter<'a> {
                     // fragment keep the old split (no per-gap handle there).
                     let cjk_c = |c: char| kinsoku::is_cjk_ideograph_or_kana(c)
                         || matches!(c, '\u{3000}'..='\u{303F}' | '\u{FF01}'..='\u{FF60}' | '\u{30FB}');
-                    let cjk_gap_ok = space_count > 0
+                    // An auto-space gap (aki) between a CJK character and a Latin letter /
+                    // digit, where the paragraph's autoSpaceDE / autoSpaceDN puts one.
+                    let aki_de = para.style.auto_space_de && self.doc_autospace();
+                    let aki_dn = para.style.auto_space_dn && self.doc_autospace();
+                    let aki_junc = |fi: usize| -> bool {
+                        let a = line.fragments[fi].text.chars().last();
+                        let b = line.fragments.get(fi + 1).and_then(|f| f.text.chars().next());
+                        let (Some(a), Some(b)) = (a, b) else { return false };
+                        let cj = |c: char| kinsoku::is_cjk_ideograph_or_kana(c);
+                        let lat = |c: char| (aki_de && c.is_ascii_alphabetic()) || (aki_dn && c.is_ascii_digit());
+                        (cj(a) && lat(b)) || (lat(a) && cj(b))
+                    };
+                    let has_aki = !crate::env_flag!("OXI_CJK_AKI_STAGE1_DISABLE")
+                        && (0..n_vis.saturating_sub(1)).any(|fi| aki_junc(fi));
+                    let cjk_gap_ok = (space_count > 0 || has_aki)
                         && !distribute_every_char
                         && !crate::env_flag!("OXI_CJK_LINE_SPACE_JUST_DISABLE")
                         && line.fragments[..n_vis].iter().any(|f| f.text.chars().any(cjk_c))
@@ -7660,9 +7674,38 @@ impl<'a> ParagraphLayouter<'a> {
                         }
                     }
                     if !cjk_gaps.is_empty() {
-                        let per = slack / cjk_gaps.len() as f32;
-                        for fi in cjk_gaps {
-                            frag_spacing_after[fi] += per;
+                        // OXI_CJK_AKI_STAGE1 (2026-11-24, default ON, opt-out _DISABLE): compat 15
+                        // first widens the Latin/CJK auto-space gaps, each up to a quarter em more
+                        // (the aki from 1/4 to 1/2 em); only then does every gap take an equal
+                        // share. `_pb_space_thresh_gen.py 52b` (slice of ja/technical__52b9cff8,
+                        // compat 15, ＭＳ 明朝 12, right indent swept): «…ス2021…付 第20回…» keeps
+                        // its kanji at 12.00 while ス→2 / 第→2 / 0→回 go 15 -> 18, then all grow
+                        // alike (junction 19.42, space 7.32, kanji 13.31); with no junction
+                        // («…ニュース 第 回…») spaces and kanji grow alike from the start. The
+                        // compat 14 slice (0333046c) has no first stage. 52b9cff8 p1's real line:
+                        // Word 17.8 / 17.8 / 5.8 at the three junctions, kanji 12.0.
+                        let mut rest = slack;
+                        // (Not a compat-15 rule: it follows the aki. blind-A ja/creative__1507a363,
+                        // compat 14 with autospace, «…全部5階まで…»: Word's akis 4.98 / 4.93 with the
+                        // kana at 10.44-10.56; the compat 14 probe base 0333046c has autoSpaceDE/DN
+                        // off -- no aki, no first stage.)
+                        if has_aki {
+                            let junction: Vec<usize> = cjk_gaps.iter().copied().filter(|&fi| aki_junc(fi)).collect();
+                            if !junction.is_empty() {
+                                let per = rest / junction.len() as f32;
+                                for &fi in &junction {
+                                    let cap = line.fragments[fi].style.font_size.unwrap_or(para_font_size) / 4.0;
+                                    let g = per.min(cap);
+                                    frag_spacing_after[fi] += g;
+                                    rest -= g;
+                                }
+                            }
+                        }
+                        if rest > 0.001 {
+                            let per = rest / cjk_gaps.len() as f32;
+                            for fi in cjk_gaps {
+                                frag_spacing_after[fi] += per;
+                            }
                         }
                     } else if space_count > 0 && !distribute_every_char {
                         let per_space = slack / space_count as f32;

@@ -41,6 +41,11 @@ pub struct OoxmlParser {
 
 /// Context passed through parsing functions for resource resolution
 thread_local! {
+    /// OXI_FIELD_ERROR_BOLD: the run being parsed received a field's error text.
+    static FIELD_ERROR_RUN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+thread_local! {
     /// OXI_RUNIN_INDENT: the document declares compatibility mode 15 or later.
     static RUNIN_COMPAT15: std::cell::Cell<bool> = std::cell::Cell::new(true);
 }
@@ -550,6 +555,7 @@ impl ParseContext {
                             }
                         } else if let Some(err) = unknown_field_text(&field.instruction) {
                             text.push_str(err);
+                            FIELD_ERROR_RUN.with(|c| c.set(true));
                         }
                     }
                 }
@@ -8163,6 +8169,21 @@ fn parse_run(
             ctx.in_toc_result() && (url.is_some() || ctx.in_hyperlink_result())),
         &ctx.paragraph_base.borrow());
     apply_run_overrides(&mut style, rpr_direct, had_color);
+    // OXI_FIELD_ERROR_BOLD (2026-11-24, default ON, opt-out _DISABLE): Word sets a
+    // field's error text («エラー! ブックマークが定義されていません。») bold, every
+    // character in the run's East Asian face. blind-A ja/reference__0b6f3b32 p8 (7 such
+    // fields): Word's PDF strokes them (2 Tr, 0.257 w) as one ＭＳ 明朝 span, kana 9.47-9.59
+    // and «!» / space 4.80 at 9pt; Oxi drew them regular with «!» 3.77 / space 3.08 in
+    // Century.
+    if FIELD_ERROR_RUN.with(|c| c.replace(false)) && !crate::env_flag!("OXI_FIELD_ERROR_BOLD_DISABLE") {
+        style.bold = true;
+        let ea = style.font_family_east_asia.clone()
+            .or_else(|| ctx.paragraph_base.borrow().font_family_east_asia.clone())
+            .or_else(|| styles.doc_default_run_style.as_ref().and_then(|d| d.font_family_east_asia.clone()));
+        if let Some(ea) = ea {
+            style.font_family = Some(ea);
+        }
+    }
 
     // If this run contains a field instruction, convert to placeholder text
     let mut field_type: Option<FieldType> = None;
