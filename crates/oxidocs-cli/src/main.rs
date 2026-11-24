@@ -2982,7 +2982,7 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     }
                 }
                 oxidocs_core::layout::LayoutContent::WatermarkText { .. } => {}
-                oxidocs_core::layout::LayoutContent::PresetShape { ref shape_type, ref stroke_color, stroke_width, flip_h, flip_v, arrow_head, arrow_tail, .. }
+                oxidocs_core::layout::LayoutContent::PresetShape { ref shape_type, ref stroke_color, stroke_width, flip_h, flip_v, arrow_head, arrow_tail, ref dash }
                     if std::env::var_os("OXI_PDF_PRESET_DISABLE").is_none() =>
                 {
                     // OXI_PDF_PRESET (2026-11-08, default ON, opt-out _DISABLE): draw a
@@ -3036,7 +3036,35 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                                     PathOp::LineTo(mx, ey), PathOp::LineTo(ex, ey)]));
                                 tf = (mx, ey); hf = (mx, sy);
                             } else {
-                                contents.push(line(vec![PathOp::MoveTo(sx, sy), PathOp::LineTo(ex, ey)]));
+                                // OXI_PDF_LINE_DASH (2026-11-24, default ON, opt-out _DISABLE): a
+                                // straight line's preset dash («prst:4,3:0», units of the width) is
+                                // drawn as its dashes. blind-A ja/correspondence__03d82ae2 p2's
+                                // dash lines (2pt, prstDash dash) came out solid; Word [8 6].
+                                let units: Option<Vec<f64>> = dash.as_deref()
+                                    .filter(|d| d.starts_with("prst:") && std::env::var_os("OXI_PDF_LINE_DASH_DISABLE").is_none())
+                                    .and_then(|d| d.split(':').nth(1))
+                                    .map(|u| u.split(',').filter_map(|v| v.parse::<f64>().ok()).collect::<Vec<_>>())
+                                    .filter(|u| u.len() >= 2 && u.iter().all(|v| *v > 0.0));
+                                let len = ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt();
+                                if let (Some(units), true) = (units, len > 0.01) {
+                                    let (ux, uy) = ((ex - sx) / len, (ey - sy) / len);
+                                    let mut ops = Vec::new();
+                                    let mut t = 0.0f64;
+                                    let mut k = 0usize;
+                                    while t < len {
+                                        let seg = units[k % units.len()] * lw;
+                                        if k % 2 == 0 {
+                                            let t1 = (t + seg).min(len);
+                                            ops.push(PathOp::MoveTo(sx + ux * t, sy + uy * t));
+                                            ops.push(PathOp::LineTo(sx + ux * t1, sy + uy * t1));
+                                        }
+                                        t += seg;
+                                        k += 1;
+                                    }
+                                    contents.push(line(ops));
+                                } else {
+                                    contents.push(line(vec![PathOp::MoveTo(sx, sy), PathOp::LineTo(ex, ey)]));
+                                }
                                 tf = (sx, sy); hf = (ex, ey);
                             }
                             if *arrow_tail {

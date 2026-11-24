@@ -11526,10 +11526,54 @@ fn parse_drawing_inner(
         None
     } else { shape_type };
 
+    // OXI_DML_FILLED_PRESET (2026-11-24, default ON, opt-out _DISABLE): a text-less
+    // DrawingML ellipse / rightArrow that carries a fill is drawn as its filled ECMA
+    // outline (a path element), not as the outline-only preset. blind-A ja/
+    // correspondence__03d82ae2 p2's schedule: the ● milestones (ellipse, solidFill
+    // windowText) were hollow rings and the thick 153x13.6 right arrow (solidFill 000000,
+    // adj 49898 / 80965) was not drawn at all; Word's PDF fills both.
+    let dml_outline: Vec<crate::ir::PathSeg> = {
+        use crate::ir::PathSeg::{C, L, M, Z};
+        let ok = !behind_doc
+            && shape_text_blocks.is_empty()
+            && !has_no_fill
+            && shape_fill.is_some()
+            && gradient_stops.is_empty()
+            && rotation.map_or(true, |r| r.rem_euclid(360.0) < 0.01)
+            && width > 0.0 && height > 0.0
+            && !crate::env_flag!("OXI_DML_FILLED_PRESET_DISABLE");
+        let g = |n: &str, d: f32| shape_adj_map.iter().find(|(k, _)| k == n).map_or(d, |(_, v)| *v);
+        let fx = |x: f32| if flip_h { 1.0 - x } else { x };
+        let fy = |y: f32| if flip_v { 1.0 - y } else { y };
+        match shape_type.as_deref() {
+            Some("ellipse") if ok => {
+                let k = 0.5523f32 / 2.0;
+                vec![M(1.0, 0.5),
+                    C(1.0, 0.5 + k, 0.5 + k, 1.0, 0.5, 1.0),
+                    C(0.5 - k, 1.0, 0.0, 0.5 + k, 0.0, 0.5),
+                    C(0.0, 0.5 - k, 0.5 - k, 0.0, 0.5, 0.0),
+                    C(0.5 + k, 0.0, 1.0, 0.5 - k, 1.0, 0.5),
+                    Z]
+            }
+            Some("rightArrow") if ok => {
+                let (w, h) = (width, height);
+                let ss = w.min(h);
+                let a1 = g("adj1", 50000.0).clamp(0.0, 100000.0);
+                let a2 = g("adj2", 50000.0).clamp(0.0, 100000.0 * w / ss);
+                let x1 = (w - ss * a2 / 100000.0) / w;
+                let dy1 = a1 / 200000.0;
+                let (y1, y2) = (0.5 - dy1, 0.5 + dy1);
+                vec![M(fx(0.0), fy(y1)), L(fx(x1), fy(y1)), L(fx(x1), fy(0.0)), L(fx(1.0), fy(0.5)),
+                    L(fx(x1), fy(1.0)), L(fx(x1), fy(y2)), L(fx(0.0), fy(y2)), Z]
+            }
+            _ => Vec::new(),
+        }
+    };
+
     // Build shape if we detected a preset geometry
     let shape = if let Some(ref st) = shape_type {
         Some(Shape {
-            vml_path: Vec::new(),
+            vml_path: dml_outline,
             shape_type: st.clone(),
             width,
             height,

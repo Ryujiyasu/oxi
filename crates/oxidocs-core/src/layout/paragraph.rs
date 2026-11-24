@@ -7152,6 +7152,35 @@ impl<'a> ParagraphLayouter<'a> {
                 // (render_width / extra_indent / line_text_width) before guessing a
                 // third time.
                 let mut slack = render_width - extra_indent - line_text_width - grid_extra_on_line;
+                // OXI_JUSTIFY_TRAIL_WS_HANG (2026-11-24, default ON, opt-out _DISABLE): a
+                // justified line that ends in a run of blanks («　» or spaces) hangs the run
+                // past the edge and spreads the text before it to the edge. Faithful slice
+                // of blind-A ja/forms__003298e3 (`_pb_trail_ideo_just_gen.py`, ＭＳ 明朝 9,
+                // 9 widths x «　»x6 / «　»x3 / «　» / 6 spaces, compat 11 and 15): every
+                // arm whose run reaches the line end puts its last visible glyph at
+                // 552.2..553.0 on the 552.8 edge, the blanks beyond (to 593.4); Oxi counted
+                // the run as text and left the line 6..55pt short (003298e3's 備考 2-4).
+                let mut n_vis = line.fragments.len();
+                let mut ws_trail = 0.0f32;
+                if !crate::env_flag!("OXI_JUSTIFY_TRAIL_WS_HANG_DISABLE") {
+                    let hangs = |c: char| c.is_whitespace() && c != '\t' && c != '\u{a0}'
+                        && !(c == '\u{3000}' && !para.style.word_wrap);
+                    let mut k = line.fragments.len();
+                    let mut trail = 0.0f32;
+                    while k > 0 {
+                        let f = &line.fragments[k - 1];
+                        if f.tab_alignment.is_some() || f.text.is_empty() || !f.text.chars().all(hangs) {
+                            break;
+                        }
+                        trail += f.width;
+                        k -= 1;
+                    }
+                    if k > 0 && k < line.fragments.len() {
+                        n_vis = k;
+                        slack += trail;
+                        ws_trail = trail;
+                    }
+                }
                 // OXI_YAKU_LEND_ORDER: the blank half of a last 約物 that hangs.
                 let mut lend_credit = 0.0f32;
                 // OXI_DBG_SLACK: the three terms behind the unexplained 2.20pt
@@ -7180,7 +7209,7 @@ impl<'a> ParagraphLayouter<'a> {
                 // advance regardless of the break-time width. Under-full lines reset 、
                 // to natural and let Phase 2 distribute.
                 if s472_render {
-                    let nfr = line.fragments.len();
+                    let nfr = n_vis;
                     let mut lend_half: Option<f32> = None;
                     let mut comps: Vec<(usize, f32, f32)> = Vec::new(); // (fi, fs, cap)
                     let s_open_even = !crate::env_flag!("OXI_YAKU_OPEN_EVEN_DISABLE");
@@ -7512,6 +7541,9 @@ impl<'a> ParagraphLayouter<'a> {
                 } else {
                     0.0
                 };
+                // OXI_JUSTIFY_TRAIL_WS_HANG: the hanging blank run is given back here too
+                // (this recompute discards the adjustment at the first binding).
+                let s1118_trailing_hang = s1118_trailing_hang.max(ws_trail);
                 slack = if phase1_compressed {
                     render_width - extra_indent - post_phase1_ltw + s1118_trailing_hang
                 } else {
@@ -7592,16 +7624,50 @@ impl<'a> ParagraphLayouter<'a> {
                         .iter()
                         .enumerate()
                         .filter(|(i, f)| {
-                            *i < line.fragments.len() - 1
+                            *i < n_vis - 1
                                 && f.text.chars().all(|c| c == ' ')
                                 && !f.text.is_empty()
                         })
                         .count();
 
-                    if space_count > 0 && !distribute_every_char {
+                    // OXI_CJK_LINE_SPACE_JUST (2026-11-24, default ON, opt-out _DISABLE): on a
+                    // line holding CJK characters the slack is not poured into the spaces --
+                    // every space AND every gap touching a CJK character takes the same share
+                    // (Latin letters inside a word take none). `_pb_cjk_space_just_gen.py` (slice
+                    // of blind-A ja/correspondence__0333046c, 11pt, jc both, ＭＳ 明朝 / Century):
+                    // «(1) A4写真…» spaces 6.24->9.47 / 6.96->10.27 with kanji 12.5->15.72 (+3.2
+                    // each); a Latin line with one «あ» spaces 6.25->9.35 and the kana 15.60 (+3.1),
+                    // with «写真» +2.02 alike; pure Latin keeps spaces-only (11.15 = Oxi). Oxi put it
+                    // all on the spaces (36..136pt each). Lines whose CJK sits inside a multi-char
+                    // fragment keep the old split (no per-gap handle there).
+                    let cjk_c = |c: char| kinsoku::is_cjk_ideograph_or_kana(c)
+                        || matches!(c, '\u{3000}'..='\u{303F}' | '\u{FF01}'..='\u{FF60}' | '\u{30FB}');
+                    let cjk_gap_ok = space_count > 0
+                        && !distribute_every_char
+                        && !crate::env_flag!("OXI_CJK_LINE_SPACE_JUST_DISABLE")
+                        && line.fragments[..n_vis].iter().any(|f| f.text.chars().any(cjk_c))
+                        && line.fragments[..n_vis].iter().all(|f| f.text.chars().count() <= 1 || !f.text.chars().any(cjk_c));
+                    let mut cjk_gaps: Vec<usize> = Vec::new();
+                    if cjk_gap_ok {
+                        for fi in 0..n_vis.saturating_sub(1) {
+                            let a = line.fragments[fi].text.chars().last();
+                            let b = line.fragments[fi + 1].text.chars().next();
+                            let is_space_frag = !line.fragments[fi].text.is_empty()
+                                && line.fragments[fi].text.chars().all(|c| c == ' ');
+                            if is_space_frag || a.is_some_and(cjk_c) || b.is_some_and(cjk_c) {
+                                cjk_gaps.push(fi);
+                            }
+                        }
+                    }
+                    if !cjk_gaps.is_empty() {
+                        let per = slack / cjk_gaps.len() as f32;
+                        for fi in cjk_gaps {
+                            frag_spacing_after[fi] += per;
+                        }
+                    } else if space_count > 0 && !distribute_every_char {
                         let per_space = slack / space_count as f32;
                         for (fi, frag) in line.fragments.iter().enumerate() {
-                            if fi < line.fragments.len() - 1
+                            if fi < n_vis - 1
                                 && frag.text.chars().all(|c| c == ' ')
                                 && !frag.text.is_empty()
                             {
@@ -7613,7 +7679,7 @@ impl<'a> ParagraphLayouter<'a> {
                         // Use character_spacing on each fragment so Canvas/PDF renderers
                         // apply per-character gap (not just fragment-level gap).
                         let total_chars: usize =
-                            line.fragments.iter().map(|f| f.text.chars().count()).sum();
+                            line.fragments[..n_vis].iter().map(|f| f.text.chars().count()).sum();
                         let has_cjk = line
                             .fragments
                             .iter()
@@ -7658,13 +7724,13 @@ impl<'a> ParagraphLayouter<'a> {
                             // Distribute: fragment-boundary gaps via frag_spacing_after,
                             // internal gaps via frag_width_adjustments (for layout width),
                             // AND set justify_char_spacing for renderer to apply letterSpacing.
-                            for fi in 0..line.fragments.len() {
+                            for fi in 0..n_vis {
                                 let frag_chars = line.fragments[fi].text.chars().count();
                                 if frag_chars > 1 {
                                     frag_width_adjustments[fi] +=
                                         per_char_gap * (frag_chars - 1) as f32;
                                 }
-                                if fi < line.fragments.len() - 1 {
+                                if fi < n_vis - 1 {
                                     frag_spacing_after[fi] += per_char_gap;
                                 }
                             }

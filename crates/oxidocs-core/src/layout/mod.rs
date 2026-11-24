@@ -711,6 +711,7 @@ fn autospace_cell_segments(
     grid_latin_em: bool,
     grid_kern: bool,
     char_width_adjustments: &[f32],
+    split_on_adjustments: bool,
     natural_gaps_after: &[f32],
     balance_cs: f32,
 ) -> Option<Vec<(String, f32, f32)>> {
@@ -771,7 +772,11 @@ fn autospace_cell_segments(
         }
         return Some(segments);
     }
-    if !de && !dn && !balance_spaces {
+    // OXI_CELL_YAKU_EVEN: a run whose marks were squeezed is drawn glyph by glyph at
+    // the squeezed advances (outside a grid nothing else reads these adjustments).
+    let adj_split = split_on_adjustments
+        && char_width_adjustments.iter().any(|a| a.abs() > 1e-4);
+    if !de && !dn && !balance_spaces && !adj_split {
         return None;
     }
     let chars: Vec<char> = text.chars().collect();
@@ -803,6 +808,14 @@ fn autospace_cell_segments(
             if i + 1 < chars.len() { split_before[i + 1] = true; }
         }
     }
+    if adj_split {
+        for i in 0..chars.len() {
+            if char_width_adjustments.get(i).is_some_and(|a| a.abs() > 1e-4) {
+                any = true;
+                if i + 1 < chars.len() { split_before[i + 1] = true; }
+            }
+        }
+    }
     if !any {
         return None;
     }
@@ -820,6 +833,9 @@ fn autospace_cell_segments(
         seg_w += if balanced[i] { fs * 0.5 + metrics.synthetic_bold_advance * fs }
             else { registry.char_width_pt_with_fallback(chars[i], fs, metrics) };
         seg_w += cs_render;
+        if adj_split {
+            seg_w += char_width_adjustments.get(i).copied().unwrap_or(0.0);
+        }
         seg.push(chars[i]);
     }
     if !seg.is_empty() {
@@ -927,6 +943,15 @@ fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
             segs,
             fill: shape.fill.clone(),
             stroke_color: shape.stroke_color.clone(),
+            stroke_width: shape.stroke_width.unwrap_or(0.0),
+        });
+    }
+    // OXI_DML_FILLED_PRESET: a filled DML ellipse / rightArrow carries its outline.
+    if !shape.is_vml && !shape.vml_path.is_empty() {
+        return Some(LayoutContent::VectorPath {
+            segs: shape.vml_path.clone(),
+            fill: shape.fill.clone(),
+            stroke_color: shape.stroke_width.and(shape.stroke_color.clone()),
             stroke_width: shape.stroke_width.unwrap_or(0.0),
         });
     }

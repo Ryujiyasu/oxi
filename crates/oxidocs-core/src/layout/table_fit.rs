@@ -9352,6 +9352,7 @@ impl<'a> TableFitLayouter<'a> {
                                             .map(|f| vec![0.0; f.0.chars().count()]).collect();
                                         let mut frag_spacing: Vec<f32> = vec![0.0; line.len()];
                                         let mut justify_char_spacing: f32 = 0.0;
+                                        let mut cell_yaku_even_used = false;
                                         // A justified terminal line may contract its word spaces,
                                         // but must never stretch. Trailing blank fragments are not
                                         // part of the visible extent or the compression capacity.
@@ -9387,7 +9388,97 @@ impl<'a> TableFitLayouter<'a> {
 
                                             // Phase 1: CJK punctuation compression (only when overflowing)
                                             let limit_cell_compression = crate::env_flag!("OXI_CELL_PUNCT_COMPRESSION_LIMIT");
-                                            if slack < 0.0 {
+                                            // OXI_CELL_YAKU_EVEN (2026-11-24, default ON, opt-out _DISABLE): a
+                                            // compat<=14 compressPunctuation cell line shares its overflow EVENLY
+                                            // over its 約物, each down to half its cell -- the body's
+                                            // OXI_YAKU_LEGACY_EVEN. An opener's share comes out of the character
+                                            // before it, a colon's is split over the two. `_pb_7cc_cellyaku_gen.py`
+                                            // (blind-A ja/technical__7cc63ebc p2 «また、JA バンク相談所（電話番号：
+                                            // ０３－…）でも、苦情», right indent swept, overflow 0..11pt): Word
+                                            // ends every arm on the 532 edge with 、（：）、 each ~overflow/5 down
+                                            // (、9.63 所9.47 号9.96 ：10.08 ）9.60 、9.48 at 4.95 over), － untouched.
+                                            // Oxi halved every mark, spread the surplus and drew the run's glyphs
+                                            // at their natural advance -- 10pt past the cell.
+                                            let cell_even = slack < 0.0
+                                                && self.compress_punctuation
+                                                && self.compat_mode < 15
+                                                && !crate::env_flag!("OXI_CELL_YAKU_EVEN_DISABLE");
+                                            if cell_even {
+                                                // (fi, ci, cap, kind): 0 = own advance, 1 = opener (previous
+                                                // char), 2 = colon / middle dot (half each).
+                                                let mut comps: Vec<(usize, usize, f32, u8)> = Vec::new();
+                                                for (fi, f) in line.iter().enumerate() {
+                                                    let fs = f.1;
+                                                    for (ci, ch) in f.0.chars().enumerate() {
+                                                        let kind = match ch {
+                                                            '（' | '「' | '『' | '〔' | '［' | '｛' | '〈' | '《' | '【' | '〘' | '〖' => 1u8,
+                                                            '：' | '；' | '・' => 2u8,
+                                                            '、' | '。' | '，' | '．' | '）' | '」' | '』' | '〕' | '］' | '｝'
+                                                            | '〉' | '》' | '】' | '〙' | '〗' => 0u8,
+                                                            _ => continue,
+                                                        };
+                                                        if kind != 0 && fi == 0 && ci == 0 {
+                                                            continue;
+                                                        }
+                                                        let fm = self.registry.default_metrics();
+                                                        let w = self.registry.char_width_pt_with_fallback(ch, fs, &fm);
+                                                        comps.push((fi, ci, w * 0.5, kind));
+                                                    }
+                                                }
+                                                let mut amt = vec![0.0f32; comps.len()];
+                                                let mut needed = -slack;
+                                                let mut active: Vec<usize> = (0..comps.len()).collect();
+                                                while !active.is_empty() && needed > 0.001 {
+                                                    let share = needed / active.len() as f32;
+                                                    let capped: Vec<usize> = active.iter().copied().filter(|&k| comps[k].2 <= share).collect();
+                                                    if capped.is_empty() {
+                                                        for &k in &active {
+                                                            amt[k] = share;
+                                                        }
+                                                        break;
+                                                    }
+                                                    for &k in &capped {
+                                                        amt[k] = comps[k].2;
+                                                        needed -= comps[k].2;
+                                                    }
+                                                    active.retain(|k| !capped.contains(k));
+                                                }
+                                                let prev_of = |fi: usize, ci: usize| -> (usize, usize) {
+                                                    if ci > 0 {
+                                                        (fi, ci - 1)
+                                                    } else {
+                                                        let mut j = fi;
+                                                        while j > 0 {
+                                                            j -= 1;
+                                                            let n = line[j].0.chars().count();
+                                                            if n > 0 {
+                                                                return (j, n - 1);
+                                                            }
+                                                        }
+                                                        (fi, ci)
+                                                    }
+                                                };
+                                                for (k, &(fi, ci, _, kind)) in comps.iter().enumerate() {
+                                                    let a = amt[k];
+                                                    if a <= 0.0 {
+                                                        continue;
+                                                    }
+                                                    let parts: [((usize, usize), f32); 2] = match kind {
+                                                        1 => [(prev_of(fi, ci), a), ((fi, ci), 0.0)],
+                                                        2 => [(prev_of(fi, ci), a * 0.5), ((fi, ci), a * 0.5)],
+                                                        _ => [((fi, ci), a), ((fi, ci), 0.0)],
+                                                    };
+                                                    for ((tf, tc), v) in parts {
+                                                        if v != 0.0 {
+                                                            frag_width_adj[tf] -= v;
+                                                            frag_char_width_adj[tf][tc] -= v;
+                                                        }
+                                                    }
+                                                    slack += a;
+                                                }
+                                                cell_yaku_even_used = true;
+                                            }
+                                            if slack < 0.0 && !cell_even {
                                                 for (
                                                     fi,
                                                     (text, fs, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _),
@@ -10903,6 +10994,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         single_byte_grid,
                                                         &grid_metrics, grid_latin_em, grid_kern,
                                                         &frag_char_width_adj[frag_idx],
+                                                        cell_yaku_even_used,
                                                         &text.chars().map(|c| self.natural_autospace_after(c,
                                                             _source_style,&para.style,*fs,*cs)
                                                             * aki_plan.get(frag_idx).map_or(1.0, |p| p.gap_scale))
