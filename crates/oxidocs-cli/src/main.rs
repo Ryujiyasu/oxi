@@ -2549,6 +2549,34 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                                 continue;
                             }
                             let key = pdf_face_for(*ch, &font_name, *bold, &embedded_fonts);
+                            // OXI_VERT_LATIN_SIDEWAYS: Latin lies on its side, its line box
+                            // (ascent + descent) centred on the column -- `_pb_vert_latin_gen.py`
+                            // baseline 1.44 / 1.68 / 2.04 right of the column's left edge for
+                            // ＭＳ 明朝 / Arial 10.5 / Times New Roman 12 (centring predicts
+                            // 1.48 / 1.61 / 1.95), drawn turned a quarter clockwise.
+                            if oxidocs_core::font::vertical_sideways_char(*ch)
+                                && std::env::var_os("OXI_PDF_VERT_SIDEWAYS_DISABLE").is_none()
+                            {
+                                let (asc, desc) = embedded_fonts.get(&key)
+                                    .and_then(|f| rustybuzz::Face::from_slice(&f.data, 0))
+                                    .map(|f| {
+                                        let u = f.units_per_em() as f64;
+                                        (f.ascender() as f64 / u, -(f.descender() as f64) / u)
+                                    })
+                                    .unwrap_or((0.88, 0.12));
+                                let bx = x + ew * 0.5 - (asc - desc) * 0.5 * fs;
+                                let top = y + k as f64 * adv;
+                                contents.push(ContentElement::SaveState);
+                                contents.push(ContentElement::RotateCw { x: bx, y: top });
+                                contents.push(ContentElement::Text(TextSpan {
+                                    x: bx, y: top,
+                                    text: ch.to_string(), font_name: key,
+                                    font_size: fs, fill_color,
+                                    character_spacing: 0.0, stroke_width: if fake_bold { fs / 35.0 } else { 0.0 }, skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
+                                }));
+                                contents.push(ContentElement::RestoreState);
+                                continue;
+                            }
                             let vg = embedded_fonts.get(&key)
                                 .and_then(|f| f.unicode_to_gid.get(&(VERT_GLYPH_KEY | *ch as u32)).copied());
                             let span = TextSpan {

@@ -3680,8 +3680,9 @@ impl<'a> LineBreaker<'a> {
                 // 95f17b17 p3 «…忘れちゃったけど･･････» fills one 20-cell column in Word
                 // (17 + 6 x 0.5); Oxi counted the six «･» as whole cells and wrapped,
                 // and the book ran to 23 pages against Word's 22.
-                let vert_sideways = vertical && ('\u{FF61}'..='\u{FF9F}').contains(&ch)
-                    && !crate::env_flag!("OXI_VERT_HALFWIDTH_SIDEWAYS_DISABLE");
+                let vert_sideways = vertical && ((('\u{FF61}'..='\u{FF9F}').contains(&ch)
+                    && !crate::env_flag!("OXI_VERT_HALFWIDTH_SIDEWAYS_DISABLE"))
+                    || crate::font::vertical_sideways_char(ch));
                 let vertical_font_advance = if vert_sideways {
                     Some(char_metrics.char_width_em(ch) * font_size)
                 } else if vertical

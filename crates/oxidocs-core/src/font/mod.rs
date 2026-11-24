@@ -2772,6 +2772,19 @@ pub fn vertical_rotated_char(ch: char) -> bool {
         && matches!(ch, '\u{30FC}' | '\u{301C}' | '\u{FF5E}' | '\u{FF0D}' | '\u{2212}' | '\u{2015}' | '\u{FF1D}')
 }
 
+/// OXI_VERT_LATIN_SIDEWAYS (2026-11-25, default ON, opt-out _DISABLE): Latin text
+/// (ASCII and the Latin letters) in upright vertical writing lies on its side and
+/// advances by its horizontal width -- also in a face whose vmtx gives the glyph a
+/// whole em. `_pb_vert_latin_gen.py` (tbRl, «物(日記の紙)に…abc», Word PDF): «(» «a»
+/// are drawn turned (text direction 0,1) and advance ＭＳ 明朝 10.5 5.3, 游明朝 4.6,
+/// メイリオ 9 4.0, Arial 3.5, Times New Roman 12 4.0 = their horizontal widths; Oxi
+/// gave the three faces with vertical tables a whole em (ja/educational__01535587:
+/// «物(日記の紙)に» ran 10pt long).
+pub fn vertical_sideways_char(ch: char) -> bool {
+    (matches!(ch, '\u{21}'..='\u{7E}') || (ch.is_alphabetic() && matches!(ch, '\u{C0}'..='\u{24F}')))
+        && !crate::env_flag!("OXI_VERT_LATIN_SIDEWAYS_DISABLE")
+}
+
 /// OXI_UD_KYOKASHO_ALIAS (2026-11-02, default ON, opt-out _DISABLE): Windows
 /// renamed «UD デジタル 教科書体 N-R / N-B / NP-R / NP-B / NK-R / NK-B» to the
 /// families «… N / NP / NK» with Regular and Bold faces. A document saved under

@@ -9471,8 +9471,17 @@ cells={} pitch={:.2} text={:?}",
                         {
                             let w: f32 = line.fragments.iter().map(|f| f.natural_width.max(f.width)).sum();
                             let room = band_h - line_start - para.style.indent_right.unwrap_or(0.0).max(0.0) - w;
-                            let marks = line.fragments.iter().flat_map(|f| f.text.chars())
-                                .filter(|&c| matches!(c, '、' | '。' | '，' | '．') || kinsoku::is_yakumono_closing(c))
+                            // OXI_VERT_SQUEEZE_OPEN (2026-11-25, default ON, opt-out _DISABLE):
+                            // an opening bracket that is not the column's first glyph shares the
+                            // squeeze too (its top half). ja/educational__047ff775 p6 «（我が子）も
+                            // （土佐…小松（＝…»: Word pulls the two mid-column （ up 3.0 / 3.1 and
+                            // takes 2.5 off each ）、, the column ending at the band end; the
+                            // column-top （ keeps its advance. Oxi squeezed the closers only and ran
+                            // 3.9pt past the band end.
+                            let sq_open = !crate::env_flag!("OXI_VERT_SQUEEZE_OPEN_DISABLE");
+                            let marks = line.fragments.iter().flat_map(|f| f.text.chars()).enumerate()
+                                .filter(|&(i, c)| matches!(c, '、' | '。' | '，' | '．') || kinsoku::is_yakumono_closing(c)
+                                    || (sq_open && i > 0 && kinsoku::is_yakumono_opening(c)))
                                 .count();
                             if room < -0.01 && marks > 0 {
                                 let fs_line = line.fragments.iter()
@@ -9665,14 +9674,29 @@ cells={} pitch={:.2} text={:?}",
         // Word's base sits 1.37..6.56pt left of the two-cell column's centre,
         // fitted to 0.1pt by 0.5 raise + 0.3 rfs - 0.34 fs + 0.15;
         // ja/reference__6358c5e9 (12 / 6 / 11) measures 3.33 (formula 3.29).
-        let x = if vert_ruby && self.vertical_grid_for_block(page, recipe.block_idx).is_some() {
+        // OXI_VERT_RUBY_LINEGRID (2026-11-25, default ON, opt-out _DISABLE): the same shift
+        // under a lines-only grid, less 0.16 x fs per em the face's win box exceeds one em.
+        // `_pb_vruby2_gen.py` (tbRl, base 10.5, ruby 5, raise 7 / 9 / 13, Word PDF): docGrid
+        // lines ＭＳ 明朝 1.68 / 2.64 / 4.68 (formula 1.58 / 2.58 / 4.58), ＭＳ ゴシック
+        // 2.64, 游ゴシック and 游明朝 (win 1.287) 2.16, メイリオ (win 1.5) 0.84 / 1.80 / 3.84;
+        // linesAndChars メイリオ 0.72 / 1.68 / 3.72 -- 0.16 x (win - 1) x fs off the ＭＳ
+        // values within 0.12. ja/educational__01535587 (lines, メイリオ Bold 10.5, ruby 5 /
+        // raise 9): Word's base 1.95 left of the band centre, Oxi centred it.
+        let ruby_linegrid = !crate::env_flag!("OXI_VERT_RUBY_LINEGRID_DISABLE");
+        let ruby_grid = self.vertical_grid_for_block(page, recipe.block_idx).is_some()
+            || (ruby_linegrid && page.grid_line_pitch.is_some());
+        let x = if vert_ruby && ruby_grid {
             let shift = col.segs.iter().filter_map(|(ri, _)| {
                 let run = &para.runs[*ri];
                 let ruby = run.ruby.as_ref().filter(|r| !r.text.is_empty())?;
                 let fs = self.resolve_font_size(&run.style, &para.style);
                 let rfs = ruby.font_size.or(ruby.hps_halfpt.map(|h| h as f32 / 2.0)).unwrap_or(fs * 0.5);
                 let raise = ruby.hps_raise_halfpt.map(|h| h as f32 / 2.0).unwrap_or(fs * 0.5 + rfs * 0.5);
-                Some((0.5 * raise + 0.3 * rfs - 0.34 * fs + 0.15).max(0.0))
+                let win_extra = if ruby_linegrid {
+                    let m = self.metrics_for(&run.style, &para.style);
+                    (m.win_ascent + m.win_descent - 1.0).max(0.0)
+                } else { 0.0 };
+                Some((0.5 * raise + 0.3 * rfs - 0.34 * fs + 0.15 - 0.16 * win_extra * fs).max(0.0))
             }).fold(0.0_f32, f32::max);
             x - shift
         } else { x };
@@ -9734,8 +9758,9 @@ cells={} pitch={:.2} text={:?}",
                 let advances: Vec<_> = glyph_chars.iter().copied().map(|ch| {
                     let metrics = self.metrics_for_char_in(ch, true, &run.style, &para.style);
                     // OXI_VERT_HALFWIDTH_SIDEWAYS: a half-width form runs sideways.
-                    let advance = if ('\u{FF61}'..='\u{FF9F}').contains(&ch)
-                        && !crate::env_flag!("OXI_VERT_HALFWIDTH_SIDEWAYS_DISABLE")
+                    let advance = if (('\u{FF61}'..='\u{FF9F}').contains(&ch)
+                        && !crate::env_flag!("OXI_VERT_HALFWIDTH_SIDEWAYS_DISABLE"))
+                        || crate::font::vertical_sideways_char(ch)
                     {
                         Some(metrics.char_width_em(ch) * fs)
                     } else {
@@ -9778,12 +9803,22 @@ cells={} pitch={:.2} text={:?}",
                         {
                             (advance - col.punct_squeeze).max(0.5 * advance)
                         } else { advance };
+                        // OXI_VERT_SQUEEZE_OPEN: a squeezed opener loses its top half --
+                        // drawn higher by the squeeze, advancing that much less.
+                        let open_lift = if col.punct_squeeze > 0.0 && glyphs_done > 0
+                            && kinsoku::is_yakumono_opening(ch)
+                            && !crate::env_flag!("OXI_VERT_SQUEEZE_OPEN_DISABLE")
+                        {
+                            col.punct_squeeze.min(0.5 * advance)
+                        } else { 0.0 };
+                        let cy_draw = cy - open_lift;
+                        let advance = advance - open_lift;
                         // A mixed segment can select a different face per glyph.
                         // Paint with the face whose vertical metric was used.
                         let glyph_family = Some(metrics.family.clone());
                         let lead = if vert_ruby && run.style.ruby_spread { run.style.ruby_lead } else { 0.0 };
                         out.push(self.vertical_line_element(
-                            ch.to_string(), x, cy + lead, col.pitch, advance, fs, 0.0,
+                            ch.to_string(), x, cy_draw + lead, col.pitch, advance + open_lift, fs, 0.0,
                             &glyph_family, &run.style, &para_style, recipe.block_idx,
                         ));
                         cy += advance;

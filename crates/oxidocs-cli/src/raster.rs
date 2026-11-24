@@ -275,6 +275,8 @@ fn render_region(
         match element {
             ContentElement::SaveState => saved.push(clip.clone()),
             ContentElement::RestoreState => clip = saved.pop().unwrap_or(None),
+            // The raster preview draws sideways glyphs upright.
+            ContentElement::RotateCw { .. } => {}
             ContentElement::ClipPath(c) => {
                 let Some(path) = build_path(&c.operations) else {
                     // An empty clip shows nothing.

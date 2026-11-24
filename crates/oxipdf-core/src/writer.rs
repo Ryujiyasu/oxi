@@ -662,6 +662,11 @@ fn build_content_stream_with_images(
             ContentElement::RestoreState => {
                 write!(buf, "Q\n").unwrap();
             }
+            ContentElement::RotateCw { x, y } => {
+                // x' = y + e, y' = -x + f with (px, py) fixed: a clockwise quarter turn.
+                let (px, py) = (*x, page.height - *y);
+                write!(buf, "0 -1 1 0 {} {} cm\n", px - py, px + py).unwrap();
+            }
             ContentElement::ClipPath(clip) => {
                 for op in &clip.operations {
                     match op {

@@ -130,6 +130,11 @@ pub enum ContentElement {
     SaveState,
     /// Restore graphics state (corresponds to PDF `Q` operator).
     RestoreState,
+    /// Turn everything drawn after it (until the enclosing `RestoreState`) a
+    /// quarter turn clockwise, as seen on the page, about the page point
+    /// (x, y) (top-down coordinates). A PDF `cm`. Used for the sideways Latin
+    /// of vertical text.
+    RotateCw { x: f64, y: f64 },
 }
 
 impl ContentElement {
