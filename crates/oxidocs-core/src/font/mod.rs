@@ -91,6 +91,20 @@ pub fn vertical_font_advance_on() -> bool {
 }
 
 /// was a 96dpi paint-snap artifact. Opt-out: OXI_S546_DISABLE.
+/// OXI_PMINCHO_PUNCT_EXACT (2026-11-24, default ON, opt-out _DISABLE): ＭＳ Ｐ明朝's CJK
+/// punctuation advances by its design width too, as OXI_PMINCHO_EXACT does for its kana
+/// and ideographs. The half-em brackets sit exactly on the 10tw tie (5.25 at 10.5pt) and
+/// rounded up to 5.50. `_pb_0a4_paren_gen.py` (ja/reference__0a43e3b0, 10.5pt, jc left /
+/// both): Word （ 5.16-5.28 ） 5.16-5.28 「 」 【 】 alike (600 dpi steps of 5.25); 12pt 6.00 on
+/// both. S1202's tokyoshugyo PDF read: （5.164 ）5.207 「5.280 」5.280. 0a43e3b0 p2 wrapped
+/// «…での感|染» one character early on the 0.25 x 2 excess.
+pub fn pmincho_punct_exact(c: char, metrics: &FontMetrics) -> bool {
+    metrics.units_per_em == 256
+        && metrics.family == "MS PMincho"
+        && matches!(c, '\u{3000}'..='\u{303F}' | '\u{FF01}'..='\u{FF60}')
+        && !crate::env_flag!("OXI_PMINCHO_PUNCT_EXACT_DISABLE")
+}
+
 pub fn s1202_proportional_cjk_exact() -> bool {
     crate::env_flag!("OXI_S1202")
 }
@@ -2472,6 +2486,9 @@ impl FontMetricsRegistry {
                         && metrics.family == "MS PMincho"
                         && !crate::env_flag!("OXI_PMINCHO_EXACT_DISABLE")))
             {
+                return advance_em * font_size;
+            }
+            if pmincho_punct_exact(c, metrics) {
                 return advance_em * font_size;
             }
             let width_tw = (advance_em * font_size * 20.0 / 10.0 + 0.5).floor() * 10.0;

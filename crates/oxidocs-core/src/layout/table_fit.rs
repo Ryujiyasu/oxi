@@ -13908,13 +13908,30 @@ impl<'a> TableFitLayouter<'a> {
                                 // Move bottom horizontal border down to content
                                 // bottom (+ the S817 tail; tail=0 keeps the old
                                 // content-bottom condition byte-identical).
-                                if let LayoutContent::TableBorder { y1, y2, .. } =
-                                    &mut next_page_elems[bi].content
-                                {
-                                    *y1 = s817_close;
-                                    *y2 = s817_close;
+                                // OXI_SPLIT_CONT_CLOSE_ALL (2026-11-24, default ON, opt-out
+                                // _DISABLE): every cell's segment of that rule moves, and the
+                                // cell fills reach it. en/reports__00196a22 p11 (trHeight 1060,
+                                // 7 cells, F2F2F2 fills): only the first cell's segment went to
+                                // the trH floor (171), the six others stayed at 141.9 and the fills
+                                // at 9pt. `_pb_splitrow_shd_gen.py` h2000: Word's continuation fill
+                                // and rule both end at top + 100.
+                                let close_all = !crate::env_flag!("OXI_SPLIT_CONT_CLOSE_ALL_DISABLE");
+                                for (ei, e) in next_page_elems.iter_mut().enumerate() {
+                                    let hit = ei == bi || (close_all && matches!(&e.content,
+                                        LayoutContent::TableBorder { y1, y2, .. }
+                                            if (*y1 - *y2).abs() < 0.1 && (*y1 - cur_border_y).abs() < 0.5));
+                                    if hit {
+                                        if let LayoutContent::TableBorder { y1, y2, .. } = &mut e.content {
+                                            *y1 = s817_close;
+                                            *y2 = s817_close;
+                                        }
+                                        e.y = s817_close;
+                                    } else if close_all && matches!(&e.content, LayoutContent::CellShading { .. })
+                                        && e.y < s817_close && e.y + e.height < s817_close - 0.5
+                                    {
+                                        e.height = s817_close - e.y;
+                                    }
                                 }
-                                next_page_elems[bi].y = s817_close;
 
                                 // Extend the sides to the continuation bottom.
                                 // Its top edges are repeated from their declarations below.
@@ -14030,6 +14047,18 @@ impl<'a> TableFitLayouter<'a> {
                             // A continuation's top edge is not a bottom template.
                             let templates: Vec<_> =
                                 split_bottom_edges.iter().filter_map(border_style).collect();
+                            // OXI_SPLIT_FILL_CLIP (2026-11-24, default ON, opt-out _DISABLE): the
+                            // cell fills of the piece stop at the rule that closes it, not at
+                            // split_y (en/reports__00196a22 p10: rule 705.1, fills ran to 719.0).
+                            if !templates.is_empty() && !crate::env_flag!("OXI_SPLIT_FILL_CLIP_DISABLE") {
+                                for e in current_page_elems.iter_mut() {
+                                    if matches!(&e.content, LayoutContent::CellShading { .. })
+                                        && e.y < close_y && e.y + e.height > close_y + 0.01
+                                    {
+                                        e.height = close_y - e.y;
+                                    }
+                                }
+                            }
                             for (bx1, bx2, color, bw, bstyle) in templates {
                                 for e in current_page_elems.iter_mut() {
                                     if let LayoutContent::TableBorder { y1, y2, .. } =

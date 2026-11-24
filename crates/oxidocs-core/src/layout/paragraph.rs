@@ -7408,6 +7408,33 @@ impl<'a> ParagraphLayouter<'a> {
                 // 2026-04-20 fix: Skip chars whose fragment.width is ALREADY smaller than
                 // natural (indicates break_into_lines already compressed them — applying
                 // Phase 1 again would DOUBLE-compress, crushing 「」 to w=0pt).
+                // OXI_DNC_HANG_WHOLE (2026-11-24, default ON, opt-out _DISABLE): without
+                // compressPunctuation, a justified line whose last character is 、。，． and
+                // which fits without it hangs that mark WHOLE past the edge; nothing on the
+                // line is squeezed and the rest spreads to the edge. `_pb_52b_hang_gen.py`
+                // (ja/technical__52b9cff8, ＭＳ 明朝 12, kern 2, doNotCompress; 36 cells with
+                // a mid 、 / without / ending 。, overflow 0.8..11.8): Word's mark starts at
+                // the edge (516.0 / 512.0 / 509.7 / 508.1 / 505.4), the mid 、 stays 12;
+                // Oxi squeezed the mid 、 to 11.6..6.0 and left the no-mid arm unspread.
+                if slack < 0.0 && txbx_ok && !s472_render && !self.compress_punctuation
+                    && !crate::env_flag!("OXI_DNC_HANG_WHOLE_DISABLE")
+                {
+                    if let Some(lf) = line.fragments.last() {
+                        if let Some(c) = lf.text.chars().last().filter(|c| matches!(c, '、' | '。' | '，' | '．')) {
+                            let w = if lf.text.chars().count() == 1 {
+                                lf.width
+                            } else {
+                                let fs = lf.style.font_size.unwrap_or(para_font_size);
+                                let fm = &*self.metrics_for(&lf.style, &para.style);
+                                self.registry.char_width_pt_with_fallback(c, fs, fm)
+                            };
+                            if slack + w >= -0.01 {
+                                lend_credit += w;
+                                slack += w;
+                            }
+                        }
+                    }
+                }
                 if slack < 0.0 && txbx_ok && !s472_render {
                     for (fi, frag) in line.fragments.iter().enumerate() {
                         for ch in frag.text.chars() {
