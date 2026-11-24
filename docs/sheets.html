@@ -154,6 +154,38 @@ html[data-host="desktop"] .src { display: none }
 .fx { display: flex; align-items: center; gap: 8px; height: 42px; flex-shrink: 0; padding: 0 12px;
   background: var(--surface); border-bottom: 1px solid var(--line); font-size: 13px }
 .fx[hidden] { display: none }
+.rib { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 40px; flex-shrink: 0; padding: 4px 12px;
+  background: var(--surface); border-bottom: 1px solid var(--line); font-size: 13px; user-select: none }
+.rib[hidden] { display: none }
+.rib .rg { display: flex; align-items: center; gap: 1px; background: var(--paper); border: 1px solid var(--line);
+  border-radius: 8px; padding: 2px }
+.rib .rs { width: 1px; height: 22px; background: var(--line); margin: 0 4px }
+.rib button { min-width: 28px; height: 28px; border: 1px solid transparent; border-radius: 6px; background: transparent;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; color: var(--ink) }
+.rib button svg { width: 16px; height: 16px }
+.rib button:hover { background: var(--surface); border-color: var(--line) }
+.rib button.on { background: var(--accent-l); border-color: var(--accent); color: var(--accent-h) }
+.rib select, .rib input[type=number] { height: 28px; border: 1px solid var(--line2); border-radius: 6px; background: var(--surface);
+  padding: 0 4px; font-size: 13px }
+.rib #fFont { width: 130px } .rib #fSize { width: 52px } .rib #fNum { width: 120px } .rib #fBorder { width: 96px }
+.rib label.cl { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 4px; border-radius: 6px; cursor: pointer }
+.rib label.cl:hover { background: var(--surface) }
+.rib input[type=color] { width: 22px; height: 22px; border: 0; padding: 0; background: none; cursor: pointer }
+.tab-add { border: 0; background: transparent; color: var(--ink2); font-size: 18px; width: 30px; cursor: pointer }
+.tab-add:hover { color: var(--accent-h); background: var(--surface) }
+.ctx label.cl { display: flex; align-items: center; justify-content: space-between; padding: 7px 10px; border-radius: 6px; cursor: pointer }
+.ctx label.cl:hover { background: var(--accent-l); color: var(--accent-h) }
+.ctx label.cl input { width: 22px; height: 18px; border: 0; padding: 0; background: none }
+.ctx button:disabled { opacity: .4; cursor: default }
+.finddlg { position: fixed; right: 18px; top: 140px; left: auto; margin: 0; z-index: 60; border: 1px solid var(--line2);
+  border-radius: 10px; box-shadow: var(--shad-2); padding: 12px 14px; background: var(--surface); font-size: 13px; width: 300px }
+.finddlg .fr { display: flex; align-items: center; gap: 8px; margin-bottom: 8px }
+.finddlg .fr > span { width: 72px; color: var(--ink2) }
+.finddlg input[type=text] { flex: 1; height: 28px; border: 1px solid var(--line2); border-radius: 6px; padding: 0 6px }
+.finddlg:not(.rep) .only-rep { display: none }
+.finddlg .fb { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px }
+.finddlg .fb button { height: 28px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 6px; background: var(--paper); cursor: pointer }
+.finddlg #fdMsg { color: var(--ink3); min-height: 16px }
 .nbox { width: 92px; height: 28px; border: 1px solid var(--line2); border-radius: 6px; background: var(--paper);
   text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); flex-shrink: 0; padding: 0 6px }
 .nbox:focus { background: var(--surface); border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-l); text-align: left }
@@ -330,6 +362,36 @@ body.dragging, body.dragging * { user-select: none }
   </form>
 </dialog>
 
+<div class="rib" id="rib" hidden>
+  <select id="fFont" data-i18n-title="tFont" title="Font"><option>Calibri</option><option>Arial</option><option>Times New Roman</option><option>Meiryo</option><option>Yu Gothic</option><option>MS Gothic</option><option>MS Mincho</option></select>
+  <input id="fSize" type="number" min="1" max="409" step="0.5" data-i18n-title="tSize" title="Font size">
+  <span class="rg"><button id="fBold" data-i18n-title="tBold" title="Bold (Ctrl+B)" style="font-weight:700">B</button><button id="fItalic" data-i18n-title="tItalic" title="Italic (Ctrl+I)" style="font-style:italic">I</button><button id="fUnder" data-i18n-title="tUnder" title="Underline (Ctrl+U)" style="text-decoration:underline">U</button><button id="fStrike" data-i18n-title="tStrike" title="Strikethrough" style="text-decoration:line-through">S</button></span>
+  <label class="cl" data-i18n-title="tColor" title="Font colour"><span style="font-weight:700;text-decoration:underline">A</span><input id="fColor" type="color" value="#c00000"></label>
+  <label class="cl" data-i18n-title="tFill" title="Fill colour"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 11l-8-8-8 8 8 8z"/><path d="M20 15s-2 2.5-2 4a2 2 0 0 0 4 0c0-1.5-2-4-2-4z"/></svg><input id="fFill" type="color" value="#ffff00"></label>
+  <button id="fNoFill" data-i18n-title="tNoFill" title="No fill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 20L20 4"/></svg></button>
+  <span class="rs"></span>
+  <span class="rg"><button id="aLeft" data-i18n-title="tLeft" title="Align left"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 10h10M4 14h16M4 18h10"/></svg></button><button id="aCenter" data-i18n-title="tCenter" title="Centre"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 10h10M4 14h16M7 18h10"/></svg></button><button id="aRight" data-i18n-title="tRight" title="Align right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M10 10h10M4 14h16M10 18h10"/></svg></button></span>
+  <button id="fWrap" data-i18n-title="tWrap" title="Wrap text"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h13a3 3 0 0 1 0 6h-4"/><path d="M15 16l-2 2 2 2M4 18h5"/></svg></button>
+  <button id="fMerge" data-i18n-title="tMerge" title="Merge and centre"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="1"/><path d="M8 12h8M14 10l2 2-2 2M10 10l-2 2 2 2"/></svg></button>
+  <span class="rs"></span>
+  <select id="fNum" data-i18n-title="tNum" title="Number format"><option value="General" data-i18n="nGeneral">General</option><option value="0.00" data-i18n="nNumber">Number</option><option value="#,##0" data-i18n="nComma">Thousands</option><option value="¥#,##0" data-i18n="nYen">Currency ¥</option><option value="$#,##0.00" data-i18n="nDollar">Currency $</option><option value="0%" data-i18n="nPct">Percent</option><option value="yyyy/m/d" data-i18n="nDate">Date</option><option value="h:mm" data-i18n="nTime">Time</option><option value="@" data-i18n="nText">Text</option><option value="" hidden>…</option></select>
+  <button id="fDecUp" data-i18n-title="tDecUp" title="Increase decimal">.0+</button><button id="fDecDown" data-i18n-title="tDecDown" title="Decrease decimal">.0−</button>
+  <select id="fBorder" data-i18n-title="tBorder" title="Borders"><option value="" data-i18n="bBorders">Borders</option><option value="all" data-i18n="bAll">All borders</option><option value="outside" data-i18n="bOutside">Outside</option><option value="thick" data-i18n="bThick">Thick outside</option><option value="bottom" data-i18n="bBottom">Bottom</option><option value="none" data-i18n="bNone">No border</option></select>
+  <button id="fClear" data-i18n-title="tClear" title="Clear formats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h10M14 4l6 6-9 9H6l-2-2z"/></svg></button>
+  <span class="rs"></span>
+  <span class="rg"><button id="fSortAsc" data-i18n-title="tSortAsc" title="Sort A to Z">A↓Z</button><button id="fSortDesc" data-i18n-title="tSortDesc" title="Sort Z to A">Z↓A</button><button id="fFilter" data-i18n-title="tFilter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16l-6 8v5l-4 2v-7z"/></svg></button></span>
+  <button id="fFreeze" data-i18n-title="tFreeze" title="Freeze panes at the active cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg></button>
+  <button id="fFind" data-i18n-title="tFind" title="Find and replace (Ctrl+F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></button>
+</div>
+
+<dialog id="findDlg" class="finddlg">
+  <div class="fr"><span data-i18n="fdWhat">Find</span><input type="text" id="fdWhat" autocomplete="off" spellcheck="false"></div>
+  <div class="fr only-rep"><span data-i18n="fdWith">Replace with</span><input type="text" id="fdWith" autocomplete="off" spellcheck="false"></div>
+  <div class="fr"><label><input type="checkbox" id="fdCase"> <span data-i18n="fdCase">Match case</span></label><label><input type="checkbox" id="fdWhole"> <span data-i18n="fdWhole">Whole cell</span></label></div>
+  <div id="fdMsg"></div>
+  <div class="fb"><button id="fdRepMode" data-i18n="fdRepMode">Replace…</button><button id="fdAll" class="only-rep" data-i18n="fdAll">Replace all</button><button id="fdNext" data-i18n="fdNext">Find next</button><button id="fdClose" data-i18n="fdClose">Close</button></div>
+</dialog>
+
 <div class="fx" id="fx" hidden>
   <input class="nbox" id="cellRef" value="A1" autocomplete="off" spellcheck="false" aria-label="Name box">
   <span class="fxmark">fx</span>
@@ -373,6 +435,35 @@ body.dragging, body.dragging * { user-select: none }
   <button data-act="fillRight" role="menuitem"><span data-i18n="fillRight">Fill right</span><kbd>Ctrl+R</kbd></button>
   <hr>
   <button data-act="clear" role="menuitem"><span data-i18n="clear">Clear contents</span><kbd>Del</kbd></button>
+  <button data-act="clearFormats" role="menuitem"><span data-i18n="clearFormats">Clear formats</span></button>
+  <hr>
+  <button data-act="insRows" role="menuitem"><span data-i18n="insRows">Insert rows above</span></button>
+  <button data-act="insCols" role="menuitem"><span data-i18n="insCols">Insert columns left</span></button>
+  <button data-act="delRows" role="menuitem"><span data-i18n="delRows">Delete rows</span></button>
+  <button data-act="delCols" role="menuitem"><span data-i18n="delCols">Delete columns</span></button>
+  <hr>
+  <button data-act="hideRows" role="menuitem"><span data-i18n="hideRows">Hide rows</span></button>
+  <button data-act="hideCols" role="menuitem"><span data-i18n="hideCols">Hide columns</span></button>
+  <button data-act="unhide" role="menuitem"><span data-i18n="unhide">Unhide</span></button>
+  <button data-act="rowHeight" role="menuitem"><span data-i18n="rowHeight">Row height…</span></button>
+  <button data-act="colWidth" role="menuitem"><span data-i18n="colWidth">Column width…</span></button>
+  <button data-act="autofit" role="menuitem"><span data-i18n="autofit">AutoFit column width</span></button>
+  <hr>
+  <button data-act="insComment" role="menuitem"><span data-i18n="insComment">Comment…</span></button>
+  <button data-act="insLink" role="menuitem"><span data-i18n="insLink">Link…</span><kbd>Ctrl+K</kbd></button>
+</div>
+
+<div class="ctx" id="tabCtx" hidden role="menu">
+  <button data-tab="insert" role="menuitem"><span data-i18n="tabInsert">Insert sheet</span></button>
+  <button data-tab="duplicate" role="menuitem"><span data-i18n="tabDuplicate">Duplicate</span></button>
+  <button data-tab="rename" role="menuitem"><span data-i18n="tabRename">Rename…</span></button>
+  <button data-tab="delete" role="menuitem"><span data-i18n="tabDelete">Delete</span></button>
+  <hr>
+  <button data-tab="left" role="menuitem"><span data-i18n="tabLeft">Move left</span></button>
+  <button data-tab="right" role="menuitem"><span data-i18n="tabRight">Move right</span></button>
+  <hr>
+  <label class="cl"><span data-i18n="tabColor">Tab colour</span><input id="tabColor" type="color" value="#00b050"></label>
+  <button data-tab="nocolor" role="menuitem"><span data-i18n="tabNoColor">No colour</span></button>
 </div>
 
 <input type="file" id="fileIn" accept=".xlsx,.xlsm" hidden>
@@ -404,6 +495,24 @@ const I18N = {
     badType: 'Choose a .xlsx or .xlsm file.',
     failed: 'Could not open the workbook: ',
     editFailed: 'Could not apply that edit: ',
+    tFont: 'Font', tSize: 'Font size', tBold: 'Bold (Ctrl+B)', tItalic: 'Italic (Ctrl+I)', tUnder: 'Underline (Ctrl+U)',
+    tStrike: 'Strikethrough', tColor: 'Font colour', tFill: 'Fill colour', tNoFill: 'No fill', tLeft: 'Align left',
+    tCenter: 'Centre', tRight: 'Align right', tWrap: 'Wrap text', tMerge: 'Merge and centre (again to unmerge)',
+    tNum: 'Number format', tDecUp: 'Increase decimal', tDecDown: 'Decrease decimal', tBorder: 'Borders',
+    tClear: 'Clear formats', tSortAsc: 'Sort A to Z', tSortDesc: 'Sort Z to A', tFilter: 'Filter',
+    tFreeze: 'Freeze panes above and left of the active cell (again to unfreeze)', tFind: 'Find and replace (Ctrl+F)',
+    nGeneral: 'General', nNumber: 'Number', nComma: 'Thousands', nYen: 'Currency ¥', nDollar: 'Currency $',
+    nPct: 'Percent', nDate: 'Date', nTime: 'Time', nText: 'Text',
+    bBorders: 'Borders', bAll: 'All borders', bOutside: 'Outside', bThick: 'Thick outside', bBottom: 'Bottom', bNone: 'No border',
+    clearFormats: 'Clear formats', insRows: 'Insert rows above', insCols: 'Insert columns left', delRows: 'Delete rows',
+    delCols: 'Delete columns', hideRows: 'Hide rows', hideCols: 'Hide columns', unhide: 'Unhide',
+    rowHeight: 'Row height…', colWidth: 'Column width…', autofit: 'AutoFit column width', insComment: 'Comment…', insLink: 'Link…',
+    tabInsert: 'Insert sheet', tabDuplicate: 'Duplicate', tabRename: 'Rename…', tabDelete: 'Delete', tabLeft: 'Move left',
+    tabRight: 'Move right', tabColor: 'Tab colour', tabNoColor: 'No colour', tabAdd: 'New sheet',
+    askRowHeight: 'Row height (points)', askColWidth: 'Column width (characters)', askComment: 'Comment',
+    askLink: 'Link address', askSheetName: 'Sheet name', askDeleteSheet: name => `Delete the sheet "${name}"?`,
+    fdWhat: 'Find', fdWith: 'Replace with', fdCase: 'Match case', fdWhole: 'Whole cell', fdRepMode: 'Replace…',
+    fdAll: 'Replace all', fdNext: 'Find next', fdClose: 'Close', notFound: 'Not found.', replaced: 'Replaced on this sheet.',
     saved: 'Saved. The file was written in your browser.',
     leave: 'You have edits that are not saved.',
     empty: 'The workbook holds no sheets.',
@@ -442,6 +551,24 @@ const I18N = {
     badType: '.xlsx / .xlsm ファイルではありません。',
     failed: 'ブックを開けませんでした: ',
     editFailed: 'この編集を反映できませんでした: ',
+    tFont: 'フォント', tSize: 'フォント サイズ', tBold: '太字 (Ctrl+B)', tItalic: '斜体 (Ctrl+I)', tUnder: '下線 (Ctrl+U)',
+    tStrike: '取り消し線', tColor: 'フォントの色', tFill: '塗りつぶしの色', tNoFill: '塗りつぶしなし', tLeft: '左揃え',
+    tCenter: '中央揃え', tRight: '右揃え', tWrap: '折り返して全体を表示', tMerge: 'セルを結合して中央揃え (もう一度で解除)',
+    tNum: '表示形式', tDecUp: '小数点以下の表示桁数を増やす', tDecDown: '小数点以下の表示桁数を減らす', tBorder: '罫線',
+    tClear: '書式のクリア', tSortAsc: '昇順で並べ替え', tSortDesc: '降順で並べ替え', tFilter: 'フィルター',
+    tFreeze: 'アクティブセルの上と左でウィンドウ枠を固定 (もう一度で解除)', tFind: '検索と置換 (Ctrl+F)',
+    nGeneral: '標準', nNumber: '数値', nComma: '桁区切り', nYen: '通貨 ¥', nDollar: '通貨 $',
+    nPct: 'パーセント', nDate: '日付', nTime: '時刻', nText: '文字列',
+    bBorders: '罫線', bAll: '格子', bOutside: '外枠', bThick: '太い外枠', bBottom: '下罫線', bNone: '枠なし',
+    clearFormats: '書式のクリア', insRows: '上に行を挿入', insCols: '左に列を挿入', delRows: '行の削除',
+    delCols: '列の削除', hideRows: '行を表示しない', hideCols: '列を表示しない', unhide: '再表示',
+    rowHeight: '行の高さ…', colWidth: '列の幅…', autofit: '列の幅の自動調整', insComment: 'コメント…', insLink: 'リンク…',
+    tabInsert: 'シートの挿入', tabDuplicate: 'コピーを作成', tabRename: '名前の変更…', tabDelete: '削除', tabLeft: '左へ移動',
+    tabRight: '右へ移動', tabColor: 'シート見出しの色', tabNoColor: '色なし', tabAdd: '新しいシート',
+    askRowHeight: '行の高さ (ポイント)', askColWidth: '列の幅 (文字数)', askComment: 'コメント',
+    askLink: 'リンク先のアドレス', askSheetName: 'シート名', askDeleteSheet: name => `シート「${name}」を削除しますか?`,
+    fdWhat: '検索する文字列', fdWith: '置換後の文字列', fdCase: '大文字と小文字を区別', fdWhole: 'セル内容が完全に同一', fdRepMode: '置換…',
+    fdAll: 'すべて置換', fdNext: '次を検索', fdClose: '閉じる', notFound: '見つかりませんでした。', replaced: 'このシートで置換しました。',
     saved: '保存しました。ファイルはブラウザの中で作られています。',
     leave: '保存していない編集があります。',
     empty: 'このブックにはシートがありません。',
@@ -672,7 +799,11 @@ function tabs() {
     button.textContent = sheet.name || `Sheet${index + 1}`;
     button.title = button.textContent;
     button.onclick = () => switchSheet(index);
+    button.oncontextmenu = e => openTabMenu(e, index);
+    button.ondblclick = () => renameSheet(index);
     return button;
+  }), Object.assign(document.createElement('button'), {
+    className: 'tab-add', textContent: '+', title: t('tabAdd'), onclick: () => addSheet(),
   }));
 }
 function switchSheet(index) {
@@ -851,6 +982,7 @@ function paint(scrollTo = true) {
   if (document.activeElement !== fxIn && mode === 'ready') fxIn.value = rawOf(cellAt(act.row, act.col));
   aggregates();
   showMode();
+  syncRibbon();
   if (scrollTo && A) reveal(A);
 }
 
@@ -1250,6 +1382,7 @@ function write(items) {
     return;
   }
   undoStack.push(step);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   redoStack.length = 0;
   markSaved();
 }
@@ -1275,6 +1408,12 @@ function replay(from, to, side) {
   const step = from.pop();
   if (!step) return;
   cancelEdit();
+  if (step.snap) {
+    restoreState(step[side]);
+    to.push(step);
+    markSaved();
+    return;
+  }
   for (const s of step) {
     const v = s[side];
     if (v) changes.set(s.key, v); else changes.delete(s.key);
@@ -1498,8 +1637,353 @@ ctx.addEventListener('click', async e => {
   } else if (act === 'clear') clearRange();
   else if (act === 'fillDown') fillDir('row');
   else if (act === 'fillRight') fillDir('col');
+  else if (UI_ACTS[act]) UI_ACTS[act]();
 });
 document.addEventListener('mousedown', e => { if (!ctx.contains(e.target)) closeMenu(); });
+
+// ---- formatting and structure ---------------------------------------------------
+/* Formats, rows and columns, sheets, sorting, the filter and frozen panes go
+   through the macro engine: the page writes the few lines of VBA a person
+   would record (`Range("B2:C4").Font.Bold = True`), the engine applies them to
+   the workbook exactly as it applies a macro's, and the saved bytes become the
+   new starting point. One engine, so what the button does is what the macro
+   does, and both save the same way.
+
+   Each run is one undo step holding the whole state before and after (bytes
+   and pending cell edits), so Ctrl+Z walks back through formats and typing in
+   the order they were made. */
+const UNDO_LIMIT = 100;
+const vq = s => '"' + String(s).replace(/"/g, '""') + '"';
+const ws = () => `Worksheets(${shown + 1})`;
+const addrOf = r => r.r0 === r.r1 && r.c0 === r.c1 ? a1(r.r0, r.c0) : `${a1(r.r0, r.c0)}:${a1(r.r1, r.c1)}`;
+const selRange = () => `${ws()}.Range(${vq(addrOf(range))})`;
+const rowsSpan = () => `${ws()}.Rows(${vq(range.r0 + ':' + range.r1)})`;
+const colsSpan = () => `${ws()}.Columns(${vq(colName(range.c0) + ':' + colName(range.c1))})`;
+const rgbOf = hex => {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return `RGB(${n >> 16 & 255}, ${n >> 8 & 255}, ${n & 255})`;
+};
+function snapState() {
+  return { source, changes: [...changes.entries()], macroDirty, shown, range: { ...range }, act: { ...act } };
+}
+function restoreState(s) {
+  source = s.source;
+  origBook = parse_spreadsheet(source);
+  changes.clear();
+  for (const [k, v] of s.changes) changes.set(k, v);
+  macroDirty = s.macroDirty;
+  shown = Math.min(s.shown, origBook.sheets.length - 1);
+  rebuild();
+  tabs(); dataButtons();
+  selectRange(s.range, s.act);
+}
+function pushSnapStep(before) {
+  undoStack.push({ snap: true, before, after: snapState() });
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  redoStack.length = 0;
+  markSaved();
+}
+/** Run `lines` as one macro on the open workbook; true when it applied. */
+function runUi(lines, opts = {}) {
+  if (!book) return false;
+  commitEdit();
+  closeMenu(); closeTabMenu();
+  const before = snapState();
+  const src = ['Public Sub OxiUi()', '  Application.DisplayAlerts = False',
+    ...lines.map(l => '  ' + l), 'End Sub'].join('\n');
+  let bytes;
+  try {
+    const ex = vbaEngine.run_spreadsheet_vba_with_outcome(book, src, 'OxiUi', [], shown, fileName, undefined);
+    if (ex.error) throw new Error(ex.error.message ?? String(ex.error));
+    bytes = vbaEngine.edit_xlsx_from_workbook(current, ex.workbook);
+  } catch (error) {
+    say(t('editFailed') + (error.message ?? error), true);
+    return false;
+  }
+  source = bytes;
+  origBook = parse_spreadsheet(bytes);
+  changes.clear();
+  macroDirty = true;
+  if (opts.sheet !== undefined) shown = Math.max(0, Math.min(opts.sheet, origBook.sheets.length - 1));
+  if (shown >= origBook.sheets.length) shown = origBook.sheets.length - 1;
+  rebuild();
+  tabs(); dataButtons();
+  if (opts.sheet !== undefined && opts.sheet !== before.shown) select({ row: 1, col: 0 });
+  else selectRange(range, act);
+  pushSnapStep(before);
+  return true;
+}
+
+// The active cell's look, for the buttons' pressed state and the pickers.
+const styleHere = () => cellAt(act.row, act.col)?.style || {};
+function syncRibbon() {
+  if (!book) return;
+  const s = styleHere();
+  const on = (id, v) => $(id).classList.toggle('on', !!v);
+  on('fBold', s.bold); on('fItalic', s.italic); on('fUnder', s.underline); on('fStrike', s.strikethrough);
+  const h = s.horizontal_align;
+  on('aLeft', h === 'left'); on('aCenter', h === 'center'); on('aRight', h === 'right');
+  on('fWrap', s.wrap_text);
+  on('fMerge', !!mergeOf(book.sheets[shown], act.row, act.col));
+  const sheet = book.sheets[shown];
+  on('fFilter', !!sheet.auto_filter);
+  on('fFreeze', (sheet.frozen_rows || 0) + (sheet.frozen_cols || 0) > 0);
+  if (document.activeElement !== $('fSize')) $('fSize').value = s.font_size ? String(+s.font_size.toFixed(1)) : '11';
+  if (document.activeElement !== $('fFont')) {
+    const name = s.font_name || 'Calibri';
+    const sel = $('fFont');
+    if (![...sel.options].some(o => o.value === name)) sel.add(new Option(name, name));
+    sel.value = name;
+  }
+  if (document.activeElement !== $('fNum')) {
+    const f = s.number_format || 'General';
+    const sel = $('fNum');
+    sel.value = [...sel.options].some(o => o.value === f) ? f : '';
+  }
+}
+
+function toggleFont(prop, cur, onValue = 'True', offValue = 'False') {
+  runUi([`${selRange()}.Font.${prop} = ${cur ? offValue : onValue}`]);
+}
+function align(h) {
+  const cur = styleHere().horizontal_align;
+  const code = { left: -4131, center: -4108, right: -4152 }[h];
+  runUi([`${selRange()}.HorizontalAlignment = ${cur === h ? 1 : code}`]);
+}
+function mergeCenter() {
+  const m = mergeOf(book.sheets[shown], act.row, act.col);
+  if (m) {
+    runUi([`${ws()}.Range(${vq(addrOf({ r0: m.start_row, c0: m.start_col, r1: m.end_row, c1: m.end_col }))}).UnMerge`]);
+  } else if (range.r0 !== range.r1 || range.c0 !== range.c1) {
+    runUi([`${selRange()}.Merge`, `${selRange()}.HorizontalAlignment = -4108`]);
+  }
+}
+/** One more or one fewer decimal in one section of a number format: the run
+    of 0s after the last digit placeholder's point (outside quoted text). */
+function stepSection(part, delta) {
+  let inQ = false, last = -1;
+  for (let i = 0; i < part.length; i++) {
+    const ch = part[i];
+    if (ch === '"') inQ = !inQ;
+    else if (!inQ && ch === '\\') i++;
+    else if (!inQ && (ch === '0' || ch === '#')) last = i;
+  }
+  if (last < 0) return part;
+  let start = last;
+  while (start > 0 && part[start - 1] === '0') start--;
+  if (start > 0 && part[start - 1] === '.') {
+    const next = Math.max(0, last - start + 1 + delta);
+    return next ? part.slice(0, start) + '0'.repeat(next) + part.slice(last + 1)
+      : part.slice(0, start - 1) + part.slice(last + 1);
+  }
+  return delta > 0 ? part.slice(0, last + 1) + '.0' + part.slice(last + 1) : part;
+}
+function stepDecimals(delta) {
+  let f = styleHere().number_format || 'General';
+  f = /^general$/i.test(f) ? (delta > 0 ? '0.0' : '0') : f.split(';').map(p => stepSection(p, delta)).join(';');
+  runUi([`${selRange()}.NumberFormat = ${vq(f)}`]);
+}
+function borders(kind) {
+  const r = selRange();
+  const lines = {
+    all: [`${r}.Borders.LineStyle = 1`, `${r}.Borders.Weight = 2`],
+    outside: [`${r}.BorderAround 1, 2`],
+    thick: [`${r}.BorderAround 1, -4138`],
+    bottom: [`${r}.Borders(9).LineStyle = 1`, `${r}.Borders(9).Weight = 2`],
+    none: [`${r}.Borders.LineStyle = -4142`, ...[5, 6, 7, 8, 9, 10, 11, 12].map(i => `${r}.Borders(${i}).LineStyle = -4142`)],
+  }[kind];
+  if (lines) runUi(lines);
+}
+function sortBy(order) {
+  const single = range.r0 === range.r1 && range.c0 === range.c1;
+  const area = single ? `${ws()}.Range(${vq(a1(act.row, act.col))}).CurrentRegion` : selRange();
+  // xlGuess: a first row of text over numbers below is a header, as Excel guesses.
+  runUi([`${area}.Sort Key1:=${ws()}.Range(${vq(a1(act.row, act.col))}), Order1:=${order}, Header:=0`]);
+}
+function toggleFilter() {
+  const sheet = book.sheets[shown];
+  if (sheet.auto_filter) runUi([`${ws()}.AutoFilterMode = False`]);
+  else runUi([`${ws()}.Range(${vq(addrOf(range))}).AutoFilter`]);
+}
+function toggleFreeze() {
+  const sheet = book.sheets[shown];
+  if ((sheet.frozen_rows || 0) + (sheet.frozen_cols || 0) > 0) runUi([`${ws()}.Activate`, 'ActiveWindow.FreezePanes = False']);
+  else runUi([`${ws()}.Activate`, `${ws()}.Range(${vq(a1(act.row, act.col))}).Select`, 'ActiveWindow.FreezePanes = True']);
+}
+
+// Rows, columns and sheets, from the context menus.
+const UI_ACTS = {
+  insRows: () => runUi([`${rowsSpan()}.Insert`]),
+  delRows: () => runUi([`${rowsSpan()}.Delete`]),
+  insCols: () => runUi([`${colsSpan()}.Insert`]),
+  delCols: () => runUi([`${colsSpan()}.Delete`]),
+  hideRows: () => runUi([`${rowsSpan()}.Hidden = True`]),
+  hideCols: () => runUi([`${colsSpan()}.Hidden = True`]),
+  unhide: () => runUi([`${rowsSpan()}.Hidden = False`, `${colsSpan()}.Hidden = False`]),
+  rowHeight: () => {
+    const v = prompt(t('askRowHeight'), '15');
+    if (v !== null && Number(v) >= 0) runUi([`${rowsSpan()}.RowHeight = ${Number(v)}`]);
+  },
+  colWidth: () => {
+    const v = prompt(t('askColWidth'), '8.43');
+    if (v !== null && Number(v) >= 0) runUi([`${colsSpan()}.ColumnWidth = ${Number(v)}`]);
+  },
+  autofit: () => runUi([`${colsSpan()}.AutoFit`]),
+  clearFormats: () => runUi([`${selRange()}.ClearFormats`]),
+  insComment: () => {
+    const v = prompt(t('askComment'), '');
+    if (v) runUi([`${ws()}.Range(${vq(a1(act.row, act.col))}).ClearComments`, `${ws()}.Range(${vq(a1(act.row, act.col))}).AddComment ${vq(v)}`]);
+  },
+  insLink: () => {
+    const v = prompt(t('askLink'), 'https://');
+    if (v && v !== 'https://') {
+      const cell = `${ws()}.Range(${vq(a1(act.row, act.col))})`;
+      const shownText = rawOf(cellAt(act.row, act.col)) || v;
+      runUi([`${ws()}.Hyperlinks.Add Anchor:=${cell}, Address:=${vq(v)}, TextToDisplay:=${vq(shownText)}`]);
+    }
+  },
+};
+
+// Sheet tabs: right-click for the sheet menu, double-click to rename, + to add.
+const tabCtx = $('tabCtx');
+let tabTarget = 0;
+function closeTabMenu() { tabCtx.hidden = true; }
+function openTabMenu(e, index) {
+  e.preventDefault();
+  commitEdit();
+  if (index !== shown) switchSheet(index);
+  tabTarget = index;
+  tabCtx.hidden = false;
+  const w = tabCtx.offsetWidth, h = tabCtx.offsetHeight;
+  tabCtx.style.left = `${Math.min(e.clientX, innerWidth - w - 8)}px`;
+  tabCtx.style.top = `${Math.max(8, Math.min(e.clientY - h, innerHeight - h - 8))}px`;
+  tabCtx.querySelector('[data-tab="left"]').disabled = index === 0;
+  tabCtx.querySelector('[data-tab="right"]').disabled = index === book.sheets.length - 1;
+  tabCtx.querySelector('[data-tab="delete"]').disabled = book.sheets.length < 2;
+}
+function addSheet() {
+  runUi([`Worksheets.Add After:=${ws()}`], { sheet: shown + 1 });
+}
+function renameSheet(index) {
+  const old = book.sheets[index].name;
+  const v = prompt(t('askSheetName'), old);
+  if (v && v !== old) runUi([`Worksheets(${index + 1}).Name = ${vq(v)}`], { sheet: index });
+}
+const TAB_ACTS = {
+  insert: () => addSheet(),
+  rename: () => renameSheet(tabTarget),
+  duplicate: () => runUi([`Worksheets(${tabTarget + 1}).Copy After:=Worksheets(${tabTarget + 1})`], { sheet: tabTarget + 1 }),
+  delete: () => {
+    if (confirm(t('askDeleteSheet')(book.sheets[tabTarget].name))) runUi([`Worksheets(${tabTarget + 1}).Delete`], { sheet: Math.max(0, tabTarget - 1) });
+  },
+  left: () => runUi([`Worksheets(${tabTarget + 1}).Move Before:=Worksheets(${tabTarget})`], { sheet: tabTarget - 1 }),
+  right: () => runUi([`Worksheets(${tabTarget + 1}).Move After:=Worksheets(${tabTarget + 2})`], { sheet: tabTarget + 1 }),
+  nocolor: () => runUi([`Worksheets(${tabTarget + 1}).Tab.ColorIndex = -4142`]),
+};
+tabCtx.addEventListener('mousedown', e => { if (e.target.type !== 'color') e.preventDefault(); });
+tabCtx.addEventListener('click', e => {
+  const act = e.target.closest('button')?.dataset.tab;
+  if (!act) return;
+  closeTabMenu();
+  TAB_ACTS[act]?.();
+});
+$('tabColor').addEventListener('change', e => {
+  closeTabMenu();
+  runUi([`Worksheets(${tabTarget + 1}).Tab.Color = ${rgbOf(e.target.value)}`]);
+});
+document.addEventListener('mousedown', e => { if (!tabCtx.contains(e.target)) closeTabMenu(); });
+
+// Find and replace.
+const findDlg = $('findDlg');
+function openFind(replace) {
+  if (!book) return;
+  commitEdit();
+  findDlg.classList.toggle('rep', !!replace);
+  if (!findDlg.open) findDlg.show();
+  $('fdWhat').focus(); $('fdWhat').select();
+}
+function findNext() {
+  const what = $('fdWhat').value;
+  if (!what) return;
+  const mc = $('fdCase').checked, whole = $('fdWhole').checked;
+  const norm = s => mc ? s : s.toLowerCase();
+  const hit = cell => {
+    const text = norm(shownOf(cell));
+    return whole ? text === norm(what) : text.includes(norm(what));
+  };
+  const n = book.sheets.length;
+  for (let k = 0; k <= n; k++) {
+    const si = (shown + k) % n;
+    const cells = [];
+    for (const row of book.sheets[si].rows || []) for (const c of row.cells || []) cells.push([row.index, c.col, c]);
+    cells.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const found = cells.find(([r, c, cell]) => (k > 0 || r > act.row || (r === act.row && c > act.col)) && hit(cell));
+    if (found) {
+      if (si !== shown) switchSheet(si);
+      select({ row: found[0], col: found[1] });
+      $('fdMsg').textContent = '';
+      return;
+    }
+  }
+  $('fdMsg').textContent = t('notFound');
+}
+function replaceAll() {
+  const what = $('fdWhat').value;
+  if (!what) return;
+  const look = $('fdWhole').checked ? 1 : 2;
+  const mc = $('fdCase').checked ? 'True' : 'False';
+  if (runUi([`${ws()}.Cells.Replace What:=${vq(what)}, Replacement:=${vq($('fdWith').value)}, LookAt:=${look}, MatchCase:=${mc}`])) {
+    $('fdMsg').textContent = t('replaced');
+  }
+}
+$('fdNext').onclick = findNext;
+$('fdRepMode').onclick = () => { findDlg.classList.add('rep'); $('fdWith').focus(); };
+$('fdAll').onclick = replaceAll;
+$('fdClose').onclick = () => { findDlg.close(); ed.focus({ preventScroll: true }); };
+$('fdWhat').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); findNext(); } if (e.key === 'Escape') $('fdClose').onclick(); });
+
+// The ribbon's own wiring. Buttons keep the grid's focus so typing goes on.
+const rib = $('rib');
+rib.addEventListener('mousedown', e => {
+  if (e.target.closest('button')) e.preventDefault();
+});
+const RIB = {
+  fBold: () => toggleFont('Bold', styleHere().bold),
+  fItalic: () => toggleFont('Italic', styleHere().italic),
+  fUnder: () => toggleFont('Underline', styleHere().underline, '2', '-4142'),
+  fStrike: () => toggleFont('Strikethrough', styleHere().strikethrough),
+  aLeft: () => align('left'), aCenter: () => align('center'), aRight: () => align('right'),
+  fWrap: () => runUi([`${selRange()}.WrapText = ${styleHere().wrap_text ? 'False' : 'True'}`]),
+  fMerge: mergeCenter,
+  fDecUp: () => stepDecimals(1), fDecDown: () => stepDecimals(-1),
+  fNoFill: () => runUi([`${selRange()}.Interior.Pattern = -4142`]),
+  fClear: () => UI_ACTS.clearFormats(),
+  fSortAsc: () => sortBy(1), fSortDesc: () => sortBy(2),
+  fFilter: toggleFilter, fFreeze: toggleFreeze,
+  fFind: () => openFind(false),
+};
+rib.addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b && RIB[b.id]) { RIB[b.id](); ed.focus({ preventScroll: true }); }
+});
+$('fFont').onchange = e => { runUi([`${selRange()}.Font.Name = ${vq(e.target.value)}`]); ed.focus({ preventScroll: true }); };
+$('fSize').onchange = e => {
+  const v = Number(e.target.value);
+  if (v >= 1 && v <= 409) runUi([`${selRange()}.Font.Size = ${v}`]);
+  ed.focus({ preventScroll: true });
+};
+$('fSize').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+$('fColor').onchange = e => { runUi([`${selRange()}.Font.Color = ${rgbOf(e.target.value)}`]); ed.focus({ preventScroll: true }); };
+$('fFill').onchange = e => { runUi([`${selRange()}.Interior.Color = ${rgbOf(e.target.value)}`]); ed.focus({ preventScroll: true }); };
+$('fNum').onchange = e => {
+  if (e.target.value) runUi([`${selRange()}.NumberFormat = ${vq(e.target.value)}`]);
+  ed.focus({ preventScroll: true });
+};
+$('fBorder').onchange = e => {
+  if (e.target.value) borders(e.target.value);
+  e.target.value = '';
+  ed.focus({ preventScroll: true });
+};
 
 // ---- keys ---------------------------------------------------------------------------
 const ARROWS = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
@@ -1549,6 +2033,13 @@ function readyKey(e) {
   if (mod && /^[zZ]$/.test(k)) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
   if (mod && /^[yY]$/.test(k)) { e.preventDefault(); redo(); return; }
   if (mod && /^[aA]$/.test(k)) { e.preventDefault(); selectAll(); return; }
+  if (mod && !e.shiftKey && /^[bB]$/.test(k)) { e.preventDefault(); RIB.fBold(); return; }
+  if (mod && !e.shiftKey && /^[iI]$/.test(k)) { e.preventDefault(); RIB.fItalic(); return; }
+  if (mod && !e.shiftKey && /^[uU]$/.test(k)) { e.preventDefault(); RIB.fUnder(); return; }
+  if (mod && !e.shiftKey && /^[fF]$/.test(k)) { e.preventDefault(); openFind(false); return; }
+  if (mod && !e.shiftKey && /^[hH]$/.test(k)) { e.preventDefault(); openFind(true); return; }
+  if (mod && !e.shiftKey && /^[kK]$/.test(k)) { e.preventDefault(); UI_ACTS.insLink(); return; }
+  if (mod && e.shiftKey && /^[lL]$/.test(k)) { e.preventDefault(); toggleFilter(); return; }
   if (mod && /^[dD]$/.test(k)) { e.preventDefault(); fillDir('row'); return; }
   if (mod && /^[rR]$/.test(k)) { e.preventDefault(); fillDir('col'); return; }
   if (mod && k === 'PageDown') { e.preventDefault(); switchSheet(shown + 1); return; }
@@ -2021,6 +2512,7 @@ function open(name, bytes) {
     sum + (sheet.rows || []).reduce((n, row) => n + (row.cells?.length || 0), 0), 0);
   $('docName').textContent = name;
   $('fx').hidden = false;
+  $('rib').hidden = false;
   $('sbar').classList.add('on');
   $('tabbar').classList.add('on');
   for (const id of ['btnSave', 'btnUndo', 'btnRedo']) $(id).hidden = false;
@@ -2101,6 +2593,7 @@ const vbaUi = bindSheetVba({
     canvasBox.classList.add('empty');
     $('docName').textContent = t('noFile');
     $('fx').hidden = true;
+    $('rib').hidden = true;
     $('sbar').classList.remove('on'); $('tabbar').classList.remove('on');
     for (const id of ['btnSave', 'btnUndo', 'btnRedo']) $(id).hidden = true;
     markSaved();

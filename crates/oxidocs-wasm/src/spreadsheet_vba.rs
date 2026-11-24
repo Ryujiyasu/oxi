@@ -3914,6 +3914,13 @@ impl<'a> WorkbookHost<'a> {
                 resolved: comment.resolved,
             })
         }).collect();
+        // A tab the file colours reads back as that colour (Tab.Color is BGR).
+        let tabs: std::collections::HashMap<usize, TabColour> = workbook.sheets.iter().enumerate().filter_map(|(index, sheet)| {
+            let hex = sheet.tab_color.as_deref()?;
+            let rgb = u32::from_str_radix(hex.get(hex.len().checked_sub(6)?..)?, 16).ok()?;
+            let colour = ((rgb & 0xFF) << 16 | (rgb & 0xFF00) | (rgb >> 16 & 0xFF)) as i64;
+            Some((index, TabColour { colour, theme: None, tint: 0.0 }))
+        }).collect();
         let mut links: Vec<Link> = workbook.sheets.iter().enumerate().flat_map(|(sheet_index, sheet)| {
             sheet.hyperlinks.iter().map(move |link| {
                 let (row, column) = link.cell;
@@ -3954,13 +3961,27 @@ impl<'a> WorkbookHost<'a> {
         }
         conditions.sort_by_key(|condition| (condition.sheet, condition.priority));
         let next_condition = conditions.len() as u64 + 1;
+        // The filter the file already has is the one the macro finds on (the
+        // active sheet's first, else the first sheet with one), with its tests.
+        let seeded_filter = std::iter::once(active_sheet).chain(0..workbook.sheets.len())
+            .find_map(|index| workbook.sheets.get(index)?.auto_filter.as_ref().map(|held| (index, held)))
+            .map(|(index, held)| AutoFilter {
+                range: CellRange { sheet: index, start_row: held.start_row, start_column: held.start_col, end_row: held.end_row, end_column: held.end_col },
+                fields: held.columns.iter().map(|column| FieldTest {
+                    field: column.field,
+                    criteria: column.criteria.iter().map(|text| parse_criteria(&Value::String(text.clone()))).collect(),
+                    either: column.either,
+                    texts: column.criteria.clone(),
+                    operator: if column.criteria.len() > 1 { if column.either { 2 } else { 1 } } else { 0 },
+                }).collect(),
+            });
         let builtin_style_base=workbook.default_style.clone();
         Ok(Self {
             workbook,
             active_sheet,
             clipboard: None,
             pending_cut: None,
-            auto_filter: None,
+            auto_filter: seeded_filter,
             advanced_filter: None,
             find_settings: (-4163, 2, 1),
             pivot_caches: Vec::new(),
@@ -4003,7 +4024,7 @@ impl<'a> WorkbookHost<'a> {
             compiled_modules: BTreeSet::new(),
             views: std::collections::HashMap::new(),
             outlines: std::collections::HashMap::new(),
-            tabs: std::collections::HashMap::new(),
+            tabs,
             sorts: std::collections::HashMap::new(),
             shapes: Vec::new(),
             shape_counters: std::collections::HashMap::new(),
@@ -27458,10 +27479,11 @@ impl<'a> WorkbookHost<'a> {
                 self.workbook.sheets[range.sheet].auto_filter = None;
                 self.show_all_rows(range.sheet)?;
             } else {
-                self.auto_filter = Some(AutoFilter {
-                    range,
-                    fields: Vec::new(),
-                });
+                let filter = AutoFilter { range, fields: Vec::new() };
+                // The sheet keeps the switched-on filter (buttons, no tests)
+                // so it is saved, as a filter with tests already is.
+                self.record_auto_filter(&filter)?;
+                self.auto_filter = Some(filter);
                 self.note_filter_database(range);
             }
             return Ok(Value::Boolean(true));
@@ -38488,7 +38510,16 @@ impl Host for WorkbookHost<'_> {
             return self.set_regexp_member(index, name, &value);
         }
         if let Some(sheet) = self.tab_sheet(receiver) {
-            return self.set_tab_member(sheet, name, &value);
+            let handled = self.set_tab_member(sheet, name, &value)?;
+            // The workbook carries the colour so it is saved (RRGGBB from BGR).
+            let hex = self.tabs.get(&sheet).map(|tab| {
+                let bgr = tab.colour as u32;
+                format!("{:02X}{:02X}{:02X}", bgr & 0xFF, bgr >> 8 & 0xFF, bgr >> 16 & 0xFF)
+            });
+            if let Some(worksheet) = self.workbook.sheets.get_mut(sheet) {
+                if worksheet.tab_color != hex { worksheet.tab_color = hex; self.wrote = true; }
+            }
+            return Ok(handled);
         }
         if let Some(HostObject::Sort(sheet)) = self.objects.get(host_object_index(receiver.handle)).copied() {
             let state = self.sorts.entry(sheet).or_default();
@@ -156449,6 +156480,36 @@ End Function
         }
     }
 
+
+    #[test]
+    fn tab_colour_and_bare_autofilter_are_saved_and_read_back() {
+        fn run(book: &mut Workbook, body: &str) -> Value {
+            let module = parse_module(&format!("Public Function Probe() As String\n{body}\nEnd Function\n")).unwrap();
+            let mut host = WorkbookHost::new(book, 0).unwrap();
+            execute_with_host(&module, "Probe", vec![], &mut host).unwrap()
+        }
+        fn save(original: &[u8], book: &Workbook) -> Vec<u8> {
+            let mut editor = oxicells_core::XlsxEditor::new(original).unwrap();
+            editor.apply_workbook(book).unwrap();
+            editor.save().unwrap()
+        }
+        let original = include_bytes!("../../../tests/fixtures/basic_test.xlsx");
+        let mut book = oxicells_core::parse_xlsx(original).unwrap();
+        run(&mut book, "Worksheets(1).Tab.Color = RGB(0, 128, 255)\nRange(\"A1\").AutoFilter\nProbe = \"\"");
+        assert_eq!(book.sheets[0].tab_color.as_deref(), Some("0080FF"));
+        let saved = save(original, &book);
+        let mut book = oxicells_core::parse_xlsx(&saved).unwrap();
+        assert_eq!(book.sheets[0].tab_color.as_deref(), Some("0080FF"));
+        let filter = book.sheets[0].auto_filter.as_ref().expect("the switched-on filter is saved");
+        assert_eq!((filter.start_row, filter.start_col, filter.end_row, filter.end_col), (1, 0, 3, 4));
+        assert_eq!(run(&mut book, "Probe = CStr(Worksheets(1).Tab.Color) & \"|\" & CStr(ActiveSheet.AutoFilterMode)"),
+            Value::String(format!("{}|True", 128 * 256 + 255 * 65536)));
+        // Switched off from a reopened file: the filter goes, as in Excel.
+        run(&mut book, "ActiveSheet.AutoFilterMode = False\nProbe = \"\"");
+        assert!(book.sheets[0].auto_filter.is_none());
+        run(&mut book, "Worksheets(1).Tab.ColorIndex = xlColorIndexNone\nProbe = \"\"");
+        assert_eq!(book.sheets[0].tab_color, None);
+    }
 
     #[test]
     fn worksheet_protection_changes_roundtrip_with_saved_and_password_rules() {
