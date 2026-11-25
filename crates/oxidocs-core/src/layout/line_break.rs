@@ -3963,6 +3963,7 @@ impl<'a> LineBreaker<'a> {
                 } else {
                     kinsoku::is_cjk_ideograph_or_kana(c)
                 };
+                let mut s1333_space_balanced = false;
                 if matches!(ch, ' ' | '\u{00a0}') && s1333_balance {
                     let prev_is_cjk = chars_vec
                         .get(char_index.wrapping_sub(1))
@@ -4035,6 +4036,7 @@ impl<'a> LineBreaker<'a> {
                         prev_is_cjk || next_is_cjk || bal_space_run
                     };
                     if balanced {
+                        s1333_space_balanced = true;
                         // S1337S (2026-09-06, HELD opt-in OXI_S1337S=1): on a character
                         // grid the balanced space is half the CELL, like every other
                         // single-byte character -- 0ea3ec86 p5 「能訓練 31か所 生活訓練
@@ -4072,7 +4074,22 @@ impl<'a> LineBreaker<'a> {
                                     2.0 * style.character_spacing.unwrap_or(0.0)
                                 } else { 0.0 }
                             }
-                            _ => font_size / 2.0 + char_metrics.synthetic_bold_advance * font_size,
+                            // OXI_BAL_SPACE_TRACK (2026-11-25, default ON, opt-out _DISABLE): the
+                            // balanced half-em space keeps the run's tracking, doubled like a
+                            // full-width glyph's. `_pb_cspc2_gen.py` (ＭＳ 明朝 / Century 9pt,
+                            // balance, compat 11 and 15, spacing 10 / 20tw): leading and mid-line
+                            // ASCII spaces advance +1.0 / +2.0pt each, digits / Latin / half-width
+                            // kana +0.5 / +1.0; Oxi dropped the tracking (+0). blind-A
+                            // ja/forms__003298e3 «(30 spaces)□熊本県…» (spacing 1): Word 4.59 per
+                            // space, Oxi 4.50, the line 2.9pt left.
+                            _ => font_size / 2.0 + char_metrics.synthetic_bold_advance * font_size
+                                + if !crate::env_flag!("OXI_BAL_SPACE_TRACK_DISABLE")
+                                    && style.fit_text.is_none() && !style.ruby_spread
+                                {
+                                    2.0 * cs
+                                } else {
+                                    0.0
+                                },
                         };
                     }
                 }
@@ -4484,7 +4501,18 @@ impl<'a> LineBreaker<'a> {
                         && !crate::font::is_fullwidth(ch)
                         && !use_east_asia
                         && char_width < 0.98 * font_size
-                        && !ch.is_whitespace()
+                        // OXI_GRID_LONE_SPACE (2026-11-25, default ON, opt-out _DISABLE): an
+                        // ASCII space the balance rule left at its natural advance takes the
+                        // grid's charSpace like a half-width letter -- all of it without
+                        // balance, half with it. `_pb_gridspace_gen.py` (linesAndChars,
+                        // charSpace 3430 / -2048, TNR / Century / ＭＳ 明朝 10.5, «a b c …»):
+                        // Word's 20-character span moves by 20 x charSpace (x 0.5 under
+                        // balance) whether the characters are letters or spaces. blind-A
+                        // ja/reference__0828db3f (balance, 3430): Word's TNR spaces 3.0-3.1,
+                        // Oxi 2.63; «Draft for consultation: …» ended 3.3pt short.
+                        && (!ch.is_whitespace()
+                            || (ch == ' ' && !s1333_space_balanced
+                                && !crate::env_flag!("OXI_GRID_LONE_SPACE_DISABLE")))
                         && style.fit_text.is_none()
                         && !style.ruby_spread
                         && !crate::env_flag!("OXI_S1449_DISABLE")

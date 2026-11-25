@@ -7064,9 +7064,49 @@ impl<'a> ParagraphLayouter<'a> {
             // slack -91 squeezed a line Word draws natural).
             let txbx_ok = !in_textbox
                 || (!crate::env_flag!("OXI_TXBX_JUSTIFY_DISABLE") && effective_char_pitch.is_none());
+            // OXI_LASTLINE_HANG_JUSTIFY (2026-11-25, default ON, opt-out _DISABLE): a justified
+            // paragraph's LAST line whose closing 、。，． runs past the edge is set as a
+            // justified line: the mark hangs and the rest spreads to the edge.
+            // `_pb_lasthang_gen.py` (ＭＳ 明朝 9, 41 characters, left indent swept 86..103pt,
+            // compat 14 and 15, doNotCompress and compressPunctuation): at overflow 0.5..8.5
+            // Word's 40 advances span the measure exactly under doNotCompress (the whole
+            // mark hangs) and the measure minus half an em under compressPunctuation; jc=left
+            // and a closing «あ» stay natural. blind-A ja/legal__02f84965 p5 «※項目番号等は、…
+            // 記載すること。» (spacing -1): Word 9.03 per character, Oxi 8.95, 3.45pt short.
+            let lastline_hang = para.alignment == Alignment::Justify
+                && is_last_line
+                && self.compat_mode >= 14
+                && effective_char_pitch.is_none()
+                && render_width - extra_indent - line_text_width < -0.01
+                && line.fragments.last().and_then(|f| f.text.chars().last())
+                    .is_some_and(|c| matches!(c, '、' | '。' | '，' | '．'))
+                // Under compressPunctuation a line that overflows even without its mark
+                // keeps the old last-line fit (the whole mark hangs, the inner 約物 give the
+                // rest): the same sweep at overflow 9.5..12.5 puts 。 ON the edge, 40
+                // advances = the measure.
+                && (!self.compress_punctuation
+                    || line.fragments.last().map_or(false, |f| {
+                        let mark_w = if f.text.chars().count() == 1 { f.width }
+                            else { f.style.font_size.unwrap_or(para_font_size) };
+                        line_text_width - mark_w <= render_width - extra_indent + 0.01
+                    }))
+                // The mark hangs only past the column edge, never past a float's wrap edge.
+                // `_pb_lasthang_float_gen.py` (the same line beside a square-wrapped picture
+                // whose left edge is swept, against a right indent giving the same measure):
+                // doNotCompress breaks before the mark (39 + 2), compressPunctuation sets
+                // the line natural while half an em absorbs the overflow (360.05 for
+                // overflow 0.5..4.5) and squeezes beyond it -- the right-indent arms are
+                // justified.
+                // A text box's inner edge is not a column edge either:
+                // `_pb_lasthang_txbx_gen.py` (the line in an inline wps box of the same
+                // measure, with and without a right indent) gives the float arms' numbers.
+                // blind-B ja/correspondence__04a3e3e1 p3 «…交通費が支給されます。» sits in a box.
+                && s758_line_red - s758_line_shift <= 0.01
+                && !in_textbox
+                && !crate::env_flag!("OXI_LASTLINE_HANG_JUSTIFY_DISABLE");
             let should_justify = txbx_ok
                 && !is_soft_break_line
-                && ((para.alignment == Alignment::Justify && !is_last_line)
+                && ((para.alignment == Alignment::Justify && (!is_last_line || lastline_hang))
                     || para.alignment == Alignment::Distribute);
             // OXI_YAKU_LASTLINE_FIT (2026-11-06, default ON, opt-out _DISABLE): the
             // last line of a justified compressPunctuation paragraph that the break
@@ -7921,7 +7961,18 @@ impl<'a> ParagraphLayouter<'a> {
             // Latin), so exempt exactly these four chars here. Default ON,
             // opt-out OXI_S762_DISABLE.
             let s762_quote_ok = !crate::env_flag!("OXI_S762_DISABLE");
+            // OXI_S672_GRID (2026-11-25, default ON, opt-out _DISABLE): a linesAndChars line
+            // carrying charSpace is drawn at its committed (grid) widths. The true-em track
+            // left the grid term out, so a COMPRESSING grid (negative charSpace) always read
+            // the line as true-wider and redrew every word and space at its bare advance.
+            // `_pb_gridspace_gen.py` (charSpace -2048, TNR / Century / ＭＳ 明朝 10.5, «a b c …»,
+            // jc left): Word's 20-character span 60.65 (= 70.65 - 20 x 0.5), Oxi 70.56 while
+            // the same letters without spaces (one fragment, OXI_GRID_LATIN_SPREAD) matched.
+            let s672_grid_line = page.doc_grid_lines_and_chars
+                && effective_char_pitch.is_some()
+                && !crate::env_flag!("OXI_S672_GRID_DISABLE");
             let s672_candidate = !crate::env_flag!("OXI_S672_DISABLE")
+                && !s672_grid_line
                 && matches!(para.alignment, Alignment::Left)
                 && !line.fragments.is_empty()
                 && line.fragments.iter().all(|f| {
