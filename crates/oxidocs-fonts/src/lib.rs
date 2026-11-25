@@ -25,7 +25,7 @@
 //!
 //! Anyone who wants only one half can name that half directly and carry less.
 
-pub use oxidocs_fonts_jp::{OXI_GOTHIC, OXI_MINCHO};
+pub use oxidocs_fonts_jp::{OXI_GOTHIC, OXI_GOTHIC_P, OXI_MINCHO, OXI_MINCHO_P};
 
 mod symbol_map;
 pub use symbol_map::symbol_font_to_unicode;
@@ -70,6 +70,30 @@ pub fn cjk_stand_in(family: &str) -> (&'static str, &'static str) {
     }
 }
 
+/// The companion of `cjk_stand_in` that draws what a proportional family sets
+/// proportionally: `OxiMinchoP` beside `OxiMincho`, `OxiGothicP` beside
+/// `OxiGothic`. The main faces set printable ASCII at half an em and kana and
+/// CJK punctuation at a full em, as ＭＳ ゴシック / ＭＳ 明朝 do, so 游ゴシック,
+/// メイリオ or ＭＳ Ｐゴシック drawn with them alone came out in a typewriter
+/// face with a gap after every word, and ＭＳ Ｐゴシック's 「（」 and 「・」 a full
+/// em wide in a cell measured half that. The companion carries Noto's own
+/// proportional Latin and its 'palt' kana and punctuation (see
+/// tools/fonts/make_proportional_companion.py). Which characters a family
+/// takes from it is the caller's to say (the layout's measured widths know).
+pub fn cjk_proportional_stand_in(family: &str) -> (&'static str, &'static str) {
+    match cjk_stand_in(family).0 {
+        "OxiMincho" => ("OxiMinchoP", "OxiMinchoP.ttf"),
+        _ => ("OxiGothicP", "OxiGothicP.ttf"),
+    }
+}
+
+/// Whether `c` is one the face `cjk_proportional_stand_in` names can draw:
+/// printable ASCII and the space, U+3000-30FF (CJK punctuation, kana) and
+/// U+FF01-FF60 (the full-width forms).
+pub fn in_cjk_proportional_stand_in(c: char) -> bool {
+    matches!(c, ' '..='~' | '\u{3000}'..='\u{30FF}' | '\u{FF01}'..='\u{FF60}')
+}
+
 /// The folders holding these faces on disk, for a binary still running inside
 /// the source tree it was built in. Empty once it has left that tree, which is
 /// the point: an absolute path baked in at compile time means nothing on
@@ -105,7 +129,7 @@ mod tests {
             );
             seen += 1;
         }
-        assert_eq!(seen, 22, "a face went missing from one of the two halves");
+        assert_eq!(seen, 24, "a face went missing from one of the two halves");
     }
 
     /// A Mincho family is stood in for by the serif face, in either script and
@@ -124,6 +148,22 @@ mod tests {
             assert!(face(key).is_some(), "{key} is not shipped");
             assert!(faces().any(|(k, f, _)| *k == key && *f == file), "{key} is not stored as {file}");
         }
+    }
+
+    /// The proportional companion follows the main face's kind and is
+    /// shipped, with Noto's own advances rather than the main face's half em.
+    #[test]
+    fn proportional_companion_follows_the_main_face() {
+        assert_eq!(cjk_proportional_stand_in("游明朝").0, "OxiMinchoP");
+        assert_eq!(cjk_proportional_stand_in("メイリオ").0, "OxiGothicP");
+        for family in ["游明朝", "メイリオ"] {
+            let (key, file) = cjk_proportional_stand_in(family);
+            assert!(faces().any(|(k, f, _)| *k == key && *f == file), "{key} is not stored as {file}");
+        }
+        assert!(in_cjk_proportional_stand_in('W') && in_cjk_proportional_stand_in(' ') && in_cjk_proportional_stand_in('~'));
+        assert!(in_cjk_proportional_stand_in('あ') && in_cjk_proportional_stand_in('（') && in_cjk_proportional_stand_in('Ａ'));
+        assert!(!in_cjk_proportional_stand_in('漢') && !in_cjk_proportional_stand_in('\u{A0}') && !in_cjk_proportional_stand_in('\t'));
+        assert!(!in_cjk_proportional_stand_in('ｱ'), "the half-width forms are half an em in the main face already");
     }
 
     /// No key is claimed by both halves, or `face` would answer with whichever

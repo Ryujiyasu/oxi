@@ -2456,8 +2456,14 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     let mut i = 0;
                     while i < chars.len() {
                         let seg_font = pdf_face_for(chars[i], &font_name, *bold, &embedded_fonts);
+                        // A kana or punctuation mark from the proportional companion is a
+                        // segment of its own, set in the cell the layout measured for it
+                        // (see `proportional_fit`).
+                        let own_cell = |c: char| !c.is_ascii() && seg_font.ends_with(PROPORTIONAL);
                         let mut j = i + 1;
-                        while j < chars.len() && pdf_face_for(chars[j], &font_name, *bold, &embedded_fonts) == seg_font {
+                        while j < chars.len() && !own_cell(chars[i]) && !own_cell(chars[j])
+                            && pdf_face_for(chars[j], &font_name, *bold, &embedded_fonts) == seg_font
+                        {
                             j += 1;
                         }
                         let seg_text: String = chars[i..j].iter().collect();
@@ -2467,6 +2473,24 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         total_est += seg_w;
                         raw_segments.push((seg_text, seg_font, seg_w));
                         i = j;
+                    }
+
+                    // A run split for what it sets proportionally (see PROPORTIONAL) was
+                    // one segment before, so the rough estimate placed nothing; split, its
+                    // pieces start where the layout's measured widths put them.
+                    let split_proportional = raw_segments.len() > 1
+                        && raw_segments.iter().any(|(_, f, _)| f.ends_with(PROPORTIONAL));
+                    if split_proportional {
+                        let m = font_family.as_deref()
+                            .map(|ff| registry.get_with_style(ff, *bold, *italic))
+                            .unwrap_or_else(|| registry.default_metrics());
+                        total_est = 0.0;
+                        for (seg_text, _, seg_w) in raw_segments.iter_mut() {
+                            *seg_w = seg_text.chars()
+                                .map(|c| m.char_width_em(c) as f64 * fs + *character_spacing as f64)
+                                .sum();
+                            total_est += *seg_w;
+                        }
                     }
 
                     // Second pass: scale segment widths to match LayoutEngine's elem.width
@@ -2632,6 +2656,22 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         if blank_skip && seg_text.chars().all(|c| c.is_control()) {
                             continue;
                         }
+                        // What the proportional companion draws is fitted to the width the
+                        // layout measured for it (see `proportional_fit`).
+                        let (hscale, sx) = match embedded_fonts.get(&seg_font)
+                            .filter(|_| seg_font.ends_with(PROPORTIONAL))
+                        {
+                            Some(face) => {
+                                let natural: f64 = seg_text.chars()
+                                    .filter_map(|c| face.unicode_to_gid.get(&(c as u32)))
+                                    .map(|g| face.cid_widths.get(g).copied().unwrap_or(1000) as f64 / 1000.0 * fs)
+                                    .sum::<f64>() * hscale / 100.0;
+                                let n = seg_text.chars().count() as f64;
+                                let (fit, shift) = proportional_fit(&seg_text, natural, _sw - n * *character_spacing as f64);
+                                (hscale * fit, sx + shift)
+                            }
+                            None => (hscale, sx),
+                        };
                         // OXI_PDF_PUA_BLANK (2026-11-10, default ON, opt-out _DISABLE): a
                         // private-use character that no face in the PDF covers is blank, as Word
                         // draws it (its fallback face shows nothing); the stand-in face's .notdef
@@ -4261,8 +4301,17 @@ fn symbol_text(family: Option<&str>, font_name: &str, text: &str, fonts: &HashMa
 /// fallback: the run's face, or the East Asian face for what a Latin face
 /// lacks.
 fn primary_face_for(c: char, font_name: &str, bold: bool, fonts: &HashMap<String, EmbeddedFont>) -> String {
-    // An East Asian face draws its whole run.
+    // An East Asian face draws its whole run -- but for what a proportional
+    // family drawn with the shipped stand-in sets proportionally, which comes
+    // from the stand-in's companion, embedded with exactly those characters
+    // (see `PROPORTIONAL`).
     if is_cjk_pdf_font(font_name) {
+        if oxidocs_fonts::in_cjk_proportional_stand_in(c) {
+            let companion = format!("{font_name}{PROPORTIONAL}");
+            if fonts.get(&companion).is_some_and(|f| f.unicode_to_gid.contains_key(&(c as u32))) {
+                return companion;
+            }
+        }
         return font_name.to_string();
     }
     // Only divert to a font that was actually loaded. The decision to load one
@@ -4292,6 +4341,43 @@ fn primary_face_for(c: char, font_name: &str, bold: bool, fonts: &HashMap<String
         "OxiCJK-Regular".to_string()
     }
 }
+
+/// How a piece drawn from a stand-in's proportional companion (`PROPORTIONAL`)
+/// meets the `target` width the layout measured for it, given its `natural`
+/// width in the companion: (horizontal scale factor, x shift). A Latin word is
+/// scaled to the width, either way, within 0.6..=1.4: Noto's advances are near
+/// 游ゴシック's and メイリオ's, but ＭＳ Ｐゴシック sets its Latin narrower, and at
+/// its own width a word ran into the 「・」 after it. A kana or punctuation mark
+/// (always a piece of its own) is only ever narrowed, to 0.6 at most: Noto's
+/// 'palt' kana are wider than ＭＳ Ｐゴシック's, and where its 「、」 is wider
+/// than Noto's the mark keeps its shape and the cell its trailing space. One
+/// still wider than its cell is centred on it -- ＭＳ Ｐゴシック's full-width «ｉ»
+/// is a quarter em, Noto's over half -- so it spills evenly instead of into the
+/// next character.
+fn proportional_fit(text: &str, natural: f64, target: f64) -> (f64, f64) {
+    if natural <= 0.0 || target <= 0.0 {
+        return (1.0, 0.0);
+    }
+    let fit = target / natural;
+    if text.is_ascii() {
+        return (if (0.6..=1.4).contains(&fit) { fit } else { 1.0 }, 0.0);
+    }
+    let fit = fit.clamp(0.6, 1.0);
+    (fit, ((target - natural * fit) / 2.0).min(0.0))
+}
+
+/// Suffix of the key the proportional companion of a stood-in East Asian face
+/// is embedded under. OXI_PDF_PROPORTIONAL_STAND_IN (2026-11-24, default ON,
+/// opt-out _DISABLE): the shipped OxiGothic / OxiMincho set printable ASCII at
+/// half an em and kana at a full em (ＭＳ ゴシック's widths), so 游ゴシック,
+/// メイリオ or ＭＳ Ｐゴシック drawn with them came out in a typewriter face, each
+/// Latin word narrower than the layout measured it and followed by a gap
+/// («Windows   ・Linux»), and ＭＳ Ｐゴシック's half-em 「（」「・」 and narrow kana
+/// a full em wide, running into the next character («（何ができるのか）»). What
+/// the family's measured widths set proportionally
+/// (`FontMetrics::draws_proportional`) comes from OxiGothicP / OxiMinchoP:
+/// Noto's proportional Latin and its 'palt' kana and punctuation.
+const PROPORTIONAL: &str = "+OxiP";
 
 /// Whether the face `name` is embedded and has no glyph for `c` -- the case a
 /// fallback face exists for. Spaces and control characters draw nothing and
@@ -4753,12 +4839,29 @@ fn build_embedded_fonts(
             .find(|(family, _)| *family == resolved)
             .map(|(_, path)| std::path::PathBuf::from(path))
             .filter(|path| path.exists());
+        let stood_in = system.is_none();
         let found_path = system.or_else(|| bundled_face_file(oxidocs_fonts::cjk_stand_in(name).1));
         let label = resolved.replace(['-', ' '], "_");
         if let Some(path) = found_path {
             if let Some(result) = subset_font_file(&path.to_string_lossy(), &used_chars, &label) {
                 note!("Embedding CJK font '{}' ({}) from {} ({} bytes)", resolved, name, path.display(), result.data.len());
-                fonts.insert(resolved, result);
+                fonts.insert(resolved.clone(), result);
+            }
+        }
+        if stood_in
+            && fonts.contains_key(&resolved)
+            && std::env::var_os("OXI_PDF_PROPORTIONAL_STAND_IN_DISABLE").is_none()
+        {
+            let metrics = proportional_registry().get(name);
+            let proportional: std::collections::BTreeSet<char> = used_chars.iter().copied()
+                .filter(|c| oxidocs_fonts::in_cjk_proportional_stand_in(*c) && metrics.draws_proportional(*c))
+                .collect();
+            if let Some(path) = bundled_face_file(oxidocs_fonts::cjk_proportional_stand_in(name).1) {
+                let key = format!("{resolved}{PROPORTIONAL}");
+                if let Some(result) = subset_font_file(&path.to_string_lossy(), &proportional, &key.replace(['-', ' ', '+'], "_")) {
+                    note!("Embedding proportional companion '{}' ({}) from {}", key, name, path.display());
+                    fonts.insert(key, result);
+                }
             }
         }
     }
@@ -4803,6 +4906,12 @@ fn build_embedded_fonts(
     // Latin fonts already embedded above (before CJK check)
 
     fonts
+}
+
+/// The measured widths that say what a family sets proportionally, loaded once.
+fn proportional_registry() -> &'static oxidocs_core::font::FontMetricsRegistry {
+    static REGISTRY: std::sync::OnceLock<oxidocs_core::font::FontMetricsRegistry> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(oxidocs_core::font::FontMetricsRegistry::load)
 }
 
 /// Embed Cambria Regular and Bold for documents using Cambria/Century.
@@ -5766,6 +5875,24 @@ mod serve_tests {
 #[cfg(test)]
 mod coverage_tests {
     use super::*;
+
+    /// Latin is scaled to its measured width either way; a kana or mark is
+    /// only narrowed, and one still too wide for its cell is centred on it.
+    #[test]
+    fn proportional_pieces_fit_their_measured_cells() {
+        assert_eq!(proportional_fit("Windows", 40.0, 36.0), (0.9, 0.0));
+        assert_eq!(proportional_fit("Windows", 30.0, 36.0), (1.2, 0.0));
+        assert_eq!(proportional_fit("Windows", 10.0, 36.0), (1.0, 0.0));
+        // 、 at Noto's half em in ＭＳ Ｐゴシック's 0.66 em cell: drawn as it is.
+        assert_eq!(proportional_fit("、", 5.0, 6.64), (1.0, 0.0));
+        // あ at Noto's 0.97 em in a 0.82 em cell: narrowed into it.
+        let (fit, shift) = proportional_fit("あ", 9.71, 8.16);
+        assert!((fit - 8.16 / 9.71).abs() < 1e-9 && shift == 0.0);
+        // ｉ at 0.56 em in a 0.25 em cell: narrowed to 0.6 and centred.
+        let (fit, shift) = proportional_fit("ｉ", 5.61, 2.5);
+        assert_eq!(fit, 0.6);
+        assert!((shift - (2.5 - 5.61 * 0.6) / 2.0).abs() < 1e-9 && shift < 0.0);
+    }
 
     #[test]
     fn story_text_leaves_out_results_the_engine_recomputes() {

@@ -48,13 +48,48 @@ export function drawRuntimeFontGlyph(ctx, element, baseline, painting) {
   return true;
 }
 
-export function drawRegisteredText(ctx, element, baseline, getOutline) {
+// `fit` (RuntimeFontLoader.standInFit): true when the element is painted in a
+// stand-in face, whose advances are not the ones the layout measured; text
+// that would run past the element's width is then narrowed to it, so it does
+// not overprint the next element. An array of [text, x, scale] pieces sets
+// each piece at x from the element's left edge, scaled horizontally:
+// ＭＳ Ｐゴシック's Latin, kana and 「（・」 each in the cell the layout
+// measured for it.
+export function drawRegisteredText(ctx, element, baseline, getOutline, fit = false) {
   if (element.font_glyph) {
     const glyph = element.font_glyph;
     const painting = getOutline(element.font_family, !!element.bold, !!element.italic,
       glyph.index, new Float32Array(glyph.bounds_em));
     drawRuntimeFontGlyph(ctx, element, baseline, painting);
-  } else {
-    ctx.fillText(element.text || '', element.x, baseline);
+    return;
   }
+  const text = element.text || '';
+  if (Array.isArray(fit)) {
+    for (const [piece, x, scale] of fit) {
+      ctx.save();
+      try {
+        ctx.translate(element.x + x, baseline);
+        ctx.scale(scale, 1);
+        ctx.fillText(piece, 0, 0);
+      } finally {
+        ctx.restore();
+      }
+    }
+    return;
+  }
+  if (fit && element.width > 0) {
+    const drawn = ctx.measureText(text.replace(/\s+$/u, '')).width;
+    if (drawn > element.width * 1.01) {
+      ctx.save();
+      try {
+        ctx.translate(element.x, baseline);
+        ctx.scale(element.width / drawn, 1);
+        ctx.fillText(text, 0, 0);
+      } finally {
+        ctx.restore();
+      }
+      return;
+    }
+  }
+  ctx.fillText(text, element.x, baseline);
 }

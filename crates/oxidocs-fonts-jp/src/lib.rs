@@ -12,12 +12,22 @@
 pub static OXI_GOTHIC: &[u8] = include_bytes!("../fonts/OxiGothic.ttf");
 /// The Japanese serif face.
 pub static OXI_MINCHO: &[u8] = include_bytes!("../fonts/OxiMincho.ttf");
+/// The sans face's proportional companion: printable ASCII at Noto's own
+/// advances, and kana, CJK punctuation and full-width forms at Noto's 'palt'
+/// widths. The main face sets ASCII at half an em and kana at a full em, as
+/// ＭＳ ゴシック does; a family that sets them proportionally (游ゴシック's and
+/// メイリオ's Latin, ＭＳ Ｐゴシック's Latin, kana and 「（・」) takes them from here.
+pub static OXI_GOTHIC_P: &[u8] = include_bytes!("../fonts/OxiGothicP.ttf");
+/// The serif face's proportional companion, for 游明朝, ＭＳ Ｐ明朝 and the like.
+pub static OXI_MINCHO_P: &[u8] = include_bytes!("../fonts/OxiMinchoP.ttf");
 
 /// Each face under the key the renderer asks for it by, with the file name it
 /// is stored under for a caller that wants it on disk.
 pub static FACES: &[(&str, &str, &[u8])] = &[
     ("OxiGothic", "OxiGothic.ttf", OXI_GOTHIC),
     ("OxiMincho", "OxiMincho.ttf", OXI_MINCHO),
+    ("OxiGothicP", "OxiGothicP.ttf", OXI_GOTHIC_P),
+    ("OxiMinchoP", "OxiMinchoP.ttf", OXI_MINCHO_P),
 ];
 
 /// Where this crate's own `fonts/` sits, for a binary still running inside the

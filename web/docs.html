@@ -719,7 +719,8 @@ if (window.__TAURI__) {
             ctx.font = `${el.italic?'italic ':''}${el.bold?'bold ':''}${fs}px ${fam}`;
             ctx.fillStyle = el.color || '#000000';
             if (el.character_spacing) ctx.letterSpacing = `${el.character_spacing}px`;
-            drawRegisteredText(ctx, el, textBaseline(el, fs), get_font_glyph_outline);
+            drawRegisteredText(ctx, el, textBaseline(el, fs), get_font_glyph_outline,
+              fontLoader.standInFit(el));
             if (el.character_spacing) ctx.letterSpacing = '0px';
           } else if (kind === 'shading') {
             const r = el.corner_radius || 0;
@@ -908,7 +909,8 @@ function renderText(ctx, elem) {
   }
 
   const baseline = textBaseline(elem, fontSize);
-  drawRegisteredText(ctx, elem, baseline, get_font_glyph_outline);
+  drawRegisteredText(ctx, elem, baseline, get_font_glyph_outline,
+    fontLoader.standInFit(elem));
 
   if (elem.character_spacing && elem.character_spacing !== 0) {
     ctx.letterSpacing = '0px';

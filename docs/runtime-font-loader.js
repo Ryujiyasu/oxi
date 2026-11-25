@@ -24,9 +24,47 @@ export class RuntimeFontLoader {
     // registered as the family's program.
     this.standIns = false;
     this.cssOnly = new Set();
+    // The proportional companion of a Japanese stand-in, per key: a second
+    // CSS face of the same family limited to what that family sets
+    // proportionally.
+    this.latinFaces = new Map();
+    // stand_in_pieces per element, so a repaint does not ask wasm again.
+    this.pieceCache = new Map();
+  }
+
+  dropLatinFace(key) {
+    const face = this.latinFaces.get(key);
+    if (face) this.host.document.fonts.delete(face);
+    this.latinFaces.delete(key);
   }
 
   key(family, bold, italic) { return JSON.stringify([family, !!bold, !!italic]); }
+
+  // Whether this face is painted by CSS alone -- a stand-in, or the machine's
+  // regular face emboldened or slanted -- so its advances may differ from the
+  // measured ones the layout used (see drawRegisteredText's `fit`).
+  isStandIn(family, bold, italic) { return this.cssOnly.has(this.key(family, bold, italic)); }
+
+  // What drawRegisteredText's `fit` takes for `element`: false for a face the
+  // machine itself paints, the pieces to set one by one where the stand-in's
+  // proportional companion draws part of it (stand_in_pieces: each kana or
+  // mark in the cell the layout measured for it), else true.
+  standInFit(element) {
+    const key = this.key(element.font_family, element.bold, element.italic);
+    if (!this.cssOnly.has(key)) return false;
+    if (!this.latinFaces.has(key) || typeof this.api.stand_in_pieces !== 'function') return true;
+    const cacheKey = JSON.stringify([element.font_family, element.text, element.width,
+      element.font_size, element.character_spacing || 0]);
+    let pieces = this.pieceCache.get(cacheKey);
+    if (pieces === undefined) {
+      const json = this.api.stand_in_pieces(element.font_family, element.text || '',
+        element.width || 0, element.font_size || 11, element.character_spacing || 0);
+      pieces = json ? JSON.parse(json) : null;
+      if (this.pieceCache.size > 20000) this.pieceCache.clear();
+      this.pieceCache.set(cacheKey, pieces);
+    }
+    return pieces || true;
+  }
 
   async enableLocalFonts() {
     if (typeof this.host.queryLocalFonts !== 'function') {
@@ -59,6 +97,7 @@ export class RuntimeFontLoader {
     if (this.cssFaces.has(key) && this.cssFaceRevisions.get(key) === revision) return;
     const oldFace = this.cssFaces.get(key);
     if (oldFace) this.host.document.fonts.delete(oldFace);
+    this.dropLatinFace(key);
     // The selected member is lifted from TTC into a complete SFNT container.
     // CFF remains wrapped as OTF here; PDF's bare-CFF stream is not a CSS font.
     const bytes = this.api.get_registered_font_sfnt(family, !!bold, !!italic);
@@ -153,12 +192,28 @@ export class RuntimeFontLoader {
     // of drawing it upright and thin under a bold label.
     const regular = (bold || italic) ? this.api.stand_in_font_program(family, false, false) : null;
     const synthesized = !!regular && regular.length === bytes.length;
-    const face = new this.host.FontFace(family, bytes, synthesized
+    const descriptors = synthesized
       ? { weight: '400', style: 'normal' }
-      : { weight: bold ? '700' : '400', style: italic ? 'italic' : 'normal' });
+      : { weight: bold ? '700' : '400', style: italic ? 'italic' : 'normal' };
+    const face = new this.host.FontFace(family, bytes, descriptors);
     await face.load();
     this.host.document.fonts.add(face);
     this.cssFaces.set(key, face);
+    // OxiGothic / OxiMincho set ASCII at half an em and kana at a full em, as
+    // ＭＳ ゴシック does. What a family sets proportionally (游ゴシック's and
+    // メイリオ's Latin, ＭＳ Ｐゴシック's Latin, kana and 「（・」) comes from the
+    // companion face instead; added after the main face, it is the one CSS
+    // asks first for the range it covers.
+    const proportional = typeof this.api.stand_in_proportional_font_program === 'function'
+      ? this.api.stand_in_proportional_font_program(family) : null;
+    const range = proportional ? this.api.stand_in_proportional_range(family) : null;
+    if (proportional && range) {
+      const latinFace = new this.host.FontFace(family, proportional,
+        { ...descriptors, unicodeRange: range });
+      await latinFace.load();
+      this.host.document.fonts.add(latinFace);
+      this.latinFaces.set(key, latinFace);
+    }
   }
 
   async ensure(layout) {
@@ -217,6 +272,7 @@ export class RuntimeFontLoader {
           const oldFace = this.cssFaces.get(key);
           if (oldFace) this.host.document.fonts.delete(oldFace);
           this.cssFaces.delete(key);
+          this.dropLatinFace(key);
           this.pending.delete(key);
         }
       }

@@ -134,7 +134,8 @@ function renderText(ctx, elem) {
 
   // Honor the baseline resolved by layout for mixed cell text.
   const baseline = textBaseline(elem, fontSize);
-  drawRegisteredText(ctx, elem, baseline, get_font_glyph_outline);
+  drawRegisteredText(ctx, elem, baseline, get_font_glyph_outline,
+    fontLoader.standInFit(elem));
 
   // Reset letter spacing
   if (elem.character_spacing && elem.character_spacing !== 0) {

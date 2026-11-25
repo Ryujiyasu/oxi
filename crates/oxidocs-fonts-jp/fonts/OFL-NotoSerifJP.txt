@@ -6,6 +6,13 @@ outlines unchanged and the metrics changed to MS Mincho's (half-width 500-unit
 advances for Latin, ascent 859 / descent 140), renamed OxiMincho. It is a
 Modified Version under the license below.
 
+Its printable ASCII outlines were later narrowed and centred to fit that
+half-width advance. OxiMinchoP.ttf is derived from Noto Serif JP 2.003 (Google Fonts): the
+printable ASCII (outlines and advances unchanged), CJK punctuation, kana and
+full-width forms (set at the widths of the font's own 'palt' feature) of its
+Regular (400) instance, with OxiMincho's vertical metrics, renamed OxiMinchoP. It is
+a Modified Version under the license below.
+
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
 https://openfontlicense.org
