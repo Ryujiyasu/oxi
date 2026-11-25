@@ -159,6 +159,71 @@ pub fn stand_in_font_program(family: &str, bold: bool, italic: bool) -> Option<V
     oxidocs_fonts::face(oxidocs_fonts::cjk_stand_in(family).0).map(<[u8]>::to_vec)
 }
 
+/// The face Oxi ships to draw what an East Asian `family` it stands in for
+/// sets proportionally -- its Latin when that is not half-width, its narrow
+/// kana and punctuation when its kana are proportional: OxiGothicP /
+/// OxiMinchoP. Null for a family that sets neither (ＭＳ ゴシック, ＭＳ 明朝,
+/// BIZ UDゴシック), which the stand-in itself draws right, and for one with no
+/// Japanese stand-in.
+///
+/// `stand_in_font_program` sets ASCII at half an em and kana at a full em, as
+/// ＭＳ ゴシック does; given to CSS alone it drew 游ゴシック or メイリオ in a
+/// typewriter face with a gap after each word, and ＭＳ Ｐゴシック's half-em
+/// 「（」 a full em wide. A caller adds this face under the same family with
+/// `unicodeRange: stand_in_proportional_range(family)`, after the main one, so
+/// the browser takes those characters from it.
+#[wasm_bindgen]
+pub fn stand_in_proportional_font_program(family: &str) -> Option<Vec<u8>> {
+    stand_in_proportional_range(family)?;
+    oxidocs_fonts::face(oxidocs_fonts::cjk_proportional_stand_in(family).0).map(<[u8]>::to_vec)
+}
+
+/// The CSS `unicode-range` of the characters `family` takes from
+/// `stand_in_proportional_font_program`: those the measured widths say it
+/// sets proportionally (`FontMetrics::draws_proportional`). Null when there
+/// are none.
+#[wasm_bindgen]
+pub fn stand_in_proportional_range(family: &str) -> Option<String> {
+    if crate::latin_stand_in(family).is_some() || !east_asian_family(family) { return None; }
+    let metrics = crate::metrics_registry().get(family);
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    for c in [' '..='~', '\u{3000}'..='\u{30FF}', '\u{FF01}'..='\u{FF60}'].into_iter().flatten() {
+        if !oxidocs_fonts::in_cjk_proportional_stand_in(c) || !metrics.draws_proportional(c) { continue; }
+        match ranges.last_mut() {
+            Some((_, end)) if *end + 1 == c as u32 => *end = c as u32,
+            _ => ranges.push((c as u32, c as u32)),
+        }
+    }
+    if ranges.is_empty() { return None; }
+    Some(ranges.iter()
+        .map(|&(a, b)| if a == b { format!("U+{a:04X}") } else { format!("U+{a:04X}-{b:04X}") })
+        .collect::<Vec<_>>()
+        .join(", "))
+}
+
+/// Where to cut an element of `text` drawn in the CSS stand-in of `family`
+/// (main face plus `stand_in_proportional_font_program` over
+/// `stand_in_proportional_range`), so each piece sits where the layout's
+/// measured widths put it: a JSON array of `[text, x, scale]`, x from the
+/// element's left edge and `scale` the horizontal factor to draw it at. The
+/// cuts are the PDF export's (`proportional_pieces`): a Latin word scaled to its
+/// measured width, each kana or mark the family sets proportionally in its own
+/// cell, narrowed and if still too wide centred on it. Null when the family
+/// sets nothing proportionally or `text` has nothing it does.
+#[wasm_bindgen]
+pub fn stand_in_pieces(family: &str, text: &str, width: f64, font_size: f64, spacing: f64) -> Option<String> {
+    if crate::latin_stand_in(family).is_some() || !east_asian_family(family) { return None; }
+    let face_key = match oxidocs_fonts::cjk_stand_in(family).0 {
+        "OxiMincho" => "OxiCJK-Mincho",
+        _ => "OxiCJK-Gothic",
+    };
+    let pieces = crate::proportional_pieces(text, family, face_key, 0.0, width, font_size, spacing)?;
+    let out: Vec<(String, f64, f64)> = pieces.into_iter()
+        .map(|(piece, _, x, hscale)| (piece, x, hscale / 100.0))
+        .collect();
+    serde_json::to_string(&out).ok()
+}
+
 /// A family named in Japanese, or one of the Latin-spelled Japanese families
 /// Word documents carry (MS Gothic, Yu Mincho, Meiryo, BIZ UDPGothic,
 /// HGSoeiKakugothicUB, UD Digi Kyokasho…). The Latin "Gothic" faces are not.
@@ -189,6 +254,22 @@ mod stand_in_tests {
     #[test]
     fn latin_families_without_a_stand_in_get_none() {
         assert!(stand_in_font_program("Century Gothic", false, false).is_none());
+        assert_eq!(stand_in_proportional_font_program("游ゴシック").as_deref(), Some(oxidocs_fonts::OXI_GOTHIC_P));
+        assert_eq!(stand_in_proportional_font_program("ＭＳ Ｐ明朝").as_deref(), Some(oxidocs_fonts::OXI_MINCHO_P));
+        assert_eq!(stand_in_proportional_font_program("メイリオ").as_deref(), Some(oxidocs_fonts::OXI_GOTHIC_P));
+        assert!(stand_in_proportional_font_program("ＭＳ ゴシック").is_none());
+        assert!(stand_in_proportional_font_program("ＭＳ 明朝").is_none());
+        assert!(stand_in_proportional_font_program("Calibri").is_none());
+        // 游ゴシック's kana are full-width: its range is the Latin alone.
+        assert_eq!(stand_in_proportional_range("游ゴシック").as_deref(), Some("U+0020-007E"));
+        let pieces: Vec<(String, f64, f64)> = serde_json::from_str(
+            &stand_in_pieces("ＭＳ Ｐゴシック", "（何）", 20.0, 10.0, 0.0).unwrap()).unwrap();
+        assert_eq!(pieces.iter().map(|p| p.0.as_str()).collect::<Vec<_>>(), ["（", "何", "）"]);
+        assert_eq!(pieces[1].1, 5.0);
+        assert!(stand_in_pieces("ＭＳ ゴシック", "（何）", 20.0, 10.0, 0.0).is_none());
+        let pgothic = stand_in_proportional_range("ＭＳ Ｐゴシック").unwrap();
+        assert!(pgothic.starts_with("U+0020-007E, U+30"), "{pgothic}");
+        assert!(pgothic.contains("FF08"), "（ is in: {pgothic}");
         assert!(stand_in_font_program("Segoe Script", false, false).is_none());
         assert!(stand_in_font_program("Brush Script MT", false, false).is_none());
         assert!(stand_in_font_program("MS Sans Serif", false, false).is_none());

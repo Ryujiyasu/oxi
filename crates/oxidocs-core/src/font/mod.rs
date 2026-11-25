@@ -793,6 +793,39 @@ impl FontMetrics {
         })
     }
 
+    /// Printable ASCII set at half an em, as ＭＳ ゴシック / ＭＳ 明朝 / BIZ UDゴシック
+    /// set it, read off i / W / m. False for a face whose Latin is proportional
+    /// (游ゴシック, メイリオ, ＭＳ Ｐゴシック…), and for one not measured at all.
+    /// A painter standing a face in for this one draws its Latin to match.
+    pub fn has_half_width_latin(&self) -> bool {
+        ['i', 'W', 'm'].iter().all(|&c| {
+            self.char_widths.contains_key(&c) && (self.char_width_em(c) - 0.5).abs() < 0.01
+        })
+    }
+
+    /// Whether this face sets `c` proportionally where the shipped Japanese
+    /// stand-ins (OxiGothic / OxiMincho) set it at a fixed width: printable
+    /// ASCII when the face's Latin is not half-width (`has_half_width_latin`),
+    /// and a kana, CJK punctuation mark or full-width form when the face's kana
+    /// are proportional and its measured advance for `c` is short of the em
+    /// (ＭＳ Ｐゴシック's 「（」 and 「・」 are half an em, its あ 0.82). A painter
+    /// standing a face in for this one draws such a character from the
+    /// stand-in's proportional companion (OxiGothicP / OxiMinchoP).
+    /// OXI_PROPORTIONAL_KANA_STAND_IN (2026-11-24, default ON, opt-out _DISABLE)
+    /// gates the kana half.
+    pub fn draws_proportional(&self, c: char) -> bool {
+        match c {
+            ' '..='~' => !self.has_half_width_latin(),
+            '\u{3000}'..='\u{30FF}' | '\u{FF01}'..='\u{FF60}' => {
+                !crate::env_flag!("OXI_PROPORTIONAL_KANA_STAND_IN_DISABLE")
+                    && self.has_proportional_kana()
+                    && self.char_widths.contains_key(&c)
+                    && self.char_width_em(c) < 0.95
+            }
+            _ => false,
+        }
+    }
+
     pub fn is_cjk_83_64_font(&self) -> bool {
         if let Some(codepages) = self.codepage_range1 {
             // Japanese, simplified/traditional Chinese and Korean code pages.
@@ -3294,6 +3327,40 @@ mod tests {
                 case.name, case.word_pitch, pitch
             );
         }
+    }
+
+    #[test]
+    fn half_width_latin_is_read_off_the_measured_widths() {
+        let reg = FontMetricsRegistry::load();
+        for family in ["ＭＳ ゴシック", "MS Gothic", "ＭＳ 明朝", "MS Mincho", "BIZ UDゴシック"] {
+            assert!(reg.get(family).has_half_width_latin(), "{family}");
+        }
+        for family in ["ＭＳ Ｐゴシック", "ＭＳ Ｐ明朝", "游ゴシック", "游明朝", "Yu Gothic", "メイリオ", "BIZ UDPゴシック", "Calibri"] {
+            assert!(!reg.get(family).has_half_width_latin(), "{family}");
+        }
+    }
+
+    /// The characters a stand-in draws from its proportional companion follow
+    /// the measured widths: the Latin of a proportional-Latin face, and the
+    /// narrow kana and punctuation of a proportional-kana face only.
+    #[test]
+    fn proportional_characters_are_read_off_the_measured_widths() {
+        let reg = FontMetricsRegistry::load();
+        let pgothic = reg.get("ＭＳ Ｐゴシック");
+        for c in ['W', 'i', ' ', 'あ', 'ト', '（', '・', '、', 'Ｐ'] {
+            assert!(pgothic.draws_proportional(c), "ＭＳ Ｐゴシック {c}");
+        }
+        for c in ['漢', '\u{A0}', 'α'] {
+            assert!(!pgothic.draws_proportional(c), "ＭＳ Ｐゴシック {c}");
+        }
+        // ＭＳ Ｐ明朝 sets ー a full em: the main face draws it.
+        assert!(!reg.get("ＭＳ Ｐ明朝").draws_proportional('ー'));
+        assert!(reg.get("ＭＳ Ｐ明朝").draws_proportional('（'));
+        // 游ゴシック's kana and punctuation are full-width, its Latin is not.
+        let yu = reg.get("游ゴシック");
+        assert!(yu.draws_proportional('W') && !yu.draws_proportional('あ') && !yu.draws_proportional('（'));
+        let gothic = reg.get("ＭＳ ゴシック");
+        assert!(['W', 'あ', '（'].iter().all(|&c| !gothic.draws_proportional(c)));
     }
 
     #[test]

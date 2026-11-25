@@ -19,13 +19,23 @@ Version 1.1, by their own authors:
   Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
 - OxiMincho (OxiMincho.ttf): derived from Noto Serif JP 2.002
   Copyright 2017-2023 Adobe (http://www.adobe.com/).
+- OxiGothicP (OxiGothicP.ttf): derived from Noto Sans JP 2.004
+  Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
+- OxiMinchoP (OxiMinchoP.ttf): derived from Noto Serif JP 2.003
+  Copyright 2017-2024 Adobe (http://www.adobe.com/).
 
 OxiGothic and OxiMincho take the Regular (400) instance of Noto Sans JP / Noto
 Serif JP (the Japanese subsets of Noto Sans / Serif CJK, i.e. Source Han Sans /
 Serif, as published on Google Fonts), keep their outlines, and change their
 metrics to those of MS Gothic / MS Mincho (half-width 500-unit advances for
 Latin, ascent 859 / descent 140) so text laid out with Word's measurements
-fits. They are Modified Versions under the license below.
+fits; the printable ASCII outlines are narrowed and centred to fit that
+half-width advance. OxiGothicP and OxiMinchoP are the printable ASCII, CJK
+punctuation, kana and full-width forms of the same Regular (400) instances,
+the ASCII with outlines and advances unchanged and the rest set at the
+proportional widths of the fonts' own 'palt' feature, with the vertical
+metrics of OxiGothic / OxiMincho, for text whose Latin or kana are
+proportional. They are Modified Versions under the license below.
 
 The per-font license files are in crates/oxidocs-fonts-latin/fonts/ and
 crates/oxidocs-fonts-jp/fonts/ in the source repository

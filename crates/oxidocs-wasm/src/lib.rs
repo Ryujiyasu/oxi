@@ -50,7 +50,7 @@ thread_local! {
 // The faces live in `oxidocs-fonts`, which owns the files. Reaching across
 // the tree into another crate's folder worked in a checkout and nowhere
 // else: a published crate carries only its own directory.
-use oxidocs_fonts::{OXI_GOTHIC, OXI_MINCHO};
+use oxidocs_fonts::{OXI_GOTHIC, OXI_GOTHIC_P, OXI_MINCHO, OXI_MINCHO_P};
 
 
 /// Which bundled family stands in for a requested one. Anything not listed
@@ -89,6 +89,151 @@ fn get_cjk_fonts() -> &'static (oxipdf_core::ir::EmbeddedFont, oxipdf_core::ir::
         let mincho = oxipdf_core::font_util::embedded_font_from_ttf(OXI_MINCHO);
         (gothic, mincho)
     })
+}
+
+/// The proportional companions of the two stand-ins, keyed as the PDF export
+/// names them.
+fn get_cjk_proportional_fonts() -> &'static [(&'static str, oxipdf_core::ir::EmbeddedFont); 2] {
+    static FONTS: OnceLock<[(&'static str, oxipdf_core::ir::EmbeddedFont); 2]> = OnceLock::new();
+    FONTS.get_or_init(|| [
+        ("OxiCJK-GothicP", oxipdf_core::font_util::embedded_font_from_ttf(OXI_GOTHIC_P)),
+        ("OxiCJK-MinchoP", oxipdf_core::font_util::embedded_font_from_ttf(OXI_MINCHO_P)),
+    ])
+}
+
+fn metrics_registry() -> &'static oxidocs_core::font::FontMetricsRegistry {
+    static METRICS: OnceLock<oxidocs_core::font::FontMetricsRegistry> = OnceLock::new();
+    METRICS.get_or_init(oxidocs_core::font::FontMetricsRegistry::load)
+}
+
+/// An element drawn with a stood-in East Asian face (`OxiCJK-Gothic` /
+/// `OxiCJK-Mincho`) cut where what the family sets proportionally starts and
+/// stops (`FontMetrics::draws_proportional`): (text, face key, x, horizontal
+/// scale) per piece. The stand-ins set ASCII at half an em and kana at a full
+/// em, as ＭＳ ゴシック does, so 游ゴシック or メイリオ came out in a typewriter
+/// face with a gap after each word, and ＭＳ Ｐゴシック's half-em 「（」「・」 ran
+/// into the next character; those are drawn from OxiGothicP / OxiMinchoP
+/// instead, placed at the layout's measured advances and fitted to the width
+/// measured for them -- Latin either way, kana and punctuation only narrowed
+/// (see the CLI's `PROPORTIONAL`). None when nothing needs cutting.
+fn proportional_pieces(
+    text: &str, family: &str, face_key: &str, x: f64, width: f64, fs: f64, spacing: f64,
+) -> Option<Vec<(String, String, f64, f64)>> {
+    let companion_key = match face_key {
+        "OxiCJK-Gothic" => "OxiCJK-GothicP",
+        "OxiCJK-Mincho" => "OxiCJK-MinchoP",
+        _ => return None,
+    };
+    let companion = &get_cjk_proportional_fonts().iter().find(|(key, _)| *key == companion_key)?.1;
+    let metrics = metrics_registry().get(family);
+    let proportional = |c: char| oxidocs_fonts::in_cjk_proportional_stand_in(c)
+        && metrics.draws_proportional(c)
+        && companion.unicode_to_gid.contains_key(&(c as u32));
+    if !text.chars().any(proportional) {
+        return None;
+    }
+    // A kana or punctuation mark from the companion is a piece of its own,
+    // set in the cell the layout measured for it.
+    let mut pieces: Vec<(String, bool, f64)> = Vec::new();
+    for c in text.chars() {
+        let is_proportional = proportional(c);
+        let advance = metrics.char_width_em(c) as f64 * fs + spacing;
+        match pieces.last_mut() {
+            Some((piece, kind, w)) if *kind == is_proportional
+                && !(is_proportional && (!c.is_ascii() || !piece.is_ascii())) =>
+            {
+                piece.push(c);
+                *w += advance;
+            }
+            _ => pieces.push((c.to_string(), is_proportional, advance)),
+        }
+    }
+    let total: f64 = pieces.iter().map(|(_, _, w)| w).sum();
+    let scale = if total > 0.0 && width > 0.0 { width / total } else { 1.0 };
+    let mut at = x;
+    Some(pieces.into_iter().map(|(piece, is_proportional, w)| {
+        let w = w * scale;
+        let start = at;
+        at += w;
+        if !is_proportional {
+            return (piece, face_key.to_string(), start, 100.0);
+        }
+        let natural: f64 = piece.chars()
+            .filter_map(|c| companion.unicode_to_gid.get(&(c as u32)))
+            .map(|g| companion.cid_widths.get(g).copied().unwrap_or(1000) as f64 / 1000.0 * fs)
+            .sum();
+        let target = w - piece.chars().count() as f64 * spacing;
+        let (fit, shift) = proportional_fit(&piece, natural, target);
+        (piece, companion_key.to_string(), start + shift, 100.0 * fit)
+    }).collect())
+}
+
+/// How a piece from the proportional companion meets the `target` width the
+/// layout measured for it, given its `natural` width: (scale factor, x shift).
+/// As the CLI's `proportional_fit`: a Latin word is scaled to the width either
+/// way within 0.6..=1.4; a kana or mark is only narrowed, to 0.6 at most, and
+/// centred on its cell when still wider than it (ＭＳ Ｐゴシック's «ｉ» is a
+/// quarter em, Noto's over half).
+fn proportional_fit(text: &str, natural: f64, target: f64) -> (f64, f64) {
+    if natural <= 0.0 || target <= 0.0 {
+        return (1.0, 0.0);
+    }
+    let fit = target / natural;
+    if text.is_ascii() {
+        return (if (0.6..=1.4).contains(&fit) { fit } else { 1.0 }, 0.0);
+    }
+    let fit = fit.clamp(0.6, 1.0);
+    (fit, ((target - natural * fit) / 2.0).min(0.0))
+}
+
+#[cfg(test)]
+mod proportional_tests {
+    use super::proportional_pieces;
+
+    #[test]
+    fn the_latin_of_a_proportional_family_is_cut_out() {
+        let pieces = proportional_pieces("游Windows・", "游ゴシック", "OxiCJK-Gothic", 10.0, 60.0, 10.5, 0.0).unwrap();
+        let keys: Vec<&str> = pieces.iter().map(|(_, key, _, _)| key.as_str()).collect();
+        assert_eq!(keys, ["OxiCJK-Gothic", "OxiCJK-GothicP", "OxiCJK-Gothic"]);
+        assert_eq!(pieces[1].0, "Windows");
+        assert_eq!(pieces[0].2, 10.0);
+        assert!(pieces[0].2 < pieces[1].2 && pieces[1].2 < pieces[2].2 && pieces[2].2 < 70.0);
+        let mincho = proportional_pieces("Office", "游明朝", "OxiCJK-Mincho", 0.0, 30.0, 10.5, 0.0).unwrap();
+        assert_eq!(mincho[0].1, "OxiCJK-MinchoP");
+    }
+
+    /// ＭＳ Ｐゴシック's narrow kana and punctuation come from the companion, its
+    /// kanji and full-em kana (が, measured a full em) from the main face, each
+    /// piece where the measured widths put it and the kana narrowed to them.
+    #[test]
+    fn the_kana_of_a_proportional_kana_family_are_cut_out() {
+        let fs = 10.0;
+        let m = super::metrics_registry().get("ＭＳ Ｐゴシック");
+        let w = |s: &str| s.chars().map(|c| m.char_width_em(c) as f64 * fs).sum::<f64>();
+        let pieces = proportional_pieces("（何ができる）", "ＭＳ Ｐゴシック", "OxiCJK-Gothic", 0.0, 0.0, fs, 0.0).unwrap();
+        let texts: Vec<&str> = pieces.iter().map(|(t, _, _, _)| t.as_str()).collect();
+        assert_eq!(texts, ["（", "何が", "で", "き", "る", "）"]);
+        let keys: Vec<&str> = pieces.iter().map(|(_, k, _, _)| k.as_str()).collect();
+        assert_eq!(keys, ["OxiCJK-GothicP", "OxiCJK-Gothic", "OxiCJK-GothicP", "OxiCJK-GothicP", "OxiCJK-GothicP", "OxiCJK-GothicP"]);
+        assert!((pieces[1].2 - 5.0).abs() < 0.01, "何 starts after the half-em （: {}", pieces[1].2);
+        assert!((pieces[2].2 - w("（何が")).abs() < 0.01);
+        assert!((pieces[5].2 - w("（何ができる")).abs() < 0.01, "each kana in its own measured cell");
+        assert_eq!(pieces[0].3, 100.0, "（ is half an em in both");
+        assert!(pieces[2].3 < 100.0 && pieces[2].3 > 60.0, "the kana are narrowed: {}", pieces[2].3);
+        // Latin stays one piece beside a mark.
+        let latin = proportional_pieces("「Oxi」", "ＭＳ Ｐゴシック", "OxiCJK-Gothic", 0.0, 0.0, fs, 0.0).unwrap();
+        let texts: Vec<&str> = latin.iter().map(|(t, _, _, _)| t.as_str()).collect();
+        assert_eq!(texts, ["「", "Oxi", "」"]);
+    }
+
+    #[test]
+    fn half_width_latin_and_other_faces_are_left_whole() {
+        assert!(proportional_pieces("Windows", "ＭＳ ゴシック", "OxiCJK-Gothic", 0.0, 36.75, 10.5, 0.0).is_none());
+        assert!(proportional_pieces("Windows", "ＭＳ 明朝", "OxiCJK-Mincho", 0.0, 36.75, 10.5, 0.0).is_none());
+        assert!(proportional_pieces("あいう（）", "游ゴシック", "OxiCJK-Gothic", 0.0, 31.5, 10.5, 0.0).is_none());
+        assert!(proportional_pieces("（あ）", "ＭＳ ゴシック", "OxiCJK-Gothic", 0.0, 31.5, 10.5, 0.0).is_none());
+        assert!(proportional_pieces("Windows", "游ゴシック", "Carlito", 0.0, 40.0, 10.5, 0.0).is_none());
+    }
 }
 
 #[wasm_bindgen(start)]
@@ -1987,8 +2132,7 @@ fn canvas_baseline_offset(elem: &oxidocs_core::layout::LayoutElement) -> Option<
         oxidocs_core::layout::LayoutContent::Text {
             font_size, font_family, is_vertical: false, ..
         } => {
-            static METRICS: OnceLock<oxidocs_core::font::FontMetricsRegistry> = OnceLock::new();
-            let registry = METRICS.get_or_init(oxidocs_core::font::FontMetricsRegistry::load);
+            let registry = metrics_registry();
             Some(elem.baseline_offset.unwrap_or_else(|| {
                 let metrics = registry.get(font_family.as_deref().unwrap_or("Calibri"));
                 elem.text_y_off - 1.0 + metrics.baseline_ascent() * *font_size
@@ -2478,6 +2622,26 @@ fn layout_to_pdf(
                     // OXI_PDF_FAKE_BOLD; Word's PDF writes «2 Tr 0.51429 w» at 18pt).
                     let fake_bold = *bold && !registered && font_name.starts_with("OxiCJK-");
 
+                    let pieces = if registered || elem.font_glyph.is_some() { None } else {
+                        proportional_pieces(text, base_font, &font_name, elem.x as f64,
+                            elem.width as f64, fs, *character_spacing as f64)
+                    };
+                    let split = pieces.is_some();
+                    if let Some(pieces) = pieces {
+                        for (piece, key, x, hscale) in pieces {
+                            contents.push(ContentElement::Text(TextSpan {
+                                x,
+                                y: baseline,
+                                text: piece,
+                                font_name: key,
+                                font_size: fs,
+                                fill_color,
+                                character_spacing: *character_spacing as f64,
+                                stroke_width: if fake_bold { fs / 35.0 } else { 0.0 },
+                                skew: 0.0, horizontal_scale: hscale, stroke_color: None,
+                            }));
+                        }
+                    }
                     let span = TextSpan {
                         x: elem.x as f64,
                         y: baseline,
@@ -2489,11 +2653,13 @@ fn layout_to_pdf(
                         stroke_width: if fake_bold { fs / 35.0 } else { 0.0 },
                         skew: 0.0, horizontal_scale: 100.0, stroke_color: None,
                     };
-                    contents.push(if let Some(glyph) = &elem.font_glyph {
-                        ContentElement::GlyphRun(GlyphRun { span, glyph_indices: vec![glyph.index] })
-                    } else {
-                        ContentElement::Text(span)
-                    });
+                    if !split {
+                        contents.push(if let Some(glyph) = &elem.font_glyph {
+                            ContentElement::GlyphRun(GlyphRun { span, glyph_indices: vec![glyph.index] })
+                        } else {
+                            ContentElement::Text(span)
+                        });
+                    }
 
                     // Underline and strikethrough across the element's width, at the
                     // positions and thicknesses the CLI's PDF export uses.
@@ -2625,6 +2791,13 @@ fn layout_to_pdf(
         }
         if has_mincho {
             embedded_fonts.insert("OxiCJK-Mincho".to_string(), mincho.clone());
+        }
+    }
+    for (key, face) in get_cjk_proportional_fonts() {
+        if pages.iter().any(|p| p.contents.iter().any(|c| {
+            matches!(c, ContentElement::Text(t) if t.font_name == *key)
+        })) {
+            embedded_fonts.insert(key.to_string(), face.clone());
         }
     }
 
