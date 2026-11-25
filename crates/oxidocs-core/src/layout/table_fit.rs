@@ -3764,14 +3764,42 @@ impl<'a> TableFitLayouter<'a> {
                                             &para.style,
                                         )
                                         .map(|s| s.to_string());
+                                    // OXI_VCELL_IND (2026-11-25, default ON, opt-out _DISABLE): a tbRlV
+                                    // cell paragraph's left indent (leftChars resolved) moves each of its
+                                    // columns down from the row top, its first line indent the first
+                                    // column; the right indent does nothing. `_pb_vcell_ind_gen.py` (slice
+                                    // of blind-A ja/legal__02f84965 p5 «①番号», ＭＳ 明朝 9, 9 arms): first
+                                    // glyph top − rule = 0.43 + left (44tw 2.59, 200tw 10.39) + firstLine
+                                    // (100tw 5.59); right 0 / 113 / 400 identical. Oxi ignored all of them.
+                                    let (vind_l, vind_fl) = if crate::env_flag!("OXI_VCELL_IND_DISABLE") {
+                                        (0.0f32, 0.0f32)
+                                    } else {
+                                        let l = self
+                                            .s1349_left_pt_style(&para.style, para.runs.first().map(|r| &r.style), None, None)
+                                            .or(para.style.indent_left)
+                                            .unwrap_or(0.0);
+                                        let r = para.style.indent_right.unwrap_or(0.0).max(0.0);
+                                        // The column runs along the paragraph's line: jc centre sets
+                                        // it between the two indents (02b63065 / 03baee42 «変更前»,
+                                        // left = right = 113tw, Word centred); jc right is not
+                                        // measured and stays put.
+                                        match para.alignment {
+                                            Alignment::Center => ((l.max(0.0) - r) / 2.0, 0.0),
+                                            Alignment::Right => (0.0, 0.0),
+                                            _ => (l.max(0.0), para.style.indent_first_line.unwrap_or(0.0)),
+                                        }
+                                    };
+                                    let mut vind_first = true;
                                     if let Some((cols, _)) = s753_vert_cols.as_ref() {
                                         for (bp, col_text, x_rel, col_w, _len) in cols.iter() {
                                             if *bp != block_pos || col_text.is_empty() {
                                                 continue;
                                             }
+                                            let vind_y = vind_l + if vind_first { vind_fl } else { 0.0 };
+                                            vind_first = false;
                                             let mut elem = LayoutElement::new(
                                                 cell_x + x_rel,
-                                                0.0,
+                                                vind_y,
                                                 *col_w,
                                                 first_run_fs,
                                                 LayoutContent::Text {

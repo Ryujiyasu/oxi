@@ -105,6 +105,10 @@ pub struct Document {
     /// `<w:useAltKinsokuLineBreakRules/>` (compat): see LayoutEngine.
     #[serde(default)]
     pub alt_kinsoku: bool,
+    /// `<w:useWord97LineBreakRules/>` (compat): a synthetic bold keeps the
+    /// regular advances (see font::Word97SynBoldScope).
+    #[serde(default)]
+    pub word97_line_breaks: bool,
     /// `<w:autoHyphenation/>` (CT_OnOff, settings.xml): Word breaks words at
     /// legal hyphenation points to fill lines. 6/619 corpus docs set it; the
     /// rule Word applies is derived in `layout::hyphen`.

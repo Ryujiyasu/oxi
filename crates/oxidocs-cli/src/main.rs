@@ -2563,7 +2563,13 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         let adv = fs + *character_spacing as f64;
                         // OXI_VERT_GLYPH_TOP: no 1pt lift for an upright vertical glyph
                         // (the renderer's rule, see oxi-dwrite-renderer).
-                        let text_y = if std::env::var("OXI_VERT_GLYPH_TOP").map_or(false, |v| v == "1")
+                        // OXI_PDF_VCELL_NOLIFT (2026-11-25, default ON, opt-out _DISABLE): the same in a
+                        // tbRlV cell. `_pb_vcell_ind_gen.py` (blind-A ja/legal__02f84965 p5 header
+                        // cells, ＭＳ 明朝 9, 9 arms): Word's first glyph top = row rule + 0.43 + indent,
+                        // this PDF's 1.33 above it in every arm; 02b63065's cells 1.1..1.2 above.
+                        let vcell_nolift = elem.cell_row_index.is_some()
+                            && std::env::var_os("OXI_PDF_VCELL_NOLIFT_DISABLE").is_none();
+                        let text_y = if (std::env::var("OXI_VERT_GLYPH_TOP").map_or(false, |v| v == "1") || vcell_nolift)
                             && std::env::var_os("OXI_PDF_BASELINE_DISABLE").is_none()
                             && elem.baseline_offset.is_none()
                         { text_y + 1.0 } else { text_y };

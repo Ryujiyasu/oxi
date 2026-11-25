@@ -1792,7 +1792,7 @@ impl FontMetricsRegistry {
 
     fn get_regular_with_synthetic_bold(&self, family: &str, bold: bool) -> FontMetricsRef<'_> {
         let regular = self.get(family);
-        if bold {
+        if bold && !W97_REGULAR_SYNBOLD.with(|c| c.get()) {
             if let Some(synthetic) = self.synthetic_bold_fonts.get(&regular.family) {
                 return (synthetic).into();
             }
@@ -3761,5 +3761,33 @@ fn gdi_kana_width_px_ppem14(c: char) -> Option<f32> {
         'ヾ' => Some(10.0),
         '゛' | '゜' => Some(7.0),
         _ => None,
+    }
+}
+
+thread_local! {
+    static W97_REGULAR_SYNBOLD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// OXI_W97_SYNBOLD (2026-11-25, default ON, opt-out _DISABLE): under
+/// `<w:useWord97LineBreakRules/>` Word lays a synthetic bold (a face without a
+/// bold member, ＭＳ Ｐゴシック etc.) out at the REGULAR advances -- it does not
+/// add the one-unit widening it adds otherwise. `_pb_synbold_flag_gen.py`: the
+/// minimal body probe (36 kanji, bold, compat 11) breaks at 35 x 10.541 with no
+/// compat flag and with each of 7cc63ebc's other 35 flags, at 35 x 10.5 with
+/// this one alone; 7cc63ebc's body and cells break bold = regular.
+/// Compat 11 / 12 / 14 (ＭＳ Ｐゴシック, ＭＳ 明朝, ＭＳ Ｐ明朝; jc left and both) all
+/// break bold = regular; compat 15 ignores the flag (bold widened).
+/// While alive (one document's layout), bold lookups return the regular table.
+pub(crate) struct Word97SynBoldScope(bool);
+impl Word97SynBoldScope {
+    pub(crate) fn enter(on: bool) -> Self {
+        let on = on && !crate::env_flag!("OXI_W97_SYNBOLD_DISABLE");
+        Self(W97_REGULAR_SYNBOLD.with(|c| c.replace(on)))
+    }
+}
+impl Drop for Word97SynBoldScope {
+    fn drop(&mut self) {
+        let prev = self.0;
+        W97_REGULAR_SYNBOLD.with(|c| c.set(prev));
     }
 }

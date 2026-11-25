@@ -4833,6 +4833,8 @@ impl LayoutEngine {
 
     pub fn layout(&self, doc: &Document) -> LayoutResult {
         let _document_fonts = crate::font::shape::enter_document_fonts(doc);
+        let _w97_synbold = crate::font::Word97SynBoldScope::enter(
+            doc.word97_line_breaks && (doc.compat_mode <= 14 || !doc.compat_mode_explicit));
         let math_font_doc;
         let doc=if document_has_math_font_runs(doc) {
             let mut copy=doc.clone();

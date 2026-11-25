@@ -7211,6 +7211,8 @@ impl<'a> ParagraphLayouter<'a> {
                 if s472_render {
                     let nfr = n_vis;
                     let mut lend_half: Option<f32> = None;
+                    // OXI_C15_LEND: (natural width, hang) of the line-final 、。 (compat 15).
+                    let mut c15_lend: Option<f32> = None;
                     let mut comps: Vec<(usize, f32, f32)> = Vec::new(); // (fi, fs, cap)
                     let s_open_even = !crate::env_flag!("OXI_YAKU_OPEN_EVEN_DISABLE");
                     let mut open_fi: Vec<usize> = Vec::new();
@@ -7327,6 +7329,47 @@ impl<'a> ParagraphLayouter<'a> {
                             };
                             continue;
                         }
+                        // OXI_C15_PROP_YAKU (2026-11-25, default ON, opt-out _DISABLE): compat 15
+                        // without a character grid takes a proportional face's 、。 at its own
+                        // advance, not the em. blind-A ja/correspondence__032cce9c (HGPｺﾞｼｯｸM 12):
+                        // Word 、 7.92..8.15 on every line (hmtx 170/256 = 7.97); Oxi restored it
+                        // to 12.10 on a loose line («…入庁し、農業…»).
+                        let fs = if !legacy_even && effective_char_pitch.is_none()
+                            && matches!(c0, '、' | '。' | '，' | '．')
+                            && !crate::env_flag!("OXI_C15_PROP_YAKU_DISABLE")
+                        {
+                            let fm = self.metrics_for_cjk(&f.style, &para.style)
+                                .unwrap_or_else(|| self.metrics_for(&f.style, &para.style));
+                            let nat = self.registry.char_width_pt_with_fallback(c0, fs, &fm);
+                            if nat > 0.0 && nat < fs * 0.95 { nat } else { fs }
+                        } else {
+                            fs
+                        };
+                        // OXI_C15_LEND (2026-11-25, default ON, opt-out _DISABLE): compat 15,
+                        // no character grid, a justified line (not the last) ending in 、。，．
+                        // that overflows: the mark hangs up to `lend` past the edge -- half an em
+                        // for a full-width face (its blank half), its whole advance for a
+                        // proportional one -- and the rest of the line spreads; overflow beyond
+                        // `lend` is squeezed out of the inner 約物. `_pb_032_hang_gen.py` (faithful
+                        // slice of blind-A ja/correspondence__032cce9c, right indent swept 1pt,
+                        // 14 arms each): ＭＳ 明朝 12 «…将来像、» 、 starts edge − 5.9..6.3 for over
+                        // 0.8..5.8, then inner 、 11.16 / 10.20 / 9.24 at over 6.8 / 7.8 / 8.8;
+                        // HGPｺﾞｼｯｸM «…実感し、» 、 starts at the edge (− 0.4..0.6) for over
+                        // 0.4..7.4, nothing squeezed; Oxi left both unspread and squeezed.
+                        if !last_fit
+                            && !legacy_even
+                            && fi + 1 == nfr
+                            && single
+                            && effective_char_pitch.is_none()
+                            && matches!(c0, '、' | '。' | '，' | '．')
+                            && !crate::env_flag!("OXI_C15_LEND_DISABLE")
+                        {
+                            let full = f.style.font_size.unwrap_or(para_font_size);
+                            frag_width_adjustments[fi] = fs - f.width;
+                            nat_total += fs;
+                            c15_lend = Some(if fs < full * 0.95 { fs } else { full / 2.0 });
+                            continue;
+                        }
                         // compat 15 without a character grid hangs the closing
                         // 、。 of a last line the same way (golden tsuuchisho_002669443
                         // p4 「…考えられること。」: 4.3pt over, 。 at 505.4 inside its
@@ -7381,6 +7424,12 @@ impl<'a> ParagraphLayouter<'a> {
                             nat_total += half;
                         } else {
                             lend_credit = half;
+                        }
+                    }
+                    if let Some(lend) = c15_lend {
+                        if nat_total - (render_width - extra_indent) > 0.01 {
+                            nat_total -= lend;
+                            lend_credit = lend;
                         }
                     }
                     let nat_slack = render_width - extra_indent - nat_total
