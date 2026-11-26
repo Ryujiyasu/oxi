@@ -37,6 +37,10 @@ copyFileSync(join(here, 'fonts.js'), join(pkg, 'fonts.js'));
 // The module carries the Carlito, Caladea, Liberation and Noto JP faces, which
 // are OFL-1.1, not the bindings' MIT/Apache; their notices go with it.
 copyFileSync(join(here, '..', '..', 'LICENSE-FONTS'), join(pkg, 'LICENSE-FONTS'));
+// The bindings are MIT OR Apache-2.0, but the module is compiled from the
+// MPL-2.0 engine crates; the licence of the whole package says so, and the
+// MPL text travels with it, or a licence scanner reports no MPL code inside.
+copyFileSync(join(here, '..', '..', 'LICENSE'), join(pkg, 'LICENSE-MPL'));
 
 // A module built without external-font-catalog has the catalog compiled in;
 // published as this package it would weigh 34 MB more and never use the
@@ -59,6 +63,7 @@ Object.assign(manifest, {
   homepage: 'https://github.com/Ryujiyasu/oxi',
   bugs: { url: 'https://github.com/Ryujiyasu/oxi/issues' },
   keywords: ['docx', 'xlsx', 'pptx', 'ooxml', 'office', 'wasm', 'word', 'layout'],
+  license: '(MIT OR Apache-2.0) AND MPL-2.0 AND OFL-1.1',
   // The licences and the README travel with it, or the npm page is bare and
   // the terms live only in a repository nobody opened.
   files: [
@@ -71,6 +76,7 @@ Object.assign(manifest, {
     'LICENSE-APACHE',
     'LICENSE-MIT',
     'LICENSE-FONTS',
+    'LICENSE-MPL',
   ],
 });
 // wasm-pack writes this for a build that has snippets; this one has none, and

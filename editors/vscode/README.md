@@ -118,5 +118,8 @@ npx @vscode/vsce package
 
 ## License
 
-The extension is MIT OR Apache-2.0, matching Oxidocs' binding layer. The engine
-itself is MPL-2.0.
+The extension's own code is MIT OR Apache-2.0, matching Oxidocs' binding layer.
+The WebAssembly engine it bundles is compiled from MPL-2.0 code (`LICENSE-MPL`;
+source at https://github.com/Ryujiyasu/oxi), and the fonts inside it are
+OFL-1.1 (`LICENSE-FONTS`). The package as a whole is
+`(MIT OR Apache-2.0) AND MPL-2.0 AND OFL-1.1`.
