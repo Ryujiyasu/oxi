@@ -2777,9 +2777,53 @@ impl<'a> TableFitLayouter<'a> {
                         }
                     }
                 }
+                // OXI_SPLIT_OUTER_EDGES (2026-11-26, default ON, opt-out _DISABLE): a page break
+                // BETWEEN rows closes the fragment with the TABLE's bottom border, not the
+                // inside rule the row above would have shared with the next row.
+                // `_pb_split_edges_gen.py` (cantSplit rows, compat 15, 8 arms of outer top/bottom
+                // x insideH): outer none / insideH single -> no rule at the page bottom; outer
+                // 2.25 / inside 0.5 -> 2.16 drawn; outer 0.5 / inside 2.25 -> 0.48; outer dashed /
+                // inside none -> dashed; outer single / inside none -> single. The page-top edge
+                // takes the table's top border the same way (OXI_PAGETOP_ROW_RULE below).
+                // blind-A en/reports__0018b88f (TableGrid + direct outer none): Oxi drew the
+                // inside rule under each page's last row; Word draws none.
+                if s1083_moved.is_empty()
+                    && row_idx > 0
+                    && table.style.border
+                    && !crate::env_flag!("OXI_SPLIT_OUTER_EDGES_DISABLE")
+                {
+                    let cut = cursor.visual_y;
+                    let bottom_rule = table.style.bottom_border.clone()
+                        .filter(|e| e.style != "none" && e.style != "nil" && e.width > 0.0);
+                    let previous = &table.rows[row_idx - 1];
+                    let mut grid = previous.grid_before as usize;
+                    let mut x = table_x + col_widths.iter().take(grid).sum::<f32>();
+                    for cell in &previous.cells {
+                        let end = (grid + cell.grid_span.max(1) as usize).min(col_widths.len());
+                        let width = col_widths.get(grid..end).unwrap_or(&[]).iter().sum::<f32>();
+                        if width > 0.0 && cell.borders.as_ref().and_then(|b| b.bottom.as_ref()).is_none() {
+                            let (x0, x1) = (x, x + width);
+                            elements.retain(|e| !matches!(&e.content,
+                                LayoutContent::TableBorder { x1: a, x2: b, y1, y2, .. }
+                                    if (*y1 - *y2).abs() < 0.1 && (*y1 - cut).abs() < 1.0
+                                        && a.min(*b) >= x0 - 0.6 && a.max(*b) <= x1 + 0.6));
+                            if let Some(edge) = bottom_rule.as_ref() {
+                                elements.push(LayoutElement::new(x0, cut, width, 0.0,
+                                    LayoutContent::TableBorder {
+                                        x1: x0, y1: cut, x2: x1, y2: cut,
+                                        color: Some(format!("#{}", edge.color.as_deref().filter(|c| !c.eq_ignore_ascii_case("auto")).unwrap_or("000000").trim_start_matches('#'))),
+                                        width: edge.width, style: Some(edge.style.clone()),
+                                    }));
+                            }
+                        }
+                        x += width;
+                        grid = end;
+                    }
+                }
                 let vmerge_cut_page = pages.len();
                 let vmerge_cut_bottom = cursor.visual_y;
                 // Push all accumulated elements (including previous rows) to current page
+                LayoutEngine::shading_under(&mut elements);
                 current_elements.extend(std::mem::take(&mut elements));
                 // OXI_CELL_BOX_PAGE (2026-11-21, default ON, opt-out _DISABLE): the deferred
                 // cell-anchored boxes drawn so far belong to the page being closed -- they were
@@ -3400,8 +3444,35 @@ impl<'a> TableFitLayouter<'a> {
                     pad_t = bw;
                 }
 
+                // OXI_VMERGE_FILL (2026-11-26, default ON, opt-out _DISABLE): a vertically
+                // merged cell is ONE cell -- Word paints the whole span with the restart
+                // cell's fill; a continuation cell's own w:shd is ignored.
+                // `_pb_vmerge_shade_gen.py` (3-row vMerge, fills restart/cont1/cont2 =
+                // D9/auto/auto, D9/D9/D9, auto/D9/D9, D9/yellow/auto, yellow/D9/D9, compat
+                // 15 / 11): Word reads the restart's colour in every row of all 10 arms.
+                // blind-A ja/forms__002f862f p1: «購入した用具» (restart F2F2F2, continuation
+                // auto) is grey to the bottom in Word, white in Oxi.
+                let vmerge_restart_shading = if is_vmerge_continue
+                    && !crate::env_flag!("OXI_VMERGE_FILL_DISABLE")
+                {
+                    (0..row_idx).rev().find_map(|ri| {
+                        LayoutEngine::s1192_cell_at(&table.rows[ri], cell_start_grid, true).and_then(|c| {
+                            match c.v_merge.as_deref() {
+                                Some("continue") | Some("") => None,
+                                Some(_) => Some(c.shading.clone()),
+                                None => Some(None),
+                            }
+                        })
+                    })
+                } else {
+                    None
+                };
+                let cell_shading = match vmerge_restart_shading {
+                    Some(restart) => restart,
+                    None => cell.shading.clone(),
+                };
                 // Emit cell shading (background fill) before cell content
-                if let Some(ref shading_color) = cell.shading {
+                if let Some(ref shading_color) = cell_shading {
                     if !shading_color.is_empty() && shading_color != "auto" {
                         let color_hex = if shading_color.starts_with('#') {
                             shading_color.clone()
@@ -7615,7 +7686,25 @@ impl<'a> TableFitLayouter<'a> {
                                                     > std::env::var("OXI_S720_BOUND")
                                                         .ok()
                                                         .and_then(|v| v.parse::<f32>().ok())
-                                                        .unwrap_or(1.0);
+                                                        // OXI_PROPCELL_NOHANG_PUSH (2026-11-26, default ON, opt-out
+                                                        // _DISABLE): a prohibited character that cannot hang gets no
+                                                        // tolerance at all -- Word pushes it with its companion as soon
+                                                        // as the natural line overflows. `_pb_7cc_slice_gen.py` (the
+                                                        // blind-A ja/technical__7cc63ebc cell, bold ＭＳ Ｐゴシック 10.5,
+                                                        // jc both, compat 11, column swept 7540..7600 tw in 2 tw): with
+                                                        // «０％» / «０々» / «０！» Word keeps the mark from 7566 (the
+                                                        // natural fit, 343.3pt) and pushes «０» + mark below it; Oxi kept
+                                                        // it from 7548 on the 1.0pt bound. «、» hangs in both; «ー» is not
+                                                        // prohibited in either. 7cc63ebc p2 «…利率が|０％を下回る».
+                                                        .unwrap_or(
+                                                            if !matches!(ch, '、' | '。' | '，' | '．')
+                                                                && !crate::env_flag!("OXI_PROPCELL_NOHANG_PUSH_DISABLE")
+                                                            {
+                                                                0.0
+                                                            } else {
+                                                                1.0
+                                                            },
+                                                        );
                                             let would_overflow = LayoutEngine::fit_text_cell_overflow(
                                                 &para.runs, run_idx, s586_ci,
                                                 line_x + buf_w, effective_wrap,
@@ -12333,24 +12422,63 @@ impl<'a> TableFitLayouter<'a> {
                     };
                     let last_row = row_idx + 1 == num_rows;
                     let last_cell = cell_idx + 1 == row.cells.len();
-                    let (top_color, top_width, top_style) = resolve_border(
-                        cell_borders.and_then(|b| b.top.as_ref()).or(inherited_top_rule.as_ref())
-                            .or_else(|| undeclared(if row_idx == 0 { 1 } else { 16 })),
-                        if row_idx == 0 {
-                            outer_width
-                        } else {
-                            horizontal_width
-                        },
-                    );
+                    // OXI_SPLIT_OUTER_EDGES: a row that opens a page after a break between rows
+                    // takes the TABLE's top border (`_pb_split_edges_gen.py`, see the page break).
+                    let split_top_outer = row_idx > 0
+                        && pages.len() > inherited_outer_page_before_row
+                        && table.style.border
+                        && !crate::env_flag!("OXI_SPLIT_OUTER_EDGES_DISABLE");
+                    let norm_rule = |e: &Option<BorderDef>| -> Option<BorderDef> {
+                        e.clone().map(|mut e| {
+                            if e.style == "nil" { e.style = "none".into(); }
+                            if e.color.as_deref().map_or(true, |c| c.eq_ignore_ascii_case("auto")) { e.color = Some("000000".into()); }
+                            e
+                        })
+                    };
+                    let table_top_rule = norm_rule(&table.style.top_border);
+                    // OXI_TBL_SIDE_RULES (2026-11-26, default ON, opt-out _DISABLE): each table
+                    // edge draws its OWN declared rule -- outer top / bottom / left / right and the
+                    // inside H / V -- not the one lumped style the table reports (the first edge
+                    // that declared). `_pb_split_edges_gen.py` outDot arm (top/bottom dotted,
+                    // insideH single): Word strokes the row rules solid, Oxi drew them dotted;
+                    // the outThick / inThick arms read each edge's own weight the same way.
+                    let side_rules = table.style.border && !crate::env_flag!("OXI_TBL_SIDE_RULES_DISABLE");
+                    let side = |e: &Option<BorderDef>| -> Option<BorderDef> { if side_rules { norm_rule(e) } else { None } };
+                    let rule_top = side(&table.style.top_border);
+                    let rule_bottom = side(&table.style.bottom_border);
+                    let rule_left = side(&table.style.left_border);
+                    let rule_right = side(&table.style.right_border);
+                    let rule_ih = side(&table.style.inside_horizontal_border);
+                    let rule_iv = side(&table.style.inside_vertical_border);
+                    let (top_color, top_width, top_style) = if split_top_outer {
+                        resolve_border(
+                            cell_borders.and_then(|b| b.top.as_ref()).or(table_top_rule.as_ref())
+                                .or(inherited_top_rule.as_ref()).or_else(|| undeclared(1)),
+                            outer_width,
+                        )
+                    } else {
+                        resolve_border(
+                            cell_borders.and_then(|b| b.top.as_ref()).or(inherited_top_rule.as_ref())
+                                .or_else(|| undeclared(if row_idx == 0 { 1 } else { 16 }))
+                                .or(if row_idx == 0 { rule_top.as_ref() } else { rule_ih.as_ref() }),
+                            if row_idx == 0 {
+                                outer_width
+                            } else {
+                                horizontal_width
+                            },
+                        )
+                    };
                     let (bot_color, bot_width, bot_style) = resolve_border(
                         cell_borders.and_then(|b| b.bottom.as_ref()).or_else(|| {
                             if row_idx + 1 == num_rows { inherited_bottom_rule.as_ref() } else { None }
-                        }).or_else(|| undeclared(if last_row { 4 } else { 16 })),
+                        }).or_else(|| undeclared(if last_row { 4 } else { 16 }))
+                            .or(if last_row { rule_bottom.as_ref() } else { rule_ih.as_ref() }),
                         horizontal_width,
                     );
                     let (left_color, left_width, left_style) = resolve_border(
                         cell_borders.and_then(|b| b.left.as_ref())
-                            .or_else(|| undeclared(if cell_idx == 0 { 2 } else { 32 })),
+                            .or_else(|| undeclared(if cell_idx == 0 { 2 } else { 32 }))
+                            .or(if cell_idx == 0 { rule_left.as_ref() } else { rule_iv.as_ref() }),
                         if cell_idx == 0 {
                             outer_width
                         } else {
@@ -12359,7 +12487,8 @@ impl<'a> TableFitLayouter<'a> {
                     );
                     let (right_color, right_width, right_style) =
                         resolve_border(cell_borders.and_then(|b| b.right.as_ref())
-                            .or_else(|| undeclared(if last_cell { 8 } else { 32 })), vertical_width);
+                            .or_else(|| undeclared(if last_cell { 8 } else { 32 }))
+                            .or(if last_cell { rule_right.as_ref() } else { rule_iv.as_ref() }), vertical_width);
 
                     // When cells have their own borders (tcBorders), draw each side per cell.
                     // When using table-level borders, use collapsed model to avoid double-drawing.
@@ -12404,7 +12533,19 @@ impl<'a> TableFitLayouter<'a> {
                                 .and_then(|c| c.borders.as_ref())
                                 .and_then(|b| b.bottom.as_ref())
                                 .map_or(false, |b| matches!(b.style.as_str(), "nil" | "none"));
-                        if (!use_collapsed || row_idx == 0 || above_bottom_nil)
+                        // OXI_PAGETOP_ROW_RULE (2026-11-26, default ON, opt-out _DISABLE): a row
+                        // that opens a page after a break BETWEEN rows draws its own top rule --
+                        // the collapsed edge's owner (the row above's bottom) stayed on the
+                        // previous page. `_pb_pagetop_rule_gen.py` (ＭＳ 明朝 10.5, docGrid lines,
+                        // tblBorders direct / Table Grid style x plain-split / vMerge first column
+                        // / cantSplit x compat 15 / 11, 16 arms): Word draws the rule at the page
+                        // top (56.6) in every arm; Oxi drew it only where the row itself split.
+                        // blind-A ja/reports__136d1ce5 p2-p11: every page's first row (number
+                        // cell vMerge) had no top rule.
+                        let page_start_row = row_idx > 0
+                            && pages.len() > inherited_outer_page_before_row
+                            && !crate::env_flag!("OXI_PAGETOP_ROW_RULE_DISABLE");
+                        if (!use_collapsed || row_idx == 0 || above_bottom_nil || page_start_row)
                             && (!inherited_only || row_idx == 0 || pages.len() > inherited_outer_page_before_row) {
                             elements.push(edge);
                         }
@@ -14167,10 +14308,32 @@ impl<'a> TableFitLayouter<'a> {
 
                 // Repeat the declared top edges even when the existing bottom
                 // already encloses the continuation text.
-                if current_page_elems.iter().any(|e| matches!(e.content, LayoutContent::Text { .. }))
+                // OXI_SPLIT_OUTER_EDGES: a row that left NO text behind moved whole -- the
+                // break fell between rows, so its page-top edge is the table's top border
+                // (`_pb_split_edges_gen.py`). blind-A ja/reports__136d1ce5 p3/p5/p7/p8/p9: the
+                // vMerge-numbered rows moved whole through this path and lost their top rule.
+                let moved_whole = !current_page_elems.iter().any(|e| matches!(e.content, LayoutContent::Text { .. }))
+                    && table.style.border
+                    && !crate::env_flag!("OXI_SPLIT_OUTER_EDGES_DISABLE");
+                let whole_top_rule = table.style.top_border.clone().map(|mut e| {
+                    if e.style == "nil" { e.style = "none".into(); }
+                    if e.color.as_deref().map_or(true, |c| c.eq_ignore_ascii_case("auto")) { e.color = Some("000000".into()); }
+                    e
+                });
+                if (current_page_elems.iter().any(|e| matches!(e.content, LayoutContent::Text { .. })) || moved_whole)
                     && next_page_elems.iter().any(|e| matches!(e.content, LayoutContent::Text { .. }))
+                    && !(moved_whole && whole_top_rule.as_ref().is_some_and(|e| e.style == "none" || e.width <= 0.0))
                 {
                     for mut edge in split_top_edges {
+                        if moved_whole {
+                            if let (Some(rule), LayoutContent::TableBorder { color, width, style, .. }) =
+                                (whole_top_rule.as_ref(), &mut edge.content)
+                            {
+                                *color = Some(format!("#{}", rule.color.as_deref().unwrap_or("000000").trim_start_matches('#')));
+                                *width = rule.width;
+                                *style = Some(rule.style.clone());
+                            }
+                        }
                         if let LayoutContent::TableBorder { x1, x2, y1, y2, .. } = &mut edge.content {
                             let covered = next_page_elems.iter().any(|e| matches!(&e.content,
                                 LayoutContent::TableBorder { x1: a, x2: b, y1: c, y2: d, .. }
@@ -14330,6 +14493,7 @@ impl<'a> TableFitLayouter<'a> {
                         split_y, page_top, page_bottom, pages.len(), current_page_elems.len(), cur_txt, next_page_elems.len(), nxt_txt, nxt_maxy);
                 }
                 elements.extend(current_page_elems);
+                LayoutEngine::shading_under(&mut elements);
                 current_elements.extend(std::mem::take(&mut elements));
                 // OXI_CELL_BOX_PAGE (2026-11-21, default ON, opt-out _DISABLE): the deferred
                 // cell-anchored boxes drawn so far belong to the page being closed -- they were
@@ -16085,8 +16249,29 @@ impl<'a> TableFitLayouter<'a> {
             }
         }
 
+        LayoutEngine::shading_under(&mut elements);
         // S487: paint cell-anchored floating text boxes last (on top of the grid).
         elements.extend(deferred_cell_textboxes);
         elements
+    }
+}
+
+impl LayoutEngine {
+    /// OXI_SHADE_UNDER (2026-11-26, default ON, opt-out _DISABLE): a table's cell fills
+    /// are painted beneath its text and rules. Fills are emitted row by row, so a
+    /// later row's fill covered text that runs down from a row above -- the label of
+    /// a vertically merged cell centred across its continuation rows
+    /// (`_pb_vmerge_shade_gen.py`: Word shows the label in every arm; blind-A
+    /// ja/forms__002f862f p1 «申請者» / «補助対象者» / «振込先» hidden under F2F2F2).
+    /// Stable: fills keep their order among themselves, everything else its own.
+    pub(crate) fn shading_under(elements: &mut Vec<LayoutElement>) {
+        if crate::env_flag!("OXI_SHADE_UNDER_DISABLE") {
+            return;
+        }
+        let (fills, rest): (Vec<LayoutElement>, Vec<LayoutElement>) = std::mem::take(elements)
+            .into_iter()
+            .partition(|e| matches!(e.content, LayoutContent::CellShading { .. }));
+        elements.extend(fills);
+        elements.extend(rest);
     }
 }

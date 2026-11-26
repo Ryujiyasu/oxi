@@ -15262,6 +15262,9 @@ fn parse_table(
                 if style.left_border.is_none() {
                     style.left_border = tbl_style.left_border.clone();
                 }
+                if style.right_border.is_none() {
+                    style.right_border = tbl_style.right_border.clone();
+                }
                 // OXI_TBL_INSIDE_INHERIT (2026-11-17): a direct tblBorders that sets
                 // only the outer frame to none keeps the style's inside grid. blind-A
                 // en/reports__0018b88f: TableGrid + direct top/left/bottom/right none,
@@ -15933,7 +15936,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                         // border_width/_style cannot tell a sz4 top from a sz24
                         // bottom, and the row-0 pad and the below-table advance
                         // each need their own edge.
-                        if matches!(local.as_str(), "insideH" | "insideV" | "top" | "bottom" | "left" | "start") {
+                        if matches!(local.as_str(), "insideH" | "insideV" | "top" | "bottom" | "left" | "start" | "right" | "end") {
                             let border = BorderDef {
                                 style: if is_none {
                                     "none".to_string()
@@ -15951,6 +15954,7 @@ fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<TableStyle, Pars
                                 "insideV" => style.inside_vertical_border = Some(border),
                                 "top" => style.top_border = Some(border),
                                 "left" | "start" => style.left_border = Some(border),
+                                "right" | "end" => style.right_border = Some(border),
                                 _ => style.bottom_border = Some(border),
                             }
                         }

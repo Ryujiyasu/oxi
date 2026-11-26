@@ -2280,6 +2280,7 @@ fn resolve_table_style_inheritance(styles: &mut StyleSheet) {
                         if child.top_border.is_none() { child.top_border = parent.top_border.clone(); }
                         if child.bottom_border.is_none() { child.bottom_border = parent.bottom_border.clone(); }
                         if child.left_border.is_none() { child.left_border = parent.left_border.clone(); }
+                        if child.right_border.is_none() { child.right_border = parent.right_border.clone(); }
                     }
                     if child.inside_horizontal_border.is_none() {
                         child.has_inside_h = parent.has_inside_h;
@@ -2583,7 +2584,7 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>, theme: &ThemeColors)
                             style.border_style = Some("single".to_string());
                         }
                         if std::env::var("OXI_TABLE_STYLE_OUTER_EDGES_DISABLE").is_err()
-                            && (local == "top" || local == "bottom" || local == "left" || local == "start") {
+                            && (local == "top" || local == "bottom" || local == "left" || local == "start" || local == "right" || local == "end") {
                             let border = BorderDef {
                                 style: edge_style,
                                 width: border_sz.unwrap_or(0.5),
@@ -2592,6 +2593,7 @@ fn parse_table_style_definition(reader: &mut Reader<&[u8]>, theme: &ThemeColors)
                             };
                             if local == "top" { style.top_border = Some(border); }
                             else if local == "left" || local == "start" { style.left_border = Some(border); }
+                            else if local == "right" || local == "end" { style.right_border = Some(border); }
                             else { style.bottom_border = Some(border); }
                         }
                         if local == "insideH" || local == "insideV" {

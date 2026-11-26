@@ -5958,6 +5958,17 @@ mod coverage_tests {
 fn dash_pattern_widths(style: Option<&str>) -> Option<Vec<f64>> {
     match style? {
         "dashSmallGap" if std::env::var_os("OXI_DASH_SMALLGAP_DISABLE").is_none() => Some(vec![3.6, 1.2]),
+        // OXI_DASH_STYLES (2026-11-26, default ON, opt-out _DISABLE): Word's own PDF dash
+        // arrays (`_pb_dash_styles_gen.py`, table top border at sz 4 / 8 / 12 / 24, butt
+        // caps): dotted [w w], dashed [3w w], dotDash [3w w w w], dotDotDash [3w w w w w w]
+        // -- the same multiples at every size. Oxi stroked all four solid.
+        s if std::env::var_os("OXI_DASH_STYLES_DISABLE").is_none() => match s {
+            "dotted" => Some(vec![1.0, 1.0]),
+            "dashed" => Some(vec![3.0, 1.0]),
+            "dotDash" => Some(vec![3.0, 1.0, 1.0, 1.0]),
+            "dotDotDash" => Some(vec![3.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+            _ => None,
+        },
         _ => None,
     }
 }

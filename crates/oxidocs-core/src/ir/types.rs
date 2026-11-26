@@ -2378,6 +2378,9 @@ pub struct TableStyle {
     /// kept apart for the same reason as `top_border`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub left_border: Option<BorderDef>,
+    /// OXI_TBL_SIDE_RULES: the table's outer RIGHT edge (`w:right` / `w:end`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_border: Option<BorderDef>,
     /// Border color (hex), e.g. "000000"
     #[serde(default)]
     pub border_color: Option<String>,
