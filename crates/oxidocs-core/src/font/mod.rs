@@ -2087,7 +2087,7 @@ impl FontMetricsRegistry {
     /// normalized / base) rather than the default Calibri fallback. Used to
     /// decide whether a fontTable `w:altName` substitution should fire (source
     /// unsupported → alternate supported).
-    pub(crate) fn supports_family(&self, family: &str) -> bool {
+    pub fn supports_family(&self, family: &str) -> bool {
         if runtime::has_registered_family(family) { return true; }
         if self.fonts.contains_key(family)
             || self.fonts.contains_key(&normalize_family_name(family))
