@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.11
+
+Japanese text in a font the machine does not have (drawn in Oxi's stand-in
+faces) now keeps its letters in place. In ＭＳ ゴシック / ＭＳ 明朝, Latin
+letters sit inside their half-width cells instead of touching. In 游ゴシック,
+メイリオ, 游明朝, ＭＳ Ｐゴシック and ＭＳ Ｐ明朝, Latin text is proportional, no
+longer typewriter-like with a gap after each word («Wi ndows»). In ＭＳ Ｐゴシック
+and ＭＳ Ｐ明朝, kana and marks such as 「（」「・」 are as narrow as those fonts
+set them, no longer running into the next character. Word documents also lay
+out Japanese closer to Word: punctuation squeezed in table cells, lines
+justified across every gap, and vertical text. PowerPoint line spacing is
+kept in whole percent, as PowerPoint does.
+
+Text in a Latin font Oxidocs has no measurements for (Inter, for one) is now
+drawn in Carlito, the face whose widths it was laid out with, so words keep
+their spaces and closing marks no longer land on the letter before them.
+Excel sheet tabs stay on one line: a long sheet name is cut with an ellipsis
+and shown in full as the tooltip.
+
+The extension is now called Oxidocs.
+
 ## 0.9.10
 
 Word documents: Up and Down move the caret a line at a time, keeping its
