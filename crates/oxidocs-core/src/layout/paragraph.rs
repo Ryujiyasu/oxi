@@ -652,12 +652,23 @@ impl<'a> ParagraphLayouter<'a> {
         // Phase-1 breaks (harassmanual/parttime PASS→FAIL on the layout-only
         // floor). Shared logic lives in s1211c_floor_body_width.
         let _ = (s1211, s1211b, grid_has_char_space);
-        let grid_content_width = self.s1211c_floor_body_width(
-            para,
-            content_width,
-            effective_char_pitch,
-            page.grid_char_cw_ratio,
-        );
+        // OXI_TXBX_NO_GRID_FLOOR (2026-11-26, default ON, opt-out _DISABLE): the whole-cell
+        // floor is the BODY column's; a text box's lines break at the box's raw inner edge
+        // (its characters still take the grid pitch). `_pb_txbx_floor_gen.py`
+        // (linesAndChars 1060, ＭＳ 明朝 10.5, compat 14, jc left / both, measure swept
+        // 38.00..38.95 cells): the body arms hold 38 from 0.40 cell, the inline-box arms
+        // from 0.05 cell; Oxi's boxes waited for 0.75. compat 15 has no floor anyway.
+        // blind-A ja/policies__0422f651's boxed «今年度は，…中止し» keeps «し» in Word.
+        let grid_content_width = if in_textbox && !crate::env_flag!("OXI_TXBX_NO_GRID_FLOOR_DISABLE") {
+            content_width
+        } else {
+            self.s1211c_floor_body_width(
+                para,
+                content_width,
+                effective_char_pitch,
+                page.grid_char_cw_ratio,
+            )
+        };
         let available_width = grid_content_width - indent_left - indent_right;
 
         // Render list marker if present

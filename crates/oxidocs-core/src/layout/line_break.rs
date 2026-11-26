@@ -6536,6 +6536,91 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
                     let mut overflow_tw = if vertical_natural_boundary {
                         current_width_tw + s1317_cw_tw - available_tw
                     } else { overflow_tw };
+                    // OXI_GRID_EXACT_EDGE (2026-11-26, OPT-IN: default-ON broke blind-B ja/reference__
+                    // 0cf9c879's ruby lines into a second page; scope not derived): a grid-pitched
+                    // character that lands EXACTLY on the edge in twips but past it unrounded does
+                    // not fit -- Word compares the unrounded pitch sum. blind-A ja/forms__002f862f p2
+                    // (linesAndChars 1382 on ＭＳ 明朝 11 = 11.3374 = 226.75 tw, first line 8843 tw):
+                    // «□申請…内容を» = 39 cells = 8843.17 tw; Word wraps «を», the twip sum read 8843
+                    // and kept it. `_pb_txbx_floor_gen.py`'s box arms at exactly 38.00 cells (EMU-
+                    // truncated, 0.0x tw short) read 37 in Word and 38 in Oxi the same way, while the
+                    // body arm (indent rounded the other way, 0.3 tw to spare) keeps 38.
+                    if overflow_tw == 0
+                        && s1317_grid_char
+                        && crate::env_flag!("OXI_GRID_EXACT_EDGE")
+                        && (current_width + char_width) * 20.0 - available_tw as f32 > 0.05
+                    {
+                        overflow_tw = 1;
+                    }
+                    // OXI_C14_SPACE_QUARTER (2026-11-26, OPT-IN: blind-A 097ed6a9 -0.0215 -- its next
+                    // line «…’very regularly’ に机» packs past Word, whose mid-line spaces do not shrink;
+                    // the scope is not derived yet): in an
+                    // explicit compat <= 14 document an ASCII space after visible text may shrink
+                    // to a quarter em, whatever the alignment, to keep the next character on the
+                    // line. `_pb_leftsqueeze_gen.py` / `_pb_leftsqueeze2_gen.py` (ＭＳ Ｐゴシック
+                    // 12, space 3.656, compressPunctuation, jc left and both, right indent swept
+                    // 5 tw): against the space-free arm Word keeps the line 0.75 / 1.25 / 2.0 /
+                    // 3.25pt longer with 1 / 2 / 3 / 5 spaces (= 0.656 per space = 3.656 - 12/4),
+                    // the spaces drawn at 3.12 on the 55-character line; the marks on the line
+                    // do not enter it, compat 15 does not shrink. A Times space is already a
+                    // quarter em -- the S1046 "zero" allowance. blind-A ja/creative__097ed6a9
+                    // «…persons’のこと。…１１時４» keeps «４» at 3.1pt spaces.
+                    if overflow_tw > 0
+                        && self.compat_mode_explicit
+                        && self.compat_mode <= 14
+                        && !ch.is_ascii()
+                        && crate::env_flag!("OXI_C14_SPACE_QUARTER")
+                    {
+                        let mut seen_text = false;
+                        let mut credit = 0.0f32;
+                        for f in current_line.fragments.iter() {
+                            if f.text == " " {
+                                if seen_text {
+                                    let fs = f.style.font_size.unwrap_or(font_size);
+                                    credit += (f.width - fs * 0.25).max(0.0);
+                                }
+                            } else if f.text.chars().any(|c| !c.is_whitespace()) {
+                                seen_text = true;
+                            }
+                        }
+                        overflow_tw -= pt_to_tw(credit);
+                    }
+                    // OXI_C15_CJK_SPACE_SHRINK (2026-11-26, default ON, opt-out _DISABLE): a
+                    // compat-15 JUSTIFIED line of a Japanese document keeps its next character
+                    // by shrinking the ASCII spaces after visible text -- a quarter of each
+                    // space's em part (S825's rate), at most a fifth of the font size per line.
+                    // `_pb_cjkspace_gen.py` («２ 本確認書…», doNotCompress, right indent 4 tw,
+                    // ＭＳ 明朝 9 / ＭＳ Ｐゴシック 12): against the space-free arm Word holds
+                    // 1.0-1.2 / 1.6-1.8 / 2.0-2.2pt (mm9) and 0.8-1.0 / 1.6-1.8 / 2.4-2.6pt (pg12)
+                    // more with 1 / 2 / 4 spaces; jc left and compat 14 hold nothing extra.
+                    // blind-A ja/legal__02f84965 p6 «２ 本確認書に、…電子メールの添付»: Word sets
+                    // the space at 3.6 and keeps «付» (0.95pt over); Oxi wrapped it.
+                    if overflow_tw > 0
+                        && is_justified
+                        && self.compat_mode >= 15
+                        && self.compat_mode_explicit
+                        && self.doc_body_has_real_cjk
+                        && !ch.is_ascii()
+                        && !crate::env_flag!("OXI_C15_CJK_SPACE_SHRINK_DISABLE")
+                    {
+                        // A space right after an opening bracket lends nothing: blind-A
+                        // ja/technical__52b9cff8 p1 «…付「 第20 回東洋» (ＭＳ 明朝 12, two 6pt
+                        // spaces): Word refuses «療» at 2.27pt over -- only «20 回» 's 1.5 counts.
+                        let mut prev: Option<char> = None;
+                        let mut credit = 0.0f32;
+                        for f in current_line.fragments.iter() {
+                            if f.text == " " {
+                                if prev.is_some_and(|c| !c.is_whitespace() && !kinsoku::is_yakumono_opening(c)) {
+                                    let cs = f.style.character_spacing.unwrap_or(0.0);
+                                    credit += (f.width - cs).max(0.0) * 0.25;
+                                }
+                            }
+                            if let Some(c) = f.text.chars().last() {
+                                prev = Some(c);
+                            }
+                        }
+                        overflow_tw -= pt_to_tw(credit.min(font_size * 0.2));
+                    }
                     // S1585: the CJK-unit arm (the gap term alone).
                     if overflow_tw > 0 && s1585_on && kinsoku::is_cjk(ch) && ch != '\u{3000}' {
                         let line_chars: Vec<char> = current_line.fragments.iter().flat_map(|f| gap_view(&f.text, &f.style)).collect();

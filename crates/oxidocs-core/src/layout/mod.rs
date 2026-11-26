@@ -22519,6 +22519,26 @@ cells={} pitch={:.2} text={:?}",
         }
     }
 
+    /// OXI_CELL_RIGHT_TAB: the width of the text after the tab at char index `pos` up to the
+    /// next tab or break (the segment a right stop aligns).
+    fn cell_segment_width_after(&self, para: &Paragraph, pos: usize) -> f32 {
+        let mut index = 0usize;
+        let mut width = 0.0;
+        'runs: for r in &para.runs {
+            let fs = self.resolve_font_size(&r.style, &para.style);
+            let m = &*self.metrics_for_text(&r.text, &r.style, &para.style);
+            for ch in r.text.chars() {
+                let at = index;
+                index += 1;
+                if at <= pos { continue; }
+                if matches!(ch, '\t' | '\n' | '\x0B' | '\x0C') { break 'runs; }
+                width += self.registry.char_width_pt_with_fallback(ch, fs, m)
+                    + r.style.character_spacing.unwrap_or(0.0);
+            }
+        }
+        width
+    }
+
     #[allow(unused_assignments)]
     fn cell_tab_word_overflows(&self, para: &Paragraph, pos: usize, current: f32, right: f32, indent_left: f32, first_indent: f32) -> bool {
         if crate::env_flag!("OXI_CELL_TAB_WORD_FIT_DISABLE") || self.doc_body_has_real_cjk { return false; }

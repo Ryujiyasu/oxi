@@ -5805,9 +5805,31 @@ impl<'a> TableFitLayouter<'a> {
                                             // each tab ~5pt (a glyph) and never wrapped.
                                             // en/forms__00619ac4's «☐ No» + 8 tabs + «If yes…» cell
                                             // lost its second line.
+                                            // OXI_CELL_RIGHT_TAB (2026-11-26, default ON, opt-out _DISABLE): an
+                                            // explicit RIGHT stop in a cell ends the text after the tab AT the
+                                            // stop, in a Japanese document too (the S443 advance was Latin-only,
+                                            // so the tab stayed a glyph). `_pb_cell_rtab_gen.py` (2791tw cell,
+                                            // ＭＳ 明朝 8, «\t9,000円以下» / «9,001円以上\t19,000円以下», stop 2000..
+                                            // 3000tw, compat 14 / 15 / the document's settings): the text ends
+                                            // at the stop (100.28 for 2000tw) in every arm while the stop is
+                                            // inside the text edge; past it compat 15 ends at the edge, compat
+                                            // 14 at the stop. blind-A ja/reference__0b6f3b32 p13-p15's fee
+                                            // tables («D2の1 9,001円以上\t19,000円以下», stop 2665 in a
+                                            // 28tw-margin cell): Word ends at 291.41, Oxi packed both left.
+                                            let cell_rtab = ch == '\t'
+                                                && !crate::env_flag!("OXI_CELL_RIGHT_TAB_DISABLE")
+                                                && {
+                                                    let indent_off = if is_first_line {
+                                                        (p_indent_left + p_first_line_indent).max(0.0)
+                                                    } else { p_indent_left };
+                                                    let abs_pos = line_x + buf_w + indent_off;
+                                                    para.style.tab_stops.iter().any(|t| t.position > abs_pos + 0.01)
+                                                        && self.cell_next_tab_stop(para, abs_pos, p_indent_left, p_first_line_indent).1
+                                                            == TabStopAlignment::Right
+                                                };
                                             if ch == '\t'
                                                 && !crate::env_flag!("OXI_S443_DISABLE")
-                                                && (p_first_line_indent < 0.0 || cell_tab_all)
+                                                && (p_first_line_indent < 0.0 || cell_tab_all || cell_rtab)
                                             {
                                                 let indent_off = if is_first_line {
                                                     (p_indent_left + p_first_line_indent).max(0.0)
@@ -5823,7 +5845,21 @@ impl<'a> TableFitLayouter<'a> {
                                                 {
                                                     cell_edge_tab_nowrap = true;
                                                 }
-                                                let tab_w = (next_pos - abs_pos).max(0.0);
+                                                let tab_w = if cell_rtab {
+                                                    let edge = wrap_w + p_indent_left;
+                                                    let target = if self.compat_mode >= 15 { next_pos.min(edge) } else { next_pos };
+                                                    let seg = self.cell_segment_width_after(para, s586_run_offset + s586_ci);
+                                                    // The right-aligned segment pulls LEFT from the stop; it
+                                                    // never wraps the line (S883's rule, cells): the first cut
+                                                    // let the estimate's last twips push «下» of «9,000円以下»
+                                                    // to a second line on every 0b6f3b32 p13 row.
+                                                    if target - abs_pos - seg >= 0.0 {
+                                                        cell_edge_tab_nowrap = true;
+                                                    }
+                                                    (target - abs_pos - seg).max(0.0)
+                                                } else {
+                                                    (next_pos - abs_pos).max(0.0)
+                                                };
                                                 // A tab is a positioned control, not a glyph.
                                                 // Keep its source text and measured advance in
                                                 // its own fragment so every renderer starts the
@@ -7069,9 +7105,44 @@ impl<'a> TableFitLayouter<'a> {
                                                     // fixed-layout cell; fixed genuinely lowers the
                                                     // credit (T ~2.75) and is rare in the corpus --
                                                     // not modeled yet.)
-                                                    (s1216_sum_a - s1216_n_a * 0.5 * font_size).max(0.0)
+                                                    // OXI_GRIDCREDIT_CAP (2026-11-26, default ON, opt-out
+                                                    // _DISABLE): the marks' credits do not add up -- together
+                                                    // they never reach one cell: at most n/(n+1) of the mark's
+                                                    // grid advance. `_pb_gridcredit2/3_gen.py` (cell, ＭＳ 明朝
+                                                    // 10.5, charSpace -3823 = 9.567 cells, compat 15 jc both,
+                                                    // 1..8 、 anywhere in the line, right indent swept 5 tw):
+                                                    // a 32-character line absorbs 6.33-6.58 / 7.08-7.33 /
+                                                    // 7.58-7.83 / 7.83-8.08 / 8.08-8.33 / 8.33-8.58 pt for n =
+                                                    // 2/3/4/5/6/8 (= 9.567 x n/(n+1) within a step), a
+                                                    // 21-character line 7.35-7.6 / 7.85-8.1 / 8.1-8.35 /
+                                                    // 8.35-8.6 / 8.6-8.85 / 8.85-9.1 (up to 1pt above it --
+                                                    // OPEN); the old sum granted 8.6 / 12.9 / 17.1 / 20.6.
+                                                    // One mark keeps the advance-minus-half-em credit (b35123).
+                                                    // blind-A ja/administrative__031662ee «…決算・監査報告、会»:
+                                                    // Word 21 characters, Oxi packed 23 on three 、.
+                                                    let sum_credit = (s1216_sum_a - s1216_n_a * 0.5 * font_size).max(0.0);
+                                                    if s1216_n_a >= 2.0 && !crate::env_flag!("OXI_GRIDCREDIT_CAP_DISABLE") {
+                                                        sum_credit.min(s1216_sum_a / s1216_n_a * s1216_n_a / (s1216_n_a + 1.0))
+                                                    } else {
+                                                        sum_credit
+                                                    }
                                                 } else if s1207_proportional {
-                                                    0.0
+                                                    // OXI_PROP_JOINT_POOL (2026-11-26, default ON, opt-out
+                                                    // _DISABLE): S1207 takes the 約物 credit away, not the
+                                                    // CJK/Latin joints -- a proportional face still squeezes
+                                                    // its auto-space gaps. `_pb_prop_joint_gen.py` (cell, ＭＳ
+                                                    // Ｐゴシック 10.5, jc both, compat 11/14, «…はJAバンク…表示）
+                                                    // …預入すると», 10 tw steps): Word keeps «と» from 6740 tw
+                                                    // (overflow 2.28 over the two 2.625 joints) and drops it at
+                                                    // 6730 (2.78); the joints' fs/8 each = 2.625 sits in that
+                                                    // window. blind-A ja/technical__7cc63ebc p1 «…新たに預入す
+                                                    // ると» (bold ＭＳ Ｐゴシック, 337.28pt): Word keeps «と», Oxi's
+                                                    // pool was 0.
+                                                    if crate::env_flag!("OXI_PROP_JOINT_POOL_DISABLE") {
+                                                        0.0
+                                                    } else {
+                                                        joints + spaces
+                                                    }
                                                 } else if crate::env_flag!("OXI_S1206_DISABLE")
                                                 {
                                                     yaku + joints + spaces
