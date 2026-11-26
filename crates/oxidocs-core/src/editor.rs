@@ -193,6 +193,13 @@ pub enum DocxEdit {
         col: usize,
         text: String,
     },
+    /// Write a table cell's paragraphs again as text and merge fields.
+    SetCellInlines {
+        table_index: usize,
+        row: usize,
+        col: usize,
+        paragraphs: Vec<Vec<crate::mail_merge::ParagraphInline>>,
+    },
     /// Set the text of ONE run inside a table cell, leaving the rest of the
     /// cell as it stands.
     ///
@@ -876,6 +883,7 @@ impl DocxEditor {
         let mut run_format_edits: HashMap<(usize, usize), RunProps> = HashMap::new();
         let mut para_format_edits: HashMap<usize, ParaProps> = HashMap::new();
         let mut para_inline_edits: HashMap<usize, &Vec<crate::mail_merge::ParagraphInline>> = HashMap::new();
+        let mut cell_inline_edits: Vec<(usize, usize, usize, &Vec<Vec<crate::mail_merge::ParagraphInline>>)> = Vec::new();
         let mut para_deletions: Vec<usize> = Vec::new();
         let mut para_insertions: Vec<(usize, String)> = Vec::new(); // (index, xml)
         let mut run_insertions: HashMap<(usize, usize), (String, Option<RunProps>)> = HashMap::new();
@@ -904,6 +912,9 @@ impl DocxEditor {
                 }
                 DocxEdit::SetParagraphInlines { paragraph_index, inlines } => {
                     para_inline_edits.insert(*paragraph_index, inlines);
+                }
+                DocxEdit::SetCellInlines { table_index, row, col, paragraphs } => {
+                    cell_inline_edits.push((*table_index, *row, *col, paragraphs));
                 }
                 DocxEdit::InsertRun { paragraph_index, run_index, text, style } => {
                     run_insertions.insert(
@@ -1125,10 +1136,20 @@ impl DocxEditor {
 
         // 5. Apply in-place edits to table segments
         for (tbl_idx, seg_idx) in table_indices.iter().enumerate() {
-            let seg_xml = match &segments[*seg_idx] {
+            let mut seg_xml = match &segments[*seg_idx] {
                 BodySegment::Table(xml) => xml.clone(),
                 _ => continue,
             };
+            let mut cells_rewritten = false;
+            for (ti, row, col, paragraphs) in &cell_inline_edits {
+                if *ti == tbl_idx {
+                    seg_xml = crate::mail_merge::table_with_cell_inlines(&seg_xml, *row, *col, paragraphs, run_text_xml);
+                    cells_rewritten = true;
+                }
+            }
+            if cells_rewritten {
+                segments[*seg_idx] = BodySegment::Table(seg_xml.clone());
+            }
 
             // Cell text edits
             let tbl_cell_edits: HashMap<(usize, usize), &String> = cell_text_edits

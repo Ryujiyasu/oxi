@@ -2301,6 +2301,10 @@ function takeSnapshot(doc) {
         blocks.push({ type: 'paragraph', text, runTexts, heading: p.style?.heading_level || 0, fields });
       } else if (b.Table) {
         const tbl = b.Table;
+        const cellFields = (tbl.rows || []).map(row =>
+          (row.cells || []).map(cell => (cell.blocks || []).flatMap(cb =>
+            cb.Paragraph ? (cb.Paragraph.runs || []).map(r => r.style?.merge_field).filter(Boolean)
+              .filter((f, i, a) => i === 0 || a[i - 1] !== f) : [])));
         const cellTexts = (tbl.rows || []).map(row =>
           (row.cells || []).map(cell => {
             if (!cell.blocks) return '';
@@ -2310,7 +2314,7 @@ function takeSnapshot(doc) {
             }).join('\n');
           })
         );
-        blocks.push({ type: 'table', cellTexts });
+        blocks.push({ type: 'table', cellTexts, cellFields });
       } else if (b.Image) {
         blocks.push({ type: 'image' });
       }
@@ -2584,21 +2588,48 @@ function syncDocxCore() {
 }
 
 /** Serialize current DOM into snapshot format for comparison. */
+/** A table cell's paragraphs as runs of text and merge fields. */
+function cellParagraphs(td) {
+  const paras = [];
+  let loose = null;
+  for (const child of td.childNodes) {
+    if (child.nodeType === 1 && ['P','H1','H2','H3','H4','H5','H6','DIV','LI'].includes(child.tagName)) {
+      loose = null;
+      const runs = [];
+      collectRuns(child, runs, {});
+      paras.push(runs.map(r => r.merge_field ? { text: r.text, merge_field: r.merge_field } : { text: r.text }));
+    } else {
+      if (!loose) { loose = []; paras.push(loose); }
+      const runs = [];
+      const box = document.createElement('span');
+      box.appendChild(child.cloneNode(true));
+      collectRuns(box, runs, {});
+      for (const r of runs) loose.push(r.merge_field ? { text: r.text, merge_field: r.merge_field } : { text: r.text });
+    }
+  }
+  return paras.length ? paras : [[]];
+}
+
 function serializeEditorAsSnapshot() {
   const blocks = [];
   for (const node of editor.childNodes) {
     if (node.nodeType !== 1) continue;
     const tag = node.tagName;
     if (tag === 'TABLE') {
-      const cellTexts = [];
+      const cellTexts = [], cellFields = [], cellParas = [];
       for (const tr of node.querySelectorAll('tr')) {
-        const row = [];
+        const row = [], fields = [], paras = [];
         for (const td of tr.querySelectorAll('td,th')) {
           row.push(td.innerText.replace(/\n$/, ''));
+          const ps = cellParagraphs(td);
+          paras.push(ps);
+          fields.push(ps.flat().map(r => r.merge_field).filter(Boolean));
         }
         cellTexts.push(row);
+        cellFields.push(fields);
+        cellParas.push(paras);
       }
-      blocks.push({ type: 'table', cellTexts });
+      blocks.push({ type: 'table', cellTexts, cellFields, cellParas });
     } else if (['P','H1','H2','H3','H4','H5','H6','DIV'].includes(tag)) {
       const text = node.innerText.replace(/\n$/, '');
       const runs = [];
@@ -2678,6 +2709,13 @@ function computeDiff(original, current) {
           return result;
         }
         for (let c = 0; c < origCells[r].length; c++) {
+          const of = (orig.cellFields?.[r]?.[c]) || [], cf = (curr.cellFields?.[r]?.[c]) || [];
+          if (of.length || cf.length) {
+            if (origCells[r][c] !== currCells[r][c] || of.join('\u0001') !== cf.join('\u0001')) {
+              result.edits.push({ type: 'set_cell_inlines', table_index: tableIdx, row: r, col: c, paragraphs: curr.cellParas[r][c] });
+            }
+            continue;
+          }
           if (origCells[r][c] !== currCells[r][c]) {
             result.edits.push({
               type: 'set_cell_text',

@@ -695,6 +695,14 @@ pub fn edit_docx_advanced(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsErro
 
     for js_edit in js_edits {
         match js_edit.r#type.as_str() {
+            "set_cell_inlines" => {
+                editor.add_edit(oxidocs_core::editor::DocxEdit::SetCellInlines {
+                    table_index: js_edit.table_index.unwrap_or(0),
+                    row: js_edit.row.unwrap_or(0),
+                    col: js_edit.col.unwrap_or(0),
+                    paragraphs: js_edit.paragraphs.unwrap_or_default(),
+                });
+            }
             "set_paragraph_inlines" => {
                 editor.add_edit(oxidocs_core::editor::DocxEdit::SetParagraphInlines {
                     paragraph_index: js_edit.paragraph_index.unwrap_or(0),
@@ -956,6 +964,9 @@ struct JsDocxEdit {
     // A paragraph written again as text and merge fields
     #[serde(default)]
     inlines: Option<Vec<oxidocs_core::mail_merge::ParagraphInline>>,
+    // A table cell written again: its paragraphs of text and merge fields
+    #[serde(default)]
+    paragraphs: Option<Vec<Vec<oxidocs_core::mail_merge::ParagraphInline>>>,
 }
 
 #[derive(Deserialize)]

@@ -2186,6 +2186,41 @@ pub(crate) fn paragraph_with_inlines(p_xml: &str, inlines: &[ParagraphInline], t
     format!("{open}{ppr}{body}</{}>", p.name)
 }
 
+/// Rewrite a table cell's paragraphs as `paragraphs` of text and merge
+/// fields. Each keeps the properties of the cell's paragraph in its place (or
+/// of the cell's last one). A cell that holds a table of its own is left as
+/// it is.
+pub(crate) fn table_with_cell_inlines(
+    tbl_xml: &str,
+    row: usize,
+    col: usize,
+    paragraphs: &[Vec<ParagraphInline>],
+    text_xml: fn(&str) -> String,
+) -> String {
+    let w = w_prefix(tbl_xml);
+    let w = if w.is_empty() { "w".to_string() } else { w };
+    let els = scan(tbl_xml);
+    let Some(tbl) = els.first() else { return tbl_xml.to_string() };
+    let Some(&tr) = tbl.children.iter().filter(|&&c| is_w(&els, c, &w, "tr")).nth(row) else { return tbl_xml.to_string() };
+    let Some(&tc) = els[tr].children.iter().filter(|&&c| is_w(&els, c, &w, "tc")).nth(col) else { return tbl_xml.to_string() };
+    if els[tc].children.iter().any(|&c| is_w(&els, c, &w, "tbl")) {
+        return tbl_xml.to_string();
+    }
+    let ps: Vec<usize> = els[tc].children.iter().copied().filter(|&c| is_w(&els, c, &w, "p")).collect();
+    let (Some(&first), Some(&last)) = (ps.first(), ps.last()) else { return tbl_xml.to_string() };
+    let empty = vec![Vec::new()];
+    let paragraphs = if paragraphs.is_empty() { &empty[..] } else { paragraphs };
+    let new: String = paragraphs
+        .iter()
+        .enumerate()
+        .map(|(i, inlines)| {
+            let src = ps[i.min(ps.len() - 1)];
+            paragraph_with_inlines(&tbl_xml[els[src].start..els[src].end], inlines, text_xml)
+        })
+        .collect();
+    format!("{}{}{}", &tbl_xml[..els[first].start], new, &tbl_xml[els[last].end..])
+}
+
 /// Field names the main document asks for that the data does not have.
 pub fn missing_fields(docx: &[u8], data: &MergeData) -> Result<Vec<String>, MergeError> {
     let report = merge_fields(docx)?;
@@ -2480,6 +2515,24 @@ mod tests {
         editor.add_edit(crate::editor::DocxEdit::SetParagraphInlines { paragraph_index: 0, inlines });
         let saved = editor.save().unwrap();
         assert_eq!(merge_fields(&saved).unwrap().fields, vec!["氏名"]);
+    }
+
+    #[test]
+    fn a_cell_written_again_takes_fields() {
+        let tbl = "<w:tbl><w:tblPr/><w:tr><w:tc><w:tcPr><w:tcW w:w=\"2000\"/></w:tcPr><w:p><w:pPr><w:jc w:val=\"right\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>keep</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+        let paras = vec![
+            vec![ParagraphInline { text: "〒".into(), merge_field: None }, ParagraphInline { text: String::new(), merge_field: Some("郵便番号".into()) }],
+            vec![ParagraphInline { text: String::new(), merge_field: Some("住所".into()) }],
+            vec![ParagraphInline { text: String::new(), merge_field: Some("氏名".into()) }, ParagraphInline { text: " 様".into(), merge_field: None }],
+        ];
+        let out = table_with_cell_inlines(tbl, 0, 0, &paras, |t| format!("<w:t xml:space=\"preserve\">{}</w:t>", escape(t)));
+        assert!(out.starts_with("<w:tbl><w:tblPr/><w:tr><w:tc><w:tcPr><w:tcW w:w=\"2000\"/></w:tcPr><w:p><w:pPr><w:jc w:val=\"right\"/></w:pPr>"), "{out}");
+        assert_eq!(text_of(&out), vec!["〒«郵便番号»", "«住所»", "«氏名» 様", "keep"]);
+        let doc = test_docx(tbl, "");
+        let mut editor = crate::DocxEditor::new(&doc).unwrap();
+        editor.add_edit(crate::editor::DocxEdit::SetCellInlines { table_index: 0, row: 0, col: 0, paragraphs: paras });
+        let saved = editor.save().unwrap();
+        assert_eq!(merge_fields(&saved).unwrap().fields, vec!["郵便番号", "住所", "氏名"]);
     }
 
     /// Merge files named by the environment (OXI_MM_MAIN, OXI_MM_DATA as
