@@ -1171,6 +1171,15 @@ async function renderDocument(docxBytes) {
 }
 
 // ---- Hit testing & cursor ----
+// Where the caret can stand: the text of a body paragraph, an empty
+// paragraph's zero-width mark included. A list number ("3.") is drawn with
+// no paragraph behind it, so a caret put on it reached no model position:
+// it looked like the number could be edited, and Backspace and typing did
+// nothing. Clicks and arrows go to the paragraph's text instead, as in Word.
+function caretStop(el) {
+  return el.kind === 'text' && el.paragraph_index != null && typeof el.text === 'string';
+}
+
 function hitTestText(e, pageIndex) {
   const canvas = e.target;
   const rect = canvas.getBoundingClientRect();
@@ -1184,7 +1193,7 @@ function hitTestText(e, pageIndex) {
   let bestElem = null, bestIdx = -1, bestDist = Infinity;
   for (let i = 0; i < page.elements.length; i++) {
     const el = page.elements[i];
-    if (el.kind !== 'text' || !el.text) continue;
+    if (!caretStop(el)) continue;
     // Check if click is within element's vertical band (with some tolerance)
     const ey = el.y, eh = el.height || el.font_size || 11;
     if (y >= ey - 2 && y <= ey + eh + 2) {
@@ -1205,7 +1214,7 @@ function hitTestText(e, pageIndex) {
   if (!bestElem) {
     for (let i = 0; i < page.elements.length; i++) {
       const el = page.elements[i];
-      if (el.kind !== 'text' || !el.text) continue;
+      if (!caretStop(el)) continue;
       const eh = el.height || el.font_size || 11;
       const cy = el.y + eh / 2, cx = el.x + (el.width || 0) / 2;
       const dist = Math.abs(cx - x) + Math.abs(cy - y) * 2;
@@ -2014,7 +2023,7 @@ function lineStep(from, dir, samePage) {
   const pick = (pi, test) => {
     const els = layoutResult.pages[pi].elements;
     const text = [];
-    els.forEach((e, i) => { if (e.kind === 'text' && e.text && test(e)) text.push(i); });
+    els.forEach((e, i) => { if (caretStop(e) && test(e)) text.push(i); });
     if (!text.length) return null;
     // The nearest line that way, in the caret's own cell or story first.
     const own = text.filter(i => lineBox(els[i]) === box);
@@ -2062,7 +2071,7 @@ function moveCursor(dir) {
   } else if (dir < 0 && newOff < 0) {
     // Move to previous text element
     for (let i = cursorPos.elemIndex - 1; i >= 0; i--) {
-      if (page.elements[i].kind === 'text' && page.elements[i].text) {
+      if (caretStop(page.elements[i])) {
         cursorPos.elemIndex = i;
         cursorPos.charOffset = (page.elements[i].text || '').length;
         break;
@@ -2071,7 +2080,7 @@ function moveCursor(dir) {
   } else if (dir > 0 && newOff > textLen) {
     // Move to next text element
     for (let i = cursorPos.elemIndex + 1; i < page.elements.length; i++) {
-      if (page.elements[i].kind === 'text' && page.elements[i].text) {
+      if (caretStop(page.elements[i])) {
         cursorPos.elemIndex = i;
         cursorPos.charOffset = 0;
         break;
