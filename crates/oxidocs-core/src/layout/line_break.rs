@@ -8030,7 +8030,17 @@ indent_l={:.2} fli={:.2} stops={} | {:?}",
         // B: tab2's strip centered at 361.7 instead of the 413.85 stop =
         // Word x330.5 vs Oxi 278.3). Track the cumulative shrink and restore
         // it on each subsequent tab before applying its own alignment.
-        let s841_on = !crate::env_flag!("OXI_S841_DISABLE");
+        // OXI_S841_AFTER_S885 (2026-11-27, default ON, opt-out _DISABLE): where S885
+        // already resolved each tab from the ALIGNED end of the previous right/center
+        // segment (Latin documents), the raw tab widths are absolute and S841's
+        // restore counts the shrink twice -- a right tab after a center tab landed
+        // half the centered text past its stop. `_pb_hdr_rtab_gen.py`: «⇥December 11,
+        // 2008⇥Mod 1» (center 4320 / right 8640) put «Mod 1» at 533.7..556.8 for Word's
+        // ..522; «⇥⇥Mod 1» (no centered text) was right. en/technical__00549a8f headers.
+        let s841_on = !crate::env_flag!("OXI_S841_DISABLE")
+            && (self.doc_body_has_real_cjk
+                || crate::env_flag!("OXI_S885_DISABLE")
+                || crate::env_flag!("OXI_S841_AFTER_S885_DISABLE"));
         for line in &mut lines {
             let frag_count = line.fragments.len();
             let mut s841_cum_delta: f32 = 0.0;

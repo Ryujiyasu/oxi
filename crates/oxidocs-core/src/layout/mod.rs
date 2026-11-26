@@ -13942,7 +13942,13 @@ cells={} pitch={:.2} text={:?}",
         let merges_with_prev = i.map_or(false, |i| i > 0
             && matches!(&blocks[i - 1], Block::Paragraph(prev) if prev.style.borders.as_ref() == Some(b)));
         let ext = |d: Option<&BorderDef>| d.filter(|d| d.style != "none" && d.style != "nil").map_or(0.0, |d| d.space + d.width);
-        (if merges_with_prev { 0.0 } else { ext(b.top.as_ref()) }) + ext(b.bottom.as_ref())
+        // OXI_HF_PBDR_MERGE: an interior paragraph of the merged box carries no bottom
+        // rule either (`_pb_hf_pbdr_gen.py` f2same/f3same: Word's footer box top sits
+        // 1.5 / 3.0 lower than Oxi's = one space+width per interior paragraph).
+        let merges_with_next = !crate::env_flag!("OXI_HF_PBDR_MERGE_DISABLE")
+            && i.map_or(false, |i| matches!(blocks.get(i + 1), Some(Block::Paragraph(next)) if next.style.borders.as_ref() == Some(b)));
+        (if merges_with_prev { 0.0 } else { ext(b.top.as_ref()) })
+            + if merges_with_next { 0.0 } else { ext(b.bottom.as_ref()) }
     }
 
     /// S755: (footer_reserved, footer_has_text) for one footer variant's

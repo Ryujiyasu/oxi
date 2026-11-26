@@ -11593,6 +11593,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                     if let Block::Paragraph(para) = block {
                         let empty_fn_h_hdr = std::collections::HashMap::new();
+                        // OXI_HF_PBDR_MERGE (2026-11-27, default ON, opt-out _DISABLE): header and
+                        // footer paragraphs merge an identical pBdr into one box like body text
+                        // (S658 / S903 / S1042 only had the body neighbours). en/technical__00549a8f:
+                        // two Header paragraphs with top+bottom single, Word draws one box.
+                        let hdr_pb_i = if crate::env_flag!("OXI_HF_PBDR_MERGE_DISABLE") { None } else { hdr_blocks.iter().position(|b| std::ptr::eq(b, block)) };
+                        let hdr_pb_at = |j: Option<usize>| j.and_then(|j| hdr_blocks.get(j)).and_then(|b| match b { Block::Paragraph(p) => p.style.borders.as_ref(), _ => None });
+                        let hdr_pb_prev = hdr_pb_at(hdr_pb_i.and_then(|i| i.checked_sub(1)));
+                        let hdr_pb_next = hdr_pb_at(hdr_pb_i.map(|i| i + 1));
                         let (hdr_elements, _, _) = self.layout_paragraph(
                             para,
                             hdr_x,
@@ -11607,7 +11615,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             previous.and_then(|p| p.style.style_id.as_deref()),
                             previous.is_some_and(|p| p.style.contextual_spacing),
                             previous.filter(|p| p.style.after_autospacing).and_then(|p| p.style.num_id.as_deref()),
-                            None,
+                            hdr_pb_prev,
                             false,
                             false,
                             previous.and_then(|p| p.style.space_after).unwrap_or(0.0),
@@ -11631,7 +11639,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             false, // S835
                             0.0,
                             None,  // S900
-                            None,  // S903
+                            hdr_pb_next,  // S903
                             false, // S916
                             None,
                         );
@@ -12001,6 +12009,14 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                     }
                     if let Block::Paragraph(para) = block {
                         let empty_fn_h_ftr = std::collections::HashMap::new();
+                        // OXI_HF_PBDR_MERGE (2026-11-27, default ON, opt-out _DISABLE): header and
+                        // footer paragraphs merge an identical pBdr into one box like body text
+                        // (S658 / S903 / S1042 only had the body neighbours). en/technical__00549a8f:
+                        // two Header paragraphs with top+bottom single, Word draws one box.
+                        let ftr_pb_i = if crate::env_flag!("OXI_HF_PBDR_MERGE_DISABLE") { None } else { ftr_blocks.iter().position(|b| std::ptr::eq(b, block)) };
+                        let ftr_pb_at = |j: Option<usize>| j.and_then(|j| ftr_blocks.get(j)).and_then(|b| match b { Block::Paragraph(p) => p.style.borders.as_ref(), _ => None });
+                        let ftr_pb_prev = ftr_pb_at(ftr_pb_i.and_then(|i| i.checked_sub(1)));
+                        let ftr_pb_next = ftr_pb_at(ftr_pb_i.map(|i| i + 1));
                         let (ftr_elements, after, _) = self.layout_paragraph(
                             para,
                             hdr_x,
@@ -12018,7 +12034,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             previous_para.and_then(|p| p.style.style_id.as_deref()),
                             previous_para.is_some_and(|p| p.style.contextual_spacing),
                             previous_para.filter(|p| p.style.after_autospacing).and_then(|p| p.style.num_id.as_deref()),
-                            None,
+                            ftr_pb_prev,
                             false,
                             false,
                             previous_after,
@@ -12042,7 +12058,7 @@ old_page={} chain_advance={:.1} chain_min_y={:.1} new_top={:.1} fresh_bottom={:.
                             false, // S835
                             0.0,
                             None,  // S900
-                            None,  // S903
+                            ftr_pb_next,  // S903
                             false, // S916
                             None,
                         );

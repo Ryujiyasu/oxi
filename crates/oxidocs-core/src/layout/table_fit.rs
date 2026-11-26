@@ -12545,7 +12545,18 @@ impl<'a> TableFitLayouter<'a> {
                         let page_start_row = row_idx > 0
                             && pages.len() > inherited_outer_page_before_row
                             && !crate::env_flag!("OXI_PAGETOP_ROW_RULE_DISABLE");
-                        if (!use_collapsed || row_idx == 0 || above_bottom_nil || page_start_row)
+                        // OXI_CELL_BORDER_CONFLICT: when the cell above declares its OWN bottom
+                        // rule, this cell's top (the table insideH) still meets it on the edge
+                        // -- emit it and let border_conflicts keep the stronger one
+                        // (`_pb_tc_dot_gen.py` bot / bot_dash: upper cell bottom dotted /
+                        // dashed, lower cell plain, insideH single -> Word strokes single).
+                        let above_bottom_declared = row_idx > 0
+                            && !crate::env_flag!("OXI_CELL_BORDER_CONFLICT_DISABLE")
+                            && LayoutEngine::s1192_cell_at(&table.rows[row_idx - 1], grid_idx, true)
+                                .and_then(|c| c.borders.as_ref())
+                                .and_then(|b| b.bottom.as_ref())
+                                .map_or(false, |b| !matches!(b.style.as_str(), "nil" | "none"));
+                        if (!use_collapsed || row_idx == 0 || above_bottom_nil || above_bottom_declared || page_start_row)
                             && (!inherited_only || row_idx == 0 || pages.len() > inherited_outer_page_before_row) {
                             elements.push(edge);
                         }
@@ -16273,5 +16284,124 @@ impl LayoutEngine {
             .partition(|e| matches!(e.content, LayoutContent::CellShading { .. }));
         elements.extend(fills);
         elements.extend(rest);
+        Self::border_conflicts(elements);
+    }
+
+    /// OXI_CELL_BORDER_CONFLICT (2026-11-27, default ON, opt-out _DISABLE): where two
+    /// cells' rules meet on one edge Word strokes ONE of them: a solid style beats a
+    /// dashed one, a dashed one beats a dotted one -- whatever the widths -- and inside
+    /// one class the wider rule wins (double counts as its 3-line extent). Oxi drew both.
+    /// `_pb_tc_conflict_gen.py` (15 arms, cell A bottom / cell B top / table insideH):
+    /// dotted sz4/8/12 vs single sz4 -> single; dotted sz4 vs insideH single sz2 ->
+    /// single; dashed sz4/8 vs single -> single; dotted vs dashed (both orders) ->
+    /// dashed; double vs single -> double; single sz8 vs sz4 (both orders) -> sz8;
+    /// dotted on both sides -> one dotted rule. Equal class and width with different
+    /// colours stay as drawn (not measured).
+    fn border_conflicts(elements: &mut Vec<LayoutElement>) {
+        if crate::env_flag!("OXI_CELL_BORDER_CONFLICT_DISABLE") {
+            return;
+        }
+        fn rank(style: &Option<String>, w: f32) -> (u8, f32) {
+            let s = style.as_deref().unwrap_or("single");
+            let class = match s {
+                "dotted" => 1,
+                "dashed" | "dashSmallGap" | "dotDash" | "dotDotDash" => 2,
+                _ => 3,
+            };
+            let extent = match s {
+                "double" => 3.0 * w,
+                "triple" => 5.0 * w,
+                _ => w,
+            };
+            (class, extent)
+        }
+        // (index, horizontal, along-axis start, end, cross position, rank, colour)
+        let mut edges: Vec<(usize, bool, f32, f32, f32, (u8, f32), Option<String>, Option<String>)> = Vec::new();
+        for (i, e) in elements.iter().enumerate() {
+            if let LayoutContent::TableBorder { x1, y1, x2, y2, color, width, style } = &e.content {
+                let horiz = (y1 - y2).abs() < 0.01;
+                let vert = (x1 - x2).abs() < 0.01;
+                if horiz {
+                    edges.push((i, true, x1.min(*x2), x1.max(*x2), *y1, rank(style, *width), color.clone(), style.clone()));
+                } else if vert {
+                    edges.push((i, false, y1.min(*y2), y1.max(*y2), *x1, rank(style, *width), color.clone(), style.clone()));
+                }
+            }
+        }
+        if edges.len() < 2 {
+            return;
+        }
+        // covered[k]: the along-axis spans of edge k that a stronger meeting rule takes over
+        let mut covered: Vec<Vec<(f32, f32)>> = vec![Vec::new(); edges.len()];
+        for a in 0..edges.len() {
+            for b in (a + 1)..edges.len() {
+                let (ea, eb) = (&edges[a], &edges[b]);
+                if ea.1 != eb.1 || (ea.4 - eb.4).abs() > 0.75 {
+                    continue;
+                }
+                let (lo, hi) = (ea.2.max(eb.2), ea.3.min(eb.3));
+                if hi - lo < 1.0 {
+                    continue;
+                }
+                let loser = if ea.5 .0 != eb.5 .0 {
+                    if ea.5 .0 < eb.5 .0 { a } else { b }
+                } else if (ea.5 .1 - eb.5 .1).abs() > 0.01 {
+                    if ea.5 .1 < eb.5 .1 { a } else { b }
+                } else if ea.6 == eb.6 && ea.7 == eb.7 {
+                    b // the same rule drawn twice
+                } else {
+                    continue;
+                };
+                covered[loser].push((lo, hi));
+            }
+        }
+        if covered.iter().all(|c| c.is_empty()) {
+            return;
+        }
+        let mut replace: Vec<(usize, Vec<LayoutElement>)> = Vec::new();
+        for (k, spans) in covered.iter_mut().enumerate() {
+            if spans.is_empty() {
+                continue;
+            }
+            let (idx, horiz, start, end, ..) = edges[k].clone();
+            spans.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap_or(std::cmp::Ordering::Equal));
+            let mut keep: Vec<(f32, f32)> = Vec::new();
+            let mut at = start;
+            for &(lo, hi) in spans.iter() {
+                if lo - at >= 1.0 {
+                    keep.push((at, lo));
+                }
+                at = at.max(hi);
+            }
+            if end - at >= 1.0 {
+                keep.push((at, end));
+            }
+            let base = &elements[idx];
+            let pieces = keep
+                .into_iter()
+                .map(|(s, t)| {
+                    let mut e = base.clone();
+                    if let LayoutContent::TableBorder { x1, y1, x2, y2, .. } = &mut e.content {
+                        if horiz {
+                            *x1 = s;
+                            *x2 = t;
+                            e.x = s;
+                            e.width = t - s;
+                        } else {
+                            *y1 = s;
+                            *y2 = t;
+                            e.y = s;
+                            e.height = t - s;
+                        }
+                    }
+                    e
+                })
+                .collect();
+            replace.push((idx, pieces));
+        }
+        replace.sort_by(|p, q| q.0.cmp(&p.0));
+        for (idx, pieces) in replace {
+            elements.splice(idx..idx + 1, pieces);
+        }
     }
 }
