@@ -853,6 +853,24 @@ let currentScale = 1;
 
 const DPI = 150;
 const SCALE_BASE = DPI / 72;
+// A narrow pane -- a phone, or VS Code's editor split beside an agent -- opens
+// with the page fitted to its width. Once the reader zooms, their level wins:
+// before, every pane under 769px wide ignored the zoom slider and buttons.
+let zoomTouched = false;
+function fittedToPane() { return window.innerWidth < 769 && !zoomTouched; }
+function pageScale(pageWidth) {
+  if (fittedToPane()) {
+    const fit = (window.innerWidth - 20) / (pageWidth || 595);
+    // Show the fitted level, so the first + or - steps from it, not from 100%.
+    zoomLevel = Math.round(fit / SCALE_BASE * 100);
+    const slider = document.getElementById('zSlider');
+    if (slider) slider.value = zoomLevel;
+    const label = document.getElementById('zLvl');
+    if (label) label.textContent = zoomLevel + '%';
+    return fit;
+  }
+  return SCALE_BASE * (zoomLevel / 100);
+}
 
 // Hidden textarea for keyboard input capture (including IME)
 const hiddenInput = document.createElement('textarea');
@@ -1045,8 +1063,7 @@ async function renderPage(page, index, scale) {
   canvas.width = Math.round(page.width * scale);
   canvas.height = Math.round(page.height * scale);
 
-  const isMobile = window.innerWidth < 769;
-  if (isMobile) {
+  if (fittedToPane()) {
     canvas.style.width = '100%';
     canvas.style.height = 'auto';
   } else {
@@ -1124,10 +1141,7 @@ async function renderDocument(docxBytes) {
 
     loadingEl.remove();
 
-    const isMobile = window.innerWidth < 769;
-    const scale = isMobile
-      ? (window.innerWidth - 20) / (result.pages[0]?.width || 595)
-      : SCALE_BASE * (zoomLevel / 100);
+    const scale = pageScale(result.pages[0]?.width);
     currentScale = scale;
 
     for (let i = 0; i < result.pages.length; i++) {
@@ -1636,10 +1650,7 @@ function scheduleRender() {
     if (cursorOverlay) { cursorOverlay.remove(); cursorOverlay = null; }
     clearSelection();
 
-    const isMobile = window.innerWidth < 769;
-    const scale = isMobile
-      ? (window.innerWidth - 20) / (result.pages[0]?.width || 595)
-      : SCALE_BASE * (zoomLevel / 100);
+    const scale = pageScale(result.pages[0]?.width);
     currentScale = scale;
 
     // Reuse existing canvases, add/remove as needed
@@ -1659,7 +1670,7 @@ function scheduleRender() {
       canvas.id = `page-${i}`;
       canvas.width = w;
       canvas.height = h;
-      if (isMobile) { canvas.style.width = '100%'; canvas.style.height = 'auto'; }
+      if (fittedToPane()) { canvas.style.width = '100%'; canvas.style.height = 'auto'; }
       else { canvas.style.width = w + 'px'; canvas.style.height = h + 'px'; }
       // Redraw in place
       const ctx = canvas.getContext('2d');
@@ -2619,14 +2630,38 @@ function printDoc() {
 let zoomLevel = 100;
 const zs = $('zSlider');
 
+let zoomTimer = 0;
 function applyZoom(v) {
-  v = Math.max(50, Math.min(200, v));
+  v = Math.max(50, Math.min(200, Math.round(v)));
+  zoomTouched = true;
+  if (v === zoomLevel) return;
   zoomLevel = v;
   zs.value = v;
   $('zLvl').textContent = v + '%';
-  // Re-render at new zoom if we have a document
-  if (currentDocx) renderDocument(currentDocx);
+  // Re-render once the slider, wheel or pinch comes to rest, not on every
+  // step of it: each render lays the whole document out again. The reader
+  // stays at the same place in the document.
+  clearTimeout(zoomTimer);
+  zoomTimer = setTimeout(async () => {
+    if (!currentDocx) return;
+    const at = canvasArea.scrollHeight ? canvasArea.scrollTop / canvasArea.scrollHeight : 0;
+    await renderDocument(currentDocx);
+    canvasArea.scrollTop = at * canvasArea.scrollHeight;
+  }, 120);
 }
+
+// Ctrl / ⌘ + wheel, and a trackpad pinch (which arrives as a wheel with
+// ctrlKey), zoom the pages instead of the whole window.
+let zoomWheel = 0;
+canvasArea.addEventListener('wheel', e => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  zoomWheel -= e.deltaY;
+  const steps = Math.trunc(zoomWheel / 40);
+  if (!steps) return;
+  zoomWheel -= steps * 40;
+  applyZoom(zoomLevel + steps * 10);
+}, { passive: false });
 
 zs.addEventListener('input', e => applyZoom(+e.target.value));
 $('zOut').addEventListener('click', () => applyZoom(zoomLevel - 10));
