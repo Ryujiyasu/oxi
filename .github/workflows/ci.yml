@@ -233,7 +233,7 @@ jobs:
         if: ${{ matrix.shard == 1 }}
         working-directory: web
         run: |
-          for suite in page grid formula bands save row-model oxi-office; do
+          for suite in page grid formula bands save row-model oxi-office docs-caret; do
             node "$suite.test.mjs"
           done
           node ../integrations/office-js-extension/test.mjs
