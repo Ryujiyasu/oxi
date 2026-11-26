@@ -62,6 +62,47 @@
         "priority": "default"
       }
     ],
+    "languages": [
+      {
+        "id": "oxidocs-docx",
+        "aliases": [
+          "Word document"
+        ],
+        "extensions": [
+          ".docx"
+        ],
+        "icon": {
+          "light": "./icons/docx-light.svg",
+          "dark": "./icons/docx-dark.svg"
+        }
+      },
+      {
+        "id": "oxidocs-xlsx",
+        "aliases": [
+          "Excel workbook"
+        ],
+        "extensions": [
+          ".xlsx"
+        ],
+        "icon": {
+          "light": "./icons/xlsx-light.svg",
+          "dark": "./icons/xlsx-dark.svg"
+        }
+      },
+      {
+        "id": "oxidocs-pptx",
+        "aliases": [
+          "PowerPoint presentation"
+        ],
+        "extensions": [
+          ".pptx"
+        ],
+        "icon": {
+          "light": "./icons/pptx-light.svg",
+          "dark": "./icons/pptx-dark.svg"
+        }
+      }
+    ],
     "commands": [
       {
         "command": "oxi.openWithDefaultEditor",
