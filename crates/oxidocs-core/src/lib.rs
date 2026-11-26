@@ -22,6 +22,7 @@ pub mod font;
 pub mod ir;
 pub mod layout;
 pub mod parser;
+pub mod mail_merge;
 pub mod revisions;
 
 pub use editor::{AddressableCell, DocxEditor};
@@ -141,6 +142,10 @@ pub struct ContentRun {
     pub font_size: Option<f32>,
     #[serde(default)]
     pub color: Option<String>,
+    /// A merge field: the run is written as `MERGEFIELD name` (its `text` is
+    /// what the field shows until a merge, and is not written).
+    #[serde(default)]
+    pub merge_field: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -355,6 +360,10 @@ fn generate_body_xml(blocks: &[ContentBlock]) -> String {
                 } else {
                     for run in &block.runs {
                         let rpr = build_rpr(run);
+                        if let Some(name) = run.merge_field.as_deref().filter(|n| !n.trim().is_empty()) {
+                            body_xml.push_str(&mail_merge::merge_field_xml(name, &rpr));
+                            continue;
+                        }
                         let text = editor::escape_xml_public(&run.text);
                         let space = if run.text.starts_with(' ') || run.text.ends_with(' ') {
                             r#" xml:space="preserve""#

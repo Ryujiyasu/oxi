@@ -3,6 +3,7 @@ mod model_map;
 mod runtime_fonts;
 mod font_catalog_api;
 mod field_boxes;
+mod mail_merge;
 #[cfg(feature = "suite")]
 mod xlsx_pdf;
 pub use font_catalog_api::{font_catalog_missing, font_catalog_register};
@@ -694,6 +695,12 @@ pub fn edit_docx_advanced(data: &[u8], edits: JsValue) -> Result<Vec<u8>, JsErro
 
     for js_edit in js_edits {
         match js_edit.r#type.as_str() {
+            "set_paragraph_inlines" => {
+                editor.add_edit(oxidocs_core::editor::DocxEdit::SetParagraphInlines {
+                    paragraph_index: js_edit.paragraph_index.unwrap_or(0),
+                    inlines: js_edit.inlines.unwrap_or_default(),
+                });
+            }
             "set_run_text" => {
                 editor.add_edit(oxidocs_core::editor::DocxEdit::SetRunText {
                     paragraph_index: js_edit.paragraph_index.unwrap_or(0),
@@ -946,6 +953,9 @@ struct JsDocxEdit {
     height_pt: Option<f32>,
     #[serde(default, rename = "content_type")]
     content_type_field: Option<String>,
+    // A paragraph written again as text and merge fields
+    #[serde(default)]
+    inlines: Option<Vec<oxidocs_core::mail_merge::ParagraphInline>>,
 }
 
 #[derive(Deserialize)]

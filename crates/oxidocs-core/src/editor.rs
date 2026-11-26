@@ -132,6 +132,12 @@ pub enum DocxEdit {
     DeleteParagraph {
         index: usize,
     },
+    /// Write a paragraph's runs again as text and merge fields, keeping its
+    /// properties and its first text run's formatting.
+    SetParagraphInlines {
+        paragraph_index: usize,
+        inlines: Vec<crate::mail_merge::ParagraphInline>,
+    },
     /// Insert a new run into an existing paragraph.
     InsertRun {
         paragraph_index: usize,
@@ -869,6 +875,7 @@ impl DocxEditor {
         let mut text_edits: HashMap<(usize, usize), String> = HashMap::new();
         let mut run_format_edits: HashMap<(usize, usize), RunProps> = HashMap::new();
         let mut para_format_edits: HashMap<usize, ParaProps> = HashMap::new();
+        let mut para_inline_edits: HashMap<usize, &Vec<crate::mail_merge::ParagraphInline>> = HashMap::new();
         let mut para_deletions: Vec<usize> = Vec::new();
         let mut para_insertions: Vec<(usize, String)> = Vec::new(); // (index, xml)
         let mut run_insertions: HashMap<(usize, usize), (String, Option<RunProps>)> = HashMap::new();
@@ -894,6 +901,9 @@ impl DocxEditor {
                 }
                 DocxEdit::DeleteParagraph { index } => {
                     para_deletions.push(*index);
+                }
+                DocxEdit::SetParagraphInlines { paragraph_index, inlines } => {
+                    para_inline_edits.insert(*paragraph_index, inlines);
                 }
                 DocxEdit::InsertRun { paragraph_index, run_index, text, style } => {
                     run_insertions.insert(
@@ -1054,6 +1064,11 @@ impl DocxEditor {
 
             let mut modified = false;
             let mut current_xml = seg_xml;
+
+            if let Some(inlines) = para_inline_edits.get(&para_idx) {
+                current_xml = crate::mail_merge::paragraph_with_inlines(&current_xml, inlines, run_text_xml);
+                modified = true;
+            }
 
             // Text edits for this paragraph
             let para_text_edits: HashMap<usize, &String> = text_edits

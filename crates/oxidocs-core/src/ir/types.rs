@@ -586,6 +586,10 @@ pub struct RunStyle {
     /// fragments carry a run's style but not the run (OXI_CELL_FIELD).
     #[serde(skip)]
     pub cell_field_type: Option<FieldType>,
+    /// The merge field (`MERGEFIELD name`) whose last result this run is, so
+    /// an editor can show it as the field it stands for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_field: Option<String>,
     pub font_family: Option<String>,
     /// East Asian font family (w:rFonts eastAsia) for CJK characters
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -875,6 +879,7 @@ impl Default for RunStyle {
     fn default() -> Self {
         Self {
             cell_field_type: None,
+            merge_field: None,
             font_family: None,
             font_family_east_asia: None,
             font_family_cs: None,

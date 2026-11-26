@@ -495,6 +495,22 @@ impl ParseContext {
                 .map_or(false, |name| name.eq_ignore_ascii_case("TOC")))
     }
 
+    /// The field name a run stands for when the innermost open field is a
+    /// `MERGEFIELD` showing its result (Word writes «name» there until a
+    /// merge fills it).
+    fn merge_field_result(&self) -> Option<String> {
+        let fields = self.fields.borrow();
+        let f = fields.last()?;
+        if !f.result {
+            return None;
+        }
+        let mut words = f.instruction.split_whitespace();
+        if !words.next()?.eq_ignore_ascii_case("MERGEFIELD") {
+            return None;
+        }
+        Some(words.next()?.trim_matches('"').to_string())
+    }
+
     fn in_hyperlink_result(&self) -> bool {
         self.fields.borrow().iter().any(|f| f.result
             && f.instruction.split_whitespace().next()
@@ -7695,6 +7711,7 @@ fn parse_run(
     let mut t_br_floor = 0usize;
     let mut preserve_text_whitespace = false;
     let mut toc_result_for_run = None;
+    let mut merge_field_for_run: Option<String> = None;
     let mut in_instr_text = false;
     let mut visible_instruction = false;
     let mut instr_text = String::new();
@@ -7751,6 +7768,9 @@ fn parse_run(
                         });
                         toc_result_for_run.get_or_insert_with(||
                             ctx.in_toc_result() && (url.is_some() || ctx.in_hyperlink_result()));
+                        if merge_field_for_run.is_none() {
+                            merge_field_for_run = ctx.merge_field_result();
+                        }
                     }
                     "instrText" if depth == 0 => {
                         in_instr_text = true;
@@ -8171,6 +8191,7 @@ fn parse_run(
             ctx.in_toc_result() && (url.is_some() || ctx.in_hyperlink_result())),
         &ctx.paragraph_base.borrow());
     apply_run_overrides(&mut style, rpr_direct, had_color);
+    style.merge_field = merge_field_for_run;
     // OXI_FIELD_ERROR_BOLD (2026-11-24, default ON, opt-out _DISABLE): Word sets a
     // field's error text («エラー! ブックマークが定義されていません。») bold, every
     // character in the run's East Asian face. blind-A ja/reference__0b6f3b32 p8 (7 such

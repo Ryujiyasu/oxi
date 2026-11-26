@@ -199,6 +199,30 @@ mark.oxi-cmt.resolved{background:transparent;border-bottom:2px dotted #bbb}
 .dlg .bp:hover{background:var(--accent-h)}
 .dlg .bs{background:#E0E0E0;color:#333}
 .dlg .bs:hover{background:#D0D0D0}
+/* Mail merge */
+.merge-field{display:inline;background:#E8F0FE;border-bottom:1px solid #4285F4;border-radius:2px;padding:0 1px;color:#1A56C4;cursor:default}
+.mm{position:fixed;top:110px;right:16px;width:340px;max-width:calc(100vw - 32px);max-height:calc(100vh - 130px);overflow:auto;z-index:90;background:#fff;border:1px solid #ccc;border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:13px;box-sizing:border-box}
+.mm[hidden]{display:none}
+.mm-h{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #eee;position:sticky;top:0;background:#fff}
+.mm section{padding:10px 14px;border-bottom:1px solid #f0f0f0}
+.mm-t{font-weight:600;margin-bottom:6px;color:var(--accent)}
+.mm-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0}
+.mm button{padding:5px 10px;border:1px solid #ccc;border-radius:4px;background:#fafafa;cursor:pointer;font:inherit;font-size:12px}
+.mm button:hover:not(:disabled){background:#f0f0f0}
+.mm button:disabled{opacity:.45;cursor:default}
+.mm button.bp{background:var(--accent);border-color:var(--accent);color:#fff}
+.mm input[type=number]{width:60px;padding:3px 4px;font:inherit;font-size:12px}
+.mm input[type=text],.mm textarea,.mm select{font:inherit;font-size:12px;padding:3px 6px;border:1px solid #ccc;border-radius:3px;box-sizing:border-box}
+.mm textarea{width:100%;font-family:monospace}
+.mm-note{color:#666;font-size:12px;margin:4px 0}
+.mm-miss{color:#C62828;font-weight:600}
+.mm-tbl{overflow:auto;max-height:150px}
+.mm-tbl table{border-collapse:collapse;font-size:11px}
+.mm-tbl th,.mm-tbl td{border:1px solid #ddd;padding:2px 5px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis}
+.mm-tbl th{background:#f5f5f5}
+.mm-fields{display:flex;flex-wrap:wrap;gap:4px}
+.mm .mm-fb{background:#E8F0FE;border-color:#B6CCF6;color:#1A56C4}
+body.mm-previewing #editor{outline:2px dashed #4285F4;outline-offset:4px}
 input[type="file"]{display:none}
 
 /* Line spacing popup */
@@ -497,6 +521,36 @@ input[type="file"]{display:none}
     <div class="acts"><button class="bp" id="dChoose" data-i18n="chooseFile">Choose File</button><button class="bs" id="dCancel" data-i18n="cancel">Cancel</button></div>
   </div>
 </div>
+<div class="mm" id="mmPanel" hidden role="dialog" aria-labelledby="mmTitle">
+  <div class="mm-h"><b id="mmTitle" data-i18n="mailMerge">Mail Merge</b><button id="mmClose" title="Close" aria-label="Close">&times;</button></div>
+  <section>
+    <div class="mm-t" data-i18n="mmStep1">1. Recipients</div>
+    <div class="mm-row"><button id="mmOpen" data-i18n="mmOpenData">Open a list…</button><button id="mmPaste" data-i18n="mmPasteData">Paste…</button><select id="mmSheet" hidden></select></div>
+    <textarea id="mmText" rows="5" hidden placeholder="Name,Address&#10;Ann,Tokyo"></textarea>
+    <div class="mm-row" id="mmTextActs" hidden><button id="mmTextUse" data-i18n="mmUseText">Use this list</button></div>
+    <div class="mm-note" id="mmInfo"></div>
+    <div class="mm-tbl" id="mmTable"></div>
+  </section>
+  <section>
+    <div class="mm-t" data-i18n="mmStep2">2. Insert fields</div>
+    <div class="mm-note" data-i18n="mmStep2Hint">Click where the field goes in the document, then click the field.</div>
+    <div class="mm-fields" id="mmFields"></div>
+    <div class="mm-row"><input type="text" id="mmName" data-i18n-placeholder="mergeField" placeholder="Field name" style="flex:1;min-width:0"><button id="mmAddName" data-i18n="mmInsert">Insert</button></div>
+    <div class="mm-note" id="mmDocFields"></div>
+  </section>
+  <section>
+    <div class="mm-t" data-i18n="mmStep3">3. Preview</div>
+    <div class="mm-row"><label><input type="checkbox" id="mmPreview"> <span data-i18n="mmPreviewResults">Preview results</span></label></div>
+    <div class="mm-row"><button id="mmPrev" aria-label="Previous record">&#9664;</button><input type="number" id="mmRec" min="1" value="1" aria-label="Record"><span id="mmOf"></span><button id="mmNext" aria-label="Next record">&#9654;</button></div>
+  </section>
+  <section>
+    <div class="mm-t" data-i18n="mmStep4">4. Finish</div>
+    <div class="mm-row"><label><input type="checkbox" id="mmSuppress" checked> <span data-i18n="mmSuppress">Leave out blank lines when fields are empty</span></label></div>
+    <div class="mm-row"><span data-i18n="mmRecords">Records</span><input type="number" id="mmFrom" min="1" aria-label="From"><span>–</span><input type="number" id="mmTo" min="1" aria-label="To"></div>
+    <div class="mm-row"><button class="bp" id="mmDoc" data-i18n="mmToDoc">One document (.docx)</button><button id="mmPdf" data-i18n="mmToPdf">PDF to print</button><button id="mmEach" data-i18n="mmToEach">A file per record (.zip)</button></div>
+  </section>
+</div>
+<input type="file" id="mmFile" accept=".csv,.tsv,.txt,.xlsx,.xlsm" hidden>
 <div class="ls-pop" id="lsPop">
   <div class="ls-menu">
     <button data-ls="1">1.0</button><button data-ls="1.15">1.15</button>
@@ -553,6 +607,14 @@ const I18N = {
     mailMerge: 'Mail Merge', mailings: 'Mailings',
     tocTitle: 'Table of Contents', commentText: 'Comment text', eqPlaceholder: 'LaTeX (e.g. x^2 + y^2 = r^2)',
     mergeField: 'Field name', mergeData: 'Paste CSV data', mergePreview: 'Preview',
+    mmStep1: '1. Recipients', mmOpenData: 'Open a list…', mmPasteData: 'Paste…', mmUseText: 'Use this list',
+    mmStep2: '2. Insert fields', mmStep2Hint: 'Click where the field goes in the document, then click the field.', mmInsert: 'Insert',
+    mmStep3: '3. Preview', mmPreviewResults: 'Preview results', mmStep4: '4. Finish',
+    mmSuppress: 'Leave out blank lines when fields are empty', mmRecords: 'Records',
+    mmToDoc: 'One document (.docx)', mmToPdf: 'PDF to print', mmToEach: 'A file per record (.zip)',
+    mmLoaded: '{n} records from {file}', mmPasted: 'pasted text', mmNoDataYet: 'Open a CSV or Excel file with the recipients (the first row names the columns).',
+    mmBadData: 'This list could not be read.', mmDocFields: 'Fields in this document:', mmNoFields: 'No fields in the document yet.',
+    mmNotInData: 'Not in the list', mmMissing: 'These fields are not in the list and will be left empty:', mmSuffix: 'merged',
     page: 'Page', words: 'words', pages: 'pages', rendering: 'Rendering...',
   },
   ja: {
@@ -583,6 +645,14 @@ const I18N = {
     mailMerge: '差し込み印刷', mailings: '差し込み',
     tocTitle: '目次', commentText: 'コメント内容', eqPlaceholder: 'LaTeX (例: x^2 + y^2 = r^2)',
     mergeField: 'フィールド名', mergeData: 'CSVデータを貼り付け', mergePreview: 'プレビュー',
+    mmStep1: '1. 宛先', mmOpenData: '宛先リストを開く…', mmPasteData: '貼り付け…', mmUseText: 'このリストを使う',
+    mmStep2: '2. 差し込みフィールドの挿入', mmStep2Hint: '文書の入れたい位置をクリックしてから、フィールドを押します。', mmInsert: '挿入',
+    mmStep3: '3. 結果のプレビュー', mmPreviewResults: '結果のプレビュー', mmStep4: '4. 完了',
+    mmSuppress: 'データが空のフィールドの空白行を印刷しない', mmRecords: 'レコード',
+    mmToDoc: '1 つの文書に差し込む (.docx)', mmToPdf: '印刷用 PDF', mmToEach: '1 件ずつ別ファイル (.zip)',
+    mmLoaded: '{file} から {n} 件', mmPasted: '貼り付けたテキスト', mmNoDataYet: '宛先の CSV か Excel ファイルを開いてください (1 行目が列名)。',
+    mmBadData: 'このリストを読めませんでした。', mmDocFields: 'この文書のフィールド:', mmNoFields: 'まだフィールドがありません。',
+    mmNotInData: 'リストにありません', mmMissing: '次のフィールドはリストにないため空になります:', mmSuffix: '差し込み',
     page: 'ページ', words: '語', pages: 'ページ', rendering: 'レンダリング中...',
   },
 };
@@ -1817,57 +1887,244 @@ $('btnSecBrk').addEventListener('click', () => {
 });
 
 // ---- Mail Merge ----
-let mergeFields = [];
-let mergeData = [];
-$('btnMailMerge').addEventListener('click', () => {
-  const action = prompt('1: Insert field\n2: Load CSV data\n3: Generate merged docs', '1');
-  if (action === '1') {
-    const field = prompt(t('mergeField'), 'Name');
-    if (!field) return;
-    if (!mergeFields.includes(field)) mergeFields.push(field);
-    const tag = document.createElement('span');
-    tag.className = 'merge-field';
-    tag.contentEditable = 'false';
-    tag.dataset.field = field;
-    tag.style.cssText = 'display:inline-block;background:#E8F0FE;border:1px solid #4285F4;border-radius:3px;padding:1px 6px;font-size:9pt;color:#1A73E8;cursor:default;margin:0 2px';
-    tag.textContent = '«' + field + '»';
-    const sel = window.getSelection();
-    if (sel.rangeCount) { const r = sel.getRangeAt(0); r.insertNode(tag); r.setStartAfter(tag); sel.removeAllRanges(); sel.addRange(r); }
-    else editor.appendChild(tag);
-  } else if (action === '2') {
-    const csv = prompt(t('mergeData'), 'Name,Email\nJohn,john@example.com\nJane,jane@example.com');
-    if (!csv) return;
-    const lines = csv.trim().split('\n');
-    const headers = lines[0].split(',').map(h => h.trim());
-    mergeData = lines.slice(1).map(line => {
-      const vals = line.split(',').map(v => v.trim());
-      const obj = {};
-      headers.forEach((h, i) => obj[h] = vals[i] || '');
-      return obj;
-    });
-    alert(`Loaded ${mergeData.length} records with fields: ${headers.join(', ')}`);
-  } else if (action === '3') {
-    if (!mergeData.length) { alert('Load CSV data first (option 2)'); return; }
-    // Generate merged documents
-    syncDocx();
-    const template = editor.innerHTML;
-    for (let i = 0; i < mergeData.length; i++) {
-      let html = template;
-      const row = mergeData[i];
-      for (const [key, val] of Object.entries(row)) {
-        const re = new RegExp('«' + key + '»', 'g');
-        html = html.replace(re, val);
-      }
-      // Build docx from merged content
-      editor.innerHTML = html;
-      syncDocx();
-      dl(currentDocx, `${fileName}_${i + 1}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    }
-    editor.innerHTML = template; // Restore
-    schedulePaginate();
-    alert(`Generated ${mergeData.length} documents`);
-  }
+// The records come from a CSV/TSV file, an Excel workbook or pasted text. A
+// field goes into the document as Word's own MERGEFIELD, and the merge is the
+// engine's: the result Word's "merge to new document" gives (one section per
+// record, \# and \@ pictures, IF / SKIPIF / NEXT, blank lines dropped).
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+var mm = { data: null, file: '', xlsx: null, sheets: null, preview: false, rec: 1, saved: null, savedDocx: null, range: null };
+
+document.addEventListener('selectionchange', () => {
+  const s = window.getSelection();
+  if (!mm.preview && s.rangeCount && editor.contains(s.anchorNode)) mm.range = s.getRangeAt(0).cloneRange();
 });
+
+function mergeChip(name, text) {
+  const tag = document.createElement('span');
+  tag.className = 'merge-field';
+  tag.contentEditable = 'false';
+  tag.dataset.field = name;
+  tag.textContent = text || ('«' + name + '»');
+  return tag;
+}
+
+function insertMergeField(name) {
+  name = (name || '').trim();
+  if (!name) return;
+  if (mm.preview) mergePreview(false);
+  editor.focus();
+  let r = mm.range && editor.contains(mm.range.startContainer) ? mm.range : null;
+  if (!r) {
+    r = document.createRange();
+    r.selectNodeContents(editor.lastElementChild || editor);
+    r.collapse(false);
+  }
+  r.deleteContents();
+  const tag = mergeChip(name);
+  r.insertNode(tag);
+  r.setStartAfter(tag);
+  r.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+  mm.range = r.cloneRange();
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
+  mergeDocFields();
+}
+
+/** Text from a file: UTF-8, else Shift_JIS (what Excel saves a Japanese CSV in). */
+function mergeDecode(buf) {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+  catch { return new TextDecoder('shift_jis').decode(buf); }
+}
+
+async function mergeLoadFile(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  try {
+    if (/\.xls[xm]$/i.test(file.name)) {
+      mm.xlsx = buf;
+      mergeUseSheet(0);
+    } else {
+      mm.xlsx = null;
+      mm.sheets = null;
+      mergeSetData(wasm.mail_merge_data_from_text(mergeDecode(buf)));
+    }
+    mm.file = file.name;
+  } catch (e) { alert(t('mmBadData') + '\n' + (e.message || e)); }
+  mergeRender();
+}
+
+function mergeUseSheet(i) {
+  const d = wasm.mail_merge_data_from_xlsx(mm.xlsx, i);
+  mm.sheets = d.sheets;
+  mm.sheet = d.sheet;
+  mergeSetData({ columns: d.columns, rows: d.rows });
+}
+
+function mergeSetData(d) {
+  mm.data = d && d.columns && d.columns.length ? { columns: d.columns, rows: d.rows || [] } : null;
+  mm.rec = 1;
+  if (mm.preview) mergeShowRecord();
+  mergeRender();
+}
+
+function mergeOpts(withRange) {
+  const o = { suppress_blank_lines: $('mmSuppress').checked };
+  if (withRange) {
+    const from = parseInt($('mmFrom').value, 10), to = parseInt($('mmTo').value, 10);
+    if (from > 0) o.first_record = from;
+    if (to > 0) o.last_record = to;
+  }
+  return o;
+}
+
+/** The fields the document uses; the ones the data lacks are marked. */
+function mergeDocFields() {
+  const box = $('mmDocFields');
+  if (mm.preview) return;
+  try {
+    syncDocx();
+    const used = wasm.mail_merge_fields(currentDocx).fields || [];
+    const have = new Set((mm.data?.columns || []).map(c => c.trim().replace(/\s/g, '_').toLowerCase()));
+    box.textContent = '';
+    if (!used.length) { box.textContent = t('mmNoFields'); return; }
+    box.append(t('mmDocFields') + ' ');
+    used.forEach((f, i) => {
+      const s = document.createElement('span');
+      s.textContent = f;
+      if (mm.data && !have.has(f.replace(/\s/g, '_').toLowerCase())) { s.className = 'mm-miss'; s.title = t('mmNotInData'); }
+      box.append(i ? ', ' : '', s);
+    });
+  } catch (e) { box.textContent = ''; }
+}
+
+function mergeRender() {
+  const d = mm.data;
+  $('mmSheet').hidden = !mm.sheets || mm.sheets.length < 2;
+  if (mm.sheets) $('mmSheet').innerHTML = mm.sheets.map((s, i) => `<option value="${i}"${i === mm.sheet ? ' selected' : ''}>${escHtml(s)}</option>`).join('');
+  $('mmInfo').textContent = d ? t('mmLoaded').replace('{n}', d.rows.length).replace('{file}', mm.file || t('mmPasted')) : t('mmNoDataYet');
+  const tbl = $('mmTable');
+  tbl.innerHTML = '';
+  if (d) {
+    const show = d.rows.slice(0, 5);
+    tbl.innerHTML = '<table><tr><th>#</th>' + d.columns.map(c => `<th>${escHtml(c)}</th>`).join('') + '</tr>' +
+      show.map((r, i) => `<tr><td>${i + 1}</td>` + d.columns.map((_, j) => `<td>${escHtml(r[j] ?? '')}</td>`).join('') + '</tr>').join('') +
+      (d.rows.length > show.length ? `<tr><td colspan="${d.columns.length + 1}">… ${d.rows.length - show.length}</td></tr>` : '') + '</table>';
+  }
+  const fields = $('mmFields');
+  fields.innerHTML = '';
+  for (const c of d?.columns || []) {
+    const b = document.createElement('button');
+    b.className = 'mm-fb';
+    b.textContent = c;
+    b.onmousedown = e => e.preventDefault();
+    b.onclick = () => insertMergeField(c);
+    fields.appendChild(b);
+  }
+  const n = d?.rows.length || 0;
+  $('mmRec').max = n;
+  $('mmRec').value = mm.rec;
+  $('mmOf').textContent = '/ ' + n;
+  for (const id of ['mmPreview', 'mmPrev', 'mmNext', 'mmRec', 'mmDoc', 'mmEach', 'mmPdf']) $(id).disabled = !n;
+  mergeDocFields();
+}
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+/** Preview: the engine merges one record and the page shows that document;
+    turning it off puts the document with its fields back as it was. */
+function mergePreview(on) {
+  if (on && !mm.data?.rows.length) on = false;
+  if (on === mm.preview) { if (on) mergeShowRecord(); $('mmPreview').checked = on; return; }
+  if (on) {
+    syncDocx();
+    mm.savedDocx = currentDocx;
+    mm.saved = editor.innerHTML;
+    mm.preview = true;
+    editor.contentEditable = 'false';
+    document.body.classList.add('mm-previewing');
+    mergeShowRecord();
+  } else {
+    mm.preview = false;
+    editor.innerHTML = mm.saved;
+    editor.contentEditable = 'true';
+    document.body.classList.remove('mm-previewing');
+    mm.saved = null;
+    paginateEditView();
+  }
+  $('mmPreview').checked = mm.preview;
+}
+
+function mergeShowRecord() {
+  const n = mm.data?.rows.length || 0;
+  mm.rec = Math.min(Math.max(1, mm.rec), Math.max(1, n));
+  $('mmRec').value = mm.rec;
+  if (!mm.preview) return;
+  try {
+    const bytes = wasm.mail_merge_docx_record(mm.savedDocx, mm.data, mm.rec, mergeOpts(false));
+    const doc = parse_document(bytes);
+    editor.innerHTML = '';
+    if (doc.pages) for (const pg of doc.pages) for (const b of pg.blocks) { const el = renderBlock(b); if (el) editor.appendChild(el); }
+    if (!editor.innerHTML.trim()) editor.innerHTML = '<p><br></p>';
+    paginateEditView();
+  } catch (e) { console.error("mail merge preview:", e); }
+}
+
+async function mergeRun(kind) {
+  if (!mm.data?.rows.length) { alert(t('mmNoDataYet')); return; }
+  if (mm.preview) mergePreview(false);
+  syncDocx();
+  const missing = wasm.mail_merge_missing_fields(currentDocx, mm.data) || [];
+  if (missing.length && !confirm(t('mmMissing') + '\n' + missing.join(', '))) return;
+  const stem = (fileName || 'doc') + '_' + t('mmSuffix');
+  try {
+    if (kind === 'each') {
+      dl(wasm.mail_merge_docx_each(currentDocx, mm.data, mergeOpts(true), fileName || 'doc'), stem + '.zip', 'application/zip');
+      return;
+    }
+    const merged = wasm.mail_merge_docx(currentDocx, mm.data, mergeOpts(true));
+    if (kind === 'pdf') dl(await withFonts(wasm, () => docx_to_pdf(merged)), stem + '.pdf', 'application/pdf');
+    else dl(merged, stem + '.docx', DOCX_MIME);
+  } catch (e) { alert(t('mailMerge') + ': ' + (e.message || e)); }
+}
+
+function mergeOpen() {
+  $('mmPanel').hidden = false;
+  mergeRender();
+}
+
+$('btnMailMerge').addEventListener('click', () => { if ($('mmPanel').hidden) mergeOpen(); else $('mmPanel').hidden = true; });
+$('mmClose').onclick = () => { mergePreview(false); $('mmPanel').hidden = true; };
+$('mmOpen').onclick = () => $('mmFile').click();
+$('mmFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) mergeLoadFile(f); };
+$('mmPaste').onclick = () => {
+  const box = $('mmText');
+  box.hidden = $('mmTextActs').hidden = !box.hidden;
+  if (!box.hidden) box.focus();
+};
+$('mmTextUse').onclick = () => {
+  const text = $('mmText').value;
+  if (!text.trim()) return;
+  mm.xlsx = null;
+  mm.sheets = null;
+  mm.file = '';
+  mergeSetData(wasm.mail_merge_data_from_text(text));
+  $('mmText').hidden = $('mmTextActs').hidden = true;
+};
+$('mmSheet').onchange = e => { try { mergeUseSheet(+e.target.value); } catch (err) { alert(err.message || err); } };
+$('mmAddName').onclick = () => { insertMergeField($('mmName').value); $('mmName').value = ''; };
+$('mmAddName').onmousedown = e => e.preventDefault();
+$('mmName').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('mmAddName').click(); } };
+$('mmPreview').onchange = e => mergePreview(e.target.checked);
+$('mmPrev').onclick = () => { mm.rec--; mergeShowRecord(); };
+$('mmNext').onclick = () => { mm.rec++; mergeShowRecord(); };
+$('mmRec').onchange = e => { mm.rec = parseInt(e.target.value, 10) || 1; mergeShowRecord(); };
+$('mmSuppress').onchange = () => { if (mm.preview) mergeShowRecord(); };
+$('mmDoc').onclick = () => mergeRun('doc');
+$('mmEach').onclick = () => mergeRun('each');
+$('mmPdf').onclick = () => mergeRun('pdf');
 
 // Mobile font/size
 $('mFontFamily').addEventListener('change', e => { e.target.style.fontFamily = e.target.value; exec('fontName', e.target.value); });
@@ -2039,7 +2296,9 @@ function takeSnapshot(doc) {
         const p = b.Paragraph;
         const text = (p.runs || []).map(r => r.text || '').join('');
         const runTexts = (p.runs || []).map(r => r.text || '');
-        blocks.push({ type: 'paragraph', text, runTexts, heading: p.style?.heading_level || 0 });
+        const fields = (p.runs || []).map(r => r.style?.merge_field).filter(Boolean)
+          .filter((f, i, a) => i === 0 || a[i - 1] !== f);
+        blocks.push({ type: 'paragraph', text, runTexts, heading: p.style?.heading_level || 0, fields });
       } else if (b.Table) {
         const tbl = b.Table;
         const cellTexts = (tbl.rows || []).map(row =>
@@ -2089,6 +2348,13 @@ function renderPara(p) {
   if (p.runs?.length) {
     const open = [];
     for (const r of p.runs) {
+      const field = r.style && r.style.merge_field;
+      if (field) {
+        const last = el.lastChild;
+        if (last && last.classList && last.classList.contains('merge-field') && last.dataset.field === field) last.textContent += r.text || '';
+        else el.appendChild(mergeChip(field, r.text));
+        continue;
+      }
       let node = renderRun(r);
       if (open.length && (r.text || '').length) {
         for (const id of open) {
@@ -2210,6 +2476,10 @@ function collectRuns(node, runs, inherited) {
       // Skip images in run collection (handled separately)
       continue;
     }
+    if (child.classList && child.classList.contains('merge-field')) {
+      runs.push({ ...inherited, text: child.textContent, merge_field: child.dataset.field });
+      continue;
+    }
     // Build style from this element
     const style = { ...inherited };
     const cs = child.style;
@@ -2276,6 +2546,7 @@ function serializeTable(tbl) {
  * Tier 3: New document → build_docx (from scratch)
  */
 function syncDocx() {
+  if (mm && mm.preview) mergePreview(false);
   syncDocxCore();
   applyNewCommentsToDocx();
 }
@@ -2330,7 +2601,11 @@ function serializeEditorAsSnapshot() {
       blocks.push({ type: 'table', cellTexts });
     } else if (['P','H1','H2','H3','H4','H5','H6','DIV'].includes(tag)) {
       const text = node.innerText.replace(/\n$/, '');
-      blocks.push({ type: 'paragraph', text });
+      const runs = [];
+      collectRuns(node, runs, {});
+      const inlines = runs.map(r => r.merge_field ? { text: r.text, merge_field: r.merge_field } : { text: r.text });
+      const fields = runs.map(r => r.merge_field).filter(Boolean);
+      blocks.push({ type: 'paragraph', text, inlines, fields });
     }
   }
   return blocks;
@@ -2358,6 +2633,13 @@ function computeDiff(original, current) {
       return result;
     }
 
+    if (orig.type === 'paragraph' && ((orig.fields || []).length || (curr.fields || []).length)) {
+      if (orig.text !== curr.text || (orig.fields || []).join('\u0001') !== (curr.fields || []).join('\u0001')) {
+        result.edits.push({ type: 'set_paragraph_inlines', paragraph_index: paraIdx, inlines: curr.inlines });
+      }
+      paraIdx++;
+      continue;
+    }
     if (orig.type === 'paragraph') {
       // Compare text content
       if (orig.text !== curr.text) {
