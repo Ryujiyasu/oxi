@@ -37,4 +37,7 @@ const pdf = docx_to_pdf(bytes);         // Uint8Array (PDF)
 
 ## License
 
-MIT OR Apache-2.0 (bindings). The engine core is MPL-2.0.
+The bindings are MIT OR Apache-2.0. The WebAssembly module is compiled from the
+MPL-2.0 engine crates (`LICENSE-MPL`; source at https://github.com/Ryujiyasu/oxi)
+and carries OFL-1.1 fonts (`LICENSE-FONTS`). The package as a whole is
+`(MIT OR Apache-2.0) AND MPL-2.0 AND OFL-1.1`.

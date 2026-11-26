@@ -1,4 +1,10 @@
-Oxi VS Code extension
+Oxidocs VS Code extension
 
 Licensed under either of MIT (LICENSE-MIT) or Apache License 2.0
 (LICENSE-APACHE) at your option.
+
+The bundled WebAssembly engine (media/oxidocs_wasm_bg.wasm) is compiled from
+Oxidocs' engine crates, licensed under the Mozilla Public License 2.0
+(media/LICENSE-MPL). Their source is at https://github.com/Ryujiyasu/oxi.
+The fonts inside it are under the SIL Open Font License 1.1
+(media/LICENSE-FONTS).

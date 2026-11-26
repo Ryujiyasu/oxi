@@ -367,6 +367,8 @@ function main() {
   // faces, which are OFL-1.1; their notices ship beside it.
   fs.copyFileSync(path.join(root, 'LICENSE-FONTS'), path.join(media, 'LICENSE-FONTS'));
   console.log('LICENSE-FONTS  <- LICENSE-FONTS');
+  fs.copyFileSync(path.join(root, 'LICENSE'), path.join(media, 'LICENSE-MPL'));
+  console.log('LICENSE-MPL  <- LICENSE');
 }
 
 main();

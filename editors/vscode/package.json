@@ -4,7 +4,7 @@
   "description": "Open, edit and save .docx, .xlsx and .pptx in VS Code, and watch Claude Code or any AI agent write them: the tab redraws each time the file changes on disk. Rendered by Oxidocs, a Rust + WebAssembly engine measured against Microsoft Office. Nothing is uploaded.",
   "version": "0.9.11",
   "publisher": "oxidocs",
-  "license": "MIT OR Apache-2.0",
+  "license": "(MIT OR Apache-2.0) AND MPL-2.0 AND OFL-1.1",
   "icon": "icon.png",
   "pricing": "Free",
   "galleryBanner": {
