@@ -30,10 +30,14 @@ function reportFace(family, bold, italic, file) {
 /**
  * The page each format opens in: Word documents in the Word editor, which
  * edits through the document model (typing, Enter, Backspace across
- * paragraphs, tables, notes, comments); workbooks and decks in the suite page.
+ * paragraphs, tables, notes, comments); workbooks in the spreadsheet editor
+ * the desktop app uses (formatting, merges, number formats, rows and columns,
+ * undo, macros); decks in the suite page.
  */
 function pageFor(uri) {
-  return /\.docx$/i.test(uri.path) ? 'docs.html' : 'index.html';
+  if (/\.docx$/i.test(uri.path)) return 'docs.html';
+  if (/\.xlsx$/i.test(uri.path)) return 'xlsx-demo.html';
+  return 'index.html';
 }
 
 /** A save that waits longer than this is reported as failed. */
@@ -344,7 +348,11 @@ function withWebviewHead(html, webview, mediaRoot, page) {
       '#btnNew', '#btnOpen', '#btnPdf',
       '#fmNew', '#fmOpen', '#fmCopy', '#fmExport', '#fmPrint', '#fmRename',
     ]
-    : ['#landingHeader', '#dropZone', '#sampleButtons', '.side-door', '#toolbar']
+    : page === 'xlsx-demo.html'
+      // The site's name and lede (a link away from the editor), the sample,
+      // new and open buttons, and the drop sign.
+      ? ['header > .name', 'header > .what', '#reset', '#fresh', 'header label.file', '#drop']
+      : ['#landingHeader', '#dropZone', '#sampleButtons', '.side-door', '#toolbar']
   ).join(', ');
 
   const head =

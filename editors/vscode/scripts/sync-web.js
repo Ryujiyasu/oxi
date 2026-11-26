@@ -310,6 +310,158 @@ if (__oxiVscode) {
 }
 `;
 
+// The spreadsheet editor (web/xlsx-demo.html), the one the desktop app opens
+// workbooks in. Its edits are kept as changes against the bytes it opened and
+// written by save(), which hands the file to the browser as a download; that
+// download is caught here and given to VS Code instead.
+const SHEETS_BRIDGE = `
+
+// === VS Code bridge (inserted by editors/vscode/scripts/sync-web.js) ===
+const __oxiVscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
+if (__oxiVscode) {
+    document.body.classList.add('oxi-vscode-host');
+    const __oxiToBase64 = (bytes) => {
+        let s = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+            s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        }
+        return btoa(s);
+    };
+    const __oxiFromBase64 = (text) => {
+        const binary = atob(text);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+    };
+
+    // Saving builds the workbook in a worker (the one macros run in). A
+    // webview's page and its files are on different origins, and a worker may
+    // only be started from the page's own; a one-line module of the page's
+    // origin that imports the real one starts it, and the worker's own
+    // imports and the engine it fetches resolve against the real file.
+    const __oxiPageWorker = globalThis.Worker;
+    globalThis.Worker = class OxiWorker extends __oxiPageWorker {
+        constructor(url, options) {
+            const href = new URL(String(url), location.href);
+            if (href.origin !== location.origin && options && options.type === 'module') {
+                const shim = new Blob(['import ' + JSON.stringify(href.href) + ';'], { type: 'text/javascript' });
+                super(URL.createObjectURL(shim), options);
+            } else {
+                super(url, options);
+            }
+        }
+    };
+
+    // The download save() starts is caught and becomes the bytes VS Code writes.
+    let __oxiCapture = null;
+    const __oxiBlobs = new Map();
+    const __oxiCreateUrl = URL.createObjectURL;
+    URL.createObjectURL = function (obj) {
+        const url = __oxiCreateUrl.call(URL, obj);
+        if (__oxiCapture && obj instanceof Blob) __oxiBlobs.set(url, obj);
+        return url;
+    };
+    const __oxiAnchorClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+        const blob = __oxiCapture && this.download ? __oxiBlobs.get(this.href) : null;
+        if (blob) {
+            __oxiBlobs.delete(this.href);
+            __oxiCapture(blob);
+            return;
+        }
+        return __oxiAnchorClick.call(this);
+    };
+
+    // The page's own save -- its button and Ctrl+S -- saves through VS Code,
+    // which owns the file and then asks for the bytes below.
+    const __oxiPageSave = save;
+    save = async () => { __oxiVscode.postMessage({ type: 'oxi:requestSave' }); };
+    window.addEventListener('click', (event) => {
+        if (event.target && event.target.closest && event.target.closest('#save')) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            save();
+        }
+    }, true);
+    const __oxiSave = async (id) => {
+        let blob = null;
+        __oxiCapture = (b) => { blob = b; };
+        stateBox.style.display = 'none';
+        try {
+            await __oxiPageSave();
+        } catch (err) {
+            __oxiVscode.postMessage({ type: 'oxi:saved', id, error: String((err && err.message) || err) });
+            return;
+        } finally {
+            __oxiCapture = null;
+            __oxiBlobs.clear();
+        }
+        if (blob) {
+            __oxiEdited = false;
+            __oxiVscode.postMessage({ type: 'oxi:saved', id, data: __oxiToBase64(new Uint8Array(await blob.arrayBuffer())) });
+            return;
+        }
+        // No file was built. With nothing to save, VS Code writes the bytes it
+        // gave the page; with edits still waiting (save() failed, or a macro
+        // cancelled it), the save fails, so the tab stays modified.
+        if (!__oxiPending()) {
+            __oxiEdited = false;
+            __oxiVscode.postMessage({ type: 'oxi:saved', id, error: null });
+            return;
+        }
+        const said = stateBox.style.display === 'block' && stateBox.textContent.trim();
+        __oxiVscode.postMessage({ type: 'oxi:saved', id, error: said || 'the workbook was not saved' });
+    };
+
+    // The tab shows modified from the first change the file would need.
+    let __oxiEdited = false;
+    const __oxiPending = () => !!book && (changes.size > 0 || beyondValues || macroSourceDirty
+        || calculationPendingSave() || macroEditRevision !== macroSavedEditRevision);
+    const __oxiPageMarkSaved = markSaved;
+    markSaved = function () {
+        __oxiPageMarkSaved();
+        const pending = __oxiPending();
+        if (pending && !__oxiEdited) {
+            __oxiEdited = true;
+            __oxiVscode.postMessage({ type: 'oxi:edit' });
+        }
+    };
+
+    // A file dropped on the grid would replace the workbook shown, not the
+    // file VS Code has open; dragging sheet tabs still works.
+    for (const kind of ['dragenter', 'dragover', 'drop']) {
+        window.addEventListener(kind, (event) => {
+            if (event.dataTransfer && [...event.dataTransfer.types].includes('Files')) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+        }, true);
+    }
+
+    window.addEventListener('message', async (event) => {
+        const msg = event.data;
+        if (!msg) return;
+        if (msg.type === 'oxi:save') {
+            await __oxiSave(msg.id);
+            return;
+        }
+        if (msg.type !== 'oxi:open') return;
+        try {
+            // The same file, changed on disk: come back to the sheet that was showing.
+            const sheet = msg.reload ? shown : 0;
+            await open(__oxiFromBase64(msg.data), msg.name);
+            __oxiEdited = false;
+            const tabs = [...tabsBox.querySelectorAll('button')];
+            if (sheet > 0 && tabs.length) tabs[Math.min(sheet, tabs.length - 1)].click();
+        } catch (err) {
+            __oxiVscode.postMessage({ type: 'oxi:error', message: String((err && err.message) || err) });
+        }
+    });
+    // The module awaited the engine before it got here.
+    __oxiVscode.postMessage({ type: 'oxi:ready' });
+}
+`;
+
 function patchHtml(html, bridge, page) {
   // Google Fonts is a cross-origin request the webview's policy refuses; the
   // page falls back to the system stack, which is what VS Code uses anyway.
@@ -328,18 +480,31 @@ function patchHtml(html, bridge, page) {
   return html.slice(0, moduleEnd) + bridge + html.slice(moduleEnd);
 }
 
-// index.html opens .xlsx and .pptx; docs.html is the Word editor.
+// docs.html is the Word editor, xlsx-demo.html the spreadsheet editor, and
+// index.html opens .pptx. `edits` are exact replacements made in the page
+// first; a page that no longer has the text fails the sync.
 const PAGES = [
   { page: 'index.html', bridge: BRIDGE },
   { page: 'docs.html', bridge: DOCS_BRIDGE },
+  {
+    page: 'xlsx-demo.html',
+    bridge: SHEETS_BRIDGE,
+    // The page opens a sample workbook once the engine is up; in VS Code the
+    // workbook is the file VS Code sends, so the sample is not fetched.
+    edits: [["\nawait openSample();\n", "\nif (typeof acquireVsCodeApi !== 'function') await openSample();\n"]],
+  },
 ];
 
 function main() {
   fs.mkdirSync(media, { recursive: true });
 
   const assets = new Set();
-  for (const { page, bridge } of PAGES) {
-    const html = fs.readFileSync(path.join(web, page), 'utf8');
+  for (const { page, bridge, edits = [] } of PAGES) {
+    let html = fs.readFileSync(path.join(web, page), 'utf8');
+    for (const [from, to] of edits) {
+      if (!html.includes(from)) throw new Error(`web/${page} no longer has ${JSON.stringify(from)}`);
+      html = html.replace(from, to);
+    }
     fs.writeFileSync(path.join(media, page), patchHtml(html, bridge, page));
     console.log(`${page}  <- web/${page} (+ VS Code bridge)`);
     for (const asset of localAssets(html)) assets.add(asset);
