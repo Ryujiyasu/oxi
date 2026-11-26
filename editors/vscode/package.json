@@ -1,8 +1,8 @@
 {
   "name": "oxi-office-viewer",
-  "displayName": "Oxi — .docx / .xlsx / .pptx editor",
-  "description": "Open, edit and save .docx, .xlsx and .pptx in VS Code, and watch Claude Code or any AI agent write them: the tab redraws each time the file changes on disk. Rendered by Oxi, a Rust + WebAssembly engine measured against Microsoft Office. Nothing is uploaded.",
-  "version": "0.9.10",
+  "displayName": "Oxidocs — .docx / .xlsx / .pptx editor",
+  "description": "Open, edit and save .docx, .xlsx and .pptx in VS Code, and watch Claude Code or any AI agent write them: the tab redraws each time the file changes on disk. Rendered by Oxidocs, a Rust + WebAssembly engine measured against Microsoft Office. Nothing is uploaded.",
+  "version": "0.9.11",
   "publisher": "oxidocs",
   "license": "MIT OR Apache-2.0",
   "icon": "icon.png",
@@ -47,7 +47,7 @@
     "customEditors": [
       {
         "viewType": "oxi.officeViewer",
-        "displayName": "Oxi Office editor",
+        "displayName": "Oxidocs Office editor",
         "selector": [
           {
             "filenamePattern": "*.docx"
@@ -65,7 +65,7 @@
     "commands": [
       {
         "command": "oxi.openWithDefaultEditor",
-        "title": "Oxi: Reopen this file with VS Code's default editor"
+        "title": "Oxidocs: Reopen this file with VS Code's default editor"
       }
     ]
   },
