@@ -2443,7 +2443,7 @@ function serializeNode(node) {
     if (lh && lh > 0) block.line_height = lh;
     // Collect runs
     collectRuns(node, block.runs, {});
-    // Remove empty trailing runs
+    trimTrailingBreak(block.runs);
     if (!block.runs.length) block.runs.push({ text: '' });
     return block;
   }
@@ -2587,7 +2587,14 @@ function syncDocxCore() {
   }
 }
 
-/** Serialize current DOM into snapshot format for comparison. */
+/** A <br> that ends a block is the browser's placeholder and is not drawn; written out it
+    would be a line break in Word, so it is left out (as innerText's trailing \n is). */
+function trimTrailingBreak(runs) {
+  const last = runs[runs.length - 1];
+  if (last && !last.merge_field && last.text === '\n') runs.pop();
+  return runs;
+}
+
 /** A table cell's paragraphs as runs of text and merge fields. */
 function cellParagraphs(td) {
   const paras = [];
@@ -2597,6 +2604,7 @@ function cellParagraphs(td) {
       loose = null;
       const runs = [];
       collectRuns(child, runs, {});
+      trimTrailingBreak(runs);
       paras.push(runs.map(r => r.merge_field ? { text: r.text, merge_field: r.merge_field } : { text: r.text }));
     } else {
       if (!loose) { loose = []; paras.push(loose); }
@@ -2607,9 +2615,11 @@ function cellParagraphs(td) {
       for (const r of runs) loose.push(r.merge_field ? { text: r.text, merge_field: r.merge_field } : { text: r.text });
     }
   }
+  paras.forEach(trimTrailingBreak);
   return paras.length ? paras : [[]];
 }
 
+/** Serialize current DOM into snapshot format for comparison. */
 function serializeEditorAsSnapshot() {
   const blocks = [];
   for (const node of editor.childNodes) {
@@ -2634,7 +2644,8 @@ function serializeEditorAsSnapshot() {
       const text = node.innerText.replace(/\n$/, '');
       const runs = [];
       collectRuns(node, runs, {});
-      const inlines = runs.map(r => r.merge_field ? { text: r.text, merge_field: r.merge_field } : { text: r.text });
+      trimTrailingBreak(runs);
+      const inlines =runs.map(r => r.merge_field ? { text: r.text, merge_field: r.merge_field } : { text: r.text });
       const fields = runs.map(r => r.merge_field).filter(Boolean);
       blocks.push({ type: 'paragraph', text, inlines, fields });
     }
