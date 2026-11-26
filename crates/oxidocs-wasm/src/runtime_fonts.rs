@@ -146,7 +146,7 @@ pub fn font_program_revision() -> u64 {
 /// emboldens the regular one.
 #[wasm_bindgen]
 pub fn stand_in_font_program(family: &str, bold: bool, italic: bool) -> Option<Vec<u8>> {
-    if let Some(base) = crate::latin_stand_in(family) {
+    if let Some(base) = crate::latin_stand_in(family).or_else(|| unmeasured_latin_stand_in(family)) {
         let key = match (bold, italic) {
             (false, false) => base.to_string(),
             (true, false) => format!("{base}-B"),
@@ -227,6 +227,17 @@ pub fn stand_in_pieces(family: &str, text: &str, width: f64, font_size: f64, spa
 /// A family named in Japanese, or one of the Latin-spelled Japanese families
 /// Word documents carry (MS Gothic, Yu Mincho, Meiryo, BIZ UDPGothic,
 /// HGSoeiKakugothicUB, UD Digi Kyokasho…). The Latin "Gothic" faces are not.
+/// A Latin family the metrics registry does not know (Inter, say) is laid out
+/// with the default Calibri widths. Left to the browser, it is drawn in
+/// whatever face the machine substitutes -- on a Mac a wider one -- and `fit`
+/// squeezes each run back into Calibri's width: spaces vanish and a closing
+/// mark lands on the letter before it. Carlito has Calibri's widths, so the
+/// text is drawn where it was measured.
+fn unmeasured_latin_stand_in(family: &str) -> Option<&'static str> {
+    if east_asian_family(family) || crate::metrics_registry().supports_family(family) { return None; }
+    Some("Carlito")
+}
+
 fn east_asian_family(family: &str) -> bool {
     if family.chars().any(|c| c as u32 > 0x2E7F) { return true; }
     let lower = family.to_lowercase();
@@ -271,7 +282,17 @@ mod stand_in_tests {
         assert!(pgothic.starts_with("U+0020-007E, U+30"), "{pgothic}");
         assert!(pgothic.contains("FF08"), "（ is in: {pgothic}");
         assert!(stand_in_font_program("Segoe Script", false, false).is_none());
-        assert!(stand_in_font_program("Brush Script MT", false, false).is_none());
-        assert!(stand_in_font_program("MS Sans Serif", false, false).is_none());
+    }
+
+    #[test]
+    fn unmeasured_latin_families_are_drawn_in_carlito() {
+        // Laid out with the default Calibri widths, so drawn in the face that has them.
+        assert!(!crate::metrics_registry().supports_family("Inter"));
+        assert_eq!(stand_in_font_program("Inter", false, false).as_deref(), oxidocs_fonts::face("Carlito"));
+        assert_eq!(stand_in_font_program("Inter", true, false).as_deref(), oxidocs_fonts::face("Carlito-B"));
+        assert_eq!(stand_in_font_program("Brush Script MT", false, false).as_deref(), oxidocs_fonts::face("Carlito"));
+        // A family the registry measured keeps its own widths: no Carlito over them.
+        assert!(stand_in_font_program("Century Gothic", false, false).is_none());
+        assert!(stand_in_font_program("Segoe Script", false, false).is_none());
     }
 }

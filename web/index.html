@@ -892,6 +892,14 @@ input[type="file"] { display: none; }
     scrollbar-width: thin;
 }
 .sheet-tab {
+    /* One line per tab, as Excel draws them: a long sheet name is cut with an
+       ellipsis (its full name is the tooltip) instead of wrapping the tab into
+       a tall block that pushes the sheet up. */
+    flex: 0 0 auto;
+    max-width: 220px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     padding: 6px 16px;
     background: #d8d8d8;
     border: 1px solid #ccc;
@@ -4757,6 +4765,7 @@ function renderEditableXlsx(workbook) {
         const tab = document.createElement('div');
         tab.className = 'sheet-tab';
         tab.textContent = sheet.name || `Sheet ${i + 1}`;
+        tab.title = tab.textContent;
         tab.onclick = () => {
             syncPendingXlsxEditsToIr();
             showSheet(i);
