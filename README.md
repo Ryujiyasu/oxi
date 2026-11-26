@@ -1,12 +1,12 @@
-# Oxi
+# Oxidocs
 
-**Oxi = Opensource Xplatform Interoperability**
+*Formerly Oxi.*
 
 **Office documents, processed on your device.**
 
-Oxi brings Word, Excel and PowerPoint documents into the applications where people work. It is an open-source engine for viewing and editing existing Office files, with document processing running on the user's device.
+Oxidocs brings Word, Excel and PowerPoint documents into the applications where people work. It is an open-source engine for viewing and editing existing Office files, with document processing running on the user's device.
 
-Teams can use Oxi to add document handling to a business application, web service or desktop tool. The browser engine works without a Microsoft Office installation or a document-processing backend. Compatibility is measured against Microsoft Office itself.
+Teams can use Oxidocs to add document handling to a business application, web service or desktop tool. The browser engine works without a Microsoft Office installation or a document-processing backend. Compatibility is measured against Microsoft Office itself.
 
 [Word demo](https://ryujiyasu.gitlab.io/oxi/docs.html) · [Excel preview](https://ryujiyasu.gitlab.io/oxi/sheets.html) · [PowerPoint preview](https://ryujiyasu.gitlab.io/oxi/slides.html) · [Benchmarks](#layout-accuracy-vs-microsoft-word) · [Get started](#quick-start) · [Contribute](#contributing)
 
@@ -21,9 +21,9 @@ Reports, forms, budgets and presentations carry work from one person or system t
 
 - **Bring documents into the workflow.** Add viewing and editing to the application people already use.
 - **Process files on the device.** The browser engine can handle documents without uploading them to a document-processing server.
-- **Keep existing document assets useful.** Oxi targets familiar file formats, Japanese page layout, spreadsheet formulas and supported Excel macros.
+- **Keep existing document assets useful.** Oxidocs targets familiar file formats, Japanese page layout, spreadsheet formulas and supported Excel macros.
 
-## What Oxi Does
+## What Oxidocs Does
 
 | Format | Capabilities |
 |--------|--------------|
@@ -56,7 +56,7 @@ Three editors over one engine, recorded from the assembled desktop build — the
 
 ## Layout Accuracy vs Microsoft Word
 
-The published benchmarks compare Oxi with Microsoft Office's own output on fixed document sets.
+The published benchmarks compare Oxidocs with Microsoft Office's own output on fixed document sets.
 
 | Reference and corpus | Mean visual similarity (SSIM) | Matching page / slide counts | Measurement |
 |----------------------|-------------------------------|-----------------------------|-------------|
@@ -72,7 +72,7 @@ SSIM measures visual similarity on these corpora. Formula and VBA behavior are c
 
 ### How the corpora are split
 
-An accuracy number is only as honest as the corpus it comes from. Oxi's documents are split into three roles, per language, and only one of them is allowed to be a headline:
+An accuracy number is only as honest as the corpus it comes from. Oxidocs' documents are split into three roles, per language, and only one of them is allowed to be a headline:
 
 | Role | What it is | May be a fix target? |
 |------|------------|----------------------|
@@ -88,28 +88,28 @@ One measurement note, because it would otherwise flatter a competitor: **OfficeC
 
 ### Latest blind sets — blind-L50 and jaBlindL50 (2026-11-20)
 
-Frozen 2026-11-20 (`pipeline_data/FROZEN_BLIND_L.md`) by the same rule as every set below — the next unclaimed SHA-256 ranks per type, declared before anything was fetched — and measured once on a clean build of commit `e39af0a4` (DWrite renderer, the `<w:lastRenderedPageBreak/>` hint ignored), declared in the freeze file before its first render. Word opened and exported all 100 documents; Oxi rendered all 100. The same three English manifest entries as blind-J/K failed the mechanical quarantine at the draw, and the Japanese `technical` type is still exhausted, so its five slots went to `forms` by the top-up rule.
+Frozen 2026-11-20 (`pipeline_data/FROZEN_BLIND_L.md`) by the same rule as every set below — the next unclaimed SHA-256 ranks per type, declared before anything was fetched — and measured once on a clean build of commit `e39af0a4` (DWrite renderer, the `<w:lastRenderedPageBreak/>` hint ignored), declared in the freeze file before its first render. Word opened and exported all 100 documents; Oxidocs rendered all 100. The same three English manifest entries as blind-J/K failed the mechanical quarantine at the draw, and the Japanese `technical` type is still exhausted, so its five slots went to `forms` by the top-up rule.
 
 | Set | Engine | mean SSIM (common pages) | penalized | page count matches Word | documents scored |
 |-----|--------|--------------------------|-----------|-------------------------|------------------|
-| English (blind-L50) | **Oxi `e39af0a4`** | **0.926** | **0.920** | **49 / 50** | 50 |
+| English (blind-L50) | **Oxidocs `e39af0a4`** | **0.926** | **0.920** | **49 / 50** | 50 |
 | | LibreOffice 26.8.2.2 | 0.862 | 0.851 | 43 / 50 | 50 |
-| Japanese (jaBlindL50) | **Oxi `e39af0a4`** | **0.884** | **0.862** | **43 / 50** | 50 |
+| Japanese (jaBlindL50) | **Oxidocs `e39af0a4`** | **0.884** | **0.862** | **43 / 50** | 50 |
 | | LibreOffice 26.8.2.2 | 0.794 | 0.754 | 40 / 50 | 50 |
 
-Per document (common-page SSIM), Oxi is ahead of LibreOffice on 39 of the 50 English documents and 44 of the 50 Japanese ones. Only LibreOffice was re-run beside Oxi this time; the full field of engines was last measured on blind-J, below. These are different documents from blind-J, so the two rotations are not comparable number for number.
+Per document (common-page SSIM), Oxidocs is ahead of LibreOffice on 39 of the 50 English documents and 44 of the 50 Japanese ones. Only LibreOffice was re-run beside Oxidocs this time; the full field of engines was last measured on blind-J, below. These are different documents from blind-J, so the two rotations are not comparable number for number.
 
 ### English blind set — blind-J50, 50 never-seen documents
 
 Frozen 2026-11-03 (`pipeline_data/FROZEN_BLIND_J.md`) as the next unclaimed SHA-256 ranks per type, **before** any measurement. Every engine renders the same 50 documents; where one produced nothing for a document, its row says how many it managed. Three English manifest entries failed the mechanical quarantine at the draw and the next ranks took their slots; Word opened and exported all 100 documents of the two sets.
 
-**Why a new set.** Blind-I (2026-10-25) became a fix target on 2026-10-30, so it can no longer say how the engine generalizes. The sets are different documents and are not comparable: Oxi scored 0.903 on I50 and 0.924 here.
+**Why a new set.** Blind-I (2026-10-25) became a fix target on 2026-10-30, so it can no longer say how the engine generalizes. The sets are different documents and are not comparable: Oxidocs scored 0.903 on I50 and 0.924 here.
 
 **Every engine is at its latest public release on the measurement day** (2026-11-03): LibreOffice 26.8.2.2, the npm-distributed engines at `@latest`, GenOffice pulled to its newest commit, ibisOffice and WordCraft from their newest release archives (checksums verified), OfficeCLI 1.0.160; ONLYOFFICE 10.0.0 and eigenpal 1.9.0 were already current.
 
 | Engine | mean SSIM (common pages) | penalized | page count matches Word | documents scored |
 |--------|--------------------------|-----------|-------------------------|------------------|
-| **Oxi 0.9.0** | **0.924** | **0.911** | **46 / 50** | 50 |
+| **Oxidocs 0.9.0** | **0.924** | **0.911** | **46 / 50** | 50 |
 | ONLYOFFICE 10.0.0 | 0.921 | 0.901 | 43 / 50 | 50 |
 | LibreOffice 26.8.2.2 | 0.889 | 0.868 | 44 / 50 | 50 |
 | WordCraft 0.15.0 | 0.886 | 0.854 | 40 / 50 | 50 |
@@ -121,7 +121,7 @@ Frozen 2026-11-03 (`pipeline_data/FROZEN_BLIND_J.md`) as the next unclaimed SHA-
 | eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.759 | 0.698 | 34 / 50 | 50 |
 | OfficeCLI 1.0.160 (`--render html`) | 0.753 | 0.483 | 23 / 50 | 50 |
 
-**Oxi is first in English, 0.003 ahead of ONLYOFFICE — inside the ±0.02 one sample carries — and places page breaks best (46 / 50).** Document by document the race is closer than the mean: ONLYOFFICE is nearer to Word on 30 of 50 documents and Oxi on 20; WordCraft wins 23 against Oxi's 27, LibreOffice 16 against 34. The worst Oxi document is at 0.352 — a one-page document Oxi spreads onto two, a defect, since LibreOffice scores it 0.813.
+**Oxidocs is first in English, 0.003 ahead of ONLYOFFICE — inside the ±0.02 one sample carries — and places page breaks best (46 / 50).** Document by document the race is closer than the mean: ONLYOFFICE is nearer to Word on 30 of 50 documents and Oxidocs on 20; WordCraft wins 23 against Oxidocs' 27, LibreOffice 16 against 34. The worst Oxidocs document is at 0.352 — a one-page document Oxidocs spreads onto two, a defect, since LibreOffice scores it 0.813.
 
 ### Japanese blind set — jaBlindJ50, 50 never-seen documents
 
@@ -129,7 +129,7 @@ Frozen 2026-11-03 by the same rule, **before** any measurement. The Japanese `te
 
 | Engine | mean SSIM (common pages) | penalized | page count matches Word | documents scored |
 |--------|--------------------------|-----------|-------------------------|------------------|
-| **Oxi 0.9.0** | **0.892** | **0.866** | **45 / 50** | 50 |
+| **Oxidocs 0.9.0** | **0.892** | **0.866** | **45 / 50** | 50 |
 | ibisOffice 0.8.5 | 0.825 | 0.789 | 43 / 50 | 50 |
 | Polaris Office 11.115.233 | 0.812 | 0.732 | 33 / 50 | 50 |
 | LibreOffice 26.8.2.2 | 0.807 | 0.789 | 42 / 50 | 50 |
@@ -141,11 +141,11 @@ Frozen 2026-11-03 by the same rule, **before** any measurement. The Japanese `te
 | OfficeCLI 1.0.160 (`--render html`) | 0.745 | 0.544 | 28 / 50 | 50 |
 | eigenpal @eigenpal/docx-editor-react 1.9.0 | 0.744 | 0.701 | 37 / 50 | 50 |
 
-**Oxi is first in Japanese by 0.067 over ibisOffice and 0.085 over LibreOffice**, closer to Word than ibisOffice on 39 of 50 documents, than LibreOffice on 40, than ONLYOFFICE on 42 and than Polaris Office on 43. Its weak point is page breaks: the three worst Japanese documents (0.32–0.46) are one-page documents Oxi spreads onto two, and ten of the fifty score below 0.80 penalized.
+**Oxidocs is first in Japanese by 0.067 over ibisOffice and 0.085 over LibreOffice**, closer to Word than ibisOffice on 39 of 50 documents, than LibreOffice on 40, than ONLYOFFICE on 42 and than Polaris Office on 43. Its weak point is page breaks: the three worst Japanese documents (0.32–0.46) are one-page documents Oxidocs spreads onto two, and ten of the fifty score below 0.80 penalized.
 
 **Rankings do not transfer between languages.** ONLYOFFICE is second in English and eighth in Japanese; ibisOffice is eighth in English and second in Japanese. That is the whole reason for keeping a blind set per language, and for keeping both numbers on this page rather than the flattering one.
 
-Every engine was measured against the same Word ground truth (Microsoft 365 16.0.20527.20088, 150 DPI). Versions are recorded in `_engine_versions_blindJ50.json` beside each result. Measurement notes, each written down before any number was compared: (1) GenOffice's window timed out on one Japanese document (`reference__704212ae`), counted as not rendered. (2) OfficeCLI's low page-count match is its own pagination: the harness takes the page count from OfficeCLI's own view and captures every page it reports. (3) Polaris Office has no command line, so its export is driven through its own window; it had updated itself to 11.115.233 before the run and was measured at that version. (4) Oxi was measured from a clean build of commit `58eb49d1`, declared in the freeze file before its first render.
+Every engine was measured against the same Word ground truth (Microsoft 365 16.0.20527.20088, 150 DPI). Versions are recorded in `_engine_versions_blindJ50.json` beside each result. Measurement notes, each written down before any number was compared: (1) GenOffice's window timed out on one Japanese document (`reference__704212ae`), counted as not rendered. (2) OfficeCLI's low page-count match is its own pagination: the harness takes the page count from OfficeCLI's own view and captures every page it reports. (3) Polaris Office has no command line, so its export is driven through its own window; it had updated itself to 11.115.233 before the run and was measured at that version. (4) Oxidocs was measured from a clean build of commit `58eb49d1`, declared in the freeze file before its first render.
 
 ### Chinese (Simplified) blind set — zhBlindA50, 50 never-seen documents
 
@@ -155,19 +155,19 @@ Documents keep the fonts they ask for. The measurement PC carries the Windows Ch
 
 | Engine | mean SSIM (common pages) | penalized | page count matches Word | documents scored |
 |--------|--------------------------|-----------|-------------------------|------------------|
-| **Oxi (commit `c513bd40`)** | **0.874** | **0.869** | **48 / 50** | 50 |
+| **Oxidocs (commit `c513bd40`)** | **0.874** | **0.869** | **48 / 50** | 50 |
 | WPS Office 中国版 12.1.0.29161 | 0.836 | 0.804 | 44 / 50 | 50 |
 | LibreOffice 26.8.2.2 | 0.789 | 0.725 | 36 / 50 | 50 |
 
-**Oxi is first in Chinese, 0.038 ahead of WPS Office** — the Office suite most Chinese users open .docx files in — and places page breaks best (48 / 50). Document by document WPS is the stronger opponent than its mean suggests: Oxi is nearer to Word on 31 of the 50 documents and WPS on 18; against LibreOffice Oxi is nearer on 47. The worst Oxi document is at 0.436, a document Oxi fits onto one page fewer than Word.
+**Oxidocs is first in Chinese, 0.038 ahead of WPS Office** — the Office suite most Chinese users open .docx files in — and places page breaks best (48 / 50). Document by document WPS is the stronger opponent than its mean suggests: Oxidocs is nearer to Word on 31 of the 50 documents and WPS on 18; against LibreOffice Oxidocs is nearer on 47. The worst Oxidocs document is at 0.436, a document Oxidocs fits onto one page fewer than Word.
 
-Measured against the same Word ground truth as the other sets (Microsoft 365 16.0.20527, 150 DPI). WPS Office was driven through its own COM automation (`Kwps.Application`, `ExportAsFixedFormat`), LibreOffice with `soffice --convert-to pdf`. Oxi was measured from a clean build of commit `c513bd40`, whose hash was written into the freeze file before its first render. The other engines in the English and Japanese tables were not run on this set.
+Measured against the same Word ground truth as the other sets (Microsoft 365 16.0.20527, 150 DPI). WPS Office was driven through its own COM automation (`Kwps.Application`, `ExportAsFixedFormat`), LibreOffice with `soffice --convert-to pdf`. Oxidocs was measured from a clean build of commit `c513bd40`, whose hash was written into the freeze file before its first render. The other engines in the English and Japanese tables were not run on this set.
 
 ### How much does one blind set decide?
 
 Three independently frozen Japanese blind sets, each measured once against the binary of its day:
 
-| Japanese blind set | Oxi mean SSIM | page count matches Word |
+| Japanese blind set | Oxidocs mean SSIM | page count matches Word |
 |--------------------|---------------|-------------------------|
 | blind-B50 (ranks 11-15, 2026-08-31) | 0.842 | 45 / 50 |
 | blind-C50 (ranks 16-20, 2026-08-31) | 0.802 | 35 / 50 |
@@ -177,7 +177,7 @@ Three independently frozen Japanese blind sets, each measured once against the b
 | blind-J50 (next unclaimed ranks, 2026-11-03) | 0.892 | 45 / 50 |
 | blind-L50 (next unclaimed ranks, 2026-11-20) | 0.884 | 43 / 50 |
 
-B50 and C50 were measured the same day on the same binary, so the 0.040 between them is set difficulty and nothing else. Roughly a quarter of that is a known defect — 19 of the 50 blind-C documents contain an anchored floating text box whose text Oxi drops, and those documents average 0.06-0.10 lower than the rest — and the remainder is simply that one sample of fifty wild documents is harder than another. **A single blind number carries about ±0.02, and a page-count rate can move 90% → 70% between samples.**
+B50 and C50 were measured the same day on the same binary, so the 0.040 between them is set difficulty and nothing else. Roughly a quarter of that is a known defect — 19 of the 50 blind-C documents contain an anchored floating text box whose text Oxidocs drops, and those documents average 0.06-0.10 lower than the rest — and the remainder is simply that one sample of fifty wild documents is harder than another. **A single blind number carries about ±0.02, and a page-count rate can move 90% → 70% between samples.**
 
 D50, cut eleven days and one engine revision later, landed on 0.802 again. Two independent samples agreeing to four decimal places is the strongest evidence on this page that the Japanese number is a property of the engine rather than of the corpus.
 
@@ -193,9 +193,9 @@ The English sets moved too — 0.903 on C50, 0.837 on D50, 0.874 on H50, 0.903 o
 
 Two honest caveats about the two engine tables together: (1) the English and Japanese sets are different documents, so the numbers are not comparable across languages — each is only comparable *within* its table; (2) engine rankings do not transfer between corpora (ONLYOFFICE leads English and comes ninth in Japanese), which is exactly why blind sets per language exist.
 
-![Word vs Oxi vs LibreOffice vs @silurus/ooxml — same page, same ground truth](docs/img/vert-3way.png)
+![Word vs Oxidocs vs LibreOffice vs @silurus/ooxml — same page, same ground truth](docs/img/vert-3way.png)
 
-*What the differences look like: the same Japanese government research-application form (rotated table-cell labels), rendered by Word, Oxi, LibreOffice and @silurus/ooxml. This document is from the **development** corpus and is shown for illustration only — the numbers above come from the blind sets.*
+*What the differences look like: the same Japanese government research-application form (rotated table-cell labels), rendered by Word, Oxidocs, LibreOffice and @silurus/ooxml. This document is from the **development** corpus and is shown for illustration only — the numbers above come from the blind sets.*
 
 ### PowerPoint (PPTX) blind set — 50 HuggingFace documents
 
@@ -203,11 +203,11 @@ The same measurement discipline, applied to real-world `.pptx` files. 50 files a
 
 | Engine | mean SSIM vs PowerPoint (per doc) | page count matches PowerPoint |
 |--------|----------------------------------|------------------------------|
-| **Oxi** (2026-08-20, re-measured) | **0.953** | **48 / 48** |
+| **Oxidocs** (2026-08-20, re-measured) | **0.953** | **48 / 48** |
 | LibreOffice 26.2.1.2 | 0.913 | 48 / 48 |
 | ONLYOFFICE 9.3.1.8 | 0.908 | 48 / 48 |
 
-Two of the 50 sampled files (corrupt zip containers, unopenable by every engine — PowerPoint COM, LibreOffice, ONLYOFFICE's x2t and Oxi all reject them) are excluded, leaving **48** measured documents — every engine matches PowerPoint's slide count on all 48. **Oxi now leads both suites on this frozen set** (paired difference vs LibreOffice +0.040 ± 0.005, |t| = 8.7, ahead on 44 of the 48 documents; LibreOffice and ONLYOFFICE remain statistically tied with each other). The set was first measured at **0.679** (2026-08-13, the renderer's first PPTX measurement) — the week of renderer work since (slide-master placeholder inheritance, group transforms under mirroring, embedded fonts, color emoji, mixed-face line boxes) moved it to 0.953, with **every one of the 48 documents improving and none regressing**; the worst document now scores 0.880. As with the Word tables, the set is frozen, never anatomized, and re-measured as the engine improves. One operational note: ONLYOFFICE's x2t emits unusually large intermediate PDFs (up to 65 MB for a single deck), which dominates its pipeline cost. Per-document scores, the paired statistics and the full method: [docs/benchmarks/pptx-hf50.md](docs/benchmarks/pptx-hf50.md); raw scores as JSON: [docs/benchmarks/pptx-hf50-results.json](docs/benchmarks/pptx-hf50-results.json).
+Two of the 50 sampled files (corrupt zip containers, unopenable by every engine — PowerPoint COM, LibreOffice, ONLYOFFICE's x2t and Oxidocs all reject them) are excluded, leaving **48** measured documents — every engine matches PowerPoint's slide count on all 48. **Oxidocs now leads both suites on this frozen set** (paired difference vs LibreOffice +0.040 ± 0.005, |t| = 8.7, ahead on 44 of the 48 documents; LibreOffice and ONLYOFFICE remain statistically tied with each other). The set was first measured at **0.679** (2026-08-13, the renderer's first PPTX measurement) — the week of renderer work since (slide-master placeholder inheritance, group transforms under mirroring, embedded fonts, color emoji, mixed-face line boxes) moved it to 0.953, with **every one of the 48 documents improving and none regressing**; the worst document now scores 0.880. As with the Word tables, the set is frozen, never anatomized, and re-measured as the engine improves. One operational note: ONLYOFFICE's x2t emits unusually large intermediate PDFs (up to 65 MB for a single deck), which dominates its pipeline cost. Per-document scores, the paired statistics and the full method: [docs/benchmarks/pptx-hf50.md](docs/benchmarks/pptx-hf50.md); raw scores as JSON: [docs/benchmarks/pptx-hf50-results.json](docs/benchmarks/pptx-hf50-results.json).
 
 ### The internal gates (development corpus)
 
@@ -217,7 +217,7 @@ The blind sets are the published claim; the development corpus is how regression
 - **SSIM regression sentinel** — 369 documents (1113 pages) pixel-compared against stored Word renders; a change that improves one document by regressing another has to justify the trade.
 - **Adversarial probe harness** — 95 synthetic documents stressing under-tested layout paths, each gated against real Word ground truth.
 - **Feature-injection perturbation harness** — individual OOXML features injected one at a time into a clean base document and pixel-verified against Word.
-- **PPTX render gate** — 40 development decks (886 slides) pixel-compared against PowerPoint's own PDF render (mean SSIM 0.957), plus 156 synthetic probe decks byte-compared per change and a determinism check (same input twice → identical bytes). LibreOffice Impress and a browser OOXML viewer render the same decks as independent references, so a slide where they land closer to PowerPoint than Oxi does is a bug with a worked example.
+- **PPTX render gate** — 40 development decks (886 slides) pixel-compared against PowerPoint's own PDF render (mean SSIM 0.957), plus 156 synthetic probe decks byte-compared per change and a determinism check (same input twice → identical bytes). LibreOffice Impress and a browser OOXML viewer render the same decks as independent references, so a slide where they land closer to PowerPoint than Oxidocs does is a bug with a worked example.
 - **Spreadsheet oracles** — the formula engine recalculates 285 real .xlsx workbooks and diffs against Excel's own cached results; the browser VBA host is checked against real Excel COM behavior.
 - **Unit / integration suite** — `cargo test`.
 
@@ -225,7 +225,7 @@ These numbers are *tuned* — every document in them has been individually root-
 
 ### Word's saved page breaks — a hint the benchmark must not see
 
-When Word saves a .docx it writes `<w:lastRenderedPageBreak/>` wherever its own render started a new page. That marker is part of the answer every number on this page is scored against, and **Oxi's parser reads it by default**: several layout rules use it as a hint. The blind-set numbers above were measured that way. Whether the other engines in the tables read the marker has not been checked, so the page-count column may favour Oxi.
+When Word saves a .docx it writes `<w:lastRenderedPageBreak/>` wherever its own render started a new page. That marker is part of the answer every number on this page is scored against, and **Oxidocs' parser reads it by default**: several layout rules use it as a hint. The blind-set numbers above were measured that way. Whether the other engines in the tables read the marker has not been checked, so the page-count column may favour Oxidocs.
 
 From now on the benchmarks run **blind**: `OXI_IGNORE_LRPB=1` makes the parser drop the marker, so no layout rule can see it, and `tools/metrics/bench_env.py` sets it for benchmark scripts unless `OXI_BENCH_WITH_LRPB=1` asks for the hinted mode. **Re-measured blind (2026-10-28).** The published blind-I numbers were re-run with the frozen engine (77605bde) on copies of the same 100 documents with every `<w:lastRenderedPageBreak/>` removed, against the same Word PDFs:
 
@@ -236,7 +236,7 @@ From now on the benchmarks run **blind**: `OXI_IGNORE_LRPB=1` makes the parser d
 
 The tables above stand: the marker did not contribute to them. The current engine also scores identically in both modes on blind-I. Benchmarks keep running blind by default regardless.
 
-The same marker also makes a **Word-free pagination check** that anyone can run on their own files. `tools/oxi-lrpb-bench` derives the page every paragraph and table row starts on from the markers, checks that derivation against the page count Word wrote in `docProps/app.xml`, then scores Oxi blind and hinted:
+The same marker also makes a **Word-free pagination check** that anyone can run on their own files. `tools/oxi-lrpb-bench` derives the page every paragraph and table row starts on from the markers, checks that derivation against the page count Word wrote in `docProps/app.xml`, then scores Oxidocs blind and hinted:
 
 ```bash
 cd tools/oxi-lrpb-bench && cargo build --release
@@ -251,7 +251,7 @@ First run, on the Word-saved files of [docling](https://github.com/docling-proje
 | page count matches Word | 8 / 10 | 8 / 10 |
 | Word's page breaks placed at the same spot | 16 / 17 | |
 
-The derived page counts matched `docProps/app.xml` on all 10 files. The marker cannot replace Oxi: it gives a page number but no position on the page, files saved by anything other than Word do not carry it, and it goes stale as soon as the document is edited.
+The derived page counts matched `docProps/app.xml` on all 10 files. The marker cannot replace Oxidocs: it gives a page number but no position on the page, files saved by anything other than Word do not carry it, and it goes stale as soon as the document is edited.
 
 ### Reproduce
 
@@ -274,7 +274,7 @@ tools/oxi-lrpb-bench                    # Word-free page-break check against Wor
 
 ### 100% Clean-Room Implementation
 
-Oxi's rendering engine was built without any disassembly, decompilation, or binary analysis of proprietary software. All layout specifications come from two sources only:
+Oxidocs' rendering engine was built without any disassembly, decompilation, or binary analysis of proprietary software. All layout specifications come from two sources only:
 
 1. **Published standards** — OOXML (ISO/IEC 29500 / ECMA-376), PDF (ISO 32000)
 2. **Black-box testing** — observing output values via the Microsoft Office COM API, and measuring Word's own PDF/PNG renders
@@ -294,26 +294,26 @@ Both engines implement a shared `FontEngine` trait, so the layout engine switche
 
 ### Open Fonts Only
 
-Oxi bundles no proprietary fonts. Open-licensed fonts are metric-matched to their Microsoft counterparts (advance width, line height, kerning — verified by automated tests). For documents authored with Microsoft Fonts, a **font divergence score** — a per-glyph pixel-diff table generated once on a licensed system, combined with the document's character frequency — quantifies visual fidelity without shipping proprietary fonts at runtime.
+Oxidocs bundles no proprietary fonts. Open-licensed fonts are metric-matched to their Microsoft counterparts (advance width, line height, kerning — verified by automated tests). For documents authored with Microsoft Fonts, a **font divergence score** — a per-glyph pixel-diff table generated once on a licensed system, combined with the document's character frequency — quantifies visual fidelity without shipping proprietary fonts at runtime.
 
 ### Golden Tests — 504 Files, 100% Parse Success
 
 Tested against 504 real-world government documents (Japanese ministries) + generated files:
 
-|        | Oxi    | LibreOffice |
+|        | Oxidocs    | LibreOffice |
 |--------|--------|-------------|
 | Overall | 100.0% | 99.2% |
 | DOCX   | 100.0% | 100.0% |
 | XLSX   | 100.0% | 98.6% |
 | PPTX   | 100.0% | 100.0% |
 
-LibreOffice timed out (>45s) on 4 large government xlsx files. Oxi parsed all instantly.
+LibreOffice timed out (>45s) on 4 large government xlsx files. Oxidocs parsed all instantly.
 
 ---
 
 ## First-Class Japanese Typography
 
-Most Word-compatible renderers treat Japanese layout as an afterthought. For Oxi it is a measured target:
+Most Word-compatible renderers treat Japanese layout as an afterthought. For Oxidocs it is a measured target:
 
 - **Kinsoku shori (禁則処理)** — JIS X 4051 line-breaking: prohibited line-start/line-end characters, punctuation compression, hanging punctuation (ぶら下げ)
 - **Vertical writing (縦書き)** — vertical sections with right-to-left column flow, plus **tate-chu-yoko (縦中横)**
@@ -323,9 +323,9 @@ Most Word-compatible renderers treat Japanese layout as an afterthought. For Oxi
 
 ---
 
-## Where Oxi Fits
+## Where Oxidocs Fits
 
-Oxi is intended for applications that need Office document handling on the user's device: embedded viewers and editors, document workflows, and desktop tools built on the same engine.
+Oxidocs is intended for applications that need Office document handling on the user's device: embedded viewers and editors, document workflows, and desktop tools built on the same engine.
 
 | Design choice | What it provides |
 |---------------|------------------|
@@ -335,13 +335,13 @@ Oxi is intended for applications that need Office document handling on the user'
 | **Japanese typography as a measured target** | Dedicated work on line breaking, vertical text, ruby and document grids |
 | **Open-source engines and language bindings** | Source access and an API for embedding; see the [license](#license) |
 
-The dated benchmark tables above show comparisons with other renderers, including cases where Oxi falls behind. The current release still has layout, editing and VBA gaps.
+The dated benchmark tables above show comparisons with other renderers, including cases where Oxidocs falls behind. The current release still has layout, editing and VBA gaps.
 
 ---
 
 ## Also in the Box
 
-Beyond .docx rendering (the core mission), Oxi also ships:
+Beyond .docx rendering (the core mission), Oxidocs also ships:
 
 - **.xlsx / .pptx / PDF** — parsing, rendering, text extraction, PDF generation
 - **Round-trip editing** — edit .docx / .xlsx / .pptx; the original ZIP is preserved and only changed XML text nodes are patched, never rebuilt from scratch (a no-edit save is byte-identical, and that is a test)
@@ -350,7 +350,7 @@ Beyond .docx rendering (the core mission), Oxi also ships:
 - **Hanko / Inkan** — Japanese digital stamp generation + PAdES PDF signatures
 - **Local document processing** — the browser engine handles documents on the device without a document-processing backend
 - **VS Code extension** — open .docx / .xlsx / .pptx inside the editor, rendered by the same WebAssembly build ([editors/vscode](editors/vscode))
-- **Gotenberg module** — converts .docx on Gotenberg's LibreOffice route with Oxi and hands anything it cannot fully serve back to LibreOffice; on 4,988 docx-corpus documents it converted 99.8% itself, at a median 0.08 s against LibreOffice's 0.89 s ([integrations/gotenberg](integrations/gotenberg))
+- **Gotenberg module** — converts .docx on Gotenberg's LibreOffice route with Oxidocs and hands anything it cannot fully serve back to LibreOffice; on 4,988 docx-corpus documents it converted 99.8% itself, at a median 0.08 s against LibreOffice's 0.89 s ([integrations/gotenberg](integrations/gotenberg))
 
 These reuse common OOXML utilities, font metrics and language bindings. The rendering benchmarks above provide the visual compatibility measurements.
 
@@ -433,7 +433,7 @@ themselves from that feed.
 ### In place of LibreOffice
 
 Programs that convert with `soffice --headless --convert-to pdf --outdir DIR FILE`
-can run Oxi instead: link the binary as `soffice` (or call `oxidocs soffice …`)
+can run Oxidocs instead: link the binary as `soffice` (or call `oxidocs soffice …`)
 and point them at it. It takes that command line for .docx, .pptx and .xlsx to
 PDF, or to PNG of the first page, writing `DIR/<name>.pdf` as LibreOffice does.
 Any other file, target or option goes to the LibreOffice named by
@@ -492,11 +492,11 @@ python3 -m http.server 8080          # Serve at http://localhost:8080
 
 ## Security & Hardening
 
-Oxi treats document parsing, rendering and macro execution as separate parts of the security model. See [SECURITY.md](SECURITY.md) for the reporting policy and current limits.
+Oxidocs treats document parsing, rendering and macro execution as separate parts of the security model. See [SECURITY.md](SECURITY.md) for the reporting policy and current limits.
 
 - **Local parsing and layout** — document-processing code runs on the client; parsing and layout do not require network requests.
 - **Browser isolation** — the browser build runs in WebAssembly. Optional native Windows font and renderer bindings are separate from the browser runtime.
-- **VBA has its own runtime** — the spreadsheet host interprets supported VBA through Oxi's APIs. It does not run Microsoft Office or provide native Windows COM execution.
+- **VBA has its own runtime** — the spreadsheet host interprets supported VBA through Oxidocs' APIs. It does not run Microsoft Office or provide native Windows COM execution.
 - **Streaming XML** — external entities and DTDs are not fetched or expanded.
 
 ---
@@ -505,16 +505,16 @@ Oxi treats document parsing, rendering and macro execution as separate parts of 
 
 The version number is the **mean pixel similarity to Word on the current frozen blind
 sets**: `0.9.0` means that on the never-seen English and Japanese benchmarks above, the pages
-Oxi and Word both draw average SSIM 0.90 against Word's own render of the same files (0.924
+Oxidocs and Word both draw average SSIM 0.90 against Word's own render of the same files (0.924
 and 0.892; two-decimal truncation of the two-language mean, 0.908). The penalized figure — a
-page Oxi adds or drops scores zero — is reported beside it (0.911 and 0.866). Until 0.8.9 the
+page Oxidocs adds or drops scores zero — is reported beside it (0.911 and 0.866). Until 0.8.9 the
 number was the penalized mean; it changed with this release (blind-J's penalized mean, 0.889,
 would have read 0.8.8). Blind-L (2026-11-20) reads 0.926 and 0.884, a two-language mean of 0.905, so the number stays 0.9. The number is measured, not tuned — a blind set is spent once its
 number is written down and a new one is frozen before the next release — and `1.0` is the
 project's stop condition rather than its finish line. Per-release detail: [CHANGELOG.md](CHANGELOG.md).
 
 - **0.8 — done:** Word-compatible .docx rendering; the measurement loop (dev gates + rotating blind benchmarks); .pptx and .xlsx rendering, formula engine and browser VBA host; PDF; round-trip editing; WASM + Canvas editor, CLI, desktop app, Python bindings
-- **0.9 — current:** the blind sets average 0.9 on common pages, and Oxi is first among eleven engines in both languages. Next: page breaks (the worst blind-J documents in both languages are one-page documents Oxi spreads onto two; six English and ten Japanese documents are below 0.80 penalized), the typical English document (ONLYOFFICE is closer to Word on 30 of 50), IME (Japanese/CJK input) and editor polish
+- **0.9 — current:** the blind sets average 0.9 on common pages, and Oxidocs is first among eleven engines in both languages. Next: page breaks (the worst blind-J documents in both languages are one-page documents Oxidocs spreads onto two; six English and ten Japanese documents are below 0.80 penalized), the typical English document (ONLYOFFICE is closer to Word on 30 of 50), IME (Japanese/CJK input) and editor polish
 - **1.0 — indistinguishable from Word:** no document in the corpus below 1.0. This is the falsifiable claim the whole loop exists to serve; counterexamples are the contribution most wanted
 - **Beyond 1.0 — format parity:** .odt rendering via DirectWrite, measured against a deterministic reference renderer with the same externally-gated loop; bidirectional .docx ↔ .odt at the IR level
 
@@ -524,7 +524,7 @@ The measurement loop (deterministic reference output, falsifiable hypotheses, ex
 
 ## Contributing
 
-Contributions are welcome. Oxi has a simple acceptance criterion:
+Contributions are welcome. Oxidocs has a simple acceptance criterion:
 
 **Every merged PR must improve the pixel accuracy of at least one document — without regressing the gates.**
 
@@ -535,7 +535,7 @@ Contributions are welcome. Oxi has a simple acceptance criterion:
 4. Format engine additions: .xlsx layout, .pptx layout, vertical writing, etc.
 
 ### What belongs elsewhere
-Features that go beyond pixel-accurate rendering — collaboration, AI integration, purpose-specific workflows — belong in a separate extension or downstream project, not in Oxi core.
+Features that go beyond pixel-accurate rendering — collaboration, AI integration, purpose-specific workflows — belong in a separate extension or downstream project, not in Oxidocs core.
 
 The desktop app is not one of those: `oxi-desktop` is the same engine in a window rather than a tab, so it ships in core under the same license as the rest of it.
 
@@ -543,7 +543,7 @@ The desktop app is not one of those: `oxi-desktop` is the same engine in a windo
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Run tests and lint (`cargo test && cargo clippy`)
-4. Sign off your commits (`git commit -s`) — Oxi uses the [Developer Certificate of Origin](https://developercertificate.org/) (DCO). No CLA, no copyright assignment: your code stays yours
+4. Sign off your commits (`git commit -s`) — Oxidocs uses the [Developer Certificate of Origin](https://developercertificate.org/) (DCO). No CLA, no copyright assignment: your code stays yours
 5. Submit a pull request with pixel accuracy results
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
@@ -562,11 +562,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 
-Oxi is licensed in three layers, chosen to maximize both adoption and the flow of improvements back into the canonical tree:
+Oxidocs is licensed in three layers, chosen to maximize both adoption and the flow of improvements back into the canonical tree:
 
 | Layer | License | Why |
 |-------|---------|-----|
-| **Core engine** (`oxidocs`, `oxidocs-common`, `oxidocs-core`, `oxicells-core`, `oxislides-core`, `oxipdf-core`, `oxihanko`, `oxidocs-cli`, `oxi-desktop`) | [MPL-2.0](LICENSE) | File-level copyleft: modifications to engine files must be published, so layout-fidelity improvements converge into one tree. Embedding Oxi in proprietary or commercial products is fully permitted — only changes to Oxi's own files must be shared. Same license as LibreOffice and Firefox |
+| **Core engine** (`oxidocs`, `oxidocs-common`, `oxidocs-core`, `oxicells-core`, `oxislides-core`, `oxipdf-core`, `oxihanko`, `oxidocs-cli`, `oxi-desktop`) | [MPL-2.0](LICENSE) | File-level copyleft: modifications to engine files must be published, so layout-fidelity improvements converge into one tree. Embedding Oxidocs in proprietary or commercial products is fully permitted — only changes to Oxidocs' own files must be shared. Same license as LibreOffice and Firefox |
 | **Bindings and integrations** (`oxidocs-wasm`, `oxidocs-python`, `integrations/gotenberg`) | MIT OR Apache-2.0 | Standard Rust dual license — zero friction for embedding in any stack |
 | **Conformance corpus** (self-authored repro documents under `tools/golden-test/repros/`) | CC BY-SA 4.0 | The Word-compatibility test suite is a shared public asset; improvements to it must stay shared |
 | **Bundled fonts** (`oxidocs-fonts-latin`, `oxidocs-fonts-jp`: Carlito, Caladea, Liberation, and OxiGothic / OxiMincho = Noto Sans / Serif JP outlines on MS Gothic / Mincho metrics, with OxiGothicP / OxiMinchoP for proportional Latin and kana) | [SIL OFL 1.1](LICENSE-FONTS) | The fonts' own license from their authors. The binary, the WebAssembly module and the packages that carry them ship `LICENSE-FONTS` |
