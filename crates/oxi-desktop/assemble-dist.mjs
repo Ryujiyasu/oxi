@@ -2,9 +2,9 @@
 // editors, so local and CI builds always embed the current editors + engine.
 // Runs as tauri's beforeBuildCommand.
 //
-// The desktop app ships all three editors behind a launcher; the public site
-// keeps its own pages (docs/sheets.html is a viewer landing page there, so the
-// spreadsheet editor is taken from web/xlsx-demo.html instead). analytics.js is
+// The desktop app ships all three editors behind a launcher. The Word editor
+// is web/docs.html, as on the site; docs/sheets.html is a viewer landing page
+// on the site, so the spreadsheet editor is taken from web/xlsx-demo.html. analytics.js is
 // deliberately never copied: the desktop app ships without telemetry, and the
 // assertion below fails the build if a reference to it survives.
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -64,16 +64,30 @@ if (asking) {
   );
 }
 
+// The Word editor is web/docs.html, the page the site and the VS Code
+// extension use too. It loads the site's shared modules as '../docs/name.js';
+// here they sit beside it.
+const wordModules = new Set();
+(function follow(text, dir) {
+  for (const [, rel, name] of text.matchAll(/from\s*'(\.\.\/docs\/|\.\/)([\w.-]+\.js)'/g)) {
+    const inDocs = rel !== './' || dir === docs;
+    if (!inDocs || wordModules.has(name)) continue;
+    wordModules.add(name);
+    follow(readFileSync(join(docs, name), 'utf8'), docs);
+  }
+})(readFileSync(join(site, 'docs.html'), 'utf8'), site);
+for (const name of wordModules) cpSync(join(docs, name), join(web, name));
+
 // The editors, under the names the launcher and the native menu navigate to.
 for (const [from, name] of [
-  [join(docs, 'docs.html'), 'docs.html'],
+  [join(site, 'docs.html'), 'docs.html'],
   [join(site, 'xlsx-demo.html'), 'sheets.html'],
   [join(docs, 'slides.html'), 'slides.html'],
 ]) {
   let html = readFileSync(from, 'utf8').replace(
     /^[ \t]*<script\b[^>]*\banalytics\.js\b[^>]*>\s*<\/script>[ \t]*\r?\n?/m,
     '',
-  );
+  ).replace(/(['"])\.\.\/docs\//g, '$1./');
   if (/analytics\.js|gtag\(|dataLayer/.test(html)) {
     throw new Error(`${name}: telemetry survived the strip — the desktop app ships without it`);
   }

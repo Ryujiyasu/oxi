@@ -264,6 +264,16 @@ if (__oxiVscode) {
     window.addEventListener('drop', (event) => { event.preventDefault(); event.stopPropagation(); }, true);
     window.addEventListener('dragover', (event) => { event.preventDefault(); event.stopPropagation(); }, true);
 
+    // A webview cannot download: what the page would download (the PDF
+    // export, mail-merge results) goes to VS Code, which asks where to save it.
+    dl = (data, name, mime) => {
+        const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+        __oxiVscode.postMessage({ type: 'oxi:export', name, mime, data: __oxiToBase64(bytes) });
+    };
+
+    // A link is opened by VS Code (a webview cannot open windows).
+    openLink = (url) => __oxiVscode.postMessage({ type: 'oxi:openLink', url: String(url).trim() });
+
     window.addEventListener('message', async (event) => {
         const msg = event.data;
         if (!msg) return;

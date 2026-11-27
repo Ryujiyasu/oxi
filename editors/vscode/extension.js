@@ -13,6 +13,21 @@ const VIEW_TYPE = 'oxi.officeViewer';
 /** The machine's fonts, indexed once for every Word editor that asks. */
 const installedFonts = new InstalledFonts();
 
+/** Ask where to save a file the page made, then write it there. */
+async function exportFile(documentUri, name, base64) {
+  const safe = name.replace(/[\\/:*?"<>|]/g, '_') || 'export';
+  const target = await vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.joinPath(documentUri, '..', safe),
+  });
+  if (!target) return;
+  try {
+    await vscode.workspace.fs.writeFile(target, Buffer.from(base64, 'base64'));
+    vscode.window.setStatusBarMessage(`Oxidocs: saved ${target.path.split('/').pop()}`, 4000);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Oxidocs: could not save ${safe}: ${err.message || err}`);
+  }
+}
+
 /**
  * Output › Oxi lists each face a Word document asked for and where it came
  * from, once per face: the file on this machine, or the open stand-in Oxi
@@ -252,6 +267,18 @@ class OxiEditorProvider {
         case 'oxi:error':
           vscode.window.showErrorMessage(`Oxi: ${msg.message}`);
           break;
+        // A file the page made (a PDF, a mail merge's documents): saved where
+        // the user picks, next to the open document by default.
+        // Ctrl+click on a link in a Word document: web, mail and phone
+        // addresses only, opened the way VS Code opens any external link.
+        case 'oxi:openLink': {
+          const url = String(msg.url || '');
+          if (/^(https?|mailto|tel|ftp):/i.test(url)) vscode.env.openExternal(vscode.Uri.parse(url, true));
+          break;
+        }
+        case 'oxi:export':
+          exportFile(document.uri, String(msg.name || 'export'), String(msg.data || ''));
+          break;
         // The Word editor draws with the font programs themselves, which a
         // webview cannot read; the bytes are sent to this page only.
         case 'oxi:font': {
@@ -344,9 +371,10 @@ function withWebviewHead(html, webview, mediaRoot, page) {
   // has loaded. Saving is VS Code's own (Ctrl+S, the title bar's save button).
   const hidden = (page === 'docs.html'
     ? [
-      // New, open, rename, and the exports a webview cannot download or print.
-      '#btnNew', '#btnOpen', '#btnPdf',
-      '#fmNew', '#fmOpen', '#fmCopy', '#fmExport', '#fmPrint', '#fmRename',
+      // New, open, rename, and printing, which a webview cannot do. (Exports
+      // are saved through VS Code: see 'oxi:export'.)
+      '#btnNew', '#btnOpen',
+      '#fmNew', '#fmOpen', '#fmCopy', '#fmPrint', '#fmRename',
     ]
     : page === 'xlsx-demo.html'
       // The site's name and lede (a link away from the editor), the sample,

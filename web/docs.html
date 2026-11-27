@@ -1,4 +1,11 @@
 <!DOCTYPE html>
+<!--
+  The Word editor. This one page is the editor everywhere: the VS Code
+  extension (editors/vscode/scripts/sync-web.js adds its bridge), the site
+  (tools/site/docs-page.mjs adds its head, colours and links) and the desktop
+  app (crates/oxi-desktop/assemble-dist.mjs). There is no docs/docs.html; add
+  Word-editor features here.
+-->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -134,6 +141,40 @@ input[type="file"]{display:none}
 @media(min-width:769px){
   .mbar{display:none!important}
 }
+
+/* Mail merge: the panel beside the pages (Mailings › Mail Merge) */
+.mm{position:fixed;top:110px;right:16px;width:340px;max-width:calc(100vw - 32px);max-height:calc(100vh - 130px);overflow:auto;z-index:90;background:#fff;border:1px solid #ccc;border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:13px;box-sizing:border-box}
+.mm[hidden]{display:none}
+.mm-h{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #eee;position:sticky;top:0;background:#fff}
+.mm-h button{border:none;background:none;font-size:18px;cursor:pointer;color:#666}
+.mm section{padding:10px 14px;border-bottom:1px solid #f0f0f0}
+.mm-t{font-weight:600;margin-bottom:6px;color:var(--accent)}
+.mm-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0}
+.mm section button{padding:5px 10px;border:1px solid #ccc;border-radius:4px;background:#fafafa;cursor:pointer;font:inherit;font-size:12px}
+.mm section button:hover:not(:disabled){background:#f0f0f0}
+.mm button:disabled{opacity:.45;cursor:default}
+.mm section button.bp{background:var(--accent);border-color:var(--accent);color:#fff}
+.mm input[type=number]{width:60px;padding:3px 4px;font:inherit;font-size:12px}
+.mm input[type=text],.mm textarea,.mm select{font:inherit;font-size:12px;padding:3px 6px;border:1px solid #ccc;border-radius:3px;box-sizing:border-box}
+.mm textarea{width:100%;font-family:monospace}
+.mm-note{color:#666;font-size:12px;margin:4px 0}
+.mm-miss{color:#C62828;font-weight:600}
+.mm-tbl{overflow:auto;max-height:150px}
+.mm-tbl table{border-collapse:collapse;font-size:11px}
+.mm-tbl th,.mm-tbl td{border:1px solid #ddd;padding:2px 5px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis}
+.mm-tbl th{background:#f5f5f5}
+.mm-fields{display:flex;flex-wrap:wrap;gap:4px}
+.mm section button.mm-fb{background:var(--accent-l);border-color:var(--accent-l);color:var(--accent)}
+body.mm-previewing .page-canvas{outline:2px dashed var(--accent);outline-offset:4px}
+
+/* Find and replace (Ctrl+F, Ctrl+H) */
+.fb{position:fixed;top:110px;right:16px;z-index:91;background:#fff;border:1px solid #ccc;border-radius:6px;padding:8px 10px;box-shadow:0 4px 16px rgba(0,0,0,.15);font-size:13px;max-width:calc(100vw - 32px)}
+.fb[hidden]{display:none}
+.fb-row{display:flex;gap:4px;align-items:center;margin:2px 0}
+.fb input{flex:1;min-width:160px;padding:4px 8px;border:1px solid #ccc;border-radius:3px;font:inherit;font-size:13px}
+.fb button{padding:3px 8px;border:1px solid #ccc;border-radius:3px;background:#fafafa;cursor:pointer;font:inherit;font-size:12px}
+.fb button:hover{background:#f0f0f0}
+#findCount{color:#666;font-size:12px;min-width:56px;text-align:center}
 </style>
 </head>
 <body>
@@ -158,6 +199,7 @@ input[type="file"]{display:none}
   <symbol id="i-cm" viewBox="0 0 16 16"><path d="M2.5 3h11v7.5H7l-3 2.5v-2.5H2.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></symbol>
   <symbol id="i-hdr" viewBox="0 0 16 16"><rect x="2.5" y="1.5" width="11" height="13" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/><path d="M4.5 4h7" stroke="currentColor" stroke-width="1.6"/><path d="M4.5 7.5h7M4.5 10h5" stroke="currentColor" stroke-width=".8" opacity=".6"/></symbol>
   <symbol id="i-ftr" viewBox="0 0 16 16"><rect x="2.5" y="1.5" width="11" height="13" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/><path d="M4.5 4.5h7M4.5 7h5" stroke="currentColor" stroke-width=".8" opacity=".6"/><path d="M4.5 12h7" stroke="currentColor" stroke-width="1.6"/></symbol>
+  <symbol id="i-merge" viewBox="0 0 16 16"><path fill="currentColor" d="M2 4h5v1H2zm0 3h5v1H2zm0 3h5v1H2z"/><path fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" d="M10 5l3 3-3 3"/></symbol>
   <symbol id="i-fld" viewBox="0 0 16 16"><rect x="1.5" y="4" width="13" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.1"/><text x="8" y="10.4" text-anchor="middle" font-size="6" font-family="sans-serif" fill="currentColor">{ }</text></symbol>
   <symbol id="i-img" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="5" cy="6" r="1.5" fill="currentColor"/><path d="M1.5 11l3-3 2 2 3-4 5 5z" fill="currentColor" opacity=".4"/></symbol>
   <symbol id="i-color" viewBox="0 0 16 16"><path fill="currentColor" d="M8 1L3 11h2l1-2.5h4L11 11h2L8 1zm-1.2 6L8 4l1.2 3H6.8z"/></symbol>
@@ -199,6 +241,7 @@ input[type="file"]{display:none}
   <button class="active" data-tab="home" data-i18n="home">Home</button>
   <button data-tab="insert" data-i18n="insert">Insert</button>
   <button data-tab="layout" data-i18n="layout">Layout</button>
+  <button data-tab="mailings" data-i18n="mailings">Mailings</button>
   <!-- File menu (Word-style dropdown) -->
   <div class="fmenu" id="fileMenu">
     <button class="fm-item" id="fmNew"><span class="fi">&#128196;</span><span data-i18n="new">New</span></button>
@@ -319,6 +362,13 @@ input[type="file"]{display:none}
     <button class="rb lg" id="btnFooter"><svg><use href="#i-ftr"/></svg> <span data-i18n="footer">Footer</span></button>
     <button class="rb lg" id="btnField"><svg><use href="#i-fld"/></svg> <span data-i18n="field">Field</span></button>
   </div><span class="rg-l" data-i18n="insert">Insert</span></div>
+</div>
+
+<!-- Mailings ribbon -->
+<div class="rib" id="ribMailings" style="display:none">
+  <div class="rg"><div class="rr" style="gap:6px">
+    <button class="rb lg" id="btnMailMerge"><svg><use href="#i-merge"/></svg> <span data-i18n="mailMerge">Mail Merge</span></button>
+  </div><span class="rg-l" data-i18n="mailMerge">Mail Merge</span></div>
 </div>
 
 <!-- Layout ribbon -->
@@ -443,6 +493,43 @@ input[type="file"]{display:none}
 </div>
 <input type="file" id="fileIn" accept=".docx">
 
+<div class="mm" id="mmPanel" hidden role="dialog" aria-labelledby="mmTitle">
+  <div class="mm-h"><b id="mmTitle" data-i18n="mailMerge">Mail Merge</b><button id="mmClose" title="Close" aria-label="Close">&times;</button></div>
+  <section>
+    <div class="mm-t" data-i18n="mmStep1">1. Recipients</div>
+    <div class="mm-row"><button id="mmOpen" data-i18n="mmOpenData">Open a list…</button><button id="mmPaste" data-i18n="mmPasteData">Paste…</button><select id="mmSheet" hidden></select></div>
+    <textarea id="mmText" rows="5" hidden placeholder="Name,Address&#10;Ann,Tokyo"></textarea>
+    <div class="mm-row" id="mmTextActs" hidden><button id="mmTextUse" data-i18n="mmUseText">Use this list</button></div>
+    <div class="mm-note" id="mmInfo"></div>
+    <div class="mm-tbl" id="mmTable"></div>
+  </section>
+  <section>
+    <div class="mm-t" data-i18n="mmStep2">2. Insert fields</div>
+    <div class="mm-note" data-i18n="mmStep2Hint">Click where the field goes in the document, then click the field.</div>
+    <div class="mm-fields" id="mmFields"></div>
+    <div class="mm-row"><input type="text" id="mmName" data-i18n-placeholder="mergeField" placeholder="Field name" style="flex:1;min-width:0"><button id="mmAddName" data-i18n="mmInsert">Insert</button></div>
+    <div class="mm-note" id="mmDocFields"></div>
+  </section>
+  <section>
+    <div class="mm-t" data-i18n="mmStep3">3. Preview</div>
+    <div class="mm-row"><label><input type="checkbox" id="mmPreview"> <span data-i18n="mmPreviewResults">Preview results</span></label></div>
+    <div class="mm-row"><button id="mmPrev" aria-label="Previous record">&#9664;</button><input type="number" id="mmRec" min="1" value="1" aria-label="Record"><span id="mmOf"></span><button id="mmNext" aria-label="Next record">&#9654;</button></div>
+  </section>
+  <section>
+    <div class="mm-t" data-i18n="mmStep4">4. Finish</div>
+    <div class="mm-row"><label><input type="checkbox" id="mmSuppress" checked> <span data-i18n="mmSuppress">Leave out blank lines when fields are empty</span></label></div>
+    <div class="mm-row"><span data-i18n="mmRecords">Records</span><input type="number" id="mmFrom" min="1" aria-label="From"><span>–</span><input type="number" id="mmTo" min="1" aria-label="To"></div>
+    <div class="mm-row"><button class="bp" id="mmDoc" data-i18n="mmToDoc">One document (.docx)</button><button id="mmPdf" data-i18n="mmToPdf">PDF to print</button><button id="mmEach" data-i18n="mmToEach">A file per record (.zip)</button></div>
+  </section>
+</div>
+<div class="fb" id="findBar" hidden role="search">
+  <div class="fb-row"><input id="findInput" data-i18n-placeholder="find" placeholder="Find"><span id="findCount"></span>
+    <button id="findPrev" aria-label="Previous">&#9650;</button><button id="findNext" aria-label="Next">&#9660;</button><button id="findClose" aria-label="Close">&times;</button></div>
+  <div class="fb-row"><input id="replaceInput" data-i18n-placeholder="replaceWith" placeholder="Replace with">
+    <button id="replaceOne" data-i18n="replace">Replace</button><button id="replaceAll" data-i18n="replaceAll">Replace all</button></div>
+</div>
+<input type="file" id="mmFile" accept=".csv,.tsv,.txt,.xlsx,.xlsm" hidden>
+
 <script type="module">
 import { renderVerticalText } from '../docs/vertical-text.js';
 import { textBaseline } from '../docs/text-baseline.js';
@@ -450,9 +537,26 @@ import { drawRegisteredText } from '../docs/runtime-font-glyph.js';
 import * as fontApi from './oxidocs_wasm.js';
 import { RuntimeFontLoader, showFontAccess } from '../docs/runtime-font-loader.js';
 const fontLoader = new RuntimeFontLoader(fontApi);
+// A face the machine does not have (or the page may not read) is drawn in the
+// open face Oxi ships for it, keeping the measured layout, instead of
+// stopping the page to ask for font access. Fonts the browser was already
+// allowed to read are used as they are.
+fontLoader.standIns = true;
 // ---- i18n ----
 const I18N = {
   en: {
+    mailMerge: 'Mail Merge', mailings: 'Mailings', mergeField: 'Field name', source: 'Source',
+    find: 'Find', replaceWith: 'Replace with', replace: 'Replace', replaceAll: 'Replace all', findNone: 'No results', findOf: '{i} of {n}', replacedN: '{n} replaced',
+    linkFollow: 'Ctrl+click to follow:', linkFollowMac: '⌘+click to follow:', linkInDocument: 'A place in this document:', linkNotOpened: 'Not opened (only web and mail addresses are):',
+    mmStep1: '1. Recipients', mmOpenData: 'Open a list…', mmPasteData: 'Paste…', mmUseText: 'Use this list',
+    mmStep2: '2. Insert fields', mmStep2Hint: 'Click where the field goes in the document, then click the field.', mmInsert: 'Insert',
+    mmStep3: '3. Preview', mmPreviewResults: 'Preview results', mmStep4: '4. Finish',
+    mmSuppress: 'Leave out blank lines when fields are empty', mmRecords: 'Records',
+    mmToDoc: 'One document (.docx)', mmToPdf: 'PDF to print', mmToEach: 'A file per record (.zip)',
+    mmLoaded: '{n} records from {file}', mmPasted: 'pasted text', mmNoDataYet: 'Open a CSV or Excel file with the recipients (the first row names the columns).',
+    mmBadData: 'This list could not be read.', mmDocFields: 'Fields in this document:', mmNoFields: 'No fields in the document yet.',
+    mmNotInData: 'Not in the list', mmMissing: 'These fields are not in the list and will be left empty:', mmSuffix: 'merged',
+    mmPreviewing: 'Previewing a merged record: turn the preview off to edit.',
     new: 'New', newDoc: 'New Document',
     open: 'Open', save: 'Save', undo: 'Undo', redo: 'Redo',
     home: 'Home', insert: 'Insert', layout: 'Layout',
@@ -474,6 +578,18 @@ const I18N = {
     exportFailed: 'PDF export failed', pasteFailed: 'Paste failed (clipboard access denied)', copied: 'Copied', crossParaUnsupported: 'Cross-paragraph delete is not supported yet',
   },
   ja: {
+    mailMerge: '差し込み印刷', mailings: '差し込み文書', mergeField: 'フィールド名', source: 'ソース',
+    find: '検索', replaceWith: '置換後の文字列', replace: '置換', replaceAll: 'すべて置換', findNone: '見つかりません', findOf: '{i} / {n} 件', replacedN: '{n} 件を置換しました',
+    linkFollow: 'Ctrl キーを押しながらクリックしてリンク先を表示:', linkFollowMac: '⌘ キーを押しながらクリックしてリンク先を表示:', linkInDocument: '文書内の場所:', linkNotOpened: 'Web とメール以外のアドレスは開きません:',
+    mmStep1: '1. 宛先', mmOpenData: '宛先リストを開く…', mmPasteData: '貼り付け…', mmUseText: 'このリストを使う',
+    mmStep2: '2. 差し込みフィールドの挿入', mmStep2Hint: '文書の入れたい位置をクリックしてから、フィールドを押します。', mmInsert: '挿入',
+    mmStep3: '3. 結果のプレビュー', mmPreviewResults: '結果のプレビュー', mmStep4: '4. 完了',
+    mmSuppress: 'データが空のフィールドの空白行を印刷しない', mmRecords: 'レコード',
+    mmToDoc: '1 つの文書に差し込む (.docx)', mmToPdf: '印刷用 PDF', mmToEach: '1 件ずつ別ファイル (.zip)',
+    mmLoaded: '{file} から {n} 件', mmPasted: '貼り付けたテキスト', mmNoDataYet: '宛先の CSV か Excel ファイルを開いてください (1 行目が列名)。',
+    mmBadData: 'このリストを読めませんでした。', mmDocFields: 'この文書のフィールド:', mmNoFields: 'まだフィールドがありません。',
+    mmNotInData: 'リストにありません', mmMissing: '次のフィールドはリストにないため空になります:', mmSuffix: '差し込み',
+    mmPreviewing: '差し込み結果のプレビュー中です。編集するにはプレビューを切ってください。',
     new: '新規', newDoc: '新しいドキュメント',
     open: '開く', save: '保存', undo: '元に戻す', redo: 'やり直し',
     home: 'ホーム', insert: '挿入', layout: 'レイアウト',
@@ -681,18 +797,25 @@ function applyI18n() {
   document.querySelectorAll('[data-i18n-title]').forEach(el => {
     el.title = t(el.dataset.i18nTitle);
   });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
 }
 
 // ---- WASM ----
-import init, { DocxDocument, layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout, docx_to_pdf, get_font_glyph_outline } from './oxidocs_wasm.js';
+import init, { DocxDocument, layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout, docx_to_pdf, get_font_glyph_outline, create_blank_docx,
+  mail_merge_fields, mail_merge_data_from_text, mail_merge_data_from_xlsx, mail_merge_docx, mail_merge_docx_each, mail_merge_docx_record, mail_merge_missing_fields } from './oxidocs_wasm.js';
 await init();
 let fontRenderEpoch = 0;
+// Mail merge state (see Mail Merge below); declared here since edits check it.
+const mm = { data: null, file: '', xlsx: null, sheets: null, sheet: 0, preview: false, rec: 1 };
 
 // Tauri headless render mode
 if (window.__TAURI__) {
   try {
     const [docxPath, outputDir, dpi] = await window.__TAURI__.core.invoke('get_render_args');
     if (docxPath && outputDir) {
+      window.__oxiHeadless = true;
       // Read docx via Tauri command
       const base64Data = await window.__TAURI__.core.invoke('read_file_base64', { path: docxPath });
       const binary = atob(base64Data);
@@ -797,6 +920,7 @@ function documentEdited() {
 }
 
 function restoreBytes(bytes) {
+  if (mm.preview) { mm.preview = false; document.body.classList.remove('mm-previewing'); $('mmPreview').checked = false; }
   const at = modelDoc ? cursorModelPos() : null;
   currentDocx = bytes;
   pendingEdit = null;
@@ -1226,11 +1350,64 @@ function hitTestText(e, pageIndex) {
   return { pageIndex, elemIndex: bestIdx, charOffset: getCharOffset(bestElem, x) };
 }
 
+// The link at a model position: what the HYPERLINK field whose result holds
+// it points at ({url} or {anchor}), or null. The model's paragraph text keeps
+// each field's code between its begin (U+0013) and separator (U+0014).
+function linkAt(pos) {
+  if (!modelDoc || !pos || (pos.story && Object.keys(pos.story).length)) return null;
+  let text;
+  try { text = modelDoc.paragraph_text(pos.para); } catch (e) { return null; }
+  const open = [];
+  for (let i = 0; i < pos.offset && i < text.length; i++) {
+    const c = text[i];
+    if (c === '\u0013') open.push({ start: i, sep: -1 });
+    else if (c === '\u0014' && open.length) open[open.length - 1].sep = i;
+    else if (c === '\u0015') open.pop();
+  }
+  for (let k = open.length - 1; k >= 0; k--) {
+    const f = open[k];
+    if (f.sep < 0) continue;
+    const code = text.slice(f.start + 1, f.sep).trim();
+    if (!/^HYPERLINK\b/i.test(code)) continue;
+    const anchor = code.match(/\\l\s+"([^"]*)"/i);
+    const target = code.replace(/\\[a-z]\s+"[^"]*"/gi, '').match(/^HYPERLINK\s+"((?:[^"\\]|\\.)*)"/i)
+      || code.match(/^HYPERLINK\s+([^\s"\\]+)/i);
+    const url = target ? target[1].replace(/\\\\/g, '\\') : '';
+    if (url) return { url: anchor ? url + '#' + anchor[1] : url };
+    if (anchor) return { anchor: anchor[1] };
+  }
+  return null;
+}
+
+function linkAtHit(hit) {
+  const el = layoutResult?.pages[hit.pageIndex]?.elements[hit.elemIndex];
+  return el ? linkAt(modelPosAt(el, hit.charOffset)) : null;
+}
+
+// Following a link opens it in the browser (a host such as VS Code replaces
+// this to open it its own way). Only web, mail and phone addresses: a
+// document's link must not run script in the page's name.
+const LINK_SCHEMES = /^(https?|mailto|tel|ftp):/i;
+let openLink = (url) => {
+  if (!LINK_SCHEMES.test(url.trim())) { $('statusText').textContent = t('linkNotOpened') + ' ' + url; return; }
+  window.open(url.trim(), '_blank', 'noopener');
+};
+
 function onCanvasClick(e, pageIndex) {
   if (!layoutResult) return;
   caretGoalX = null;
   const hit = hitTestText(e, pageIndex);
   if (!hit) return;
+  // As in Word, Ctrl+click (⌘+click) follows a link; a plain click edits it.
+  if ((e.ctrlKey || e.metaKey) && e.detail === 1 && !e.shiftKey) {
+    const link = linkAtHit(hit);
+    if (link) {
+      e.preventDefault();
+      if (link.url) openLink(link.url);
+      else $('statusText').textContent = t('linkInDocument') + ' ' + link.anchor;
+      return;
+    }
+  }
   // As in Word: a double click selects the word, a triple click the
   // paragraph, a shift click extends the selection to the click.
   if (e.detail === 2 || e.detail >= 3) {
@@ -1257,6 +1434,8 @@ function onCanvasClick(e, pageIndex) {
   e.preventDefault();
   hiddenInput.focus();
   syncRibbonFromCursor();
+  const link = linkAtHit(hit);
+  if (link) $('statusText').textContent = (navigator.platform.startsWith('Mac') ? t('linkFollowMac') : t('linkFollow')) + ' ' + (link.url || link.anchor);
 }
 
 function onCanvasDrag(e, pageIndex) {
@@ -1653,6 +1832,7 @@ function scheduleRender() {
     }
     if (fontEpoch !== fontRenderEpoch) return;
     layoutResult = result;
+    window.__oxiLayout = result;
     const layoutMs = Math.round(performance.now() - start);
 
     // Remove cursor overlay; element indices changed, so drop any selection
@@ -2186,6 +2366,9 @@ function selectionModelRange() {
 // Apply edits to the model, save it as the current file, re-lay it out and
 // put the cursor at `cursorAfter`. False when the model refused the edits.
 function applyModelEdits(edits, cursorAfter) {
+  // A merged record on show is not the document: edits wait for the preview
+  // to be turned off.
+  if (mm.preview) { $('statusText').textContent = t('mmPreviewing'); return false; }
   try { modelDoc.apply(JSON.stringify(edits)); }
   catch (e) { console.warn('Edit refused:', e); $('statusText').textContent = String(e.message || e); return false; }
   currentDocx = new Uint8Array(modelDoc.save());
@@ -2254,10 +2437,12 @@ function looseCaretXY(pos) {
   return null;
 }
 
-function findModelCursor(pos) {
+// Where a model position is on the laid-out pages, {pageIndex, elemIndex,
+// charOffset}, or null when the pages show nothing there.
+function layoutPosOf(pos) {
   let p;
-  try { const r = modelDoc.place(JSON.stringify(pos)); if (!r) return false; p = JSON.parse(r); }
-  catch (e) { return false; }
+  try { const r = modelDoc.place(JSON.stringify(pos)); if (!r) return null; p = JSON.parse(r); }
+  catch (e) { return null; }
   for (let pi = 0; pi < layoutResult.pages.length; pi++) {
     const els = layoutResult.pages[pi].elements;
     for (let ei = 0; ei < els.length; ei++) {
@@ -2267,15 +2452,21 @@ function findModelCursor(pos) {
       if ((el.run_index || 0) !== (p.run || 0) || !sameCells(elCells(el), p.cells || [])) continue;
       const start = el.char_offset || 0, end = start + (el.text || '').length;
       if (p.char_offset >= start && p.char_offset <= end) {
-        cursorPos = { pageIndex: pi, elemIndex: ei, charOffset: p.char_offset - start };
-        startCursorBlink();
-        hiddenInput.focus();
-        syncRibbonFromCursor();
-        return true;
+        return { pageIndex: pi, elemIndex: ei, charOffset: p.char_offset - start };
       }
     }
   }
-  return false;
+  return null;
+}
+
+function findModelCursor(pos) {
+  const at = layoutPosOf(pos);
+  if (!at) return false;
+  cursorPos = at;
+  startCursorBlink();
+  hiddenInput.focus();
+  syncRibbonFromCursor();
+  return true;
 }
 
 // One step left (-1) or right (+1) from `offset` in a paragraph's text,
@@ -2513,6 +2704,7 @@ function openFieldDialog() {
 
 function fieldResult(code) {
   const name = code.trim().split(/\s+/)[0].toUpperCase();
+  if (name === 'MERGEFIELD') return '«' + mergeFieldName(code) + '»';
   if (name === 'PAGE') return String((cursorPos ? cursorPos.pageIndex : 0) + 1);
   if (name === 'NUMPAGES') return String(layoutResult ? layoutResult.pages.length : 1);
   if (name === 'DATE') {
@@ -2576,9 +2768,23 @@ function doNew() {
   $('docName').textContent = fileName;
   $('docName').dataset.i18n = 'newDoc';
   canvasArea.querySelectorAll('.page-canvas,.loading-state').forEach(el => el.remove());
-  emptyState.style.display = '';
   $('pgInfo').textContent = '';
   $('statusText').textContent = '';
+  // A new document is a blank page to type on, as in Word.
+  try {
+    currentDocx = new Uint8Array(create_blank_docx());
+    openModel(currentDocx);
+    resetHistory(currentDocx);
+    renderDocument(currentDocx).then(() => {
+      if (!layoutResult || cursorPos) return;
+      const els = layoutResult.pages[0]?.elements || [];
+      const first = els.findIndex(caretStop);
+      if (first >= 0) { cursorPos = { pageIndex: 0, elemIndex: first, charOffset: 0 }; startCursorBlink(); hiddenInput.focus(); }
+    });
+  } catch (e) {
+    console.warn('blank document unavailable:', e);
+    emptyState.style.display = '';
+  }
 }
 $('btnNew').addEventListener('click', doNew);
 
@@ -2635,6 +2841,358 @@ function printDoc() {
   setTimeout(() => { w.focus(); w.print(); }, 300);
 }
 
+
+// ---- Mail Merge ----
+// The records come from a CSV/TSV file, an Excel workbook or pasted text. A
+// field goes into the document as Word's own MERGEFIELD, and the merge is the
+// engine's: the result Word's "merge to new document" gives (one section per
+// record, \# and \@ pictures, IF / SKIPIF / NEXT, blank lines dropped).
+// Preview lays out one merged record in place of the document; edits wait
+// until it is turned off.
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+/** The field name in a MERGEFIELD code, quotes taken off. */
+function mergeFieldName(code) {
+  const rest = code.trim().replace(/^MERGEFIELD\s+/i, '');
+  const quoted = rest.match(/^"([^"]*)"/);
+  return quoted ? quoted[1] : rest.split(/\s+/)[0];
+}
+
+/** Put «name» at the caret (or over the selection) as a MERGEFIELD. */
+function insertMergeField(name) {
+  name = (name || '').trim();
+  if (!name || !modelDoc) return;
+  if (mm.preview) mergePreview(false);
+  const sel = selectionModelRange();
+  fieldAt = sel ? sel.from : cursorModelPos();
+  if (!fieldAt) { $('statusText').textContent = t('noCursor'); return; }
+  const code = /[\s"]/.test(name) ? `MERGEFIELD "${name.replace(/"/g, '')}"` : `MERGEFIELD ${name}`;
+  if (modelInsertField(code)) mergeDocFields();
+}
+
+/** Text from a file: UTF-8, else Shift_JIS (what Excel saves a Japanese CSV in). */
+function mergeDecode(buf) {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+  catch { return new TextDecoder('shift_jis').decode(buf); }
+}
+
+async function mergeLoadFile(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  try {
+    if (/\.xls[xm]$/i.test(file.name)) {
+      mm.xlsx = buf;
+      mergeUseSheet(0);
+    } else {
+      mm.xlsx = null;
+      mm.sheets = null;
+      mergeSetData(mail_merge_data_from_text(mergeDecode(buf)));
+    }
+    mm.file = file.name;
+  } catch (e) { alert(t('mmBadData') + '\n' + (e.message || e)); }
+  mergeRender();
+}
+
+function mergeUseSheet(i) {
+  const d = mail_merge_data_from_xlsx(mm.xlsx, i);
+  mm.sheets = d.sheets;
+  mm.sheet = d.sheet;
+  mergeSetData({ columns: d.columns, rows: d.rows });
+}
+
+function mergeSetData(d) {
+  mm.data = d && d.columns && d.columns.length ? { columns: d.columns, rows: d.rows || [] } : null;
+  mm.rec = 1;
+  if (mm.preview) mergeShowRecord();
+  mergeRender();
+}
+
+function mergeOpts(withRange) {
+  const o = { suppress_blank_lines: $('mmSuppress').checked };
+  if (withRange) {
+    const from = parseInt($('mmFrom').value, 10), to = parseInt($('mmTo').value, 10);
+    if (from > 0) o.first_record = from;
+    if (to > 0) o.last_record = to;
+  }
+  return o;
+}
+
+/** The fields the document uses; the ones the data lacks are marked. */
+function mergeDocFields() {
+  const box = $('mmDocFields');
+  if (mm.preview || !currentDocx) { if (!currentDocx) box.textContent = ''; return; }
+  try {
+    const used = mail_merge_fields(currentDocx).fields || [];
+    const have = new Set((mm.data?.columns || []).map(c => c.trim().replace(/\s/g, '_').toLowerCase()));
+    box.textContent = '';
+    if (!used.length) { box.textContent = t('mmNoFields'); return; }
+    box.append(t('mmDocFields') + ' ');
+    used.forEach((f, i) => {
+      const s = document.createElement('span');
+      s.textContent = f;
+      if (mm.data && !have.has(f.replace(/\s/g, '_').toLowerCase())) { s.className = 'mm-miss'; s.title = t('mmNotInData'); }
+      box.append(i ? ', ' : '', s);
+    });
+  } catch (e) { box.textContent = ''; }
+}
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function mergeRender() {
+  const d = mm.data;
+  $('mmSheet').hidden = !mm.sheets || mm.sheets.length < 2;
+  if (mm.sheets) $('mmSheet').innerHTML = mm.sheets.map((s, i) => `<option value="${i}"${i === mm.sheet ? ' selected' : ''}>${escHtml(s)}</option>`).join('');
+  $('mmInfo').textContent = d ? t('mmLoaded').replace('{n}', d.rows.length).replace('{file}', mm.file || t('mmPasted')) : t('mmNoDataYet');
+  const tbl = $('mmTable');
+  tbl.innerHTML = '';
+  if (d) {
+    const show = d.rows.slice(0, 5);
+    tbl.innerHTML = '<table><tr><th>#</th>' + d.columns.map(c => `<th>${escHtml(c)}</th>`).join('') + '</tr>' +
+      show.map((r, i) => `<tr><td>${i + 1}</td>` + d.columns.map((_, j) => `<td>${escHtml(r[j] ?? '')}</td>`).join('') + '</tr>').join('') +
+      (d.rows.length > show.length ? `<tr><td colspan="${d.columns.length + 1}">… ${d.rows.length - show.length}</td></tr>` : '') + '</table>';
+  }
+  const fields = $('mmFields');
+  fields.innerHTML = '';
+  for (const c of d?.columns || []) {
+    const b = document.createElement('button');
+    b.className = 'mm-fb';
+    b.textContent = c;
+    b.onmousedown = e => e.preventDefault();
+    b.onclick = () => insertMergeField(c);
+    fields.appendChild(b);
+  }
+  const n = d?.rows.length || 0;
+  $('mmRec').max = n;
+  $('mmRec').value = mm.rec;
+  $('mmOf').textContent = '/ ' + n;
+  for (const id of ['mmPreview', 'mmPrev', 'mmNext', 'mmRec', 'mmDoc', 'mmEach', 'mmPdf']) $(id).disabled = !n || !currentDocx;
+  mergeDocFields();
+}
+
+/** Preview: the engine merges one record and the pages show that document;
+    turning it off lays the document with its fields out again. */
+function mergePreview(on) {
+  if (on && (!mm.data?.rows.length || !currentDocx)) on = false;
+  if (on === mm.preview) { if (on) mergeShowRecord(); $('mmPreview').checked = on; return; }
+  mm.preview = on;
+  document.body.classList.toggle('mm-previewing', on);
+  $('mmPreview').checked = on;
+  if (on) mergeShowRecord();
+  else { clearSelection(); renderDocument(currentDocx); mergeDocFields(); }
+}
+
+function mergeShowRecord() {
+  const n = mm.data?.rows.length || 0;
+  mm.rec = Math.min(Math.max(1, mm.rec), Math.max(1, n));
+  $('mmRec').value = mm.rec;
+  if (!mm.preview) return;
+  try {
+    const bytes = new Uint8Array(mail_merge_docx_record(currentDocx, mm.data, mm.rec, mergeOpts(false)));
+    clearSelection();
+    stopCursorBlink();
+    cursorPos = null;
+    renderDocument(bytes);
+  } catch (e) { console.error('mail merge preview:', e); $('statusText').textContent = String(e.message || e); }
+}
+
+async function mergeRun(kind) {
+  if (!mm.data?.rows.length || !currentDocx) { alert(t('mmNoDataYet')); return; }
+  if (mm.preview) mergePreview(false);
+  const missing = mail_merge_missing_fields(currentDocx, mm.data) || [];
+  if (missing.length && !confirm(t('mmMissing') + '\n' + missing.join(', '))) return;
+  const stem = (fileName || 'doc') + '_' + t('mmSuffix');
+  try {
+    if (kind === 'each') {
+      dl(mail_merge_docx_each(currentDocx, mm.data, mergeOpts(true), fileName || 'doc'), stem + '.zip', 'application/zip');
+      return;
+    }
+    const merged = new Uint8Array(mail_merge_docx(currentDocx, mm.data, mergeOpts(true)));
+    if (kind === 'pdf') {
+      await fontLoader.resolveLayout(() => layout_document(merged));
+      dl(docx_to_pdf(merged), stem + '.pdf', 'application/pdf');
+    } else dl(merged, stem + '.docx', DOCX_MIME);
+  } catch (e) { alert(t('mailMerge') + ': ' + (e.message || e)); }
+}
+
+function mergeOpen() {
+  $('mmPanel').hidden = false;
+  mergeRender();
+}
+
+$('btnMailMerge').addEventListener('click', () => { if ($('mmPanel').hidden) mergeOpen(); else { mergePreview(false); $('mmPanel').hidden = true; } });
+$('mmClose').onclick = () => { mergePreview(false); $('mmPanel').hidden = true; };
+$('mmOpen').onclick = () => $('mmFile').click();
+$('mmFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) mergeLoadFile(f); };
+$('mmPaste').onclick = () => {
+  const box = $('mmText');
+  box.hidden = $('mmTextActs').hidden = !box.hidden;
+  if (!box.hidden) box.focus();
+};
+$('mmTextUse').onclick = () => {
+  const text = $('mmText').value;
+  if (!text.trim()) return;
+  mm.xlsx = null;
+  mm.sheets = null;
+  mm.file = '';
+  try { mergeSetData(mail_merge_data_from_text(text)); }
+  catch (e) { alert(t('mmBadData') + '\n' + (e.message || e)); return; }
+  $('mmText').hidden = $('mmTextActs').hidden = true;
+};
+$('mmSheet').onchange = e => { try { mergeUseSheet(+e.target.value); } catch (err) { alert(err.message || err); } };
+$('mmAddName').onclick = () => { insertMergeField($('mmName').value); $('mmName').value = ''; };
+$('mmAddName').onmousedown = e => e.preventDefault();
+$('mmName').onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); $('mmAddName').click(); } };
+$('mmText').onkeydown = e => e.stopPropagation();
+$('mmPreview').onchange = e => mergePreview(e.target.checked);
+$('mmPrev').onclick = () => { mm.rec--; mergeShowRecord(); };
+$('mmNext').onclick = () => { mm.rec++; mergeShowRecord(); };
+$('mmRec').onchange = e => { mm.rec = parseInt(e.target.value, 10) || 1; mergeShowRecord(); };
+$('mmSuppress').onchange = () => { if (mm.preview) mergeShowRecord(); };
+$('mmDoc').onclick = () => mergeRun('doc');
+$('mmEach').onclick = () => mergeRun('each');
+$('mmPdf').onclick = () => mergeRun('pdf');
+
+// ---- Find and replace ----
+// Over the body's text as the model holds it: a field's code (between its
+// begin and separator marks) is not searched, its result is. A match is
+// selected on the page; Replace types over the selected match.
+const find = { hits: [], at: -1, query: '' };
+
+/** The visible characters of a paragraph and, for each, its model offset. */
+function visibleText(raw) {
+  let text = '', map = [], depth = 0;
+  const codes = [];
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === '\u0013') { codes.push(true); continue; }
+    if (c === '\u0014') { if (codes.length) codes[codes.length - 1] = false; continue; }
+    if (c === '\u0015') { codes.pop(); continue; }
+    if (codes.some(Boolean)) continue;
+    if (c < ' ' && c !== '\t') continue;
+    text += c; map.push(i);
+  }
+  map.push(raw.length);
+  return { text, map };
+}
+
+function findAll(query) {
+  const hits = [];
+  if (!modelDoc || !query) return hits;
+  let paras;
+  try { paras = JSON.parse(modelDoc.paragraphs()); } catch (e) { return hits; }
+  const q = query.toLocaleLowerCase();
+  paras.forEach((raw, para) => {
+    const { text, map } = visibleText(raw);
+    const low = text.toLocaleLowerCase();
+    for (let i = low.indexOf(q); i >= 0; i = low.indexOf(q, i + Math.max(1, q.length))) {
+      hits.push({ from: { para, offset: map[i] }, to: { para, offset: map[i + q.length - 1] + 1 } });
+    }
+  });
+  return hits;
+}
+
+function sayFind() {
+  const n = find.hits.length;
+  $('findCount').textContent = !find.query ? '' : !n ? t('findNone')
+    : t('findOf').replace('{i}', find.at + 1).replace('{n}', n);
+}
+
+/** Select hit `i` on the pages and bring it into view. */
+function showHit(i) {
+  const hit = find.hits[i];
+  if (!hit) return;
+  find.at = i;
+  const a = layoutPosOf(hit.from), b = layoutPosOf(hit.to);
+  if (a && b && a.pageIndex === b.pageIndex) {
+    setSelection(a, b);
+    $('findInput').focus();
+  } else if (a) { cursorPos = a; drawCursor(); }
+  const xy = a && getCursorXY(a);
+  const canvas = a && $(`page-${a.pageIndex}`);
+  if (xy && canvas) {
+    const y = canvas.offsetTop + xy.y * currentScale;
+    if (y < canvasArea.scrollTop + 40 || y > canvasArea.scrollTop + canvasArea.clientHeight - 60) {
+      canvasArea.scrollTop = Math.max(0, y - canvasArea.clientHeight / 3);
+    }
+  }
+  sayFind();
+}
+
+function findStep(dir) {
+  const query = $('findInput').value;
+  if (query !== find.query || !find.hits.length) {
+    find.query = query;
+    find.hits = findAll(query);
+    find.at = dir < 0 ? find.hits.length : -1;
+  }
+  if (!find.hits.length) { sayFind(); return; }
+  showHit((find.at + dir + find.hits.length) % find.hits.length);
+}
+
+function openFind() {
+  if (mm.preview) mergePreview(false);
+  $('findBar').hidden = false;
+  const sel = selectedText && selectedText();
+  if (sel && !sel.includes('\n') && sel.length < 100) $('findInput').value = sel;
+  $('findInput').focus();
+  $('findInput').select();
+  find.query = '';
+}
+
+function closeFind() {
+  $('findBar').hidden = true;
+  find.hits = []; find.at = -1; find.query = '';
+  hiddenInput.focus();
+}
+
+function replaceOne() {
+  const hit = find.hits[find.at];
+  const by = $('replaceInput').value;
+  if (!hit) { findStep(1); return; }
+  if (applyModelEdits([{ op: 'replace', from: hit.from, to: hit.to, text: by }], hit.from)) {
+    // Positions after the replaced text moved: search again from there once
+    // the pages are laid out again.
+    const next = find.at;
+    find.query = '';
+    setTimeout(() => {
+      find.query = $('findInput').value;
+      find.hits = findAll(find.query);
+      find.at = next - 1;
+      if (find.hits.length) showHit((find.at + 1) % find.hits.length); else sayFind();
+    }, 400);
+  }
+}
+
+function replaceAll() {
+  const query = $('findInput').value, by = $('replaceInput').value;
+  const hits = findAll(query);
+  if (!hits.length) { find.hits = []; sayFind(); return; }
+  // From the last to the first, so each range is still where it was found.
+  const edits = hits.slice().reverse().map(h => ({ op: 'replace', from: h.from, to: h.to, text: by }));
+  if (applyModelEdits(edits, hits[0].from)) {
+    find.hits = []; find.at = -1; find.query = '';
+    $('findCount').textContent = t('replacedN').replace('{n}', hits.length);
+  }
+}
+
+$('findNext').addEventListener('click', () => findStep(1));
+$('findPrev').addEventListener('click', () => findStep(-1));
+$('findClose').addEventListener('click', closeFind);
+$('replaceOne').addEventListener('click', replaceOne);
+$('replaceAll').addEventListener('click', replaceAll);
+for (const id of ['findInput', 'replaceInput']) {
+  $(id).addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+    else if (e.key === 'Enter' && !e.isComposing) {
+      e.preventDefault();
+      if (id === 'replaceInput') replaceOne(); else findStep(e.shiftKey ? -1 : 1);
+    }
+  });
+}
+$('findInput').addEventListener('input', () => { find.query = ''; find.hits = []; $('findCount').textContent = ''; });
+
 // ---- Zoom ----
 let zoomLevel = 100;
 const zs = $('zSlider');
@@ -2677,7 +3235,7 @@ $('zOut').addEventListener('click', () => applyZoom(zoomLevel - 10));
 $('zIn').addEventListener('click', () => applyZoom(zoomLevel + 10));
 
 // ---- Ribbon tabs ----
-const ribs = { home: 'ribHome', insert: 'ribInsert', layout: 'ribLayout' };
+const ribs = { home: 'ribHome', insert: 'ribInsert', layout: 'ribLayout', mailings: 'ribMailings' };
 document.querySelectorAll('.rtabs button').forEach(b => {
   b.addEventListener('click', () => {
     document.querySelectorAll('.rtabs button').forEach(x => x.classList.remove('active'));
@@ -3181,6 +3739,7 @@ $('linkIn').addEventListener('keydown', e => {
 // ---- Keyboard shortcuts ----
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey) {
+    if ((e.key === 'f' || e.key === 'h') && !e.altKey && !e.shiftKey) { e.preventDefault(); openFind(); return; }
     if (e.key === 's') { e.preventDefault(); $('btnSave').click(); }
     if (e.key === 'o') { e.preventDefault(); $('btnOpen').click(); }
     if (e.key === 'p') { e.preventDefault(); printDoc(); }
@@ -3207,6 +3766,10 @@ $('langSel').addEventListener('change', e => {
 });
 document.documentElement.lang = curLang.startsWith('zh') ? curLang : curLang.split('-')[0];
 applyI18n();
+// The page opens on a blank document, ready to type in, as Word does (the
+// site, the desktop app). VS Code brings its own file, and the headless
+// renderer has drawn the one it was given.
+if (typeof acquireVsCodeApi !== 'function' && !window.__oxiHeadless && !currentDocx) doNew();
 </script>
 </body>
 </html>
