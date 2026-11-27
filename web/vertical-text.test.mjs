@@ -74,7 +74,6 @@ test('narrow columns do not shift glyphs left and negative spacing stays on the 
 // A helper-only test would miss a page that still draws the whole run sideways.
 for (const [file, entry] of [
   ['docs.html', 'renderText'], ['print-preview.html', 'renderText'],
-  ['../docs/docs.html', 'renderPageToCanvas'],
   ['docs.html', 'inline'], ['render-headless.html', 'inline'],
 ]) {
   test(`${file}: ${entry} routes vertical text and preserves horizontal drawing`, async () => {

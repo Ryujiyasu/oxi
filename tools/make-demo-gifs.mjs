@@ -172,11 +172,10 @@ async function docs(page, take) {
   await take.say('Oxidocs — a .docx opens in the browser. No server, nothing uploaded.');
   await take.hold(1500);
   await (await page.$('#fileIn')).uploadFile(join(repo, 'docs', 'sample.docx'));
-  await page.waitForFunction('document.querySelectorAll("canvas").length > 0', { timeout: 60000 })
+  await page.waitForFunction('window.__oxiRenderDone === true && window.__oxiPageCount > 1', { timeout: 60000 })
     .catch(() => {});
-  // Opening leaves the caret at the end of the document, and the view with it.
   await page.evaluate(() => {
-    const area = document.getElementById('editArea');
+    const area = document.getElementById('canvasArea');
     if (area) area.scrollTop = 0;
   });
   await take.hold(2600);
@@ -192,22 +191,27 @@ async function docs(page, take) {
   // The same thing the slide clip was missing: a still cannot show that the
   // page is editable, so the clip has to do it.
   await page.evaluate(() => {
-    const area = document.getElementById('editArea');
+    const area = document.getElementById('canvasArea');
     if (area) area.scrollTop = 0;
   });
   await take.hold(1200);
   await take.say('The page is editable in place: pick a word and type over it.');
   // A body line rather than the title. Bold on a heading that is already bold
   // shows a viewer nothing; replacing a word shows them everything.
-  const lines = await page.$$('#editor p');
-  let box = null;
-  for (const line of lines) {
-    const size = await line.boundingBox();
-    if (size && size.width > 380 && size.height > 12 && size.height < 40) {
-      box = size;
-      break;
-    }
-  }
+  // The page is drawn on canvases: find a word of body text in the layout and
+  // turn its page coordinates into the window's.
+  const box = await page.evaluate(() => {
+    const layout = window.__oxiLayout;
+    const canvas = document.querySelector('.page-canvas');
+    if (!layout || !canvas) return null;
+    const scale = canvas.getBoundingClientRect().width / layout.pages[0].width;
+    const word = layout.pages[0].elements.find((e) => e.kind === 'text' && e.paragraph_index != null
+      && e.cell_row_index == null && /^[A-Za-z]{5,}$/.test(e.text || '') && (e.font_size || 11) <= 12);
+    if (!word) return null;
+    const r = canvas.getBoundingClientRect();
+    return { x: r.left + word.x * scale + (word.width * scale) / 2 - 60, y: r.top + word.y * scale,
+      width: 0, height: word.height * scale };
+  });
   if (box) {
     await page.mouse.click(box.x + 60, box.y + box.height / 2, { clickCount: 2 });
     await take.hold(1000);

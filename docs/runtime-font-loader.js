@@ -2,6 +2,8 @@
 // Font bytes and CSS faces stay in memory. No outline/font data files or
 // family translation lists are produced. Program metadata resolves aliases.
 
+import { loadMissingFonts } from './font-catalog.js';
+
 export class LocalFontAccessRequired extends Error {}
 
 export class RuntimeFontLoader {
@@ -245,6 +247,13 @@ export class RuntimeFontLoader {
 
   async resolveLayout(createLayout, initial, isCurrent = () => true) {
     let layout = initial || createLayout();
+    // The site's engine leaves its per-face metric catalog out and fetches the
+    // members a layout found missing (font-catalog.js); a bundled engine
+    // reports none. Faces registered here make the layout right, so lay out
+    // again before resolving the font programs to draw with.
+    for (let pass = 0; pass < 4 && isCurrent() && await loadMissingFonts(this.api); pass++) {
+      layout = createLayout();
+    }
     while (isCurrent()) {
       const revision = this.api.font_program_revision();
       try { await this.ensure(layout); }

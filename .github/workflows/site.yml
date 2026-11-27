@@ -117,6 +117,8 @@ jobs:
           cp crates/oxidocs-wasm/pkg/oxidocs_wasm.js crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm \
              crates/oxidocs-wasm/pkg/oxidocs_wasm.d.ts crates/oxidocs-wasm/pkg/oxidocs_wasm_bg.wasm.d.ts public/
           sh tools/site/split_font_catalog.sh public/font_catalog
+          # The Word editor is web/docs.html, the page the extension uses too.
+          node tools/site/docs-page.mjs public
           ls -la public/oxidocs_wasm_bg.wasm
           # Byte-reproducible, so an unchanged site gives an unchanged hash.
           tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - public | gzip -n -9 > site.tar.gz
