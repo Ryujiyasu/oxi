@@ -5845,14 +5845,29 @@ impl LayoutEngine {
                 .map_or(false, |m| m.is_jis_fullwidth_face());
         // Circled numbers follow the run's font hint even in mixed-script
         // documents; surrounding paragraphs do not select their font slot.
+        // OXI_NUMBER_FORM_EA (2026-11-27, default ON, opt-out _DISABLE): the Roman
+        // numerals (U+2160..2183) follow the hint as the circled numbers do, and an
+        // unhinted one of either the Latin face cannot draw goes to the eastAsia face --
+        // Word's PDF: blind-A ja/administrative__031662ee «Ⅱ　事業» (hint eastAsia,
+        // ascii Century) and ja/policies__0353d0b2's list labels «①②③» (no hint, label
+        // in Century) are MS-Mincho, the docs' eastAsia face; Oxi left them in Century
+        // and the PDF fell back to its stand-in gothic.
         let circled_number = matches!(ch, '\u{2460}'..='\u{2473}');
-        if !math && !punctuation && !alphabet && !circled_number {
+        let number_form_ea = !crate::env_flag!("OXI_NUMBER_FORM_EA_DISABLE");
+        let roman_numeral = number_form_ea && matches!(ch, '\u{2160}'..='\u{2183}');
+        if !math && !punctuation && !alphabet && !circled_number && !roman_numeral {
             return None;
         }
-        Some(run_style.font_hint_east_asia
+        let hinted = run_style.font_hint_east_asia
             .or_else(|| para_style.default_run_style.as_ref()
                 .and_then(|s| s.font_hint_east_asia))
-            .unwrap_or(false))
+            .unwrap_or(false);
+        if !hinted && number_form_ea && (circled_number || roman_numeral)
+            && self.metrics_for(run_style, para_style).own_width_em(ch).is_none()
+        {
+            return Some(true);
+        }
+        Some(hinted)
     }
 
     fn hinted_alphabet_break(&self, ch: char, run: &RunStyle, para: &ParagraphStyle) -> bool {

@@ -127,6 +127,21 @@ fn face_matches_in(font: &skrifa::FontRef, family: &str, bold: bool, italic: boo
             }
         }
     }
+    // OXI_FACE_FULL_NAME (2026-11-27, default ON, opt-out _DISABLE): a regular request
+    // takes the face whose FULL name (nameID 4) it is, whatever that face's subfamily.
+    // The Office cloud cache's «UD デジタル 教科書体 N-B» is a family of one face,
+    // subfamily «Bold», full name «UD デジタル 教科書体 N-B»; Word draws runs naming it
+    // with that face (blind-A ja/educational__066ae7c8 / 0214ac9a: the speech-bubble
+    // text, PDF font «UDデジタル教科書体N-B»), Oxi rejected it for its style and drew its
+    // stand-in gothic. A bold request does not take it, so Word's synthetic bold of it
+    // (PDF «…NP-B-Bold») stays the fake-bold path.
+    if !legacy_only && !bold && !italic && !crate::env_flag!("OXI_FACE_FULL_NAME_DISABLE") {
+        for rec in font.localized_strings(skrifa::string::StringId::FULL_NAME) {
+            if rec.to_string().trim().to_ascii_lowercase() == want {
+                return true;
+            }
+        }
+    }
     if !fam_ok {
         return false;
     }

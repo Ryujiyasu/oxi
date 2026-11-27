@@ -1527,9 +1527,23 @@ fn resolve_face_path(family: &str, bold: bool, italic: bool) -> Option<String> {
     // The `index == 0` test belongs to each candidate, not to the pair: a
     // family that only exists deeper in a collection should still let the
     // bundled stand-in be tried, rather than taking the whole lookup down.
+    // OXI_PDF_OS_ALIAS (2026-11-27, default ON, opt-out _DISABLE): Windows'
+    // FontSubstitutes names (Times -> Times New Roman, Helvetica -> Arial, Courier ->
+    // Courier New) are the real faces Word draws with, tried before the metric
+    // stand-ins. blind-A en/educational__00158a7d / forms__001c0798 / legal__0010437a:
+    // Word's PDF embeds «Times» with Times New Roman's glyphs; Oxi drew Liberation Serif.
+    let os_alias = (std::env::var_os("OXI_PDF_OS_ALIAS_DISABLE").is_none())
+        .then(|| match family.trim().to_ascii_lowercase().as_str() {
+            "times" => Some("Times New Roman"),
+            "helvetica" => Some("Arial"),
+            "courier" => Some("Courier New"),
+            _ => None,
+        })
+        .flatten();
     index
         .find(family, bold, italic)
         .filter(|face| face.index == 0)
+        .or_else(|| os_alias.and_then(|a| index.find(a, bold, italic)).filter(|face| face.index == 0))
         .or_else(|| {
             substitute_for(family)
                 .and_then(|s| index.find(s, bold, italic))
@@ -1587,6 +1601,18 @@ fn split_style_suffix(family: &str) -> Option<(String, bool, bool)> {
 
 fn substitute_for(family: &str) -> Option<&'static str> {
     let key = family.trim().to_lowercase();
+    // OXI_PDF_OS_ALIAS: Windows' FontSubstitutes target when this machine has it
+    if std::env::var_os("OXI_PDF_OS_ALIAS_DISABLE").is_none() {
+        let alias = match key.as_str() {
+            "times" => Some("Times New Roman"),
+            "helvetica" => Some("Arial"),
+            "courier" => Some("Courier New"),
+            _ => None,
+        };
+        if let Some(a) = alias.filter(|a| font_index().find(a, false, false).is_some()) {
+            return Some(a);
+        }
+    }
     SUBSTITUTES
         .iter()
         .find(|(name, _)| *name == key)
@@ -2437,10 +2463,22 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         && face_file_cached(f, false, false).is_some_and(|reg| {
                             face_file_cached(f, true, false).map_or(true, |b| b == reg)
                         });
+                    // OXI_PDF_YUMIN_FAKE_BOLD (2026-11-27, default ON, opt-out _DISABLE):
+                    // 游明朝 has no bold member of its own -- «游明朝 Demibold» is a family of
+                    // its own -- so Word draws bold 游明朝 as the Regular face stroked at fs/35
+                    // (2 Tr, 0.30171 w at 10.56). blind-A ja/educational__015355870669 /
+                    // administrative__021e0f5e / creative__14af1ca6: Word's PDF has only
+                    // YuMincho-Regular (534 / 70 / 3 stroked runs); Oxi drew YuMincho-Demibold.
+                    // (游ゴシック has a real Bold: Word uses YuGothic-Bold.)
+                    let yumin_fake = |f: &str| {
+                        let n: String = f.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
+                        std::env::var_os("OXI_PDF_YUMIN_FAKE_BOLD_DISABLE").is_none()
+                            && matches!(n.as_str(), "游明朝" | "yumincho" | "游明朝regular" | "yuminchoregular")
+                    };
                     let fake_bold = *bold
                         && std::env::var_os("OXI_PDF_FAKE_BOLD_DISABLE").is_none()
                         && font_family.as_deref().is_some_and(|f| (is_cjk_family(f)
-                            && face_file_cached(f, true, false).is_none()) || latin_fake_bold(f));
+                            && (face_file_cached(f, true, false).is_none() || yumin_fake(f))) || latin_fake_bold(f));
                     // Resolve font name for PDF (map to Type1 base fonts or CJK)
                     let font_name = resolve_font_styled(font_family.as_deref(), *bold && !(fake_bold && font_family.as_deref().is_some_and(is_cjk_family)), *italic);
                     let font_name = if *bold && !fake_bold && font_family.as_deref().is_some_and(is_cjk_family)
