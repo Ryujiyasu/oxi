@@ -26,7 +26,7 @@ Japanese government/legal documents) and per-page SSIM pixel comparison.
 ## Usage
 
 ```js
-import init, { parse_document, layout_document, docx_to_pdf } from 'oxidocs';
+import init, { parse_document, layout_document, docx_to_pdf } from '@oxidocs/wasm';
 
 await init();
 const bytes = new Uint8Array(await file.arrayBuffer());
