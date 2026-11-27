@@ -59,11 +59,18 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// Word's own minimums, taken from the same dictionary file
-/// (`LEFTHYPHENMIN 2` / `RIGHTHYPHENMIN 3`): at least 2 characters stay on the
-/// first line and at least 3 move to the next.
+/// The minimums: at least 2 characters stay on the first line and at least 2
+/// move to the next.
+/// OXI_HYPH_RIGHT_MIN2 (2026-11-27, default ON, opt-out _DISABLE): the dictionary
+/// file says RIGHTHYPHENMIN 3, but Word breaks with two letters after the hyphen.
+/// blind-A en/educational__00158a7d (autoHyphenation, Times New Roman 12): Word's PDF
+/// hyphenates «Ar-ab», «Unit-ed», «end-ed», «par-ty», «democra-cy.» -- Oxi could
+/// not, wrapped those lines a word earlier or broke «democ-racy», and drifted a line
+/// by p22.
 const LEFT_MIN: usize = 2;
-const RIGHT_MIN: usize = 3;
+fn right_min() -> usize {
+    if crate::env_flag!("OXI_HYPH_RIGHT_MIN2_DISABLE") { 3 } else { 2 }
+}
 
 const PATTERNS: &str = include_str!("data/hyph_en_us.txt");
 
@@ -123,7 +130,7 @@ pub fn is_lexical_word(word: &str) -> bool {
 pub fn break_offsets(word: &str) -> Vec<usize> {
     let word = lexical_core(word);
     let chars: Vec<char> = word.chars().collect();
-    if chars.len() < LEFT_MIN + RIGHT_MIN || !chars.iter().all(|c| c.is_alphabetic()) {
+    if chars.len() < LEFT_MIN + right_min() || !chars.iter().all(|c| c.is_alphabetic()) {
         return Vec::new();
     }
     let p = patterns();
@@ -155,7 +162,7 @@ pub fn break_offsets(word: &str) -> Vec<usize> {
     for (ci, ch) in chars.iter().enumerate() {
         byte += ch.len_utf8();
         let after = ci + 1; // characters kept on this line
-        if after < LEFT_MIN || chars.len() - after < RIGHT_MIN {
+        if after < LEFT_MIN || chars.len() - after < right_min() {
             continue;
         }
         // odd value = a permitted break
@@ -204,8 +211,9 @@ mod tests {
         // break of each (see the module docs). Asserted so the divergence
         // shows up as a fact in the test suite instead of as a surprise in a
         // corpus gate — and so a future table swap has to confront it.
-        assert_eq!(splits("democracy"), vec!["democ"]); // Word also takes "de-"
-        assert_eq!(splits("hyphenation"), vec!["hy", "hyphen"]); // Word also takes "hyphena-"
+        assert!(splits("democracy").iter().any(|s| s == "democ")); // Word also takes "de-" (and, right minimum 2, "democra-")
+        let h = splits("hyphenation");
+        assert!(h.iter().any(|s| s == "hy") && h.iter().any(|s| s == "hyphen")); // Word also takes "hyphena-"
     }
 
     #[test]
@@ -213,7 +221,7 @@ mod tests {
         // LEFTHYPHENMIN 2 / RIGHTHYPHENMIN 3.
         for w in ["a", "an", "the", "item", "oxide"] {
             for b in break_offsets(w) {
-                assert!(b >= LEFT_MIN && w.len() - b >= RIGHT_MIN, "{w} broke at {b}");
+                assert!(b >= LEFT_MIN && w.len() - b >= right_min(), "{w} broke at {b}");
             }
         }
     }
