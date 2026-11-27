@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Oxi",
+        "title": "Oxidocs",
         "width": 1280,
         "height": 900,
         "resizable": true,

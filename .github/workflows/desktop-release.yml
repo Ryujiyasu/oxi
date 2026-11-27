@@ -112,7 +112,7 @@ jobs:
           projectPath: crates/oxi-desktop
           tauriScript: tauri
           tagName: ${{ github.ref_name }}
-          releaseName: 'Oxi Desktop ${{ github.ref_name }}'
+          releaseName: 'Oxidocs Desktop ${{ github.ref_name }}'
           releaseBody: 'Installers for Windows / macOS / Linux. Installed apps update automatically from this release feed.'
           releaseDraft: true
           prerelease: false
@@ -125,7 +125,7 @@ jobs:
           projectPath: crates/oxi-desktop
           tauriScript: tauri
           tagName: ${{ github.ref_name }}
-          releaseName: 'Oxi Desktop ${{ github.ref_name }}'
+          releaseName: 'Oxidocs Desktop ${{ github.ref_name }}'
           releaseBody: 'Installers for Windows / macOS / Linux. Installed apps update automatically from this release feed.'
           releaseDraft: true
           prerelease: false
