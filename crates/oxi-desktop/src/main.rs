@@ -40,7 +40,7 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running Oxi Desktop");
+        .expect("error while running Oxidocs Desktop");
 }
 
 /// The three editors the window switches between, appended to the platform's
@@ -82,7 +82,7 @@ async fn check_for_updates(app: tauri::AppHandle) {
             "新しいバージョン {version} が利用可能です。今すぐ更新しますか？\n\
              A new version ({version}) is available. Update now?"
         ))
-        .title("Oxi")
+        .title("Oxidocs")
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Update / 更新".into(),
             "Later / 後で".into(),
@@ -98,9 +98,9 @@ async fn check_for_updates(app: tauri::AppHandle) {
                 .dialog()
                 .message(
                     "更新をインストールしました。再起動して適用しますか？\n\
-                     The update is installed. Restart Oxi to apply it?",
+                     The update is installed. Restart Oxidocs to apply it?",
                 )
-                .title("Oxi")
+                .title("Oxidocs")
                 .buttons(MessageDialogButtons::OkCancelCustom(
                     "Restart / 再起動".into(),
                     "Later / 後で".into(),
@@ -116,7 +116,7 @@ async fn check_for_updates(app: tauri::AppHandle) {
                     "更新に失敗しました。次回起動時に再試行します。\n\
                      The update failed and will be retried on next launch.\n\n{err}"
                 ))
-                .title("Oxi")
+                .title("Oxidocs")
                 .blocking_show();
         }
     }
