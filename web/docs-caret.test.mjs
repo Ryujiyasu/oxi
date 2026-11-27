@@ -2,7 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Where the caret can stand in the docx editor around list numbers.
+//! Where the caret can stand in the docx editor: around list numbers, and in
+//! blank table cells.
 //!
 //! A list number ("3.") is laid out as text with no paragraph behind it. The
 //! editor used to let a click or an arrow put the caret on it: the caret sat
@@ -111,4 +112,44 @@ test('arrows step over numbers and stop in an empty item', () => {
   const back = ed.move(left, -1);
   assert.equal(list[back.elemIndex].text, 'stand.');
   assert.equal(back.charOffset, 'stand.'.length);
+});
+
+// A blank cell (a form's empty field, or a cell whose text was just deleted)
+// used to have nothing in the layout to put the caret on, so a click there
+// landed in some other cell and the blank one could not be typed into.
+// tests/fixtures/table_empty_cells.docx: a 2x3 grid with «Name» at (0,0),
+// «Total» at (1,2) and the other four cells empty.
+const tableBytes = new Uint8Array(await readFile(join(here, '../tests/fixtures/table_empty_cells.docx')));
+const cellMark = (list, row, col) => list.find(e => e.kind === 'text'
+  && e.cell_row_index === row && e.cell_col_index === col);
+
+test('every blank cell has a caret mark', () => {
+  const list = layout_document(tableBytes).pages[0].elements;
+  for (const [row, col] of [[0, 1], [0, 2], [1, 0], [1, 1]]) {
+    const mark = cellMark(list, row, col);
+    assert.ok(mark, `no mark in cell ${row},${col}`);
+    assert.equal(mark.text, '');
+    assert.equal(mark.width, 0);
+  }
+});
+
+test('a click in a blank cell puts the caret there, and typing fills that cell', () => {
+  const layout = layout_document(tableBytes);
+  const model = new DocxDocument(tableBytes);
+  const ed = editor(layout, model);
+  const list = layout.pages[0].elements;
+  const mark = cellMark(list, 1, 1);
+  const hit = ed.hit(mark.x + 20, mid(mark));
+  const el = list[hit.elemIndex];
+  assert.equal(el.cell_row_index, 1, 'the caret went to another row');
+  assert.equal(el.cell_col_index, 1, 'the caret went to another cell');
+  const at = ed.modelPos(hit);
+  assert.ok(at, 'the caret has no document position');
+  model.apply(JSON.stringify([{ op: 'insert_text', at, text: 'Filled' }]));
+  const after = layout_document(new Uint8Array(model.save())).pages[0].elements;
+  const typed = after.find(e => e.text === 'Filled');
+  assert.ok(typed, 'the text is not in the document');
+  assert.equal(typed.cell_row_index, 1);
+  assert.equal(typed.cell_col_index, 1);
+  assert.ok(cellMark(after, 0, 1), 'the other blank cells lost their marks');
 });

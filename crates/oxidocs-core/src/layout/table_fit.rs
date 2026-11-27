@@ -8640,7 +8640,19 @@ impl<'a> TableFitLayouter<'a> {
                                         }
                                         let is_interior_empty = last_content_block_pos
                                             .map_or(false, |last| block_pos < last);
-                                        if (is_interior_empty || crate::env_flag!("OXI_CELL_EMPTY_LINES"))
+                                        // A cell with no content at all keeps one mark, on its
+                                        // first paragraph: it is where the editor's caret stands
+                                        // to type into a blank cell (a form's empty field, a cell
+                                        // whose text was just deleted). Without it a click on the
+                                        // cell found no text to land on. The mark sits at the top
+                                        // of the cell, inside the line its height already counts,
+                                        // so it never overflows a split alone as a trailing mark
+                                        // would (e3c545 above). Opt-out: OXI_EMPTY_CELL_CARET_DISABLE.
+                                        let is_blank_cell_mark = last_content_block_pos.is_none()
+                                            && block_pos == 0
+                                            && !crate::env_flag!("OXI_EMPTY_CELL_CARET_DISABLE");
+                                        if (is_interior_empty || is_blank_cell_mark
+                                            || crate::env_flag!("OXI_CELL_EMPTY_LINES"))
                                             && !crate::env_flag!("OXI_S428_DISABLE")
                                         {
                                             let mut empty_el = LayoutElement::new(
