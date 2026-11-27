@@ -72,6 +72,9 @@ struct Series {
     line_width: Option<f32>,
     line_none: bool,
     marker: bool,
+    /// the marker's own fill (c:marker/c:spPr) and size
+    marker_fill: Option<String>,
+    marker_size: f32,
     point_fills: HashMap<usize, String>,
     /// A cached point's own `formatCode` (c:pt/@formatCode), over `format`.
     point_formats: HashMap<usize, String>,
@@ -185,6 +188,8 @@ fn series(ser: &Node, xml: &str, theme: &ThemeColors) -> Series {
         line_width: ln.and_then(|l| l.num("w")).map(|w| w / 12700.0),
         line_none: ln.is_some_and(|l| l.child("noFill").is_some()),
         marker: ser.path(&["marker", "symbol"]).and_then(|s| s.attr("val")).is_some_and(|v| v != "none"),
+        marker_fill: ser.path(&["marker", "spPr", "solidFill"]).and_then(|f| color_of(f, xml, theme)),
+        marker_size: ser.path(&["marker", "size"]).and_then(|n| n.num("val")).map_or(5.0, |v| v as f32),
         point_fills,
         point_formats: point_formats(ser.child("val").or_else(|| ser.child("yVal"))),
     }
@@ -363,6 +368,39 @@ fn text_width(text: &str, size: f32) -> f32 {
     text.chars().map(|c| if (c as u32) >= 0x2E80 { size } else { size * 0.56 }).sum()
 }
 
+/// OXI_CHART_TEXT_MEASURE (2026-11-27, default ON, opt-out _DISABLE): a label's advance
+/// from the face's metrics (the run's latin face, Calibri when the theme names none);
+/// `text_width`'s 0.56 em per Latin letter made «Bank Panin Dubai Syariah» at 9pt 121
+/// wide against Word's 92.7, and the legend grid is cut by it.
+fn measure(text: &str, st: &TextStyle) -> f32 {
+    if crate::env_flag!("OXI_CHART_TEXT_MEASURE_DISABLE") {
+        return text_width(text, st.size);
+    }
+    static REG: std::sync::OnceLock<crate::font::FontMetricsRegistry> = std::sync::OnceLock::new();
+    let reg = REG.get_or_init(crate::font::FontMetricsRegistry::load);
+    let fam = st.latin.clone().unwrap_or_else(|| "Calibri".to_string());
+    let m = reg.get(&fam);
+    text.chars().map(|c| reg.char_width_pt_with_fallback(c, st.size, &m)).sum()
+}
+
+/// A legend key: a line chart's is its line with the marker on it (Word's PDF: 19.2
+/// long, 2 wide, the marker's own fill at its middle, d = the marker size), else a
+/// square of the series fill.
+fn legend_key(g: &mut Group, x: f32, mid: f32, color: &str, marker: Option<&(String, f32)>, line_key: bool, swatch: f32) {
+    if line_key {
+        line(g, (x, mid), (x + 19.2, mid), color, 2.0);
+        if let Some((mc, d)) = marker {
+            let r = d * 0.5;
+            let mut segs = vec![PathSeg::M(x + 9.6, mid - r)];
+            arc(&mut segs, x + 9.6, mid, r, 0.0, 360.0);
+            segs.push(PathSeg::Z);
+            path(g, segs, Some(mc.clone()), Some((mc.clone(), 0.75)));
+        }
+    } else {
+        rect(g, (x, mid - swatch / 2.0, swatch, swatch), Some(color.to_string()), None);
+    }
+}
+
 fn label(g: &mut Group, text: &str, st: &TextStyle, rect: (f32, f32, f32, f32), align: Alignment) {
     if text.is_empty() || rect.2 <= 0.0 || rect.3 <= 0.0 {
         return;
@@ -532,10 +570,21 @@ pub(super) fn from_chart(xml: &str, theme: &ThemeColors, w: f32, h: f32) -> Opti
     let mut g = Group { shapes: Vec::new(), texts: Vec::new() };
 
     // Chart area.
-    if let Some(sp) = root.child("spPr") {
-        let fill = area_fill(sp, xml, theme);
-        let ln = sp.child("ln").and_then(|l| Some((color_of(l.child("solidFill")?, xml, theme)?, l.num("w").map_or(0.75, |w| w / 12700.0))));
-        rect(&mut g, (0.0, 0.0, w, h), fill, ln);
+    // OXI_CHART_AREA_DEFAULT (2026-11-27, default ON, opt-out _DISABLE): a chart area
+    // whose spPr sets no outline (or that has no spPr) is white with Office's automatic
+    // border, 868686 at 0.75 -- Word's PDF of blind-A en/reports__00156ad9 and blind-F
+    // ja/educational__1dadc175 (no spPr: 0.525 grey, 0.75), 0042471c with its spPr taken
+    // out or left with a fill only (a border too). Oxi drew neither.
+    let area_default = !crate::env_flag!("OXI_CHART_AREA_DEFAULT_DISABLE");
+    match root.child("spPr") {
+        Some(sp) => {
+            let fill = area_fill(sp, xml, theme);
+            let ln = sp.child("ln").and_then(|l| Some((color_of(l.child("solidFill")?, xml, theme)?, l.num("w").map_or(0.75, |w| w / 12700.0))));
+            let ln = if ln.is_none() && area_default && sp.child("ln").is_none() { Some(("868686".to_string(), 0.75)) } else { ln };
+            rect(&mut g, (0.0, 0.0, w, h), fill, ln);
+        }
+        None if area_default => rect(&mut g, (0.0, 0.0, w, h), Some("FFFFFF".to_string()), Some(("868686".to_string(), 0.75))),
+        None => {}
     }
     let office = TextStyle {
         size: 9.0,
@@ -604,12 +653,20 @@ pub(super) fn from_chart(xml: &str, theme: &ThemeColors, w: f32, h: f32) -> Opti
             .filter(|e| e.name == "legendEntry" && e.path(&["delete"]).and_then(|d| d.attr("val")) == Some("1"))
             .filter_map(|e| e.path(&["idx"]).and_then(|i| i.num("val")).map(|i| i as usize))
             .collect();
-        let entries: Vec<(String, String)> = legend_entries(kind, &all_series, vary, theme)
+        let line_key = (kind.starts_with("line") || kind == "scatterChart") && !(vary && all_series.len() == 1);
+        let markers: Vec<Option<(String, f32)>> = all_series
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (line_key && s.marker).then(|| {
+                (s.marker_fill.clone().or_else(|| s.line.clone()).unwrap_or_else(|| default_color(i, theme)), s.marker_size)
+            }))
+            .collect();
+        let (entries, entry_markers): (Vec<(String, String)>, Vec<Option<(String, f32)>>) = legend_entries(kind, &all_series, vary, theme)
             .into_iter()
             .enumerate()
             .filter(|(i, _)| !hidden.contains(i))
-            .map(|(_, e)| e)
-            .collect();
+            .map(|(i, e)| (e, markers.get(i).cloned().flatten()))
+            .unzip();
         // A legend the author moved keeps its box and takes no room from the plot.
         let lm = lg.path(&["layout", "manualLayout"]);
         let lfrac = |k: &str| lm.and_then(|m| m.child(k)).and_then(|n| n.num("val"));
@@ -622,7 +679,70 @@ pub(super) fn from_chart(xml: &str, theme: &ThemeColors, w: f32, h: f32) -> Opti
         let row_h = st.size * 1.4;
         let entry_w = |t: &str| swatch + 4.0 + text_width(t, st.size) + 2.0;
         let horizontal_row = matches!(pos, "b" | "t");
+        // OXI_CHART_LEGEND_GRID (2026-11-27, default ON, opt-out _DISABLE): a top / bottom
+        // legend as Word lays it out (`arms_424leg.py`, blind-A en/reference__0042471c, 9pt
+        // Calibri, 3..11 series): an entry is key 21.28 + text + 4.87. Entries that fit one
+        // row are packed and centred (on the chart, or in a moved legend's box); else a grid
+        // of columns key + the longest text: centred and 16.9 (1.88 em) a row when automatic,
+        // the moved box split into equal columns at 10.9 (1.21 em) a row, the rows the box
+        // cannot hold left out (11 series -> 8 drawn). Oxi drew one row past the chart edge.
+        let grid_on = !crate::env_flag!("OXI_CHART_LEGEND_GRID_DISABLE") && horizontal_row && !entries.is_empty();
+        if grid_on {
+            let key_w = if line_key { 21.28 } else { swatch + 4.0 };
+            let tail = 4.87;
+            let tws: Vec<f32> = entries.iter().map(|(t, _)| measure(t, &st)).collect();
+            let total: f32 = tws.iter().map(|t| key_w + t + tail).sum::<f32>() - tail;
+            let maxw = tws.iter().copied().fold(0.0, f32::max);
+            let col_w = key_w + maxw + tail;
+            let auto_pitch = st.size * 1.878;
+            let min_pitch = st.size * 1.211;
+            let draw = |g: &mut Group, i: usize, ex: f32, mid: f32| {
+                legend_key(g, ex, mid, &entries[i].1, entry_markers[i].as_ref(), line_key, swatch);
+                let th = st.size * 1.4;
+                label(g, &entries[i].0, &st, (ex + key_w, mid - th / 2.0, tws[i] + 2.0, th), Alignment::Left);
+            };
+            let (bx, by, bw, bh, manual) = match moved {
+                Some((mx, my, mw, mh)) => (mx, my, mw, mh, true),
+                None => (0.0, 0.0, w, h, false),
+            };
+            let avail = if manual { bw } else { w - 28.0 };
+            if total <= avail {
+                let mid = if manual { by + bh / 2.0 } else if pos == "b" { h - 13.3 } else { top + auto_pitch / 2.0 };
+                let mut ex = bx + (bw - total) / 2.0;
+                for i in 0..entries.len() {
+                    draw(&mut g, i, ex, mid);
+                    ex += key_w + tws[i] + tail;
+                }
+                if !manual {
+                    if pos == "b" { bottom = bottom.min(mid - auto_pitch / 2.0 - 4.0) } else { top += auto_pitch + 4.0 }
+                }
+            } else {
+                let ncols = ((avail / col_w).floor() as usize).max(1);
+                let nrows = entries.len().div_ceil(ncols);
+                if manual {
+                    let pitch = (bh / nrows as f32).clamp(min_pitch, auto_pitch);
+                    let rows = nrows.min(((bh + 0.01) / pitch).floor().max(1.0) as usize);
+                    let cw = bw / ncols as f32;
+                    let y0 = by + (bh - rows as f32 * pitch) / 2.0;
+                    for i in 0..(rows * ncols).min(entries.len()) {
+                        let (r, c) = (i / ncols, i % ncols);
+                        draw(&mut g, i, bx + c as f32 * cw + (cw - (col_w - tail)) / 2.0, y0 + (r as f32 + 0.5) * pitch);
+                    }
+                } else {
+                    let gw = ncols as f32 * col_w - tail;
+                    let x0 = (w - gw) / 2.0;
+                    let first_mid = if pos == "b" { h - 13.3 - (nrows - 1) as f32 * auto_pitch } else { top + auto_pitch / 2.0 };
+                    for i in 0..entries.len() {
+                        let (r, c) = (i / ncols, i % ncols);
+                        draw(&mut g, i, x0 + c as f32 * col_w, first_mid + r as f32 * auto_pitch);
+                    }
+                    let used = nrows as f32 * auto_pitch;
+                    if pos == "b" { bottom = bottom.min(first_mid - auto_pitch / 2.0 - 4.0) } else { top += used + 4.0 }
+                }
+            }
+        }
         match (pos, moved) {
+            _ if grid_on => {}
             (_, Some((mx, my, mw, mh))) if horizontal_row => {
                 let total: f32 = entries.iter().map(|(t, _)| entry_w(t) + 8.0).sum();
                 let y = my + (mh - row_h) / 2.0;
@@ -1007,11 +1127,36 @@ fn draw_category(
 }
 
 fn marker(g: &mut Group, x: f32, y: f32, color: &str) {
-    let r = 2.5;
+    marker_sized(g, x, y, color, 5.0)
+}
+
+fn marker_sized(g: &mut Group, x: f32, y: f32, color: &str, size: f32) {
+    let r = size * 0.5;
     let mut segs = vec![PathSeg::M(x, y - r)];
     arc(&mut segs, x, y, r, 0.0, 360.0);
     segs.push(PathSeg::Z);
     path(g, segs, Some(color.to_string()), None);
+}
+
+/// The part of segment a-b inside the box (x0, y0, x1, y1) (Liang-Barsky).
+fn clip_segment(a: (f32, f32), b: (f32, f32), (x0, y0, x1, y1): (f32, f32, f32, f32)) -> Option<((f32, f32), (f32, f32))> {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, q) in [(-dx, a.0 - x0), (dx, x1 - a.0), (-dy, a.1 - y0), (dy, y1 - a.1)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let r = q / p;
+            if p < 0.0 {
+                t0 = t0.max(r);
+            } else {
+                t1 = t1.min(r);
+            }
+        }
+    }
+    (t0 <= t1).then(|| ((a.0 + t0 * dx, a.1 + t0 * dy), (a.0 + t1 * dx, a.1 + t1 * dy)))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1047,10 +1192,38 @@ fn draw_scatter(
     let xfmt = axis_format(x_ax, "General");
     let yticks: Vec<f64> = (0..=((y1 - y0) / ym).round() as i64).map(|k| y0 + k as f64 * ym).collect();
     let xticks: Vec<f64> = (0..=((x1 - x0) / xm).round() as i64).map(|k| x0 + k as f64 * xm).collect();
-    let ylab_w = if axis_hidden(y_ax) { 0.0 } else { yticks.iter().map(|t| text_width(&format_number(*t, &yfmt), st_y.size)).fold(0.0, f32::max) + 6.0 };
-    let xlab_h = if axis_hidden(x_ax) { 0.0 } else { st_x.size * 1.4 };
+    // OXI_CHART_SCATTER_LABELS (2026-11-27, default ON, opt-out _DISABLE): the category
+    // axis labels hang from the axis line where it crosses the value axis (autoZero: at 0),
+    // their text top 0.835 em below it; the value labels end 0.92 em left of the plot.
+    // Word's PDF (`arms_156s.py` / `arms_424.py`, 9 / 10 / 14pt): x labels +7.5 / +11.7 below
+    // the line at 9 / 14pt, at the zero line of a plot that runs below 0 (blind-A en/reports__
+    // 00156ad9: 0 .. 100 under the 0 line, the plot down to -0.5); y labels 9.2 / 12.9 left.
+    // Oxi hung them 3.9 below the plot's bottom edge whatever the crossing.
+    let lab_on = !crate::env_flag!("OXI_CHART_SCATTER_LABELS_DISABLE");
+    // OXI_CHART_AXIS_TITLE (2026-11-27, default ON, opt-out _DISABLE): the category axis
+    // title, centred under the plot: its text top 0.33 em below the plot, or 0.43 em below
+    // the labels when they hang lower (00156ad9 «Depth (fold-coverage)» 275.8 for plot 271.5
+    // / labels to 270.5; 0042471c «Year» 225.5 for plot 222.0); bold unless its run says
+    // b="0". Room for it comes off an automatic plot (1.257 em: 00156ad9's plot 289.1 ->
+    // 271.5 with it). Oxi drew no axis title. (The value axis title is turned a quarter;
+    // the text boxes here cannot turn yet.)
+    let xt = x_ax.and_then(|a| a.child("title")).filter(|_| !crate::env_flag!("OXI_CHART_AXIS_TITLE_DISABLE"));
+    let xt_text = xt.and_then(rich_text);
+    let xt_st = xt.map(|t| {
+        let st = text_style(Some(t), xml, theme, &TextStyle { bold: true, ..base.clone() });
+        let para = t.path(&["tx", "rich", "p"]);
+        let st = apply_rpr(para.and_then(|p| p.path(&["pPr", "defRPr"])), xml, theme, st);
+        let first_run = para.and_then(|p| p.children.iter().find(|r| r.name == "r")).and_then(|r| r.child("rPr"));
+        apply_rpr(first_run, xml, theme, st)
+    });
+    let xt_h = match (&xt_text, &xt_st) { (Some(_), Some(st)) => st.size * 1.257, _ => 0.0 };
+    let ylab_w = if axis_hidden(y_ax) { 0.0 } else {
+        let widest = yticks.iter().map(|t| text_width(&format_number(*t, &yfmt), st_y.size)).fold(0.0, f32::max);
+        if lab_on { widest + st_y.size * 0.92 + 3.0 } else { widest + 6.0 }
+    };
+    let xlab_h = if axis_hidden(x_ax) { 0.0 } else if lab_on { st_x.size * 1.9 } else { st_x.size * 1.4 };
     let (px, py, pw, ph) = plot;
-    let (ix, iy, iw, ih) = if inner_manual { plot } else { (px + ylab_w, py, pw - ylab_w, ph - xlab_h) };
+    let (ix, iy, iw, ih) = if inner_manual { plot } else { (px + ylab_w, py, pw - ylab_w, ph - xlab_h - xt_h) };
     if iw <= 0.0 || ih <= 0.0 {
         return;
     }
@@ -1061,18 +1234,26 @@ fn draw_scatter(
         if let Some((c, lw)) = &grid { line(g, (ix, fy(*t)), (ix + iw, fy(*t)), c, *lw); }
         if !axis_hidden(y_ax) {
             let h = st_y.size * 1.4;
-            label(g, &format_number(*t, &yfmt), &st_y, (ix - ylab_w, fy(*t) - h / 2.0, ylab_w - 3.0, h), Alignment::Right);
+            let gap = if lab_on { st_y.size * 0.92 } else { 3.0 };
+            label(g, &format_number(*t, &yfmt), &st_y, (ix - ylab_w, fy(*t) - h / 2.0, ylab_w - gap, h), Alignment::Right);
         }
     }
     if let Some((c, lw)) = grid_color(x_ax, xml, theme) {
         for t in &xticks { line(g, (fx(*t), iy), (fx(*t), iy + ih), &c, lw); }
     }
+    let lab_top = if lab_on { fy(0.0_f64.clamp(y0, y1)) + st_x.size * 0.70 } else { iy + ih + 2.0 };
     if !axis_hidden(x_ax) {
         for t in &xticks {
             let txt = format_number(*t, &xfmt);
             let tw = text_width(&txt, st_x.size) + 6.0;
-            label(g, &txt, &st_x, (fx(*t) - tw / 2.0, iy + ih + 2.0, tw, xlab_h), Alignment::Center);
+            let lh = if lab_on { st_x.size * 1.4 } else { xlab_h };
+            label(g, &txt, &st_x, (fx(*t) - tw / 2.0, lab_top, tw, lh), Alignment::Center);
         }
+    }
+    if let (Some(t), Some(st)) = (&xt_text, &xt_st) {
+        let lab_bottom = if axis_hidden(x_ax) { iy + ih } else { lab_top + st_x.size * 1.2 };
+        let top = (iy + ih + st.size * 0.33).max(lab_bottom + st.size * 0.43);
+        label(g, t, st, (ix, top - st.size * 0.2, iw, st.size * 1.4), Alignment::Center);
     }
     if let Some((c, lw)) = axis_line(x_ax, xml, theme, Some(GRID_GREY)) {
         let y = fy(0.0_f64.clamp(y0, y1));
@@ -1082,13 +1263,41 @@ fn draw_scatter(
         let color = s.line.clone().or_else(|| s.fill.clone()).unwrap_or_else(|| default_color(j, theme));
         let pts: Vec<(f32, f32)> = xs_of(s).iter().zip(&s.vals).filter_map(|(x, y)| Some((fx((*x)?), fy((*y)?)))).collect();
         if !s.line_none && pts.len() >= 2 {
-            let mut segs = vec![PathSeg::M(pts[0].0, pts[0].1)];
-            segs.extend(pts.iter().skip(1).map(|(x, y)| PathSeg::L(*x, *y)));
-            path(g, segs, None, Some((color.clone(), s.line_width.unwrap_or(2.25))));
+            // OXI_CHART_CLIP (2026-11-27, default ON, opt-out _DISABLE): the line is cut at
+            // the plot's edges, as Word clips it (blind-A en/reports__00156ad9: data to 40.6
+            // under a fixed maximum 3 -- Word's curve leaves the plot at its top; Oxi's ran
+            // 2300pt up the page).
+            let mut segs = Vec::new();
+            if crate::env_flag!("OXI_CHART_CLIP_DISABLE") {
+                segs.push(PathSeg::M(pts[0].0, pts[0].1));
+                segs.extend(pts.iter().skip(1).map(|(x, y)| PathSeg::L(*x, *y)));
+            } else {
+                let mut pen: Option<(f32, f32)> = None;
+                for w2 in pts.windows(2) {
+                    if let Some((a, b)) = clip_segment(w2[0], w2[1], (ix, iy, ix + iw, iy + ih)) {
+                        if pen.is_none_or(|p| (p.0 - a.0).abs() > 0.01 || (p.1 - a.1).abs() > 0.01) {
+                            segs.push(PathSeg::M(a.0, a.1));
+                        }
+                        segs.push(PathSeg::L(b.0, b.1));
+                        pen = Some(b);
+                    } else {
+                        pen = None;
+                    }
+                }
+            }
+            if !segs.is_empty() {
+                path(g, segs, None, Some((color.clone(), s.line_width.unwrap_or(2.25))));
+            }
         }
         if s.marker || s.line_none {
+            // OXI_CHART_MARKER_FILL (2026-11-27, default ON, opt-out _DISABLE): a marker in
+            // its own c:marker/c:spPr fill at its c:size (0042471c: accent2 circles on an
+            // accent1 line, d 5.04 for size 5); Oxi painted it the line colour at 5.
+            let (mc, ms) = if crate::env_flag!("OXI_CHART_MARKER_FILL_DISABLE") { (color.clone(), 5.0) } else {
+                (s.marker_fill.clone().unwrap_or_else(|| color.clone()), s.marker_size)
+            };
             for (x, y) in &pts {
-                marker(g, *x, *y, &color);
+                marker_sized(g, *x, *y, &mc, ms);
             }
         }
     }
@@ -1278,7 +1487,7 @@ mod tests {
     #[test]
     fn clustered_columns_stand_on_the_axis_in_series_colours() {
         let g = from_chart(&bar("col", "clustered"), &theme(), 300.0, 200.0).expect("chart");
-        let bars: Vec<&VectorShape> = g.shapes.iter().filter(|s| !s.is_line && s.path.is_empty() && s.h > 6.0).collect();
+        let bars: Vec<&VectorShape> = g.shapes.iter().filter(|s| !s.is_line && s.path.is_empty() && s.h > 6.0 && s.w < 299.0).collect();
         assert_eq!(bars.len(), 6, "two series of three");
         // all bars share one baseline (value 0), and the tallest is South C (5)
         let base = bars[0].y + bars[0].h;
@@ -1297,7 +1506,7 @@ mod tests {
     #[test]
     fn horizontal_stacked_bars_add_up() {
         let g = from_chart(&bar("bar", "stacked"), &theme(), 300.0, 200.0).expect("chart");
-        let bars: Vec<&VectorShape> = g.shapes.iter().filter(|s| !s.is_line && s.path.is_empty() && s.w > 1.0 && s.h > 6.0).collect();
+        let bars: Vec<&VectorShape> = g.shapes.iter().filter(|s| !s.is_line && s.path.is_empty() && s.w > 1.0 && s.w < 299.0 && s.h > 6.0).collect();
         assert_eq!(bars.len(), 6);
         // category C: 3 + 5 -- the second segment starts where the first ends
         let c: Vec<&&VectorShape> = bars.iter().filter(|b| (b.y - bars[0].y).abs() > 0.01).collect();

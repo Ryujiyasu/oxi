@@ -2824,7 +2824,30 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     }
                     // Underline
                     if *underline {
-                        let ul_w = 0.5_f64.max(fs * 0.05);
+                        // OXI_PDF_UL_POST (2026-11-27, default ON, opt-out _DISABLE): a Latin
+                        // face's underline is its post table's: the line's top
+                        // -underlinePosition em below the baseline, underlineThickness em
+                        // thick. `_pb_ulpos2_gen.py` (Courier New / Times New Roman / Arial /
+                        // Calibri / Century / Cambria / Georgia / Verdana / Segoe UI at 8 /
+                        // 10.5 / 12 / 20pt): every top within 0.06 and every thickness within
+                        // 0.06 of it (Word rounds to 0.12); blind-A en/legal__0011b198 Courier
+                        // New 12 top 2.76 below the baseline, Oxi 1.5. A run in an East Asian family, or with East Asian text, keeps
+                        // the old 0.15 em centre: ＭＳ 明朝 / メイリオ / 游明朝 sit 0.05-0.25 em
+                        // lower than their post tables say (not derived yet).
+                        let post_ul = (std::env::var_os("OXI_PDF_UL_POST_DISABLE").is_none()
+                            && !font_family.as_deref().is_some_and(is_cjk_family)
+                            && !text.chars().any(|c| c as u32 >= 0x2E80))
+                            .then(|| text.chars().find(|c| c.is_alphanumeric()))
+                            .flatten()
+                            .and_then(|ch| embedded_fonts.get(&pdf_face_for(ch, &font_name, *bold, &embedded_fonts)))
+                            .and_then(|f| rustybuzz::Face::from_slice(&f.data, 0))
+                            .and_then(|f| {
+                                let u = f.units_per_em() as f64;
+                                let m = f.underline_metrics()?;
+                                let (pos, th) = (-(m.position as f64) / u, m.thickness as f64 / u);
+                                (th > 0.0 && pos > -0.1 && pos < 0.5).then_some((pos * fs, (th * fs).max(0.24)))
+                            });
+                        let ul_w = post_ul.map_or(0.5_f64.max(fs * 0.05), |(_, t)| t);
                         // OXI_PDF_UL_SPACE_GAP (2026-11-27, default ON, opt-out _DISABLE): the
                         // widened space of a justified line belongs to the underlined run, so
                         // Word's line runs on across it to the next word. The layout splits a
@@ -2865,12 +2888,12 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                             ends_space: text.ends_with(' ') || text.ends_with('\u{3000}'),
                             para: elem.paragraph_index,
                             run: elem.run_index,
-                            held: hold.then(|| (s0, seg_x, text_y + fs * 0.15 - ul_w * 0.5, ul_w, fill_color.clone())),
+                            held: hold.then(|| (s0, seg_x, post_ul.map_or(text_y + fs * 0.15 - ul_w * 0.5, |(top, _)| text_y + top), ul_w, fill_color.clone())),
                         });
                         if hold {
                             // drawn by the next element of the line, or never
                         } else if std::env::var_os("OXI_PDF_UL_STYLES_DISABLE").is_none() {
-                            let edge = text_y + fs * 0.15 - ul_w * 0.5;
+                            let edge = post_ul.map_or(text_y + fs * 0.15 - ul_w * 0.5, |(top, _)| text_y + top);
                             for (operations, w) in underline_strokes(underline_style.as_deref(), false, s0, seg_x, origin, edge, ul_w) {
                                 contents.push(ContentElement::Path(PathData {
                                     operations,

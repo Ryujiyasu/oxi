@@ -639,7 +639,13 @@ pub(crate) fn merge_run_style(child: &mut RunStyle, parent: &RunStyle) {
             child.italic = true;
         }
     }
-    if !child.underline && parent.underline {
+    // OXI_U_NONE_BEATS_PSTYLE (2026-11-27, default ON, opt-out _DISABLE): a run's own
+    // <w:u w:val="none"/> beats the underline of its paragraph style. blind-A en/
+    // educational__00158a7d's table of contents (pStyle TOC4 rPr w:u single, the number
+    // «4.1.1.1» and the tab after it u none): Word underlines only the heading text, Oxi
+    // the number, the tab gap and the dot leader too (p6 / p7, 270pt of rule).
+    let child_says_none = child.underline_style.as_deref() == Some("none");
+    if !child.underline && parent.underline && !child_says_none {
         child.underline = true;
     }
     // S988A: strikethrough is three-state (mirror bold/italic above) — an

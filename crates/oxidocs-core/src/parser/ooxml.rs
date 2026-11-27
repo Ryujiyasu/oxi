@@ -14687,7 +14687,15 @@ fn parse_run_properties(
                         }
                         let s1355 = std::env::var("OXI_S1355_DISABLE").is_err();
                         match val.as_deref() {
-                            Some("none") => { style.underline = false; direct_u_none = true; }
+                            Some("none") => {
+                                style.underline = false;
+                                direct_u_none = true;
+                                // OXI_U_NONE_BEATS_PSTYLE: remembered, so the paragraph
+                                // style's underline merged in later does not come back
+                                if !crate::env_flag!("OXI_U_NONE_BEATS_PSTYLE_DISABLE") {
+                                    style.underline_style = Some("none".to_string());
+                                }
+                            }
                             Some(v) => {
                                 style.underline = true;
                                 style.underline_style = Some(v.to_string());
