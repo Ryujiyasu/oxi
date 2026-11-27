@@ -33,9 +33,9 @@
 
 <table>
 <tr>
-<td width="33%"><img src="docs/img/oxi-docs.gif" alt="A .docx opening in Oxidocs and scrolling"><br><b>Word — .docx</b><br>Pages laid out the way Word lays them out; edit, save, export PDF</td>
-<td width="33%"><img src="docs/img/oxi-cells.gif" alt="A workbook opening; a formula typed into a cell reproduces the sheet's total"><br><b>Excel — .xlsx / .xlsm</b><br>Formulas recalculated, supported VBA macros run in the browser</td>
-<td width="33%"><img src="docs/img/oxi-slides.gif" alt="A deck opening, moving slide to slide, a title edited in place"><br><b>PowerPoint — .pptx</b><br>Slides drawn, edited and presented</td>
+<td width="33%"><img src="docs/img/oxi-docs.gif" alt="A .docx opening in Oxidocs and scrolling"><br><img src="editors/vscode/icons/docx-light.svg" width="28" align="absmiddle" alt=""> <b>Word — .docx</b><br>Pages laid out the way Word lays them out; edit, save, export PDF</td>
+<td width="33%"><img src="docs/img/oxi-cells.gif" alt="A workbook opening; a formula typed into a cell reproduces the sheet's total"><br><img src="editors/vscode/icons/xlsx-light.svg" width="28" align="absmiddle" alt=""> <b>Excel — .xlsx / .xlsm</b><br>Formulas recalculated, supported VBA macros run in the browser</td>
+<td width="33%"><img src="docs/img/oxi-slides.gif" alt="A deck opening, moving slide to slide, a title edited in place"><br><img src="editors/vscode/icons/pptx-light.svg" width="28" align="absmiddle" alt=""> <b>PowerPoint — .pptx</b><br>Slides drawn, edited and presented</td>
 </tr>
 </table>
 
@@ -80,9 +80,9 @@ const layout = layout_document(bytes); // every glyph, line and table cell, posi
 
 | Format | Capabilities |
 |--------|--------------|
-| **Word — `.docx`** | View, edit and export PDF; Japanese typography; round-trip saves that patch only what changed |
-| **Excel — `.xlsx` / `.xlsm`** | View and edit, recalculate formulas, run supported VBA macros |
-| **PowerPoint — `.pptx`** | View, edit and present |
+| <img src="editors/vscode/icons/docx-light.svg" width="20" alt=""> **Word — `.docx`** | View, edit and export PDF; Japanese typography; round-trip saves that patch only what changed |
+| <img src="editors/vscode/icons/xlsx-light.svg" width="20" alt=""> **Excel — `.xlsx` / `.xlsm`** | View and edit, recalculate formulas, run supported VBA macros |
+| <img src="editors/vscode/icons/pptx-light.svg" width="20" alt=""> **PowerPoint — `.pptx`** | View, edit and present |
 | **PDF** | Read and extract text, create PDFs, digital signatures |
 
 Full Office and VBA compatibility is still in progress; the benchmarks below say exactly how far it goes.
