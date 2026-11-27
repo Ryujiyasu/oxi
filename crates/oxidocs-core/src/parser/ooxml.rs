@@ -11613,6 +11613,32 @@ fn parse_drawing_inner(
                 vec![M(fx(0.0), fy(y1)), L(fx(x1), fy(y1)), L(fx(x1), fy(0.0)), L(fx(1.0), fy(0.5)),
                     L(fx(x1), fy(1.0)), L(fx(x1), fy(y2)), L(fx(0.0), fy(y2)), Z]
             }
+            // OXI_DML_BRACKET (2026-11-27, default ON, opt-out _DISABLE): a DrawingML
+            // left / right bracket bends across the WHOLE width and min(w, h) x adj / 100000
+            // down (adj 8333 by default). Word's PDF: blind-H ja/reference__5b3cc5df (6 x 40
+            // and 3.6 x 40, no adj) corners 6.00 x 0.50 / 3.55 x 0.30; blind-D
+            // ja/administrative__0ca9c820 (21.75 wide, adj 55624 / 47025) 21.75 x 12.10 /
+            // 10.23. Oxi bent a sixth of the short side both ways. A half turn mirrors it.
+            Some(t @ ("leftBracket" | "rightBracket"))
+                if !crate::env_flag!("OXI_DML_BRACKET_DISABLE")
+                    && shape_text_blocks.is_empty()
+                    && width > 0.0 && height > 0.0
+                    && rotation.map_or(true, |r| { let r = r.rem_euclid(360.0); r < 0.01 || (r - 180.0).abs() < 0.01 }) =>
+            {
+                let half_turn = rotation.is_some_and(|r| (r.rem_euclid(360.0) - 180.0).abs() < 0.01);
+                let left = (t == "leftBracket") ^ flip_h ^ half_turn;
+                let ss = width.min(height);
+                let adj = g("adj", 8333.0).clamp(0.0, 50000.0 * height / ss);
+                let ay = ss * adj / 100000.0 / height;
+                let k = 0.5523f32;
+                if left {
+                    vec![M(1.0, 0.0), C(1.0 - k, 0.0, 0.0, ay * (1.0 - k), 0.0, ay), L(0.0, 1.0 - ay),
+                        C(0.0, 1.0 - ay + k * ay, 1.0 - k, 1.0, 1.0, 1.0)]
+                } else {
+                    vec![M(0.0, 0.0), C(k, 0.0, 1.0, ay * (1.0 - k), 1.0, ay), L(1.0, 1.0 - ay),
+                        C(1.0, 1.0 - ay + k * ay, k, 1.0, 0.0, 1.0)]
+                }
+            }
             _ => Vec::new(),
         }
     };
@@ -12356,6 +12382,7 @@ fn parse_vml_pict(
 ) -> Result<DrawingResult, ParseError> {
     let mut shape_type = None;
     let mut vml_path_attr: Option<String> = None;
+    let mut vml_adj_attr: Option<f32> = None;
     let mut shape_wrap = None;
     let mut shape_wrap_points: Vec<(f32, f32)> = Vec::new();
     let mut shape_coord_size = (21600.0_f32, 21600.0_f32);
@@ -12626,6 +12653,10 @@ fn parse_vml_pict(
                             let key = local_name(attr.key.as_ref());
                             if key == "path" && local == "shape" {
                                 vml_path_attr = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                            if key == "adj" && local == "shape" {
+                                vml_adj_attr = String::from_utf8_lossy(&attr.value)
+                                    .split(',').next().and_then(|v| v.trim().parse::<f32>().ok());
                             }
                             if key == "wrapcoords" || key == "coordsize" {
                                 let values: Vec<f32> = String::from_utf8_lossy(&attr.value)
@@ -12898,6 +12929,10 @@ fn parse_vml_pict(
                             let key = local_name(attr.key.as_ref());
                             if key == "path" && local == "shape" {
                                 vml_path_attr = Some(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                            if key == "adj" && local == "shape" {
+                                vml_adj_attr = String::from_utf8_lossy(&attr.value)
+                                    .split(',').next().and_then(|v| v.trim().parse::<f32>().ok());
                             }
                             if key == "wrapcoords" || key == "coordsize" {
                                 let values: Vec<f32> = String::from_utf8_lossy(&attr.value)
@@ -13651,6 +13686,39 @@ fn parse_vml_pict(
         .filter(|_| !crate::env_flag!("OXI_VML_PATH_DISABLE"))
         .map(|p| parse_vml_path(p, shape_coord_size))
         .unwrap_or_default();
+    // OXI_VML_BRACKET_PATH (2026-11-27, default ON, opt-out _DISABLE): a VML bracket
+    // (shapetype 85 / 86) is its own path «m21600,qx0@0l0@1qy21600,21600e»: the corner
+    // is a quarter ellipse across the WHOLE width and adj/21600 of the height (adj 1800 by
+    // default). Word's PDF of blind-A ja/technical__7cc63ebc p2 (8.95 x 146, adj 1800):
+    // 175.20 -> 166.25 across, 460.85 -> 473.02 down (= 1800/21600 x 146); Oxi drew
+    // bracketPair's corner of a sixth of the short side (1.5 across).
+    let vml_path = if vml_path.is_empty()
+        && !crate::env_flag!("OXI_VML_BRACKET_PATH_DISABLE")
+        && matches!(shape_type.as_deref(), Some("leftBracket" | "rightBracket"))
+    {
+        use crate::ir::PathSeg;
+        // the two quarter ellipses as Word's PDF draws them (k = 0.5523 of each radius),
+        // in the box's own 0..1 coordinates
+        let ay = vml_adj_attr.unwrap_or(1800.0).clamp(0.0, 10800.0) / 21600.0;
+        let k = 0.5523f32;
+        if shape_type.as_deref() == Some("leftBracket") {
+            vec![
+                PathSeg::M(1.0, 0.0),
+                PathSeg::C(1.0 - k, 0.0, 0.0, ay * (1.0 - k), 0.0, ay),
+                PathSeg::L(0.0, 1.0 - ay),
+                PathSeg::C(0.0, 1.0 - ay + k * ay, 1.0 - k, 1.0, 1.0, 1.0),
+            ]
+        } else {
+            vec![
+                PathSeg::M(0.0, 0.0),
+                PathSeg::C(k, 0.0, 1.0, ay * (1.0 - k), 1.0, ay),
+                PathSeg::L(1.0, 1.0 - ay),
+                PathSeg::C(1.0, 1.0 - ay + k * ay, k, 1.0, 0.0, 1.0),
+            ]
+        }
+    } else {
+        vml_path
+    };
     // OXI_VML_RECT_DEFAULT_FILL (2026-11-03, default ON, opt-out _DISABLE): a VML
     // rect with no fillcolor is filled WHITE (the VML default, as filled="t" with
     // fillcolor white) -- the fill-less Shape fell to the outline-only preset path,
@@ -14350,7 +14418,9 @@ fn apply_run_overrides(style: &mut RunStyle, direct: (bool, bool), had_color: bo
     }
     if direct.0 {
         style.underline = false;
-        style.underline_style = None;
+        // OXI_U_NONE_BEATS_PSTYLE: keep the run's "none" mark for the paragraph-style
+        // merge that follows (clearing it let TOC4's underline back onto «4.1.1.1»)
+        style.underline_style = (!crate::env_flag!("OXI_U_NONE_BEATS_PSTYLE_DISABLE")).then(|| "none".to_string());
     }
     if direct.1 && !had_color {
         style.color = None;

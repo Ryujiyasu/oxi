@@ -12487,10 +12487,19 @@ impl<'a> TableFitLayouter<'a> {
                             .or(if last_row { rule_bottom.as_ref() } else { rule_ih.as_ref() }),
                         horizontal_width,
                     );
+                    // OXI_TBL_NO_INSIDE_V (2026-11-27, default ON, opt-out _DISABLE): an inner
+                    // vertical edge that no cell, the table nor its style gives a rule stays
+                    // bare -- it is not the table's outer border. blind-A en/technical__0043bfe0
+                    // p24 (List Table 3 Accent 4: outer single only, band1Vert left/right under
+                    // tblLook noVBand=1): Word draws the two outer sides, Oxi also the three
+                    // column rules (`arms_43b.py`: noVBand=0 -> Word draws them too).
+                    let iv_bare = side_rules && rule_iv.is_none()
+                        && !crate::env_flag!("OXI_TBL_NO_INSIDE_V_DISABLE");
                     let (left_color, left_width, left_style) = resolve_border(
                         cell_borders.and_then(|b| b.left.as_ref())
                             .or_else(|| undeclared(if cell_idx == 0 { 2 } else { 32 }))
-                            .or(if cell_idx == 0 { rule_left.as_ref() } else { rule_iv.as_ref() }),
+                            .or(if cell_idx == 0 { rule_left.as_ref() } else { rule_iv.as_ref() })
+                            .or(if cell_idx > 0 && iv_bare { Some(&edge_none) } else { None }),
                         if cell_idx == 0 {
                             outer_width
                         } else {
@@ -12500,7 +12509,8 @@ impl<'a> TableFitLayouter<'a> {
                     let (right_color, right_width, right_style) =
                         resolve_border(cell_borders.and_then(|b| b.right.as_ref())
                             .or_else(|| undeclared(if last_cell { 8 } else { 32 }))
-                            .or(if last_cell { rule_right.as_ref() } else { rule_iv.as_ref() }), vertical_width);
+                            .or(if last_cell { rule_right.as_ref() } else { rule_iv.as_ref() })
+                            .or(if !last_cell && iv_bare { Some(&edge_none) } else { None }), vertical_width);
 
                     // When cells have their own borders (tcBorders), draw each side per cell.
                     // When using table-level borders, use collapsed model to avoid double-drawing.

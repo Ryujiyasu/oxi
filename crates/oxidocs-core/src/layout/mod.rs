@@ -947,6 +947,17 @@ fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
         });
     }
     // OXI_DML_FILLED_PRESET: a filled DML ellipse / rightArrow carries its outline.
+    if !shape.is_vml && !shape.vml_path.is_empty()
+        && matches!(shape.shape_type.as_str(), "leftBracket" | "rightBracket")
+    {
+        // OXI_DML_BRACKET: stroke only, at the preset's default 0.75 when a:ln gives none
+        return Some(LayoutContent::VectorPath {
+            segs: shape.vml_path.clone(),
+            fill: None,
+            stroke_color: Some(shape.stroke_color.clone().unwrap_or_else(|| "000000".to_string())),
+            stroke_width: shape.stroke_width.unwrap_or(0.75),
+        });
+    }
     if !shape.is_vml && !shape.vml_path.is_empty() {
         return Some(LayoutContent::VectorPath {
             segs: shape.vml_path.clone(),
@@ -960,9 +971,11 @@ fn shape_fill_boxrect(shape: &Shape) -> Option<LayoutContent> {
     }
     // OXI_VML_PATH: a freeform draws its own outline, filled or not.
     if !shape.vml_path.is_empty() {
+        // OXI_VML_BRACKET_PATH: a bracket (shapetype 85 / 86, filled="f") is a stroke only
+        let bracket = matches!(shape.shape_type.as_str(), "leftBracket" | "rightBracket");
         return Some(LayoutContent::VectorPath {
             segs: shape.vml_path.clone(),
-            fill: shape.fill.clone(),
+            fill: if bracket { None } else { shape.fill.clone() },
             stroke_color: shape.stroke_width.map(|_| shape.stroke_color.clone().unwrap_or_else(|| "000000".to_string())),
             stroke_width: shape.stroke_width.unwrap_or(0.0),
         });

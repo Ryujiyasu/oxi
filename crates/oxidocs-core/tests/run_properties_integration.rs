@@ -143,9 +143,13 @@ fn v1_bold_italic_underline_with_none_polarity() {
         !un.style.underline,
         "<w:u w:val=\"none\"/> SUPPRESSES underline despite element presence"
     );
-    assert!(
-        un.style.underline_style.is_none(),
-        "val=none does NOT populate underline_style"
+    // OXI_U_NONE_BEATS_PSTYLE (2026-11-27): the explicit none is kept as the
+    // style "none" so the paragraph style's underline merged in later cannot
+    // switch the run back on (blind-A en/educational__00158a7d's TOC numbers).
+    assert_eq!(
+        un.style.underline_style.as_deref(),
+        Some("none"),
+        "val=none is remembered as an explicit none"
     );
 }
 
