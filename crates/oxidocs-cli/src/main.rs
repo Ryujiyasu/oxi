@@ -2312,6 +2312,11 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
         let mut contents: Vec<ContentElement> = Vec::new();
         // (index in contents, left, top, bottom, right, highlight name) of the last highlight box
         let mut last_hl: Option<(usize, f64, f64, f64, f64, String)> = None;
+        // OXI_PDF_UL_SPACE_GAP: the previous underlined text element of the line
+        // (top, height, right end, style) when it ended in a space
+        let mut last_ul: Option<UlPrev> = None;
+        // the previous vertical underlined element (column x, width, bottom, style, origin)
+        let mut last_vul: Option<(f64, f64, f64, Option<String>, f64)> = None;
 
         // OXI_PDF_SYMBOL_MARKER_BASELINE (2026-11-13, default ON, opt-out _DISABLE): a Symbol-font
         // list marker sits on its line's body baseline, as the DirectWrite renderer already draws it
@@ -2345,6 +2350,8 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                     underline, underline_style, strikethrough, color, highlight,
                     character_spacing, text_scale, effects, is_vertical, ..
                 } => {
+                    let prev_ul = last_ul.take();
+                    let prev_vul = last_vul.take();
                     // OXI_PDF_TEXT_EFFECTS (2026-11-08, default ON, opt-out _DISABLE): Word's
                     // character effects as the DirectWrite renderer draws them -- no fill
                     // paints nothing; outline = a white fill ringed in the text colour;
@@ -2620,6 +2627,44 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                                 None => ContentElement::Text(span),
                             });
                         }
+                        // OXI_PDF_VERT_UNDERLINE (2026-11-27, default ON, opt-out _DISABLE):
+                        // an underline in vertical text is Word's sideline on the right of
+                        // the column, 0.6 thick at every size, its left edge half the face's
+                        // win height (winAscent + winDescent) right of the column's centre
+                        // line (`_pb_vert_ul_gen.py`: MS Mincho the em box's right edge, Meiryo
+                        // 2.64 further at 10.5; blind-A ja/educational__015355870669 p4 wave
+                        // at 480.65 predicted, 480.67 in Word's PDF). The PDF drew none.
+                        if *underline && std::env::var_os("OXI_PDF_VERT_UNDERLINE_DISABLE").is_none() {
+                            let win = chars.iter().find(|c| !c.is_whitespace())
+                                .and_then(|ch| embedded_fonts.get(&pdf_face_for(*ch, &font_name, *bold, &embedded_fonts)))
+                                .and_then(|f| rustybuzz::Face::from_slice(&f.data, 0))
+                                .map(|f| {
+                                    let u = f.units_per_em() as f64;
+                                    match f.tables().os2 {
+                                        Some(o) => (o.windows_ascender() as f64 + o.windows_descender() as f64) / u,
+                                        None => (f.ascender() as f64 - f.descender() as f64) / u,
+                                    }
+                                })
+                                .unwrap_or(1.0);
+                            let edge = x + ew * 0.5 + win * 0.5 * fs;
+                            let origin = match &prev_vul {
+                                Some((px, pew, pend, pst, porg))
+                                    if (px - x).abs() < 0.01 && (pew - ew).abs() < 0.01
+                                        && (y - pend).abs() < 0.05 && pst.as_deref() == underline_style.as_deref() => *porg,
+                                _ => y,
+                            };
+                            last_vul = Some((x, ew, y + eh, underline_style.clone(), origin));
+                            for (operations, w) in underline_strokes(underline_style.as_deref(), true, y, y + eh, origin, edge, 0.6) {
+                                contents.push(ContentElement::Path(PathData {
+                                    operations,
+                                    stroke: Some(StrokeStyle {
+                                        color: fill_color, width: w,
+                                        line_cap: LineCap::Butt, line_join: LineJoin::Miter,
+                                    }),
+                                    fill: None,
+                                }));
+                            }
+                        }
                         continue;
                     }
                     let hex = |c: u32| Color::Rgb(((c >> 16) & 255) as f64 / 255.0, ((c >> 8) & 255) as f64 / 255.0, (c & 255) as f64 / 255.0);
@@ -2772,15 +2817,91 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                         }
                     }
 
+                    if !*underline {
+                        if let Some(p) = prev_ul.as_ref().filter(|p| (p.y - y).abs() < 0.01 && (p.eh - eh).abs() < 0.01) {
+                            push_held_space(&mut contents, p);
+                        }
+                    }
                     // Underline
                     if *underline {
-                        let is_double = underline_style.as_deref() == Some("double");
                         let ul_w = 0.5_f64.max(fs * 0.05);
-                        if is_double {
-                            // Double underline: two lines
-                            let ul_y1 = text_y + fs * 0.10;
-                            let ul_y2 = text_y + fs * 0.22;
-                            for ul_y in [ul_y1, ul_y2] {
+                        // OXI_PDF_UL_SPACE_GAP (2026-11-27, default ON, opt-out _DISABLE): the
+                        // widened space of a justified line belongs to the underlined run, so
+                        // Word's line runs on across it to the next word. The layout splits a
+                        // stretched line into word elements (each with its trailing space)
+                        // and the PDF left the stretch bare (`_pb_ul_justify_gen.py`: jc both /
+                        // distribute / a w:cr line -- one stroke 72..540 in Word; a space run
+                        // without w:u or w:u="words" -- gaps in Word too; blind-A en/
+                        // administrative__001eef60 p1 «Overview of Main Duties ...»).
+                        // The gap is the run's own (justify / distribute stretch, a tab) when the
+                        // previous element is the same run of the paragraph, or ended in a space.
+                        // A space-only element is held back and drawn only when more of the line
+                        // follows: Word leaves a line's trailing space bare (long_single 72..540.1).
+                        let gap_on = std::env::var_os("OXI_PDF_UL_SPACE_GAP_DISABLE").is_none()
+                            && underline_style.as_deref() != Some("words");
+                        let cont = prev_ul.as_ref().filter(|p| (p.y - y).abs() < 0.01 && (p.eh - eh).abs() < 0.01
+                            && p.style.as_deref() == underline_style.as_deref());
+                        let (s0, origin, absorbed) = match cont {
+                            Some(p) if (x - p.end).abs() < 0.05 && p.held.is_none() => (x, p.origin, true),
+                            Some(p) if gap_on && x > p.end - 0.05 && x - p.end < 200.0
+                                && (p.ends_space || (p.run.is_some() && p.run == elem.run_index
+                                    && p.para == elem.paragraph_index)) => (p.end, p.origin, true),
+                            _ => (x, x, false),
+                        };
+                        if !absorbed {
+                            if let Some(p) = prev_ul.as_ref().filter(|p| (p.y - y).abs() < 0.01) {
+                                push_held_space(&mut contents, p);
+                            }
+                        }
+                        // Only the ASCII space: an underlined U+3000 fill-in blank runs to its end
+                        // (blind-A ja/correspondence__03dac448 p2, Word 152.4..524.5).
+                        let space_only = !text.is_empty() && text.chars().all(|c| c == ' ');
+                        let hold = gap_on && space_only;
+                        last_ul = Some(UlPrev {
+                            y, eh,
+                            end: if hold { s0 } else { seg_x },
+                            style: underline_style.clone(),
+                            origin,
+                            ends_space: text.ends_with(' ') || text.ends_with('\u{3000}'),
+                            para: elem.paragraph_index,
+                            run: elem.run_index,
+                            held: hold.then(|| (s0, seg_x, text_y + fs * 0.15 - ul_w * 0.5, ul_w, fill_color.clone())),
+                        });
+                        if hold {
+                            // drawn by the next element of the line, or never
+                        } else if std::env::var_os("OXI_PDF_UL_STYLES_DISABLE").is_none() {
+                            let edge = text_y + fs * 0.15 - ul_w * 0.5;
+                            for (operations, w) in underline_strokes(underline_style.as_deref(), false, s0, seg_x, origin, edge, ul_w) {
+                                contents.push(ContentElement::Path(PathData {
+                                    operations,
+                                    stroke: Some(StrokeStyle {
+                                        color: fill_color, width: w,
+                                        line_cap: LineCap::Butt, line_join: LineJoin::Miter,
+                                    }),
+                                    fill: None,
+                                }));
+                            }
+                        } else {
+                            let is_double = underline_style.as_deref() == Some("double");
+                            if is_double {
+                                // Double underline: two lines
+                                let ul_y1 = text_y + fs * 0.10;
+                                let ul_y2 = text_y + fs * 0.22;
+                                for ul_y in [ul_y1, ul_y2] {
+                                    contents.push(ContentElement::Path(PathData {
+                                        operations: vec![
+                                            PathOp::MoveTo(x, ul_y),
+                                            PathOp::LineTo(seg_x, ul_y),
+                                        ],
+                                        stroke: Some(StrokeStyle {
+                                            color: fill_color, width: ul_w,
+                                            line_cap: LineCap::Butt, line_join: LineJoin::Miter,
+                                        }),
+                                        fill: None,
+                                    }));
+                                }
+                            } else {
+                                let ul_y = text_y + fs * 0.15;
                                 contents.push(ContentElement::Path(PathData {
                                     operations: vec![
                                         PathOp::MoveTo(x, ul_y),
@@ -2793,19 +2914,6 @@ fn doc_to_pdf(doc: &oxidocs_core::Document) -> (PdfDocument, std::collections::B
                                     fill: None,
                                 }));
                             }
-                        } else {
-                            let ul_y = text_y + fs * 0.15;
-                            contents.push(ContentElement::Path(PathData {
-                                operations: vec![
-                                    PathOp::MoveTo(x, ul_y),
-                                    PathOp::LineTo(seg_x, ul_y),
-                                ],
-                                stroke: Some(StrokeStyle {
-                                    color: fill_color, width: ul_w,
-                                    line_cap: LineCap::Butt, line_join: LineJoin::Miter,
-                                }),
-                                fill: None,
-                            }));
                         }
                     }
 
@@ -5970,6 +6078,112 @@ fn dash_pattern_widths(style: Option<&str>) -> Option<Vec<f64>> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// OXI_PDF_UL_SPACE_GAP: the underlined text element before this one on the line.
+struct UlPrev {
+    y: f64,
+    eh: f64,
+    /// where the next element's underline may continue from
+    end: f64,
+    style: Option<String>,
+    /// where the run's underline began (dot / wave phase)
+    origin: f64,
+    ends_space: bool,
+    para: Option<usize>,
+    run: Option<usize>,
+    /// a space-only element not drawn yet: (from, to, edge, thickness, colour)
+    held: Option<(f64, f64, f64, f64, Color)>,
+}
+
+fn push_held_space(contents: &mut Vec<ContentElement>, p: &UlPrev) {
+    if let Some((a, b, edge, t, color)) = &p.held {
+        for (operations, w) in underline_strokes(p.style.as_deref(), false, *a, *b, p.origin, *edge, *t) {
+            contents.push(ContentElement::Path(PathData {
+                operations,
+                stroke: Some(StrokeStyle { color: color.clone(), width: w, line_cap: LineCap::Butt, line_join: LineJoin::Miter }),
+                fill: None,
+            }));
+        }
+    }
+}
+
+/// OXI_PDF_UL_STYLES (2026-11-27, default ON, opt-out _DISABLE): the strokes of an
+/// underline of style `style` from `s0` to `s1` along the text, `edge` being the near
+/// edge of a single underline of thickness `t` (horizontal: its top, the lines grow
+/// down; vertical: its left, Word's sideline on the right of the column). Word's PDF
+/// (`_pb_vert_ul_gen.py` / `_pb_vert_ul2_gen.py`, MS Mincho / Meiryo 8-28pt):
+/// dotted = 1.44 on / 1.44 off, dash = 3.96 / 1.92 (fixed lengths at every size);
+/// double = a second line of t a gap of t further out; thick = 2t + 0.12 (vertical:
+/// grows toward the text from the single line's outer edge); wave = cubic arcs of a
+/// fixed 1.2 half-period, horizontal from the line's top down 1.35t, vertical from
+/// 0.24 left of the line to its right edge.
+fn underline_strokes(style: Option<&str>, vertical: bool, s0: f64, s1: f64, origin: f64, edge: f64, t: f64) -> Vec<(Vec<PathOp>, f64)> {
+    // `origin`: where the run's underline began -- dots and waves keep their phase
+    // across the elements a run is drawn in (Word draws the run as one stroke).
+    let pt = |a: f64, c: f64| if vertical { (c, a) } else { (a, c) };
+    let line = |c: f64| {
+        let (ax, ay) = pt(s0, c);
+        let (bx, by) = pt(s1, c);
+        vec![PathOp::MoveTo(ax, ay), PathOp::LineTo(bx, by)]
+    };
+    let dashes = |c: f64, on: f64, off: f64| {
+        let period = on + off;
+        let mut ops = Vec::new();
+        let mut a = origin + ((s0 - origin) / period).floor() * period;
+        while a < s1 - 0.01 {
+            let (b, e) = (a.max(s0), (a + on).min(s1));
+            if e > b + 0.01 {
+                let (ax, ay) = pt(b, c);
+                let (bx, by) = pt(e, c);
+                ops.push(PathOp::MoveTo(ax, ay));
+                ops.push(PathOp::LineTo(bx, by));
+            }
+            a += period;
+        }
+        ops
+    };
+    let on = std::env::var_os("OXI_PDF_UL_STYLES_DISABLE").is_none();
+    match style {
+        Some("double") => vec![(line(edge + t * 0.5), t), (line(edge + t * 2.5), t)],
+        Some("thick") if on => {
+            let w = 2.0 * t + 0.12;
+            let c = if vertical { edge + t - w * 0.5 } else { edge + w * 0.5 };
+            vec![(line(c), w)]
+        }
+        Some("dotted") if on => vec![(dashes(edge + t * 0.5, 1.44, 1.44), t)],
+        Some("dottedHeavy") if on => vec![(dashes(edge + t, 1.44, 1.44), 2.0 * t)],
+        Some("dash") if on => vec![(dashes(edge + t * 0.5, 3.96, 1.92), t)],
+        Some("dashedHeavy") if on => vec![(dashes(edge + t, 3.96, 1.92), 2.0 * t)],
+        Some("wave") if on && s1 > s0 + 0.01 => {
+            let (lo, hi) = if vertical { (edge - 0.24, edge + t) } else { (edge, edge + 1.35 * t) };
+            let (mid, amp, hp) = ((lo + hi) * 0.5, (hi - lo) * 0.5, 1.2_f64);
+            let k = std::f64::consts::PI / hp;
+            let c = |a: f64| mid + amp * (k * (a - origin)).cos();
+            let d = |a: f64| -amp * k * (k * (a - origin)).sin();
+            let mut stops = vec![s0];
+            let mut a = origin + ((s0 - origin) / hp).floor() * hp + hp;
+            while a < s1 - 0.01 {
+                if a > s0 + 0.01 {
+                    stops.push(a);
+                }
+                a += hp;
+            }
+            stops.push(s1);
+            let (x0, y0) = pt(s0, c(s0));
+            let mut ops = vec![PathOp::MoveTo(x0, y0)];
+            for w in stops.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                let h = (b - a) / 3.0;
+                let (p1x, p1y) = pt(a + h, c(a) + h * d(a));
+                let (p2x, p2y) = pt(b - h, c(b) - h * d(b));
+                let (p3x, p3y) = pt(b, c(b));
+                ops.push(PathOp::CurveTo(p1x, p1y, p2x, p2y, p3x, p3y));
+            }
+            vec![(ops, 0.24)]
+        }
+        _ => vec![(line(edge + t * 0.5), t)],
     }
 }
 

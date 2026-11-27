@@ -8610,8 +8610,14 @@ impl<'a> ParagraphLayouter<'a> {
             // Paragraph-level revisions (ppr_change, paragraph_mark_revision)
             // count as revisions on every line of the paragraph — they're
             // detected once at paragraph entry rather than per-fragment.
-            let mut line_has_revision =
-                para.ppr_change.is_some() || para.paragraph_mark_revision.is_some();
+            // OXI_FINAL_NO_BARS (2026-11-27, default ON, opt-out _DISABLE): Word's
+            // Final / Original views ("No Markup") draw no change bars -- a pPrChange or
+            // rPrChange left a bar in the margin of every line of the paragraph
+            // (blind-A en/correspondence__00217539 p1-p4, the CLI's S483 Final view).
+            let show_bars = crate::env_flag!("OXI_FINAL_NO_BARS_DISABLE")
+                || matches!(self.show_revisions, ShowRevisions::All | ShowRevisions::Simple);
+            let mut line_has_revision = show_bars
+                && (para.ppr_change.is_some() || para.paragraph_mark_revision.is_some());
 
             // S705 (2026-06-30): paragraph-level shd (w:pPr/w:shd) fills the
             // whole text column behind the paragraph. Emit a full-line-width
@@ -10105,7 +10111,7 @@ impl<'a> ParagraphLayouter<'a> {
                 // canonical signal. Word fires a change bar for any revision
                 // — insert/delete/move via `tracked_change`, or formatting
                 // change via `rpr_change` (R-12).
-                if !line_has_revision {
+                if !line_has_revision && show_bars {
                     if let Some(run) = para.runs.get(frag.run_index) {
                         if run.tracked_change.is_some() || run.rpr_change.is_some() {
                             line_has_revision = true;

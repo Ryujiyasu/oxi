@@ -256,14 +256,24 @@ fn scale(lo: f64, hi: f64, axis: Option<&Node>) -> (f64, f64, f64) {
     let fixed = |name: &str| axis.and_then(|a| a.path(&["scaling", name])).and_then(|n| n.num("val")).map(f64::from);
     let major_fixed = axis.and_then(|a| a.child("majorUnit")).and_then(|n| n.num("val")).map(f64::from);
     let (lo, hi) = if lo.is_finite() && hi.is_finite() { (lo, hi) } else { (0.0, 1.0) };
-    let mut min = fixed("min").unwrap_or(if lo >= 0.0 && lo <= hi * 5.0 / 6.0 { 0.0 } else { lo });
+    // OXI_CHART_AXIS_PAD (2026-11-27, default ON, opt-out _DISABLE): the automatic minimum
+    // is the data minimum less 5% of the data range, floored to the major unit, and snaps
+    // to 0 only when the positive data spans MORE than a sixth of its maximum. Word's PDF
+    // (`arms_156s.py`, data swapped into blind-A en/reports__00156ad9's scatter): 50..60 ->
+    // 48..62 (span exactly 1/6: no snap), 8.4..10 -> 8.2..10.2, 1..10 / 2..10 -> 0..12,
+    // -3..7 -> -4..8; blind-A en/reference__0042471c x 2015..2020 -> 2014..2021. Oxi
+    // floored the bare minimum (50, 2015).
+    let pad = !crate::env_flag!("OXI_CHART_AXIS_PAD_DISABLE");
+    let zero_min = if pad { lo >= 0.0 && hi - lo > hi / 6.0 } else { lo >= 0.0 && lo <= hi * 5.0 / 6.0 };
+    let mut min = fixed("min").unwrap_or(if zero_min { 0.0 } else { lo });
     let mut max = fixed("max").unwrap_or(if hi <= 0.0 { 0.0 } else { hi });
     if max <= min {
         max = min + 1.0;
     }
     let major = major_fixed.unwrap_or_else(|| major_unit(max - min));
     if fixed("min").is_none() && min != 0.0 {
-        min = (min / major).floor() * major;
+        let m = if pad { min - 0.05 * (hi - lo) } else { min };
+        min = (m / major).floor() * major;
     }
     if fixed("max").is_none() {
         max = ((hi + 0.05 * (hi - min)) / major).ceil() * major;
