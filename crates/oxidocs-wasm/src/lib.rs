@@ -345,6 +345,20 @@ impl DocxDocument {
         Ok(())
     }
 
+    /// Word's Insert Picture at a model position (`{para, offset}`): the
+    /// image bytes (`content_type` image/png, image/jpeg, image/gif, ...)
+    /// go in at `width_emu` by `height_emu` (914400 EMU to the inch). Applied
+    /// here rather than returned as edits, so the image is not copied into
+    /// JSON and back. Returns the position just after the picture as JSON.
+    pub fn insert_picture(&mut self, at_json: &str, data: &[u8], content_type: &str, width_emu: f64, height_emu: f64) -> Result<String, JsError> {
+        let at: oxidocs_model::edit::Pos = serde_json::from_str(at_json).map_err(|e| JsError::new(&e.to_string()))?;
+        let (edits, end) = oxidocs_model::edit::picture_edits(&self.model, &at, data, content_type, width_emu.round() as i64, height_emu.round() as i64)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        oxidocs_model::edit::apply_all(&mut self.model, &edits).map_err(|e| JsError::new(&e.to_string()))?;
+        *self.map.borrow_mut() = None;
+        Ok(serde_json::to_string(&end).unwrap())
+    }
+
     fn with_map<T>(&self, f: impl FnOnce(&model_map::DocMap) -> T) -> Result<T, JsError> {
         if self.map.borrow().is_none() {
             let bytes = self.save()?;
