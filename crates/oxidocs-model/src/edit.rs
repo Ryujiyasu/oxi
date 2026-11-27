@@ -2277,6 +2277,128 @@ pub fn link_edits(model: &DocxModel, from: &Pos, to: &Pos, url: &str) -> Result<
     Ok((edits, end))
 }
 
+/// The edits Word's Insert Picture makes at `at`: an inline picture,
+/// `width_emu` by `height_emu`, in a run of its own carrying the formatting
+/// typed there. The image (`content_type`, e.g. `image/png`) becomes a part
+/// of its own, `media/image1.<ext>` (the writer renames it if taken), and the drawing's
+/// `wp:docPr` takes an id no other drawing in the document has. Returns the
+/// edits and the position just after the picture.
+pub fn picture_edits(
+    model: &DocxModel,
+    at: &Pos,
+    data: &[u8],
+    content_type: &str,
+    width_emu: i64,
+    height_emu: i64,
+) -> Result<(Vec<Edit>, Pos), EditError> {
+    let ext = match content_type {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpeg",
+        "image/gif" => "gif",
+        "image/bmp" => "bmp",
+        "image/tiff" => "tiff",
+        _ => return err(format!("pictures are PNG, JPEG, GIF, BMP or TIFF, not {content_type}")),
+    };
+    if data.is_empty() {
+        return err("the picture is empty");
+    }
+    if width_emu <= 0 || height_emu <= 0 {
+        return err("a picture needs a size");
+    }
+    let id = next_drawing_id(model);
+    let xml = crate::xml::parse(&format!(
+        concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">"#,
+            r#"<wp:extent cx="{cx}" cy="{cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>"#,
+            r#"<wp:docPr id="{id}" name="Picture {id}"/>"#,
+            r#"<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>"#,
+            r#"<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">"#,
+            r#"<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">"#,
+            r#"<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">"#,
+            r#"<pic:nvPicPr><pic:cNvPr id="0" name="Picture {id}"/><pic:cNvPicPr/></pic:nvPicPr>"#,
+            r##"<pic:blipFill><a:blip r:embed="#0" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>"##,
+            r#"<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>"#,
+            r#"</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#,
+        ),
+        cx = width_emu,
+        cy = height_emu,
+        id = id,
+    ))
+    .map_err(|e| EditError(format!("picture markup: {e:?}")))?;
+    let part = crate::content::Part::Internal {
+        rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image".into(),
+        name: format!("media/image1.{ext}"),
+        content_type: content_type.into(),
+        data: data.to_vec(),
+        rels: Vec::new(),
+    };
+    let run = Run { props: typed_props(model, at)?, content: vec![RunItem::Object(Object { xml, parts: vec![part] })] };
+    let edits = vec![Edit::InsertInline { at: at.clone(), inline: Inline::Run(run) }];
+    let mut trial = model.clone();
+    let before = paragraph_end(&trial, &at.story, at.para)?;
+    apply_all(&mut trial, &edits)?;
+    let grew = paragraph_end(&trial, &at.story, at.para)? - before;
+    Ok((edits, Pos { offset: at.offset + grew, ..at.clone() }))
+}
+
+/// A w14:paraId no paragraph of the document has: eight hex digits below
+/// 0x80000000, as the schema requires.
+fn fresh_para_id(model: &DocxModel) -> String {
+    fn walk(v: &serde_json::Value, ids: &mut std::collections::HashSet<u32>) {
+        match v {
+            serde_json::Value::Array(a) => {
+                if a.len() == 2 && a[0].as_str() == Some("w14:paraId") {
+                    if let Some(n) = a[1].as_str().and_then(|h| u32::from_str_radix(h, 16).ok()) {
+                        ids.insert(n);
+                    }
+                }
+                a.iter().for_each(|c| walk(c, ids));
+            }
+            serde_json::Value::Object(o) => o.values().for_each(|c| walk(c, ids)),
+            _ => {}
+        }
+    }
+    let mut ids = std::collections::HashSet::new();
+    if let Ok(v) = serde_json::to_value(model) {
+        walk(&v, &mut ids);
+    }
+    let mut n: u32 = 0x1C0F_FEE0;
+    while ids.contains(&n) {
+        n = (n + 1) & 0x7FFF_FFFF;
+    }
+    format!("{n:08X}")
+}
+
+/// One more than the largest `wp:docPr` id in the document's drawings (Word
+/// wants each drawing's id to be its own).
+fn next_drawing_id(model: &DocxModel) -> u64 {
+    fn walk(v: &serde_json::Value, max: &mut u64) {
+        match v {
+            serde_json::Value::Object(o) => {
+                if o.get("name").and_then(|n| n.as_str()) == Some("wp:docPr") {
+                    if let Some(serde_json::Value::Array(attrs)) = o.get("attrs") {
+                        for a in attrs {
+                            if a.get(0).and_then(|k| k.as_str()) == Some("id") {
+                                if let Some(n) = a.get(1).and_then(|v| v.as_str()).and_then(|v| v.parse::<u64>().ok()) {
+                                    *max = (*max).max(n);
+                                }
+                            }
+                        }
+                    }
+                }
+                o.values().for_each(|c| walk(c, max));
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|c| walk(c, max)),
+            _ => {}
+        }
+    }
+    let mut max = 0;
+    if let Ok(v) = serde_json::to_value(model) {
+        walk(&v, &mut max);
+    }
+    max + 1
+}
+
 /// The id of the style of `kind` (`paragraph`, `character`) named `name`,
 /// with `make` defining it (given a free id near `preferred`) when the
 /// document lacks it. Styles defined earlier in `edits` count.
@@ -2583,6 +2705,14 @@ pub fn comment_edits(model: &DocxModel, from: &Pos, to: &Pos, text: &str, author
     });
     let start = Pos { story: Story::Comment(index), para: 0, offset: 0 };
     edits.push(Edit::FormatParagraphs { from: start.clone(), to: start.clone(), patch: Patch { set: vec![val("w:pStyle", &text_style)], ..Default::default() } });
+    // Word joins a comment to its replies and its resolved state
+    // (commentsExtended) by its paragraph's w14:paraId, so the comment's
+    // paragraph gets one no other paragraph has.
+    edits.push(Edit::SetParagraphAttrs {
+        story: Story::Comment(index),
+        para: 0,
+        attrs: vec![("w14:paraId".into(), fresh_para_id(model)), ("w14:textId".into(), "77777777".into())],
+    });
     let mark = mark_run(Some(&ref_style), "w:annotationRef", vec![])?;
     let after_mark = inline_len(&mark);
     edits.push(Edit::InsertInline { at: start.clone(), inline: mark });
@@ -3123,9 +3253,11 @@ fn coalesce(v: &mut Vec<Inline>) {
         if let Some(inner) = children_mut(&mut it) {
             coalesce(inner);
         }
-        // Word gives a field's characters and code runs of their own; so
-        // does tidying (readers that split fields by run expect it).
-        let field = |r: &Run| r.content.iter().any(|c| matches!(c, RunItem::FieldChar { .. } | RunItem::InstrText(_) | RunItem::DeletedInstrText(_)));
+        // Word gives a field's characters and code runs of their own, and a
+        // picture or other drawn object a run of its own; so does tidying
+        // (readers that split fields by run expect it, and a layout reading a
+        // run as either text or a picture would drop the text beside one).
+        let field = |r: &Run| r.content.iter().any(|c| matches!(c, RunItem::FieldChar { .. } | RunItem::InstrText(_) | RunItem::DeletedInstrText(_) | RunItem::Object(_)));
         if let (Some(Inline::Run(prev)), Inline::Run(r)) = (out.last_mut(), &it) {
             if prev.props == r.props && !r.content.iter().any(|c| matches!(c, RunItem::Props(_))) && !field(prev) && !field(r) {
                 let Inline::Run(r) = it else { unreachable!() };
@@ -3135,6 +3267,30 @@ fn coalesce(v: &mut Vec<Inline>) {
                         (Some(RunItem::DeletedText(a)), RunItem::DeletedText(b)) => a.push_str(&b),
                         (_, c) => prev.content.push(c),
                     }
+                }
+                continue;
+            }
+        }
+        // A picture or other drawn object keeps a run of its own: text typed
+        // beside one (which lands in its run) is split off into runs of the
+        // same properties before and after it.
+        if let Inline::Run(r) = &it {
+            if r.content.len() > 1 && r.content.iter().any(|c| matches!(c, RunItem::Object(_))) {
+                let Inline::Run(r) = it else { unreachable!() };
+                let mut pending: Vec<RunItem> = Vec::new();
+                for c in r.content {
+                    match c {
+                        RunItem::Object(o) => {
+                            if !pending.is_empty() {
+                                out.push(Inline::Run(Run { props: r.props.clone(), content: std::mem::take(&mut pending) }));
+                            }
+                            out.push(Inline::Run(Run { props: r.props.clone(), content: vec![RunItem::Object(o)] }));
+                        }
+                        other => pending.push(other),
+                    }
+                }
+                if !pending.is_empty() {
+                    out.push(Inline::Run(Run { props: r.props, content: pending }));
                 }
                 continue;
             }

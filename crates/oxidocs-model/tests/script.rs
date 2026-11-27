@@ -319,6 +319,17 @@ fn insert_comment_as_words_does() {
     assert_eq!(comments.len(), 2);
     // The comment's own mark comes first, then its text.
     assert_eq!(edit::paragraph_texts(&m, &Story::Comment(1)).unwrap()[0], "\u{5}check this");
+    // Each comment's paragraph has a w14:paraId of its own, the key replies
+    // and the resolved state are joined by, and it is written out.
+    let para_id = |i: usize| {
+        let Block::Paragraph(p) = &comments[i].content[0] else { panic!() };
+        p.attrs.iter().find(|(k, _)| k == "w14:paraId").map(|(_, v)| v.clone()).expect("paraId")
+    };
+    assert_ne!(para_id(0), para_id(1));
+    let bytes = m.write(None).unwrap();
+    let back = DocxModel::read(&bytes).unwrap();
+    let Block::Paragraph(p) = &back.comments.as_ref().unwrap()[1].content[0] else { panic!() };
+    assert!(p.attrs.iter().any(|(k, v)| k == "w14:paraId" && *v == para_id(1)));
 }
 
 #[test]
@@ -404,4 +415,66 @@ fn tracked_typing_and_deleting_as_words_does() {
     assert!(!edit::tracking(&m));
     apply(&mut m, &Edit::SetTrackRevisions { on: true }).unwrap();
     assert!(edit::tracking(&m));
+}
+
+#[test]
+fn insert_picture_adds_an_inline_drawing_and_its_image_part() {
+    // A 1x1 PNG.
+    let png: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+        0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0, 0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99, 0x3D, 0x1D, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    let mut m = DocxModel { body: vec![para(vec![run("ab", false)])], ..Default::default() };
+    let (edits, end) = edit::picture_edits(&m, &Pos::body(0, 1), png, "image/png", 914400, 457200).unwrap();
+    apply_all(&mut m, &edits).unwrap();
+    // The picture is one position, between a and b; the caret goes after it.
+    let text = &edit::paragraph_texts(&m, &Story::Body).unwrap()[0];
+    assert_eq!(text.encode_utf16().count(), 3);
+    assert_eq!(end.offset, 2);
+    // Text typed just after the picture goes in a run of its own.
+    apply(&mut m, &Edit::InsertText { at: end.clone(), text: "x".into() }).unwrap();
+    {
+        let Block::Paragraph(p) = &m.body[0] else { panic!() };
+        let mixed = |i: &Inline| matches!(i, Inline::Run(r) if r.content.len() > 1 && r.content.iter().any(|c| matches!(c, RunItem::Object(_))));
+        assert!(!p.content.iter().any(mixed), "{:?}", p.content);
+        let shown: String = edit::shown_positions(&edit::paragraph_texts(&m, &Story::Body).unwrap()[0]).into_iter().map(|(c, _)| c).filter(|c| *c != '\u{1}').collect();
+        assert_eq!(shown, "axb");
+    }
+    apply(&mut m, &Edit::Delete { from: end.clone(), to: Pos { offset: end.offset + 1, ..end.clone() } }).unwrap();
+    // A second picture takes a drawing id of its own.
+    let (more, _) = edit::picture_edits(&m, &end, png, "image/png", 914400, 914400).unwrap();
+    apply_all(&mut m, &more).unwrap();
+
+    let bytes = m.write(None).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let mut read = |name: &str| {
+        use std::io::Read;
+        let mut s = String::new();
+        zip.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+        s
+    };
+    let doc = read("word/document.xml");
+    let rels = read("word/_rels/document.xml.rels");
+    let types = read("[Content_Types].xml");
+    assert_eq!(doc.matches("<wp:inline").count(), 2, "{doc}");
+    // Each picture is a run of its own, as Word writes it, not joined to the
+    // text beside it.
+    assert!(doc.contains("<w:t>a</w:t></w:r><w:r><w:drawing>") || doc.contains(r#"<w:t xml:space="preserve">a</w:t></w:r><w:r><w:drawing>"#), "{doc}");
+    assert!(doc.contains(r#"cx="914400" cy="457200""#));
+    assert!(doc.contains(r#"<wp:docPr id="1""#) && doc.contains(r#"<wp:docPr id="2""#), "{doc}");
+    let rid = doc.split(r#"r:embed=""#).nth(1).unwrap().split('"').next().unwrap();
+    assert!(rels.contains(&format!(r#"Id="{rid}""#)) && rels.contains("relationships/image"), "{rels}");
+    assert!(types.contains("png"), "{types}");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    // The same picture twice is stored once, as Word does on save.
+    let media: Vec<String> = zip.file_names().filter(|n| n.starts_with("word/media/")).map(String::from).collect();
+    assert_eq!(media, vec!["word/media/image1.png".to_string()]);
+    let mut got = Vec::new();
+    { use std::io::Read; zip.by_name(&media[0]).unwrap().read_to_end(&mut got).unwrap(); }
+    assert_eq!(got, png);
+    // It reads back, and the engine lays the picture out.
+    DocxModel::read(&bytes).unwrap();
+    assert!(edit::picture_edits(&m, &Pos::body(0, 0), png, "image/webp", 1, 1).is_err());
 }

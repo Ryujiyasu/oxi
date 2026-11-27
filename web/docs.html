@@ -175,6 +175,21 @@ body.mm-previewing .page-canvas{outline:2px dashed var(--accent);outline-offset:
 .fb button{padding:3px 8px;border:1px solid #ccc;border-radius:3px;background:#fafafa;cursor:pointer;font:inherit;font-size:12px}
 .fb button:hover{background:#f0f0f0}
 #findCount{color:#666;font-size:12px;min-width:56px;text-align:center}
+
+/* Comments (Review › Show Comments) */
+.cm-card{margin:8px 10px;padding:8px 10px;border:1px solid #e3e3e3;border-radius:6px;background:#fff}
+.cm-card.resolved{opacity:.6}
+.cm-head{display:flex;align-items:center;gap:6px;font-size:12px}
+.cm-ava{width:20px;height:20px;border-radius:50%;background:var(--accent);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0}
+.cm-name{font-weight:600}
+.cm-time{color:#888;margin-left:auto;font-size:11px}
+.cm-body{margin:4px 0 2px 26px;white-space:pre-wrap;word-break:break-word}
+.cm-reply{margin:6px 0 0 18px;padding-left:8px;border-left:2px solid #eee}
+.cm-acts{display:flex;gap:4px;margin:6px 0 0 26px;flex-wrap:wrap}
+.cm-acts button{padding:3px 8px;border:1px solid #ccc;border-radius:4px;background:#fafafa;cursor:pointer;font:inherit;font-size:11px}
+.cm-acts button:hover{background:#f0f0f0}
+.cm-acts input{flex:1;min-width:120px;padding:3px 6px;border:1px solid #ccc;border-radius:3px;font:inherit;font-size:12px}
+.cm-empty{color:#666;padding:12px 14px;font-size:12px}
 </style>
 </head>
 <body>
@@ -241,6 +256,7 @@ body.mm-previewing .page-canvas{outline:2px dashed var(--accent);outline-offset:
   <button class="active" data-tab="home" data-i18n="home">Home</button>
   <button data-tab="insert" data-i18n="insert">Insert</button>
   <button data-tab="layout" data-i18n="layout">Layout</button>
+  <button data-tab="review" data-i18n="review">Review</button>
   <button data-tab="mailings" data-i18n="mailings">Mailings</button>
   <!-- File menu (Word-style dropdown) -->
   <div class="fmenu" id="fileMenu">
@@ -362,6 +378,14 @@ body.mm-previewing .page-canvas{outline:2px dashed var(--accent);outline-offset:
     <button class="rb lg" id="btnFooter"><svg><use href="#i-ftr"/></svg> <span data-i18n="footer">Footer</span></button>
     <button class="rb lg" id="btnField"><svg><use href="#i-fld"/></svg> <span data-i18n="field">Field</span></button>
   </div><span class="rg-l" data-i18n="insert">Insert</span></div>
+</div>
+
+<!-- Review ribbon -->
+<div class="rib" id="ribReview" style="display:none">
+  <div class="rg"><div class="rr" style="gap:6px">
+    <button class="rb lg" id="btnNewComment"><svg><use href="#i-cm"/></svg> <span data-i18n="newComment">New Comment</span></button>
+    <button class="rb lg" id="btnShowComments"><svg><use href="#i-cm"/></svg> <span data-i18n="showComments">Show Comments</span></button>
+  </div><span class="rg-l" data-i18n="comments">Comments</span></div>
 </div>
 
 <!-- Mailings ribbon -->
@@ -522,6 +546,10 @@ body.mm-previewing .page-canvas{outline:2px dashed var(--accent);outline-offset:
     <div class="mm-row"><button class="bp" id="mmDoc" data-i18n="mmToDoc">One document (.docx)</button><button id="mmPdf" data-i18n="mmToPdf">PDF to print</button><button id="mmEach" data-i18n="mmToEach">A file per record (.zip)</button></div>
   </section>
 </div>
+<div class="mm cm" id="cmPanel" hidden role="complementary" aria-labelledby="cmTitle">
+  <div class="mm-h"><b id="cmTitle" data-i18n="comments">Comments</b><button id="cmClose" title="Close" aria-label="Close">&times;</button></div>
+  <div id="cmList"></div>
+</div>
 <div class="fb" id="findBar" hidden role="search">
   <div class="fb-row"><input id="findInput" data-i18n-placeholder="find" placeholder="Find"><span id="findCount"></span>
     <button id="findPrev" aria-label="Previous">&#9650;</button><button id="findNext" aria-label="Next">&#9660;</button><button id="findClose" aria-label="Close">&times;</button></div>
@@ -545,6 +573,7 @@ fontLoader.standIns = true;
 // ---- i18n ----
 const I18N = {
   en: {
+    review: 'Review', newComment: 'New Comment', showComments: 'Show Comments', comments: 'Comments', cmNone: 'No comments in this document.', cmReply: 'Reply', cmReplyHint: 'Reply…', cmResolve: 'Resolve', cmReopen: 'Reopen', cmDelete: 'Delete', cmYou: 'You', cmNoAnchor: 'This comment is in a table; replies are not supported there yet.', picBad: 'Pictures can be PNG, JPEG, GIF or BMP.',
     mailMerge: 'Mail Merge', mailings: 'Mailings', mergeField: 'Field name', source: 'Source',
     find: 'Find', replaceWith: 'Replace with', replace: 'Replace', replaceAll: 'Replace all', findNone: 'No results', findOf: '{i} of {n}', replacedN: '{n} replaced',
     linkFollow: 'Ctrl+click to follow:', linkFollowMac: '⌘+click to follow:', linkInDocument: 'A place in this document:', linkNotOpened: 'Not opened (only web and mail addresses are):',
@@ -578,6 +607,7 @@ const I18N = {
     exportFailed: 'PDF export failed', pasteFailed: 'Paste failed (clipboard access denied)', copied: 'Copied', crossParaUnsupported: 'Cross-paragraph delete is not supported yet',
   },
   ja: {
+    review: '校閲', newComment: '新しいコメント', showComments: 'コメントの表示', comments: 'コメント', cmNone: 'この文書にコメントはありません。', cmReply: '返信', cmReplyHint: '返信…', cmResolve: '解決', cmReopen: '再び開く', cmDelete: '削除', cmYou: 'あなた', cmNoAnchor: '表の中のコメントには、まだ返信できません。', picBad: '画像は PNG、JPEG、GIF、BMP が使えます。',
     mailMerge: '差し込み印刷', mailings: '差し込み文書', mergeField: 'フィールド名', source: 'ソース',
     find: '検索', replaceWith: '置換後の文字列', replace: '置換', replaceAll: 'すべて置換', findNone: '見つかりません', findOf: '{i} / {n} 件', replacedN: '{n} 件を置換しました',
     linkFollow: 'Ctrl キーを押しながらクリックしてリンク先を表示:', linkFollowMac: '⌘ キーを押しながらクリックしてリンク先を表示:', linkInDocument: '文書内の場所:', linkNotOpened: 'Web とメール以外のアドレスは開きません:',
@@ -803,7 +833,7 @@ function applyI18n() {
 }
 
 // ---- WASM ----
-import init, { DocxDocument, layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout, docx_to_pdf, get_font_glyph_outline, create_blank_docx,
+import init, { DocxDocument, layout_document, edit_docx_advanced, build_docx, parse_document, edit_text_and_relayout, docx_to_pdf, get_font_glyph_outline, create_blank_docx, update_docx_comments,
   mail_merge_fields, mail_merge_data_from_text, mail_merge_data_from_xlsx, mail_merge_docx, mail_merge_docx_each, mail_merge_docx_record, mail_merge_missing_fields } from './oxidocs_wasm.js';
 await init();
 let fontRenderEpoch = 0;
@@ -1862,13 +1892,19 @@ function scheduleRender() {
       if (fittedToPane()) { canvas.style.width = '100%'; canvas.style.height = 'auto'; }
       else { canvas.style.width = w + 'px'; canvas.style.height = h + 'px'; }
       // Redraw in place
+      // Pictures are decoded first and drawn in their place among the other
+      // elements. Drawn when each finished loading, they landed after the
+      // page's scale and clips were undone: at the wrong size and position,
+      // over the text.
+      const imageMap = await preloadImages(page.elements);
+      if (fontEpoch !== fontRenderEpoch) return;
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, w, h);
       ctx.save();
       ctx.scale(scale, scale);
-      for (const elem of page.elements) {
+      for (const [idx, elem] of page.elements.entries()) {
         if (elem.kind === 'text') renderText(ctx, elem);
         else if (elem.kind === 'border') renderBorder(ctx, elem);
         else if (elem.kind === 'shading') renderShading(ctx, elem);
@@ -1876,13 +1912,7 @@ function scheduleRender() {
         else if (elem.kind === 'preset_shape') renderPresetShape(ctx, elem);
         else if (elem.kind === 'clip_start') { ctx.save(); ctx.beginPath(); ctx.rect(elem.x, elem.y, elem.width, elem.height); ctx.clip(); }
         else if (elem.kind === 'clip_end') ctx.restore();
-        else if (elem.kind === 'image' && elem.image_data) {
-          const img = new Image();
-          const ct = elem.content_type || 'image/png';
-          img.src = `data:${ct};base64,${elem.image_data}`;
-          const ex = elem.x, ey = elem.y, ew = elem.width, eh = elem.height;
-          img.onload = () => { ctx.drawImage(img, ex, ey, ew, eh); };
-        }
+        else if (elem.kind === 'image' && imageMap.has(idx)) renderImage(ctx, elem, imageMap.get(idx));
       }
       ctx.restore();
     }
@@ -2371,6 +2401,14 @@ function applyModelEdits(edits, cursorAfter) {
   if (mm.preview) { $('statusText').textContent = t('mmPreviewing'); return false; }
   try { modelDoc.apply(JSON.stringify(edits)); }
   catch (e) { console.warn('Edit refused:', e); $('statusText').textContent = String(e.message || e); return false; }
+  modelChanged(cursorAfter);
+  return true;
+}
+
+// After the model has changed (edits applied, or a picture inserted): save
+// it as the current file, announce the edit and lay the pages out again,
+// with the cursor going to `cursorAfter`.
+function modelChanged(cursorAfter) {
   currentDocx = new Uint8Array(modelDoc.save());
   documentEdited();
   pendingEdit = null;
@@ -2381,7 +2419,6 @@ function applyModelEdits(edits, cursorAfter) {
   // keys typed meanwhile go after what was just typed.
   if (cursorAfter) { cursorPos = null; modelCursorOnly = cursorAfter; }
   scheduleRender();
-  return true;
 }
 
 function sameCells(a, b) {
@@ -3053,6 +3090,173 @@ $('mmDoc').onclick = () => mergeRun('doc');
 $('mmEach').onclick = () => mergeRun('each');
 $('mmPdf').onclick = () => mergeRun('pdf');
 
+// ---- Insert › Picture ----
+// Word's Insert Picture: the image goes in at the caret, inline, at its own
+// size (96 pixels to the inch) or narrowed to fit the page's text width.
+const PICTURE_TYPES = { 'image/png': 1, 'image/jpeg': 1, 'image/gif': 1, 'image/bmp': 1 };
+
+async function insertPictureFile(file) {
+  if (!modelDoc) return;
+  if (mm.preview) mergePreview(false);
+  const type = file.type === 'image/jpg' ? 'image/jpeg' : file.type;
+  if (!PICTURE_TYPES[type]) { alert(t('picBad')); return; }
+  const sel = selectionModelRange();
+  const at = sel ? sel.from : cursorModelPos();
+  if (!at) { $('statusText').textContent = t('noCursor'); return; }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let w = 0, h = 0;
+  try {
+    const bmp = await createImageBitmap(new Blob([bytes], { type }));
+    w = bmp.width; h = bmp.height; bmp.close?.();
+  } catch (e) { alert(t('picBad')); return; }
+  // Points: 0.75 to the pixel. The text width: the page less its margins,
+  // read off where the body text starts and the page's width.
+  let wPt = w * 0.75, hPt = h * 0.75;
+  const page = layoutResult?.pages[cursorPos?.pageIndex || 0];
+  if (page) {
+    const left = Math.min(...page.elements.filter(e => e.kind === 'text' && e.paragraph_index != null).map(e => e.x), 72);
+    const room = Math.max(72, page.width - 2 * left);
+    if (wPt > room) { hPt *= room / wPt; wPt = room; }
+  }
+  if (sel && !applyModelEdits([{ op: 'delete', from: sel.from, to: sel.to }], sel.from)) return;
+  let end;
+  try { end = JSON.parse(modelDoc.insert_picture(JSON.stringify(at), bytes, type, wPt * 12700, hPt * 12700)); }
+  catch (e) { $('statusText').textContent = String(e.message || e); return; }
+  modelChanged(end);
+}
+
+$('btnImg2').addEventListener('click', () => {
+  const pick = document.createElement('input');
+  pick.type = 'file';
+  pick.accept = 'image/png,image/jpeg,image/gif,image/bmp';
+  pick.onchange = () => { const f = pick.files[0]; if (f) insertPictureFile(f); };
+  pick.click();
+});
+// A picture pasted or dropped onto the page goes in at the caret too.
+hiddenInput.addEventListener('paste', e => {
+  const f = [...(e.clipboardData?.files || [])].find(x => PICTURE_TYPES[x.type]);
+  if (f) { e.preventDefault(); e.stopImmediatePropagation(); insertPictureFile(f); }
+}, true);
+
+// ---- Review › Comments ----
+// The document's comments, threaded as Word threads them (a reply names its
+// parent's paragraph id). Replying, resolving and deleting rewrite the
+// comment parts and the range marks, then the model is read again.
+function commentThreads() {
+  let doc;
+  try { doc = parse_document(currentDocx); } catch (e) { return { threads: [], doc: null }; }
+  const all = (doc.comments || []).map(c => ({
+    id: c.id, author: c.author || '', date: (c.date || '').replace('T', ' ').slice(0, 16),
+    text: (c.blocks || []).map(b => b.Paragraph ? (b.Paragraph.runs || []).map(r => r.text || '').join('') : '').join('\n'),
+    resolved: !!c.resolved, paraId: c.para_id, parentParaId: c.parent_para_id, replies: [],
+  }));
+  const byPara = new Map(all.filter(c => c.paraId).map(c => [c.paraId, c]));
+  const threads = [];
+  for (const c of all) {
+    const parent = c.parentParaId && byPara.get(c.parentParaId);
+    if (parent && parent !== c) parent.replies.push(c); else threads.push(c);
+  }
+  return { threads, doc };
+}
+
+// Where a comment's range is, as the comment writer counts it: the body
+// paragraph (tables left out) and character offsets over its text.
+function commentAnchor(doc, id) {
+  let para = -1;
+  for (const page of doc.pages || []) for (const b of page.blocks || []) {
+    if (!b.Paragraph) continue;
+    para++;
+    // The reader hangs a range mark on the run beside it, before or after,
+    // so the marks are found wherever they sit and the range taken between.
+    let at = 0, start = null, end = null;
+    for (const r of b.Paragraph.runs || []) {
+      if (start == null && (r.comment_range_start || []).includes(id)) start = at;
+      at += (r.text || '').length;
+      if ((r.comment_range_end || []).includes(id) || (r.comment_references || []).includes(id)) end = Math.max(end ?? 0, at);
+    }
+    if (start != null || end != null) {
+      const a = start ?? 0, z = end ?? at;
+      return { paragraph_index: para, char_start: Math.min(a, z), char_end: Math.max(a, z) };
+    }
+  }
+  return null;
+}
+
+function commentAuthor() {
+  try { return localStorage.getItem('oxiAuthor') || t('cmYou'); } catch (e) { return t('cmYou'); }
+}
+
+function rewriteComments(ops) {
+  if (mm.preview) mergePreview(false);
+  let bytes;
+  try { bytes = new Uint8Array(update_docx_comments(currentDocx, ops)); }
+  catch (e) { $('statusText').textContent = String(e.message || e); return; }
+  currentDocx = bytes;
+  openModel(currentDocx);
+  documentEdited();
+  clearSelection();
+  scheduleRender();
+  renderComments();
+}
+
+function renderComments() {
+  const list = $('cmList');
+  if ($('cmPanel').hidden) return;
+  list.textContent = '';
+  if (!currentDocx) return;
+  const { threads, doc } = commentThreads();
+  if (!threads.length) {
+    const none = document.createElement('div'); none.className = 'cm-empty'; none.textContent = t('cmNone');
+    list.appendChild(none); return;
+  }
+  const head = c => {
+    const h = document.createElement('div'); h.className = 'cm-head';
+    const ava = document.createElement('span'); ava.className = 'cm-ava'; ava.textContent = ([...c.author.trim()][0] || '?').toUpperCase();
+    const name = document.createElement('span'); name.className = 'cm-name'; name.textContent = c.author || '?';
+    const time = document.createElement('span'); time.className = 'cm-time'; time.textContent = c.date;
+    h.append(ava, name, time);
+    const body = document.createElement('div'); body.className = 'cm-body'; body.textContent = c.text;
+    return [h, body];
+  };
+  const button = (label, fn) => { const b = document.createElement('button'); b.textContent = label; b.onclick = fn; return b; };
+  for (const c of threads) {
+    const card = document.createElement('div');
+    card.className = 'cm-card' + (c.resolved ? ' resolved' : '');
+    card.append(...head(c));
+    for (const r of c.replies) {
+      const box = document.createElement('div'); box.className = 'cm-reply';
+      box.append(...head(r)); card.appendChild(box);
+    }
+    const acts = document.createElement('div'); acts.className = 'cm-acts';
+    if (!c.resolved) {
+      const input = document.createElement('input'); input.placeholder = t('cmReplyHint');
+      input.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); send(); } };
+      const send = () => {
+        const text = input.value.trim();
+        if (!text) return;
+        const anchor = commentAnchor(doc, c.id);
+        if (!anchor) { $('statusText').textContent = t('cmNoAnchor'); return; }
+        const author = commentAuthor();
+        const date = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+        rewriteComments({ add: [{ author, text, date, ...anchor, resolved: false, parent_para_id: c.paraId || null }] });
+      };
+      acts.append(input, button(t('cmReply'), send));
+    }
+    if (c.paraId) acts.append(button(c.resolved ? t('cmReopen') : t('cmResolve'),
+      () => rewriteComments({ set_resolved: [{ para_id: c.paraId, done: !c.resolved }] })));
+    acts.append(button(t('cmDelete'), () => rewriteComments({ remove_ids: [c.id, ...c.replies.map(r => r.id)] })));
+    card.appendChild(acts);
+    list.appendChild(card);
+  }
+}
+
+$('btnNewComment').addEventListener('click', () => openCommentDialog());
+$('btnShowComments').addEventListener('click', () => { $('cmPanel').hidden = !$('cmPanel').hidden; renderComments(); });
+$('cmClose').addEventListener('click', () => { $('cmPanel').hidden = true; });
+// Comments added, or a file opened, while the panel is up.
+document.addEventListener('oxi:document-edited', () => setTimeout(renderComments, 0));
+document.addEventListener('oxi:layout', () => renderComments());
+
 // ---- Find and replace ----
 // Over the body's text as the model holds it: a field's code (between its
 // begin and separator marks) is not searched, its result is. A match is
@@ -3235,7 +3439,7 @@ $('zOut').addEventListener('click', () => applyZoom(zoomLevel - 10));
 $('zIn').addEventListener('click', () => applyZoom(zoomLevel + 10));
 
 // ---- Ribbon tabs ----
-const ribs = { home: 'ribHome', insert: 'ribInsert', layout: 'ribLayout', mailings: 'ribMailings' };
+const ribs = { home: 'ribHome', insert: 'ribInsert', layout: 'ribLayout', review: 'ribReview', mailings: 'ribMailings' };
 document.querySelectorAll('.rtabs button').forEach(b => {
   b.addEventListener('click', () => {
     document.querySelectorAll('.rtabs button').forEach(x => x.classList.remove('active'));
