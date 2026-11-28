@@ -98,7 +98,7 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 .tg .tc.hl{background:var(--accent-l);border-color:var(--accent)}
 
 /* Canvas document area */
-.canvas-area{flex:1;overflow:auto;display:flex;flex-direction:column;align-items:center;padding:20px 0 60px;background:#888;position:relative}
+.canvas-area{flex:1;overflow:auto;touch-action:pan-x pan-y;display:flex;flex-direction:column;align-items:center;padding:20px 0 60px;background:#888;position:relative}
 .canvas-area .page-canvas{display:block;margin:10px auto;box-shadow:0 2px 8px rgba(0,0,0,.3);background:#fff}
 .canvas-area .empty-state{color:#ccc;font-size:18px;margin-top:120px;text-align:center;user-select:none}
 .canvas-area .loading-state{color:#fff;font-size:14px;padding:20px}
@@ -3433,6 +3433,62 @@ canvasArea.addEventListener('wheel', e => {
   zoomWheel -= steps * 40;
   applyZoom(zoomLevel + steps * 10);
 }, { passive: false });
+
+// Touch (tablets, phones): one finger scrolls natively (touch-action above
+// leaves pinch to us, since the viewport disables the browser's own zoom);
+// two fingers pinch the pages, shown live as a scale and laid out again once
+// the fingers lift; a double tap fits the page to the width of the pane.
+const touches = new Map();
+let pinch = null;
+let lastTap = null;
+function pinchDistance() {
+  const [a, b] = [...touches.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+function pinchPreview(ratio) {
+  canvasArea.querySelectorAll('.page-canvas').forEach(c => {
+    c.style.transformOrigin = 'top center';
+    c.style.transform = ratio === 1 ? '' : `scale(${ratio})`;
+  });
+}
+canvasArea.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch') return;
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touches.size === 2) pinch = { distance: pinchDistance(), zoom: zoomLevel, ratio: 1 };
+});
+canvasArea.addEventListener('pointermove', e => {
+  if (e.pointerType !== 'touch' || !touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!pinch || touches.size !== 2) return;
+  const target = Math.max(50, Math.min(200, pinch.zoom * pinchDistance() / pinch.distance));
+  pinch.ratio = target / pinch.zoom;
+  $('zLvl').textContent = Math.round(target) + '%';
+  pinchPreview(pinch.ratio);
+});
+const endTouch = e => {
+  if (e.pointerType !== 'touch' || !touches.has(e.pointerId)) return;
+  touches.delete(e.pointerId);
+  if (pinch && touches.size < 2) {
+    const done = pinch;
+    pinch = null;
+    lastTap = null;
+    pinchPreview(1);
+    if (Math.abs(done.ratio - 1) > 0.02) applyZoom(done.zoom * done.ratio);
+    else $('zLvl').textContent = zoomLevel + '%';
+    return;
+  }
+  if (touches.size || e.type !== 'pointerup') return;
+  const now = performance.now();
+  if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+    lastTap = null;
+    const width = layoutResult?.pages?.[0]?.width;
+    if (width) applyZoom((canvasArea.clientWidth - 24) / (width * SCALE_BASE) * 100);
+    return;
+  }
+  lastTap = { t: now, x: e.clientX, y: e.clientY };
+};
+canvasArea.addEventListener('pointerup', endTouch);
+canvasArea.addEventListener('pointercancel', endTouch);
 
 zs.addEventListener('input', e => applyZoom(+e.target.value));
 $('zOut').addEventListener('click', () => applyZoom(zoomLevel - 10));
