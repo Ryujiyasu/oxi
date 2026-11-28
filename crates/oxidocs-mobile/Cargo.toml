@@ -1,0 +1,25 @@
+[package]
+name = "oxidocs-mobile"
+version = "0.9.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Oxidocs for native iOS and Android apps: open a document, read its pages, draw tiles of them (UniFFI bindings for Swift and Kotlin)"
+repository = "https://github.com/Ryujiyasu/oxi"
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+name = "oxidocs_mobile"
+
+[[bin]]
+# Generates the Swift and Kotlin sources from the built library:
+#   cargo run -p oxidocs-mobile --bin uniffi-bindgen -- generate \
+#     --library target/release/liboxidocs_mobile.so --language kotlin --out-dir out/
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[dependencies]
+oxidocs-render = { version = "0.9.0", path = "../oxidocs-render" }
+oxidocs-fonts = { version = "0.9.0", path = "../oxidocs-fonts" }
+oxipdf-core = { version = "0.9.0", path = "../oxipdf-core" }
+uniffi = { version = "0.33", features = ["cli"] }
+thiserror = "1"
