@@ -395,6 +395,11 @@ pub struct Page {
     /// Starting page number for this section
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_number_start: Option<u32>,
+    /// OXI_CHAP_PAGE_NUM: pgNumType chapStyle (heading level 1..9) and chapSep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chap_style: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chap_sep: Option<String>,
     /// Page borders
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_borders: Option<PageBorders>,
@@ -2023,6 +2028,9 @@ pub struct ParagraphStyle {
     pub chars_unit_run_style: Option<RunStyle>,
     /// Pre-resolved list marker text (e.g., "•", "1.", "a)")
     pub list_marker: Option<String>,
+    /// OXI_CHAP_PAGE_NUM: the marker's chapter number (ResolvedMarker::chapter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_chapter: Option<String>,
     /// Hanging indent for the list marker in points
     pub list_indent: Option<f32>,
     /// Suffix after list number: "tab" (default), "space", or "nothing"
@@ -2277,6 +2285,7 @@ impl Default for ParagraphStyle {
             default_run_style: None,
             chars_unit_run_style: None,
             list_marker: None,
+            list_chapter: None,
             list_indent: None,
             list_suff: None,
             list_tab_stop: None,

@@ -8748,15 +8748,30 @@ impl<'a> TableFitLayouter<'a> {
                                                 if !cur.is_empty() {
                                                     pieces.push(cur);
                                                 }
+                                                // OXI_S1242_OWN_FACE (2026-11-28, default ON, opt-out _DISABLE):
+                                                // the pieces are priced in the run's own face (bold, family),
+                                                // not the document default. Pricing «Periodicity: Monthly»
+                                                // (bold Arial 11, jc both, one run) in the default face moved
+                                                // the space 1.9pt left of the drawn word and every later word
+                                                // by up to ±2pt (blind-A en/technical__00549a8f p20 cells;
+                                                // `_pb_spnarrow_gen.py`: Word = the natural advances, as in
+                                                // the body and the two-run cell).
+                                                let own_face = !crate::env_flag!("OXI_S1242_OWN_FACE_DISABLE");
+                                                let run_cjk = text.chars().any(|c| (c as u32) >= 0x3000);
                                                 let raw: Vec<f32> = pieces
                                                     .iter()
                                                     .map(|p| {
                                                         p.chars()
                                                             .map(|c| {
-                                                                self.registry
-                                                                    .char_width_pt_with_fallback(
-                                                                        c, fs, &fm,
-                                                                    )
+                                                                if own_face {
+                                                                    self.metrics_for_char_in(c, run_cjk, &frag.16, &para.style)
+                                                                        .char_width_em(c) * fs
+                                                                } else {
+                                                                    self.registry
+                                                                        .char_width_pt_with_fallback(
+                                                                            c, fs, &fm,
+                                                                        )
+                                                                }
                                                             })
                                                             .sum::<f32>()
                                                     })
@@ -9595,7 +9610,7 @@ impl<'a> TableFitLayouter<'a> {
                                             if !n.is_empty() && para.runs.iter().any(|r| r.text.contains(n.as_str())) {
                                                 eprintln!("[CELLJUST] line={} last={} just={} eff={:.2} total={:.2} adj={:.2} nfrag={} tail={:?}",
                                                     line_idx, is_last_line, should_justify, effective_wrap, line_total_w,
-                                                    frag_width_adj.iter().sum::<f32>(), line.len(), line.last().map(|f| f.0.clone()));
+                                                    frag_width_adj.iter().sum::<f32>(), line.len(), line.iter().map(|f| (f.0.clone(), f.2)).collect::<Vec<_>>());
                                             }
                                         }
                                         if should_justify && !line.is_empty() {

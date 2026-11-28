@@ -5519,6 +5519,46 @@ impl LayoutEngine {
             }
         }
 
+        // OXI_CHAP_PAGE_NUM (2026-11-28, default ON, opt-out _DISABLE): a section whose
+        // pgNumType names a chapStyle prints «chapter<sep>page». The chapter is the number of
+        // the latest Heading-N paragraph on or before the page (the first one after it when
+        // none precedes), taken from its label's first %n to its last %n; chapSep hyphen
+        // (default) . : — –; no such heading in the document = the bare number.
+        // `_pb_chapnum_gen.py` (Word PDF, 14 pages): 1-1 (heading on p2), 1-2, 1-3, 2-4,
+        // «%1.%2» 2.1.1, «Part %3» B:1, emDash 2—1, level 5 absent 1. blind-A
+        // en/technical__00549a8f footers «2-4» (Heading 1 «%1»), Oxi drew «4».
+        let chap_by_page: Vec<[Option<String>; 9]> = if !crate::env_flag!("OXI_CHAP_PAGE_NUM_DISABLE")
+            && doc_resolved.pages.iter().any(|p| p.chap_style.is_some())
+        {
+            let mut seen: Vec<Vec<(usize, String)>> = vec![Vec::new(); 9];
+            for (page_idx, page) in pages.iter().enumerate() {
+                let Some(ir) = layout_to_ir_page.get(page_idx).and_then(|&i| doc_resolved.pages.get(i)) else { continue };
+                let body_bottom = ir.size.height - ir.margin.bottom;
+                let mut done = std::collections::HashSet::new();
+                for e in &page.elements {
+                    let Some(pi) = e.paragraph_index else { continue };
+                    if e.cell_row_index.is_some() || e.y < ir.margin.top - 1.0 || e.y > body_bottom || !done.insert(pi) {
+                        continue;
+                    }
+                    if let Some(Block::Paragraph(p)) = ir.blocks.get(pi) {
+                        if let Some(ch) = p.style.list_chapter.as_ref() {
+                            let lvl = p.style.heading_level.filter(|l| (1..=9).contains(l))
+                                .or_else(|| p.style.outline_level.filter(|l| *l < 9).map(|l| l + 1));
+                            if let Some(l) = lvl {
+                                seen[(l - 1) as usize].push((page_idx, ch.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+            (0..pages.len()).map(|pi| {
+                std::array::from_fn(|l| {
+                    seen[l].iter().rev().find(|(p, _)| *p <= pi).or_else(|| seen[l].first()).map(|(_, c)| c.clone())
+                })
+            }).collect()
+        } else {
+            Vec::new()
+        };
         for (page_idx, page) in pages.iter_mut().enumerate() {
             // S534 (2026-06-10): apply the section's pgNumType format to the
             // PAGE field. 3a4f's footer section sets `<w:pgNumType
@@ -5530,6 +5570,16 @@ impl LayoutEngine {
                 .get(page_idx)
                 .and_then(|&ir| doc_resolved.pages.get(ir))
                 .and_then(|p| p.page_number_format.clone());
+            let page_chap: Option<(u8, &'static str)> = layout_to_ir_page
+                .get(page_idx)
+                .and_then(|&ir| doc_resolved.pages.get(ir))
+                .and_then(|p| p.chap_style.map(|l| (l, match p.chap_sep.as_deref() {
+                    Some("period") => ".",
+                    Some("colon") => ":",
+                    Some("emDash") => "\u{2014}",
+                    Some("enDash") => "\u{2013}",
+                    _ => "-",
+                })));
             // OXI_PGNUM_LINE (2026-11-16): (element index, width change, anchor) of every
             // substituted number, so the text it touches on its line can follow below.
             let mut pgnum_moves: Vec<(usize, f32, f32)> = Vec::new();
@@ -5546,9 +5596,16 @@ impl LayoutEngine {
                         FieldType::Page => {
                             // S912: the section-relative number, not page_idx + 1.
                             let n = page_numbers[page_idx];
-                            match page_num_fmt.as_deref() {
+                            let num = match page_num_fmt.as_deref() {
                                 Some(fmt) => crate::parser::numbering::format_number(n, fmt),
                                 None => format!("{}", n),
+                            };
+                            match (page_chap.as_ref(), chap_by_page.get(page_idx)) {
+                                (Some((lvl, sep)), Some(chs)) => match chs[(*lvl - 1) as usize].as_ref() {
+                                    Some(c) => format!("{}{}{}", c, sep, num),
+                                    None => num,
+                                },
+                                _ => num,
                             }
                         }
                         FieldType::NumPages => format!("{}", total_pages),

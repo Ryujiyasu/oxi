@@ -1685,6 +1685,8 @@ impl OoxmlParser {
                     footer_distance: section.properties.footer_distance,
                     page_number_format: section.properties.page_number_format,
                     page_number_start: section.properties.page_number_start,
+                    chap_style: section.properties.chap_style,
+                    chap_sep: section.properties.chap_sep.clone(),
                     page_borders: section.properties.page_borders,
                     total_lrpb_count: total_lrpb,
                     bidi_columns: section.properties.bidi,
@@ -3705,6 +3707,8 @@ fn parse_body(
         page_number_format: None,
         endnote_number_format: None,
         page_number_start: None,
+        chap_style: None,
+        chap_sep: None,
         page_borders: None,
         header_distance: None,
         footer_distance: None,
@@ -5596,6 +5600,7 @@ fn parse_paragraph_with_inline_images_impl(
                     *e
                 };
                 crate::parser::numbering::ResolvedMarker {
+                    chapter: format!("{}", count),
                     text: format!("{}.", count),
                     marker_size: None,
                     marker_font: None,
@@ -5646,6 +5651,9 @@ fn parse_paragraph_with_inline_images_impl(
                         ms.font_size = Some(sz);
                     }
                     style.list_marker_style = Some(Box::new(ms));
+                }
+                if !resolved.chapter.is_empty() {
+                    style.list_chapter = Some(resolved.chapter.clone());
                 }
                 style.list_marker = Some(resolved.text);
             }
@@ -15578,6 +15586,20 @@ fn parse_table(
         if let Some(cond_fmts) = styles.table_conditional_formats.get(style_id) {
             let look = style.tbl_look.unwrap_or_default();
             let num_rows = rows.len();
+            // OXI_HDR_ROWS_FIRST (2026-11-28, default ON, opt-out _DISABLE): the first row and
+            // every repeated-header row (w:tblHeader) that follows it without a gap take the
+            // style's firstRow part, and the row bands start counting after them. Faithful
+            // slice of blind-A en/technical__0043bfe0 p44 (Grid Table 4, rows «Price Limits» /
+            // «Item Number…» both tblHeader, `_pb_hdrrows_slice.py`, 10 arms): Word draws the 2nd
+            // header row white bold on the header fill and bands the 3rd row; a header row after
+            // a plain row 2 stays plain; row 2 joins when row 1 is no header; cnfStyle is ignored.
+            let n_first = if !look.first_row {
+                0
+            } else if crate::env_flag!("OXI_HDR_ROWS_FIRST_DISABLE") {
+                1
+            } else {
+                1 + rows.iter().skip(1).take_while(|r| r.header).count()
+            };
             for (row_idx, row) in rows.iter_mut().enumerate() {
                 let num_cols = row.cells.len();
                 for (col_idx, cell) in row.cells.iter_mut().enumerate() {
@@ -15593,7 +15615,7 @@ fn parse_table(
                     if !crate::env_flag!("OXI_TBLSTYLE_LAYERED_DISABLE") {
                         let mut fmt = crate::ir::TableConditionalFormat::default();
                         let mut any = false;
-                        for key in resolve_conditional_layers(row_idx, col_idx, num_rows, num_cols, &look) {
+                        for key in resolve_conditional_layers(row_idx, col_idx, num_rows, num_cols, &look, n_first) {
                             if let Some(part) = cond_fmts.get(key) {
                                 any = true;
                                 if part.shading.is_some() { fmt.shading = part.shading.clone(); }
@@ -15632,7 +15654,7 @@ fn parse_table(
                     }
                     // Determine which conditional format applies (priority: corner > row/col > band)
                     let cond_key =
-                        resolve_conditional_type(row_idx, col_idx, num_rows, num_cols, &look);
+                        resolve_conditional_type(row_idx, col_idx, num_rows, num_cols, &look, n_first);
                     if let Some(key) = cond_key {
                         if let Some(fmt) = cond_fmts.get(key) {
                             // Apply shading if cell doesn't have explicit shading
@@ -15686,8 +15708,9 @@ fn resolve_conditional_layers(
     num_rows: usize,
     num_cols: usize,
     look: &crate::ir::TableLook,
+    n_first: usize,
 ) -> Vec<&'static str> {
-    let is_first_row = row_idx == 0 && look.first_row;
+    let is_first_row = row_idx < n_first;
     let is_last_row = row_idx + 1 == num_rows && look.last_row;
     let is_first_col = col_idx == 0 && look.first_column;
     let is_last_col = col_idx + 1 == num_cols && look.last_column;
@@ -15699,7 +15722,7 @@ fn resolve_conditional_layers(
     }
     if look.banded_rows && !is_first_row && !is_last_row {
         let band_size = look.row_band_size.max(1) as usize;
-        let r = if look.first_row { row_idx.saturating_sub(1) } else { row_idx };
+        let r = if look.first_row { row_idx.saturating_sub(n_first.max(1)) } else { row_idx };
         out.push(if (r / band_size) % 2 == 0 { "band1Horz" } else { "band2Horz" });
     }
     if is_first_col { out.push("firstCol"); }
@@ -15721,8 +15744,9 @@ fn resolve_conditional_type(
     num_rows: usize,
     num_cols: usize,
     look: &crate::ir::TableLook,
+    n_first: usize,
 ) -> Option<&'static str> {
-    let is_first_row = row_idx == 0 && look.first_row;
+    let is_first_row = row_idx < n_first;
     let is_last_row = row_idx == num_rows - 1 && look.last_row;
     let is_first_col = col_idx == 0 && look.first_column;
     let is_last_col = col_idx == num_cols - 1 && look.last_column;
@@ -15762,7 +15786,7 @@ fn resolve_conditional_type(
         let band_size = look.row_band_size.max(1) as usize;
         // Adjust row index: skip header row for banding count
         let banding_row = if look.first_row {
-            row_idx.saturating_sub(1)
+            row_idx.saturating_sub(n_first.max(1))
         } else {
             row_idx
         };
@@ -17174,6 +17198,8 @@ struct SectionProperties {
     endnote_number_format: Option<String>,
     /// Starting page number for this section
     page_number_start: Option<u32>,
+    chap_style: Option<u8>,
+    chap_sep: Option<String>,
     /// Page borders
     page_borders: Option<PageBorders>,
     /// Header distance from page top edge (w:pgMar header attr, in points)
@@ -17291,6 +17317,8 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
     // `<w:footnotePr>`), so the element alone does not say which it is.
     let mut in_endnote_pr = false;
     let mut page_number_start: Option<u32> = None;
+    let mut chap_style: Option<u8> = None;
+    let mut chap_sep: Option<String> = None;
     let mut page_borders: Option<PageBorders> = None;
     let mut header_distance: Option<f32> = None;
     let mut footer_distance: Option<f32> = None;
@@ -17800,6 +17828,12 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
                                 "start" => {
                                     page_number_start = val.parse::<u32>().ok();
                                 }
+                                "chapStyle" => {
+                                    chap_style = val.parse::<u8>().ok().filter(|v| (1..=9).contains(v));
+                                }
+                                "chapSep" => {
+                                    chap_sep = Some(val.to_string());
+                                }
                                 _ => {}
                             }
                         }
@@ -17881,6 +17915,8 @@ fn parse_section_properties(reader: &mut Reader<&[u8]>) -> Result<SectionPropert
         page_number_format,
         endnote_number_format,
         page_number_start,
+        chap_style,
+        chap_sep,
         page_borders,
         header_distance,
         footer_distance,

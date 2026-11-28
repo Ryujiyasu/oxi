@@ -114,6 +114,9 @@ pub struct NumberingDefinitions {
 /// Result of resolving a list marker
 pub struct ResolvedMarker {
     pub text: String,
+    /// OXI_CHAP_PAGE_NUM: the label from its first %n to its last %n («Chapter %1» -> «1»,
+    /// «%1.%2» -> «2.1»), the number a chapStyle PAGE field puts in front of the page.
+    pub chapter: String,
     /// S801b: level rPr w:sz in points (marker glyph size), if declared.
     pub marker_size: Option<f32>,
     /// S1037: level rPr font identity (top priority for the marker's glyph).
@@ -196,6 +199,7 @@ impl NumberingDefinitions {
         counters: &mut HashMap<(String, u8), u32>,
     ) -> ResolvedMarker {
         let fallback = ResolvedMarker {
+            chapter: String::new(),
             text: "\u{2022}".to_string(),
             marker_size: None,
             marker_font: None,
@@ -247,7 +251,7 @@ impl NumberingDefinitions {
                     map_symbol_bullets(&level.lvl_text)
                 }
             };
-            return ResolvedMarker { marker_font: level.marker_font_for(&marker), text: marker, marker_size: level.marker_size, marker_font_east_asia: level.marker_font_east_asia.clone(), marker_bold: level.marker_bold, marker_italic: level.marker_italic, hanging, suff, tab_stop, level_left: level.indent_left };
+            return ResolvedMarker { chapter: String::new(), marker_font: level.marker_font_for(&marker), text: marker, marker_size: level.marker_size, marker_font_east_asia: level.marker_font_east_asia.clone(), marker_bold: level.marker_bold, marker_italic: level.marker_italic, hanging, suff, tab_stop, level_left: level.indent_left };
         }
 
         // Numbered list: increment counter
@@ -397,7 +401,51 @@ impl NumberingDefinitions {
             text
         };
 
-        ResolvedMarker { marker_font: level.marker_font_for(&marker), text: marker, marker_size: level.marker_size, marker_font_east_asia: level.marker_font_east_asia.clone(), marker_bold: level.marker_bold, marker_italic: level.marker_italic, hanging, suff, tab_stop, level_left: level.indent_left }
+        // OXI_CHAP_PAGE_NUM: the same substitution over the span of lvlText from its first
+        // placeholder to the end of its last one.
+        let chapter = {
+            let src = &level.lvl_text;
+            let bytes = src.as_bytes();
+            let mut first: Option<usize> = None;
+            let mut last_end = 0usize;
+            let mut i = 0usize;
+            while i + 1 < bytes.len() {
+                if bytes[i] == b'%' && (b'1'..=b'9').contains(&bytes[i + 1]) {
+                    first.get_or_insert(i);
+                    last_end = i + 2;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            match first {
+                Some(f) if level.num_fmt != "none" => {
+                    let mut text = src[f..last_end].to_string();
+                    for lvl_i in 0u8..9 {
+                        let placeholder = format!("%{}", lvl_i + 1);
+                        if !text.contains(&placeholder) {
+                            continue;
+                        }
+                        if lvl_i == ilvl {
+                            text = text.replace(&placeholder, &formatted_num);
+                        } else if let Some(abstract_num) = self.abstract_nums.get(abstract_num_id) {
+                            if let Some(other_level) = self.effective_level(num_id, abstract_num, lvl_i) {
+                                let other_count = self.other_level_count(num_id, lvl_i, other_level, counters);
+                                let other_fmt = if other_level.num_fmt == "none" {
+                                    String::new()
+                                } else {
+                                    format_number(other_count, &other_level.num_fmt)
+                                };
+                                text = text.replace(&placeholder, &other_fmt);
+                            }
+                        }
+                    }
+                    text
+                }
+                _ => String::new(),
+            }
+        };
+        ResolvedMarker { chapter, marker_font: level.marker_font_for(&marker), text: marker, marker_size: level.marker_size, marker_font_east_asia: level.marker_font_east_asia.clone(), marker_bold: level.marker_bold, marker_italic: level.marker_italic, hanging, suff, tab_stop, level_left: level.indent_left }
     }
 
     /// S988B: the EFFECTIVE level for (numId, ilvl) — the `<w:lvlOverride>`'s
