@@ -531,6 +531,7 @@ dependencies = [
  "oxidocs-core",
  "oxidocs-docling",
  "oxidocs-fonts",
+ "oxidocs-render",
  "oxidocs-wasm",
  "oxihanko",
  "oxipdf-core",
@@ -612,6 +613,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxidocs-render"
+version = "0.9.0"
+dependencies = [
+ "image",
+ "oxidocs-core",
+ "oxidocs-fonts",
+ "oxipdf-core",
+ "rustybuzz",
+ "serde",
+ "subsetter",
+ "tiny-skia",
+ "ttf-parser",
+]
+
+[[package]]
 name = "oxidocs-wasm"
 version = "0.9.0"
 dependencies = [
@@ -627,6 +643,7 @@ dependencies = [
  "oxidocs-core",
  "oxidocs-fonts",
  "oxidocs-model",
+ "oxidocs-render",
  "oxihanko",
  "oxipdf-core",
  "oxislides-core",
