@@ -3,7 +3,7 @@ name = "oxidocs-mobile"
 version = "0.9.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Oxidocs for native iOS and Android apps: open a document, read its pages, draw tiles of them (UniFFI bindings for Swift and Kotlin)"
+description = "Oxidocs for native iOS and Android apps: open a Word, Excel or PowerPoint file, read its pages, draw tiles of them (UniFFI bindings for Swift and Kotlin)"
 repository = "https://github.com/Ryujiyasu/oxi"
 
 [lib]
@@ -18,7 +18,8 @@ name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
 
 [dependencies]
-oxidocs-render = { version = "0.9.0", path = "../oxidocs-render" }
+oxidocs-render = { version = "0.9.0", path = "../oxidocs-render", features = ["xlsx", "pptx"] }
+oxislides-core = { version = "0.9.0", path = "../oxislides-core" }
 oxidocs-fonts = { version = "0.9.0", path = "../oxidocs-fonts" }
 oxipdf-core = { version = "0.9.0", path = "../oxipdf-core" }
 uniffi = { version = "0.33", features = ["cli"] }

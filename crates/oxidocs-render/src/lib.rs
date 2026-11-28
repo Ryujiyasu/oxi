@@ -15,6 +15,10 @@ pub mod fonts;
 pub mod pdf;
 #[cfg(feature = "raster")]
 pub mod raster;
+#[cfg(feature = "xlsx")]
+pub mod xlsx;
+#[cfg(feature = "pptx")]
+pub mod pptx;
 
 use oxipdf_core::ir::PdfDocument;
 

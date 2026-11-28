@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Oxidocs for native apps. A Swift or Kotlin viewer opens a document, asks
+//! Oxidocs for native apps. A Swift or Kotlin viewer opens a Word, Excel
+//! or PowerPoint file, asks
 //! how many pages it has and how large they are, and draws the tiles of them
 //! that are on screen, at the zoom it shows. Everything is laid out and drawn
 //! in Rust (`oxidocs-render`), the same pages the browser build and the PDF
@@ -20,7 +21,7 @@ pub enum OxiError {
     /// The bytes are not a document Oxidocs can open, or opening it failed.
     #[error("cannot open: {reason}")]
     Open { reason: String },
-    /// The file is a format the native viewer does not draw yet.
+    /// The file is a format the native viewer does not draw.
     #[error("not supported yet: {format}")]
     Unsupported { format: String },
 }
@@ -56,6 +57,20 @@ impl Document {
             Format::Word => {
                 let pages = oxidocs_render::pdf::docx_pages(&bytes, None)
                     .map_err(|reason| OxiError::Open { reason })?;
+                Ok(Arc::new(Self { pages }))
+            }
+            // The print pages: each visible sheet's print areas or used range,
+            // with its page setup, from the values saved in the file.
+            Format::Workbook => {
+                let pages = oxidocs_render::xlsx::workbook_pages(&bytes, "")
+                    .map_err(|reason| OxiError::Open { reason })?;
+                Ok(Arc::new(Self { pages }))
+            }
+            // One page per slide.
+            Format::Presentation => {
+                let pres = oxislides_core::parse_pptx(&bytes)
+                    .map_err(|e| OxiError::Open { reason: e.to_string() })?;
+                let (pages, _not_drawn) = oxidocs_render::pptx::pages(&pres, &oxidocs_render::pptx::BundledFonts);
                 Ok(Arc::new(Self { pages }))
             }
             Format::Other(format) => Err(OxiError::Unsupported { format }),
@@ -97,6 +112,8 @@ fn stand_in() -> Option<&'static [u8]> {
 
 enum Format {
     Word,
+    Workbook,
+    Presentation,
     Other(String),
 }
 
@@ -105,9 +122,19 @@ fn format_of(bytes: &[u8], name: &str) -> Format {
     let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
     match ext {
         "docx" | "docm" | "dotx" | "dotm" => Format::Word,
+        "xlsx" | "xlsm" | "xltx" | "xltm" => Format::Workbook,
+        "pptx" | "pptm" | "ppsx" | "ppsm" | "potx" | "potm" => Format::Presentation,
         "" => {
             let has = |part: &[u8]| bytes.windows(part.len()).any(|w| w == part);
-            if has(b"word/document.xml") { Format::Word } else { Format::Other("unknown".into()) }
+            if has(b"word/document.xml") {
+                Format::Word
+            } else if has(b"xl/workbook.xml") {
+                Format::Workbook
+            } else if has(b"ppt/presentation.xml") {
+                Format::Presentation
+            } else {
+                Format::Other("unknown".into())
+            }
         }
         other => Format::Other(other.to_string()),
     }
@@ -139,12 +166,41 @@ mod tests {
         assert!(doc.render_tile(0, 0.0, 0.0, 0.0, 16, 16).is_none());
     }
 
+    fn has_ink(doc: &Document, index: u32) -> bool {
+        let size = doc.page_size(index).unwrap();
+        let tile = doc.render_tile(index, 1.0, 0.0, 0.0, size.width as u32, size.height as u32).unwrap();
+        tile.rgba.chunks_exact(4).any(|p| p[0] < 200 || p[1] < 200 || p[2] < 200)
+    }
+
     #[test]
-    fn formats_not_drawn_yet_are_named_and_junk_is_refused() {
-        match Document::open(vec![1, 2, 3], "deck.pptx".into()) {
-            Err(OxiError::Unsupported { format }) => assert_eq!(format, "pptx"),
+    fn a_workbook_opens_as_its_print_pages() {
+        let doc = Document::open(fixture("multi_sheet.xlsx"), "multi_sheet.xlsx".into()).unwrap();
+        assert!(doc.page_count() >= 1);
+        assert!(has_ink(&doc, 0));
+    }
+
+    #[test]
+    fn a_presentation_opens_one_page_per_slide() {
+        let doc = Document::open(fixture("multi_slide.pptx"), "multi_slide.pptx".into()).unwrap();
+        assert!(doc.page_count() >= 2);
+        let size = doc.page_size(0).unwrap();
+        assert!(size.width > size.height, "slides are landscape: {size:?}");
+        assert!(has_ink(&doc, 0));
+    }
+
+    #[test]
+    fn the_format_is_found_from_the_bytes_when_the_name_says_nothing() {
+        let doc = Document::open(fixture("multi_slide.pptx"), "attachment".into()).unwrap();
+        assert!(doc.page_count() >= 2);
+    }
+
+    #[test]
+    fn other_formats_are_named_and_junk_is_refused() {
+        match Document::open(vec![1, 2, 3], "notes.odt".into()) {
+            Err(OxiError::Unsupported { format }) => assert_eq!(format, "odt"),
             other => panic!("{:?}", other.map(|_| ())),
         }
         assert!(matches!(Document::open(vec![1, 2, 3], "a.docx".into()), Err(OxiError::Open { .. })));
+        assert!(matches!(Document::open(vec![1, 2, 3], "a.pptx".into()), Err(OxiError::Open { .. })));
     }
 }
