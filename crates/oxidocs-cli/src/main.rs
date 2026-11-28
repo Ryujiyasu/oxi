@@ -17,7 +17,7 @@ mod vba;
 mod emf;
 mod pptx;
 mod xlsx;
-mod raster;
+use oxidocs_render::raster;
 mod soffice;
 
 #[cfg(target_env = "musl")]

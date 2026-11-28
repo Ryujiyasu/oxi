@@ -1,0 +1,13 @@
+[package]
+name = "oxidocs-render"
+version = "0.9.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Draw Oxidocs pages to pixels: whole pages, or tiles of a page at any zoom"
+repository = "https://github.com/Ryujiyasu/oxi"
+
+[dependencies]
+oxipdf-core = { version = "0.9.0", path = "../oxipdf-core" }
+rustybuzz = "0.20"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }

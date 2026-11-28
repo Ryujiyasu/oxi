@@ -251,7 +251,7 @@ fn ink_box(pixmap: &Pixmap) -> Option<(u32, u32, u32, u32)> {
 
 /// Draw `page` at `scale` pixels per point onto a `px_w` × `px_h` canvas
 /// whose top-left corner is the point `origin` of the page.
-fn render_region(
+pub fn render_region(
     doc: &PdfDocument,
     page: &Page,
     scale: f32,
