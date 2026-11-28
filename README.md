@@ -33,9 +33,14 @@
 
 <table>
 <tr>
-<td width="33%"><img src="docs/img/oxi-docs.gif" alt="A .docx opening in Oxidocs and scrolling"><br><img src="editors/vscode/icons/docx-light.svg" width="28" align="absmiddle" alt=""> <b>Word — .docx</b><br>Pages laid out the way Word lays them out; edit, save, export PDF</td>
-<td width="33%"><img src="docs/img/oxi-cells.gif" alt="A workbook opening; a formula typed into a cell reproduces the sheet's total"><br><img src="editors/vscode/icons/xlsx-light.svg" width="28" align="absmiddle" alt=""> <b>Excel — .xlsx / .xlsm</b><br>Formulas recalculated, supported VBA macros run in the browser</td>
-<td width="33%"><img src="docs/img/oxi-slides.gif" alt="A deck opening, moving slide to slide, a title edited in place"><br><img src="editors/vscode/icons/pptx-light.svg" width="28" align="absmiddle" alt=""> <b>PowerPoint — .pptx</b><br>Slides drawn, edited and presented</td>
+<td width="33%" align="center" valign="top"><img src="editors/vscode/icons/docx-light.svg" width="36" alt=""><br><b>Word</b> <code>.docx</code><br><sub>Laid out as Word does · edit · PDF</sub></td>
+<td width="33%" align="center" valign="top"><img src="editors/vscode/icons/xlsx-light.svg" width="36" alt=""><br><b>Excel</b> <code>.xlsx</code> <code>.xlsm</code><br><sub>Formulas recalculated · VBA in the browser</sub></td>
+<td width="33%" align="center" valign="top"><img src="editors/vscode/icons/pptx-light.svg" width="36" alt=""><br><b>PowerPoint</b> <code>.pptx</code><br><sub>Drawn, edited and presented</sub></td>
+</tr>
+<tr>
+<td valign="top"><img src="docs/img/oxi-docs.gif" alt="A .docx opening in Oxidocs and scrolling"></td>
+<td valign="top"><img src="docs/img/oxi-cells.gif" alt="A workbook opening; a formula typed into a cell reproduces the sheet's total"></td>
+<td valign="top"><img src="docs/img/oxi-slides.gif" alt="A deck opening, moving slide to slide, a title edited in place"></td>
 </tr>
 </table>
 
