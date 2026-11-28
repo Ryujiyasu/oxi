@@ -531,6 +531,7 @@ dependencies = [
  "oxidocs-core",
  "oxidocs-docling",
  "oxidocs-fonts",
+ "oxidocs-render",
  "oxidocs-wasm",
  "oxihanko",
  "oxipdf-core",
@@ -609,6 +610,16 @@ dependencies = [
  "serde",
  "serde_json",
  "zip",
+]
+
+[[package]]
+name = "oxidocs-render"
+version = "0.9.0"
+dependencies = [
+ "image",
+ "oxipdf-core",
+ "rustybuzz",
+ "tiny-skia",
 ]
 
 [[package]]
