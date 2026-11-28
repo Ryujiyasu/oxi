@@ -96,7 +96,14 @@ pub(super) struct ParagraphWrap {
 impl ParagraphWrap {
     pub fn frame(&self, index: usize, width: f32, first_width: f32,
         indent: f32, first_indent: f32) -> LineFrame {
-        self.frame_with_minimum(index, width, first_width, indent, first_indent, 0.0)
+        // OXI_CELL_FLOAT_MIN_LANE (2026-11-28, default ON, opt-out _DISABLE): Word leaves a
+        // lane beside a cell float empty when it is narrower than 18pt, for text lines as for
+        // the empty mark. `_pb_cellgap_gen.py` (en/educational__00161422 p6 slice, the
+        // wrapSquare slide picture with «19» after it, posH swept): lane 15 / 17.5 / 17.55pt
+        // -> «19» under the picture, 18.0 / 18.5 / 20pt -> beside it; the same at 22pt type
+        // and for «1»; «1999» (22pt wide) still waits until 24pt. Oxi set «19» in the 17.55pt lane.
+        let minimum = if crate::env_flag!("OXI_CELL_FLOAT_MIN_LANE_DISABLE") { 0.0 } else { 18.0 };
+        self.frame_with_minimum(index, width, first_width, indent, first_indent, minimum)
     }
 
     pub fn frame_with_minimum(&self, index: usize, width: f32, first_width: f32,

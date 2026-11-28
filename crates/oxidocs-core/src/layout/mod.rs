@@ -3160,6 +3160,8 @@ pub enum LayoutContent {
         rotation: f32,
         /// OXI_PICTURE_SOFT_EDGE: softEdge radius in points (0 = none).
         soft_edge: f32,
+        /// OXI_PICTURE_OUTLINE: see ir::Image::outline.
+        outline: Option<(String, f32)>,
         /// OXI_PICTURE_SOFT_EDGE: clip the picture to the ellipse inscribed in its box.
         ellipse_clip: bool,
     },
@@ -5527,6 +5529,36 @@ impl LayoutEngine {
         // `_pb_chapnum_gen.py` (Word PDF, 14 pages): 1-1 (heading on p2), 1-2, 1-3, 2-4,
         // «%1.%2» 2.1.1, «Part %3» B:1, emDash 2—1, level 5 absent 1. blind-A
         // en/technical__00549a8f footers «2-4» (Heading 1 «%1»), Oxi drew «4».
+        // OXI_PICTURE_OUTLINE: the picture's a:ln as a stroke ring right after it (the
+        // renderers stroke a BoxRect centred on its edge, as Word does).
+        if !crate::env_flag!("OXI_PICTURE_OUTLINE_DISABLE") {
+            for page in pages.iter_mut() {
+                if !page.elements.iter().any(|e| matches!(&e.content, LayoutContent::Image { outline: Some(_), .. })) {
+                    continue;
+                }
+                let mut out = Vec::with_capacity(page.elements.len() + 4);
+                for e in std::mem::take(&mut page.elements) {
+                    let ring = match &e.content {
+                        LayoutContent::Image { outline: Some((c, w)), rotation, data, ellipse_clip, .. }
+                            if rotation.abs() < 0.01 && !data.is_empty() && !*ellipse_clip && *w > 0.0 =>
+                        {
+                            let mut r = LayoutElement::new(e.x, e.y, e.width, e.height, LayoutContent::BoxRect {
+                                fill: None,
+                                stroke_color: Some(c.clone()),
+                                stroke_width: *w,
+                                corner_radius: 0.0,
+                            });
+                            r.paragraph_index = e.paragraph_index;
+                            Some(r)
+                        }
+                        _ => None,
+                    };
+                    out.push(e);
+                    out.extend(ring);
+                }
+                page.elements = out;
+            }
+        }
         let chap_by_page: Vec<[Option<String>; 9]> = if !crate::env_flag!("OXI_CHAP_PAGE_NUM_DISABLE")
             && doc_resolved.pages.iter().any(|p| p.chap_style.is_some())
         {
@@ -7465,7 +7497,16 @@ impl LayoutEngine {
                 // this fit group, trust Word's pre-computed values and skip the
                 // recomputation (which may disagree due to CJK pitch/yakumono
                 // differences, causing overflow on b35 事務処理体制 row).
-                if runs[start..i].iter().any(|r| r.style.text_scale.is_some()) {
+                // OXI_FIT_SCALE_EXPAND (2026-11-28, default ON, opt-out _DISABLE): a saved w:w is
+                // trusted only while it fills the box; a group that the scaled glyphs leave short
+                // keeps the scale and spreads the rest as spacing (decided below, once the scaled
+                // natural width is known). Word PDF: blind-A ja/correspondence__03d82ae2 «令和２年９月７日»
+                // (w 83, spacing 50, fitText 105): span 104.4 at a 13.68 pitch, glyphs 8.64 wide --
+                // the saved spacing 2.5 is redone; 16ee6605 (w 90, 105) 104.8; 1c7889e0 «ご回答者名»
+                // (w 50, 31.5) 31.4. Oxi kept the saved spacing: 87.2.
+                let saved_scale = runs[start..i].iter().any(|r| r.style.text_scale.is_some());
+                let fit_scale_expand = saved_scale && !crate::env_flag!("OXI_FIT_SCALE_EXPAND_DISABLE");
+                if saved_scale && !fit_scale_expand {
                     for run in &mut runs[start..i] {
                         run.style.fit_text_saved_scale = true;
                     }
@@ -7507,6 +7548,12 @@ impl LayoutEngine {
                 // Restore original cs before overriding
                 for (idx, run) in runs[start..i].iter_mut().enumerate() {
                     run.style.character_spacing = saved_cs[idx];
+                }
+                if fit_scale_expand && natural_w > target_w - 0.5 {
+                    for run in &mut runs[start..i] {
+                        run.style.fit_text_saved_scale = true;
+                    }
+                    continue;
                 }
 
                 if natural_w > 0.01 {
@@ -8144,7 +8191,7 @@ impl LayoutEngine {
                 let target = Self::vertical_page_of(&block_starts, img.anchor_block_index);
                 let (x, y) = self.resolve_floating_image_position(img, page, &anchor_y, top);
                 drawings.push((img.behind_doc, img.relative_height, target, vec![
-                    LayoutElement::new(x, y, img.width, img.height, LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
+                    LayoutElement::new(x, y, img.width, img.height, LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip, outline: img.outline.clone(),
                         data: img.data.clone(), rotation: img.rotation,
                         content_type: img.content_type.clone(),
                         crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
@@ -9694,7 +9741,7 @@ cells={} pitch={:.2} text={:?}",
         }
         if col.image {
             if let Block::Image(img) = &page.blocks[recipe.block_idx] {
-                return vec![LayoutElement::new(x, y + col.top, img.width, img.height, LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
+                return vec![LayoutElement::new(x, y + col.top, img.width, img.height, LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip, outline: img.outline.clone(),
                     data: img.data.clone(), rotation: img.rotation,
                     content_type: img.content_type.clone(),
                     crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
@@ -10471,6 +10518,7 @@ cells={} pitch={:.2} text={:?}",
                             rotation: 0.0,
                             soft_edge: 0.0,
                             ellipse_clip: false,
+                            outline: None,
                         }));
                     } else if let (true, Some((fh, fv, head, tail))) = (vs.is_line, vs.arrow) {
                         // OXI_CANVAS_MEMBERS: a member connector with arrowheads is a
@@ -11553,7 +11601,7 @@ cells={} pitch={:.2} text={:?}",
                         cursor.visual_y + txbx_img_off,
                         img.width.min(inner_width),
                         img.height,
-                        LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
+                        LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip, outline: img.outline.clone(),
                             data: img.data.clone(), rotation: img.rotation,
                             content_type: img.content_type.clone(),
                             crop: img
@@ -22767,7 +22815,8 @@ cells={} pitch={:.2} text={:?}",
         } else { measure.geometry };
         height -= wrap.heights.iter().sum::<f32>();
         height += (0..wrap.heights.len()).map(|i| {
-            let frame = wrap.frame_with_minimum(i, width, first_width, indent, first_indent, if empty_float { 18.0 } else { 0.0 });
+            let frame = wrap.frame_with_minimum(i, width, first_width, indent, first_indent,
+                if empty_float || !crate::env_flag!("OXI_CELL_FLOAT_MIN_LANE_DISABLE") { 18.0 } else { 0.0 });
             frame.gap + frame.advance
         }).sum::<f32>();
         (height, wrap)
@@ -23918,7 +23967,8 @@ cells={} pitch={:.2} text={:?}",
             indent_l - stop
         } else if hanging > 0.01
             && marker_w_exact > hanging + 0.01
-            && !self.doc_body_has_real_cjk
+            // OXI_S893_CJK: CJK documents too (see paragraph.rs S893; the probe's cell arms agree).
+            && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_S893_CJK_DISABLE"))
             && !crate::env_flag!("OXI_S1590_DISABLE")
         {
             // The marker sits at indent_l - hanging (the paragraph's own hanging,
@@ -24248,6 +24298,7 @@ cells={} pitch={:.2} text={:?}",
                         rotation: 0.0,
                         soft_edge: 0.0,
                         ellipse_clip: false,
+                        outline: None,
                     })
                 } else if vs.is_line {
                     LayoutElement::new(vx, vy, vs.w.max(0.1), vs.h.max(vs.stroke_width), LayoutContent::TableBorder {

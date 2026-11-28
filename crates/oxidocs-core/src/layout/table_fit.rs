@@ -10393,8 +10393,25 @@ impl<'a> TableFitLayouter<'a> {
                                         let cell_atleast_zero = !crate::env_flag!("OXI_CELL_NATBOX_ATLEAST_DISABLE")
                                             && effective_line_rule == Some("atLeast")
                                             && effective_line_spacing.map_or(false, |v| v <= 0.01);
+                                        // OXI_CELL_MULT_TEXT_TOP (2026-11-28, default ON, opt-out _DISABLE): the
+                                        // body's OXI_MULT_TEXT_TOP for CJK cell lines -- a multiple-spaced line keeps
+                                        // the single-spaced placement, the multiplier's extra sits below the text.
+                                        // `_pb_mult_base_gen.py` (ＭＳ 明朝 / 游明朝 / Century+あ 12pt, compat 15, no
+                                        // docGrid, line 240/360/405/480/600, body and cell): Word's cell gaps equal
+                                        // the body's in every arm; Oxi's cell put the first multiplied baseline
+                                        // +2.5 / +3.9 / +6.4 / +10.0 low (ＭＳ 明朝). blind-A ja/forms__0023e437
+                                        // «視覚、聴覚…» (line 405 after an empty paragraph): Oxi +4.2.
+                                        // Only the paragraph's own auto multiple, off a snapped grid (as the body):
+                                        // a grid-derived effective spacing is not a multiplier (ja/policies__0353d0b2's
+                                        // single-line vAlign-centre cells went to the top).
+                                        let cell_mult_nat = !crate::env_flag!("OXI_CELL_MULT_TEXT_TOP_DISABLE")
+                                            && matches!(para.style.line_spacing_rule.as_deref(), None | Some("auto"))
+                                            && para.style.line_spacing.map_or(false, |v| v > 1.01)
+                                            && !(row_line_pitch.map_or(false, |p| p > 0.0) && para.style.snap_to_grid);
+                                        let lh_nat = if cell_mult_nat { lh / para.style.line_spacing.unwrap_or(1.0) } else { lh };
                                         let cell_text_y_off = if !crate::env_flag!("OXI_CJK_NATBOX_DISABLE")
                                             && (cell_atleast_zero
+                                                || cell_mult_nat
                                                 || (matches!(effective_line_rule, None | Some("auto"))
                                                     && effective_line_spacing.map_or(true, |v| (v - 1.0).abs() < 0.01)))
                                             && para.style.list_marker.is_none()
@@ -10483,7 +10500,7 @@ impl<'a> TableFitLayouter<'a> {
                                                         self.symbol_chain_extra(&t.0, m, t.1)
                                                     })
                                                     .fold(0.0_f32, f32::max);
-                                                1.0 + ((lh - (asc + desc + chain)) / 2.0).max(0.0) + chain
+                                                1.0 + ((lh_nat - (asc + desc + chain)) / 2.0).max(0.0) + chain
                                             } else if any_cjk && cjk_asc > 0.0
                                                 && lat_c <= cjk_c + 0.01
                                                 && !crate::env_flag!("OXI_CELL_CJK_DOMINANT_DISABLE")
@@ -10498,7 +10515,7 @@ impl<'a> TableFitLayouter<'a> {
                                                 // Oxi set the Latin runs at their own ascent on a grid (+0.2..+0.8,
                                                 // the CJK -0.5..-1.3) and the whole line at the Latin ascent off it.
                                                 // ja/administrative__13c71e15: Word 472.03, Oxi 472.88 / 471.62.
-                                                let y = 1.0 + ((lh - (cjk_asc + cjk_desc)) / 2.0).max(0.0);
+                                                let y = 1.0 + ((lh_nat - (cjk_asc + cjk_desc)) / 2.0).max(0.0);
                                                 cjk_dominant_baseline = Some(y - 1.0 + cjk_base);
                                                 y
                                             } else if any_cjk && asc > 0.0
@@ -10831,7 +10848,7 @@ impl<'a> TableFitLayouter<'a> {
                                                             obj_bottom - oh,
                                                             img.width,
                                                             oh,
-                                                            LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
+                                                            LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip, outline: img.outline.clone(),
                                                                 data: img.data.clone(), rotation: img.rotation,
                                                                 content_type: img
                                                                     .content_type
@@ -11630,7 +11647,7 @@ impl<'a> TableFitLayouter<'a> {
                                     .and_then(|position| *position).unwrap_or_else(||
                                         LayoutEngine::cell_float_position(img, &float_tops, (cell_w - pad_l - pad_r).max(0.0)));
                                 let mut element = LayoutElement::new(cell_x + pad_l + x, y,
-                                    img.width, img.height, LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
+                                    img.width, img.height, LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip, outline: img.outline.clone(),
                                         data: img.data.clone(), rotation: img.rotation, content_type: img.content_type.clone(),
                                         crop: img.crop.as_ref().map(|c| (c.top, c.right, c.bottom, c.left)),
                                     });
@@ -11724,7 +11741,7 @@ impl<'a> TableFitLayouter<'a> {
                                     content_h + effect_top + grid_drop,
                                     img.width,
                                     img.height,
-                                    LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
+                                    LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip, outline: img.outline.clone(),
                                         data: img.data.clone(), rotation: img.rotation,
                                         content_type: img.content_type.clone(),
                                         crop: img

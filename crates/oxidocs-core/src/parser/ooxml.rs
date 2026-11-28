@@ -9011,6 +9011,10 @@ fn parse_drawing_inner(
     let mut stroke_dash: Option<String> = None;
     // OXI_LINE_CAP_ROUND: a:ln cap="rnd" (last a:ln wins, as stroke_dash).
     let mut stroke_cap_rnd = false;
+    // OXI_PICTURE_OUTLINE: a stand-alone pic:pic was opened, and the a:ln seen after it
+    // (its spPr's) as (colour, w pt, noFill, compound).
+    let mut pic_open = false;
+    let mut pic_ln: Option<(Option<String>, Option<f32>, bool, bool)> = None;
     let mut outer_shadow: Option<(f32, f32, String, f32)> = None;
     let mut shape_text_blocks: Vec<Block> = Vec::new();
     let mut rotation: Option<f32> = None;
@@ -9219,6 +9223,9 @@ fn parse_drawing_inner(
                     }
                     "pic" if s839_in_wgp && wpg_children_on && wpg_pics_on => {
                         s839_pic = Some(((0.0, 0.0), (0.0, 0.0), None));
+                    }
+                    "pic" if !s839_in_wgp && !is_canvas => {
+                        pic_open = true;
                     }
                     "wsp" if s839_in_wgp => {
                         // OXI_WPG_MEMBER_FONTREF (2026-10-31, default ON, opt-out _DISABLE):
@@ -9468,6 +9475,9 @@ fn parse_drawing_inner(
                         // globals stay last-win as before).
                         let mut s839_ln_color: Option<String> = None;
                         let mut s839_ln_nofill = false;
+                        // OXI_PICTURE_OUTLINE: this a:ln's own colour/width (the globals stay last-win).
+                        let ln_prev_color = stroke_color.take();
+                        let mut ln_this_w: Option<f32> = None;
                         for attr in e.attributes().flatten() {
                             let key = local_name(attr.key.as_ref());
                             if key == "cmpd" {
@@ -9483,6 +9493,7 @@ fn parse_drawing_inner(
                             if key == "w" {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 stroke_width = val.parse::<f32>().ok().map(|v| v / 12700.0);
+                                ln_this_w = stroke_width;
                                 if let Some(wsp) = s839_wsp.as_mut() {
                                     wsp.ln_w = stroke_width;
                                 }
@@ -9632,6 +9643,12 @@ fn parse_drawing_inner(
                                 Ok(Event::Eof) => break,
                                 _ => {}
                             }
+                        }
+                        if pic_open {
+                            pic_ln = Some((stroke_color.clone(), ln_this_w, s839_ln_nofill, stroke_cmpd.is_some()));
+                        }
+                        if stroke_color.is_none() {
+                            stroke_color = ln_prev_color;
                         }
                         if let Some(wsp) = s839_wsp.as_mut() {
                             if s839_ln_color.is_some() {
@@ -11353,7 +11370,7 @@ fn parse_drawing_inner(
                             }
                             let (cx, cy, cw, ch) = (x * e2p, y * e2p, cw * e2p, ch * e2p);
                             if cw > 0.0 && ch > 0.0 {
-                                let img = Image { soft_edge: 0.0, ellipse_clip: false,
+                                let img = Image { outline: None, soft_edge: 0.0, ellipse_clip: false,
                                     rotation: 0.0,
                                     paragraph_space_before: 0.0,
                                     paragraph_space_after: 0.0,
@@ -11526,7 +11543,21 @@ fn parse_drawing_inner(
         };
         let content_type = ctx.media_types.get(&rid).cloned();
         let se_on = !crate::env_flag!("OXI_PICTURE_SOFT_EDGE_DISABLE");
+        // OXI_PICTURE_OUTLINE (2026-11-28, default ON, opt-out _DISABLE): Word strokes a
+        // picture's own solid single a:ln centred on the picture box, w absent = 0.75pt.
+        // Word PDFs: en/educational__00161422 (32 pictures, accent1/tx2/0070C0, no w:
+        // 0.75pt, box +-0.375), ja/creative__13152ea1 (w=6350 tx1/windowText: 0.5pt
+        // +-0.25), en/reports__0039f9336 (w=76200/57150: 6.0 / 4.5pt, +-3.0 / +-2.25),
+        // en/creative__04637c5f (w=3175: 0.25pt), en/reports__67cf8704. Oxi drew none.
+        let outline = match pic_ln.as_ref() {
+            Some((Some(c), w, false, false)) if !crate::env_flag!("OXI_PICTURE_OUTLINE_DISABLE") =>
+            {
+                Some((c.clone(), w.unwrap_or(0.75).max(0.0)))
+            }
+            _ => None,
+        };
         Some(Image {
+            outline,
             soft_edge: if se_on { soft_edge_pt.max(0.0) } else { 0.0 },
             ellipse_clip: se_on && shape_type.as_deref() == Some("ellipse"),
             rotation: picture_rotation,
@@ -12119,7 +12150,7 @@ fn parse_drawing_inner(
         && height > 0.0
         && std::env::var("OXI_S1182_DISABLE").is_err();
     let image = if s1182_visual {
-        Some(Image { soft_edge: 0.0, ellipse_clip: false,
+        Some(Image { outline: None, soft_edge: 0.0, ellipse_clip: false,
             rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
@@ -12153,7 +12184,7 @@ fn parse_drawing_inner(
         && width > 0.0
         && height > 0.0
     {
-        Some(Image { soft_edge: 0.0, ellipse_clip: false,
+        Some(Image { outline: None, soft_edge: 0.0, ellipse_clip: false,
             rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
@@ -13165,7 +13196,7 @@ fn parse_vml_pict(
     {
         return Ok(DrawingResult {
             symbol_text: None,
-            image: Some(Image { soft_edge: 0.0, ellipse_clip: false,
+            image: Some(Image { outline: None, soft_edge: 0.0, ellipse_clip: false,
                 rotation: 0.0,
                 paragraph_space_before: 0.0,
                 paragraph_space_after: 0.0,
@@ -13283,7 +13314,7 @@ fn parse_vml_pict(
         } else {
             None
         };
-        Some(Image { soft_edge: 0.0, ellipse_clip: false,
+        Some(Image { outline: None, soft_edge: 0.0, ellipse_clip: false,
             rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
@@ -13656,7 +13687,7 @@ fn parse_vml_pict(
             chain: None,
             canvas: false,
         });
-        let placeholder = Some(Image { soft_edge: 0.0, ellipse_clip: false,
+        let placeholder = Some(Image { outline: None, soft_edge: 0.0, ellipse_clip: false,
             rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
@@ -14078,7 +14109,7 @@ fn parse_ole_object(
     let image = if let Some(rid) = rel_id {
         let data = ctx.media.get(&rid).cloned().unwrap_or_default();
         let content_type = ctx.media_types.get(&rid).cloned();
-        Some(Image { soft_edge: 0.0, ellipse_clip: false,
+        Some(Image { outline: None, soft_edge: 0.0, ellipse_clip: false,
             rotation: 0.0,
             paragraph_space_before: 0.0,
             paragraph_space_after: 0.0,
@@ -16637,7 +16668,7 @@ fn parse_table_cell(
                             && pr.paragraph.runs.iter().all(|r| r.text.is_empty())
                             && pr.math_blocks.is_empty();
                         if s838_visual_only {
-                            blocks.push(Block::Image(crate::ir::Image { soft_edge: 0.0, ellipse_clip: false,
+                            blocks.push(Block::Image(crate::ir::Image { outline: None, soft_edge: 0.0, ellipse_clip: false,
                                 rotation: 0.0,
                                 paragraph_space_before: 0.0,
                                 paragraph_space_after: 0.0,

@@ -1120,6 +1120,10 @@ pub struct Image {
     /// OXI_PICTURE_SOFT_EDGE: `a:effectLst/a:softEdge@rad` in points (0 = none).
     #[serde(default)]
     pub soft_edge: f32,
+    /// OXI_PICTURE_OUTLINE: the picture's own `pic:spPr/a:ln` (solid, single line) as
+    /// (hex colour, width pt); Word strokes it centred on the picture box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<(String, f32)>,
     /// OXI_PICTURE_SOFT_EDGE: the picture's `a:prstGeom` is an ellipse.
     #[serde(default)]
     pub ellipse_clip: bool,

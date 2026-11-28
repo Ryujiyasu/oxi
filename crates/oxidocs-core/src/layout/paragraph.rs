@@ -853,8 +853,14 @@ impl<'a> ParagraphLayouter<'a> {
             // overlapping the marker end 157.7 by 4.5pt AND giving line 1
             // 18pt of extra room — the knife-edge that made the correct S892
             // NBSP width flip wp31 (the S559 pair blocking S892).
+            // OXI_S893_CJK (2026-11-28, default ON, opt-out _DISABLE): the rule holds in CJK documents
+            // too. `_pb_ja_marker_over_gen.py` (MS Mincho 10.5, label «１）» 21pt, level left 420, num
+            // tab 420, paragraph hanging 60/200/300/420/0, defaultTabStop 720/840, compat 14/15, body and
+            // a table cell): Word text at 72/36/36/21 (dts 720) and 42/42/42/21 (840) = the first default
+            // stop past the label end, the left when the label ends on it; Oxi drew all at 21, over the
+            // label. blind-A ja/technical__5175ec20 p2 «１）スペル…»: Word 162.0, Oxi 111.0.
             if !crate::env_flag!("OXI_S893_DISABLE")
-                && !self.doc_body_has_real_cjk
+                && (!self.doc_body_has_real_cjk || !crate::env_flag!("OXI_S893_CJK_DISABLE"))
                 && para.style.list_suff.as_deref().unwrap_or("tab") == "tab"
                 && list_consumes_hanging
                 && s778_stop_extra <= 0.0
@@ -9418,7 +9424,7 @@ impl<'a> ParagraphLayouter<'a> {
                             image_y,
                             ow,
                             image_h,
-                            LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip,
+                            LayoutContent::Image { soft_edge: img.soft_edge, ellipse_clip: img.ellipse_clip, outline: img.outline.clone(),
                                 data: img.data.clone(), rotation: img.rotation,
                                 content_type: img.content_type.clone(),
                                 crop,
@@ -9488,6 +9494,7 @@ impl<'a> ParagraphLayouter<'a> {
                                     rotation: 0.0,
                                     soft_edge: 0.0,
                                     ellipse_clip: false,
+                                    outline: None,
                                 });
                                 if let Some(pi) = body_para_index {
                                     e.paragraph_index = Some(pi);

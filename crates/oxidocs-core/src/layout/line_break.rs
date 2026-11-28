@@ -3655,10 +3655,18 @@ impl<'a> LineBreaker<'a> {
                     && !crate::env_flag!("OXI_NOBREAK_HYPHEN_EM_DISABLE");
                 let latin_metric_char = if no_break_hyphen_em
                     && !char_metrics.char_widths.contains_key(&ch) { '-' } else { space_metric_char };
+                // OXI_LATINEM_QUOTE (2026-11-28, default ON, opt-out _DISABLE): a quote or
+                // dash that reads as Latin (latin_ctx_quote) takes the em advance here as it
+                // does on the kern-active arm above; is_cjk() claims U+201C, so a no-kern run
+                // priced «“» at the rounded 110tw (5.5) while drawing it at 5.326 (TNR 12).
+                // blind-A en/educational__00158a7d p21 «…political movement “that»: Word ends
+                // the line at 539.9 of 540; Oxi's 9361tw > 9360 wrapped «“that» and the page
+                // ran two lines ahead by p22.
+                let latinem_quote = latin_ctx_quote && !crate::env_flag!("OXI_LATINEM_QUOTE_DISABLE");
                 if !kern_active
                     && !crate::env_flag!("OXI_LATINEM_DISABLE")
                     && latinem_in_scope(self.doc_body_has_real_cjk)
-                    && (!kinsoku::is_cjk(ch) || no_break_hyphen_em)
+                    && (!kinsoku::is_cjk(ch) || no_break_hyphen_em || latinem_quote)
                     && char_metrics.char_widths.contains_key(&latin_metric_char)
                 {
                     char_width = char_metrics.char_width_em(latin_metric_char) * font_size;
