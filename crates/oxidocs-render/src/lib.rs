@@ -10,10 +10,15 @@
 //! and pinches, drawing only the part of the page on screen, so the same
 //! pages can be shown natively on a tablet or a phone.
 
+pub mod font_program;
+pub mod fonts;
+pub mod pdf;
+#[cfg(feature = "raster")]
 pub mod raster;
 
 use oxipdf_core::ir::PdfDocument;
 
+#[cfg(feature = "raster")]
 /// A rectangle of a page drawn at some zoom: `width` × `height` pixels of
 /// RGBA, rows top to bottom, not premultiplied (what Android's `Bitmap` and
 /// iOS's `CGImage` take as `ARGB_8888` / `RGBA8888` after a channel swap, or
@@ -25,6 +30,7 @@ pub struct Tile {
     pub rgba: Vec<u8>,
 }
 
+#[cfg(feature = "raster")]
 /// Draw the part of page `index` (0-based) of `doc` that starts at the point
 /// (`left`, `top`) of the page, `width` × `height` pixels, at `scale` pixels
 /// per point (96 dpi is 4/3). Parts of the tile beyond the page are paper
@@ -58,6 +64,7 @@ pub fn page_size(doc: &PdfDocument, index: usize) -> Option<(f64, f64)> {
     doc.pages.get(index).map(|p| (p.width, p.height))
 }
 
+#[cfg(feature = "raster")]
 fn unpremultiplied(pixmap: &tiny_skia::Pixmap) -> Vec<u8> {
     let mut out = Vec::with_capacity(pixmap.data().len());
     for px in pixmap.pixels() {
@@ -67,6 +74,7 @@ fn unpremultiplied(pixmap: &tiny_skia::Pixmap) -> Vec<u8> {
     out
 }
 
+#[cfg(feature = "raster")]
 #[cfg(test)]
 mod tests {
     use super::*;

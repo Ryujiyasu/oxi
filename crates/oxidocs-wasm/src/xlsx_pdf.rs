@@ -24,9 +24,9 @@ impl Canvas {
     fn face(&self, family: &str, bold: bool, italic: bool, ch: char) -> String {
         let mut fonts = self.fonts.borrow_mut();
         if crate::runtime_fonts::has_font_program(family, bold, italic) {
-            let key = crate::runtime_fonts::resource_name(family, bold, italic);
+            let key = oxidocs_render::fonts::resource_name(family, bold, italic);
             if !fonts.contains_key(&key) {
-                if let Some(font) = crate::runtime_fonts::embedded_font(family, bold, italic) {
+                if let Some(font) = oxidocs_render::fonts::embedded_font(family, bold, italic) {
                     fonts.insert(key.clone(), font);
                 }
             }
