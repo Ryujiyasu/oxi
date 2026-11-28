@@ -5,6 +5,8 @@ mod field_boxes;
 mod mail_merge;
 #[cfg(feature = "suite")]
 mod xlsx_pdf;
+#[cfg(feature = "suite")]
+pub use xlsx_pdf::xlsx_to_pdf;
 pub use font_catalog_api::{font_catalog_missing, font_catalog_register};
 pub use runtime_fonts::{font_program_revision, register_font_program, clear_font_programs, has_font_program, get_font_glyph_outline, try_register_font_program_family, register_font_program_family, get_registered_font_sfnt};
 

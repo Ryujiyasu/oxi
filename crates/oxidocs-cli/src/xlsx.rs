@@ -10,23 +10,8 @@ use oxipdf_core::ir::*;
 
 pub use oxicells_core::print::is_workbook;
 
-impl oxicells_core::print::PrintCanvas for TextPages {
-    fn page(&mut self, width: f64, height: f64) {
-        TextPages::page(self, width, height)
-    }
-    fn element(&mut self, element: ContentElement) {
-        TextPages::element(self, element)
-    }
-    fn width(&self, text: &str, family: &str, size: f64, bold: bool, italic: bool) -> f64 {
-        TextPages::width(self, text, family, size, bold, italic)
-    }
-    fn text(&mut self, text: &str, family: &str, size: f64, bold: bool, italic: bool, x: f64, y: f64, color: Color) {
-        TextPages::text(self, text, family, size, bold, italic, x, y, color)
-    }
-}
-
 pub fn pages(data: &[u8]) -> Result<(PdfDocument, Vec<UnsupportedContent>), String> {
-    let mut canvas = TextPages::default();
+    let mut canvas = super::pptx::text_pages();
     let unsupported = oxicells_core::print::pages(data, &mut canvas)?;
     let unsupported = unsupported
         .into_iter()

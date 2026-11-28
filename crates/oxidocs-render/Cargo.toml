@@ -12,6 +12,8 @@ oxidocs-fonts = { version = "0.9.0", path = "../oxidocs-fonts" }
 ttf-parser = "=0.25.1"
 subsetter = "0.2.6"
 serde = { version = "1", features = ["derive"] }
+oxislides-core = { version = "0.9.0", path = "../oxislides-core", optional = true }
+oxicells-core = { version = "0.9.0", path = "../oxicells-core", features = ["print"], optional = true }
 oxipdf-core = { version = "0.9.0", path = "../oxipdf-core" }
 rustybuzz = { version = "0.20", optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"], optional = true }
@@ -22,3 +24,7 @@ default = ["raster"]
 # Drawing pages to pixels (tiles, thumbnails). The browser build draws with a
 # canvas and leaves it out.
 raster = ["dep:rustybuzz", "dep:image", "dep:tiny-skia"]
+# Spreadsheet print pages.
+xlsx = ["dep:oxicells-core"]
+# Slide pages.
+pptx = ["dep:oxislides-core"]
